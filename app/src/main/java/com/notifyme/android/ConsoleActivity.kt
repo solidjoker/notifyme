@@ -159,6 +159,7 @@ class ConsoleActivity : Activity() {
         setupAdvisorSection()
         setupReminderSection()
         setupPrivacySection()
+        setupOverlaySection()
     }
 
     override fun onResume() {
@@ -170,6 +171,7 @@ class ConsoleActivity : Activity() {
         refreshAnalysisStatus()
         refreshAdvisorStatus()
         refreshA11yStatus()
+        refreshOverlayPermission?.invoke()
         // 提取进行中状态由服务写 prefs，这里每秒轮询刷新
         a11yPollHandler.removeCallbacks(a11yPollRunnable)
         a11yPollHandler.postDelayed(a11yPollRunnable, 1000)
@@ -182,6 +184,9 @@ class ConsoleActivity : Activity() {
 
     /** 无障碍直读状态轮询：服务在 worker 线程跑，UI 轮询 prefs 同步进度与按钮态 */
     private val a11yPollHandler = Handler(Looper.getMainLooper())
+
+    /** M9：从悬浮窗权限设置页返回后刷新按钮状态（setupOverlaySection 中赋值） */
+    private var refreshOverlayPermission: (() -> Unit)? = null
     private val a11yPollRunnable = object : Runnable {
         override fun run() {
             refreshA11yStatus()
@@ -1203,5 +1208,53 @@ class ConsoleActivity : Activity() {
         }
 
         refresh()
+    }
+
+    // ---------- M9 悬浮通知 ----------
+
+    /**
+     * 悬浮卡片初始化：卡片/球两个开关 + 悬浮窗权限按钮。
+     * 开关切换即写配置并下发 OverlayService reconcile；无悬浮窗权限时触发链路
+     * 自动降级为 heads-up（OverlayManager 内部判断）。
+     */
+    private fun setupOverlaySection() {
+        val switchCards = findViewById<Switch>(R.id.switchOverlayCards)
+        val switchBall = findViewById<Switch>(R.id.switchOverlayBall)
+        val btnPermission = findViewById<Button>(R.id.btnOverlayPermission)
+
+        var state = OverlayConfig.get(this)
+
+        fun syncService() {
+            val intent = Intent(this, OverlayService::class.java).apply {
+                action = OverlayService.ACTION_RECONCILE
+            }
+            androidx.core.content.ContextCompat.startForegroundService(this, intent)
+        }
+
+        switchCards.isChecked = state.cardsEnabled
+        switchBall.isChecked = state.ballEnabled
+        switchCards.setOnCheckedChangeListener { _, checked ->
+            state = OverlayConfig.get(this).copy(cardsEnabled = checked)
+            OverlayConfig.set(this, state)
+            if (checked) syncService()
+        }
+        switchBall.setOnCheckedChangeListener { _, checked ->
+            state = OverlayConfig.get(this).copy(ballEnabled = checked)
+            OverlayConfig.set(this, state)
+            if (checked) syncService()
+        }
+
+        fun refreshPermission() {
+            val granted = OverlayManager.canDrawOverlays(this)
+            btnPermission.text = if (granted) getString(R.string.overlay_permission_ok)
+            else getString(R.string.overlay_permission_btn)
+            btnPermission.isEnabled = !granted
+        }
+        btnPermission.setOnClickListener {
+            startActivity(OverlayManager.overlaySettingsIntent(this))
+        }
+
+        refreshOverlayPermission = ::refreshPermission
+        refreshPermission()
     }
 }

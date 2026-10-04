@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 常驻悬浮球：边缘停靠，可拖动 -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/tvBall"
+    android:layout_width="48dp"
+    android:layout_height="48dp"
+    android:background="@drawable/bg_overlay_ball"
+    android:gravity="center"
+    android:text="@string/overlay_ball_text"
+    android:textColor="@color/card_bg"
+    android:textSize="20sp" />

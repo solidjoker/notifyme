@@ -8,6 +8,9 @@
     <!-- 前台保活：前台服务本体 + dataSync 类型声明（Android 14 起按类型授权） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- M9 悬浮通知：悬浮窗 + specialUse 类型 FGS（Android 14） -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- 前台服务通知在 Android 13+ 需要运行时权限，主界面会引导授予 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 开机自启拉起保活服务 -->
@@ -90,6 +93,16 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- M9 悬浮通知服务：specialUse，Android 14 要求声明用途属性 -->
+        <service
+            android:name=".OverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="在其他应用之上显示重要消息悬浮卡与常驻悬浮球" />
+        </service>
+
         <!--
           微信聊天无障碍直读服务（无需 root 的本机直读路线）。
           BIND_ACCESSIBILITY_SERVICE 保证只有系统能绑定；用户需在系统设置手动开启。
@@ -125,6 +138,15 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="com.notifyme.android.action.REMINDER_ALERT" />
+            </intent-filter>
+        </receiver>
+
+        <!-- M9 悬浮卡降级通知的动作接收 -->
+        <receiver
+            android:name=".OverlayActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.notifyme.android.action.DISMISS_CARD" />
             </intent-filter>
         </receiver>
 

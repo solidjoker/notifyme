@@ -126,6 +126,20 @@
     <string name="privacy_preview_banner_off">模式：关闭——将发送文本与原文相同。</string>
     <string name="privacy_preview_banner_cloud">模式：出设备脱敏——下面即云端/上报实际收到的文本。</string>
     <string name="privacy_preview_banner_local">模式：仅端侧分析——云端不发送任何内容，下列文本仅用于核对规则效果。</string>
+
+    <!-- M9 悬浮通知 -->
+    <string name="overlay_ball_text">⚡</string>
+    <string name="overlay_card_dismiss">标记已处理</string>
+    <string name="overlay_card_open">打开详情</string>
+    <string name="overlay_panel_title">最近待办</string>
+    <string name="overlay_panel_open_app">打开 NotifyMe</string>
+    <string name="overlay_panel_empty">暂无待办</string>
+    <string name="overlay_section_title">悬浮通知</string>
+    <string name="overlay_cards_switch">重要消息悬浮卡</string>
+    <string name="overlay_ball_switch">常驻悬浮球</string>
+    <string name="overlay_permission_btn">授予悬浮窗权限</string>
+    <string name="overlay_permission_ok">悬浮窗权限已授予</string>
+    <string name="overlay_desc">重要消息以悬浮卡出现在任意界面之上；无权限时降级为系统横幅。MIUI/HyperOS 还需在系统设置允许「后台弹出界面」。</string>
     <string name="sync_push_switch">启用服务器上报（关闭后消息继续累积，开启时补报）</string>
 
     <!-- 聊天记录提取（服务端安卓库直读，走 serverUrl 同源 /admin/extract） -->

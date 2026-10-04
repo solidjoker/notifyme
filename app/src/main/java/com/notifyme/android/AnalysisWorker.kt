@@ -209,6 +209,25 @@ class AnalysisWorker(
                     done++
                     if (record.escalated) escalatedCount++
 
+                    // M9 悬浮卡（分析路径）：S1 判定需要行动才弹，覆盖空名单（全部关注）
+                    // 场景；卡带 caseId，「标记已处理」即删除该 case
+                    if (record.s1NeedAction &&
+                        OverlayConfig.get(applicationContext).cardsEnabled
+                    ) {
+                        val last = kase.messages.last()
+                        OverlayManager.show(
+                            applicationContext,
+                            OverlayManager.Card(
+                                pkg = kase.pkg,
+                                conversation = kase.conversation,
+                                sender = last.sender,
+                                text = record.s2Summary.ifEmpty { last.text },
+                                appLabel = last.appLabel,
+                                caseId = record.caseId
+                            )
+                        )
+                    }
+
                     // needAction 且提醒开启 -> 日历事件（dedupKey=caseId，内部双重去重）
                     if (record.s1NeedAction && config.reminderEnabled) {
                         val note = CalendarHelper.createReminder(

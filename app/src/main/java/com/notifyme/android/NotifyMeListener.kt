@@ -97,6 +97,24 @@ class NotifyMeListener : NotificationListenerService() {
         // 成功入库后才算「观察到该来源」，避免空内容通知污染来源列表
         AppSourceStore.recordSeen(applicationContext, pkg, raw.appLabel)
         Log.i(TAG, "捕获消息[$pkg]: $message")
+
+        // 8) M9 悬浮卡（即时路径）：只对「用户显式加入重点名单」的会话弹卡——
+        //    空名单语义是「全部关注」，此时每条都弹会打扰，改由分析完成路径出卡
+        if (OverlayConfig.get(applicationContext).cardsEnabled) {
+            val explicit = WatchlistStore.watchedKeys(applicationContext)
+            if (explicit.contains(message.convKey)) {
+                OverlayManager.show(
+                    applicationContext,
+                    OverlayManager.Card(
+                        pkg = message.pkg,
+                        conversation = message.conversation,
+                        sender = message.sender,
+                        text = message.text,
+                        appLabel = message.appLabel
+                    )
+                )
+            }
+        }
     }
 
     /**
