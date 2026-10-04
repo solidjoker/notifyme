@@ -1,5 +1,9 @@
 # notifyme · 微信通知本地智能分析助手
 
+[![build](https://github.com/solidjoker/notifyme/actions/workflows/android.yml/badge.svg)](https://github.com/solidjoker/notifyme/actions/workflows/android.yml)
+[![release](https://img.shields.io/github/v/release/solidjoker/notifyme?label=release)](https://github.com/solidjoker/notifyme/releases/latest)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 > **TodayToTomorrow for little mermaid**
 
 一个本地优先的微信通知捕获、会话管理与 AI 分析工具。
@@ -7,7 +11,7 @@
 需要行动的消息自动生成日历 / 闹钟提醒。
 
 - 🤖 **Android**：现有 APK，独立运行，完全离线可用
-- 🍎 **iPhone**：PWA 查看端（需配套服务端）；原生 iOS 客户端规划中
+- 🍎 **iPhone**：PWA 查看端（需配套服务端）；原生 iOS 查看端 + 提醒推送规划中
 - 🖥️ **服务端（可选）**：跨设备查看、历史回填、公网访问
 
 ---
@@ -72,7 +76,8 @@
 
 ### Android（现有 APK）
 
-1. 从 [Releases](https://github.com/solidjoker/notifyme/releases) 下载 `notifyme-open.apk`，或按 [docs/BUILD.md](docs/BUILD.md) 自行构建
+1. 从 [Releases](https://github.com/solidjoker/notifyme/releases/latest) 下载最新 `notifyme-open.apk`
+   （同页附 `.sha256` 校验文件），或按 [docs/BUILD.md](docs/BUILD.md) 自行构建
 2. 安装后按引导授予：
    - **通知使用权**（设置 → 通知访问权限）— 必需
    - （可选）**无障碍服务**：启用微信界面直读
@@ -89,8 +94,10 @@ iPhone 目前通过 PWA 查看已同步的消息与分析结果，需配套服�
 2. 用 Safari 打开 `http://<你的服务器地址>/console`
 3. 「分享 → 添加到主屏幕」即可像原生 App 一样使用
 
-> iOS 系统限制：无法像 Android 那样后台捕获通知，iPhone 端仅查看已同步数据。
-> 原生 iOS 客户端（含本地捕获能力）在规划中。
+> iOS 系统限制：任何第三方 App 都无法像 Android 那样后台读取其他应用的通知，
+> iPhone 端只能查看已同步数据，不能本地捕获。
+> 规划中的原生 iOS 客户端定位为「查看端 + 提醒推送」（把待行动结果推送到 iPhone），
+> 而非本地捕获。详见 [docs/ROADMAP.md](docs/ROADMAP.md) 的 M5。
 
 ### 服务端部署（可选）
 
@@ -143,12 +150,14 @@ $env:JAVA_HOME = "你的 JDK 17 路径"
 
 ## 下一步计划
 
-1. **原生 iOS 客户端**：iPhone 本地捕获与分析能力（当前仅 PWA 查看端）
-2. **跨应用通知管理**：从微信扩展到手机上所有 App 的通知，以及 PC 通知的统一管理
-3. **通知之外的信息融入**：把自己发出的消息等通知流之外的数据纳入方案
-4. **隐私信息保护**：端侧处理、敏感信息识别与脱敏的进一步强化
+按里程碑推进，完整排期、工作量与风险见 [docs/ROADMAP.md](docs/ROADMAP.md)。
+
+1. **跨应用通知管理**：从微信扩展到手机上所有 App 的通知，以及 PC 通知的统一管理
+2. **隐私信息保护**：端侧脱敏，敏感信息不出设备
+3. **本地 Agent 与大模型优化**：端侧模型能力、提示词与分析质量
+4. **iOS 原生查看端 + 提醒推送**：在 iPhone 上看分析结果并收到提醒（不含本地捕获）
 5. **前端 UI 优化**：交互细节、可读性与多端适配
-6. **本地 Agent 与大模型优化**：端侧模型能力、提示词与分析质量
+6. **通知之外的信息融入**：把自己发出的消息等通知流之外的数据纳入方案
 7. **打通智能硬件**：与可穿戴 / 家居等设备的通知联动
 8. **其他**：欢迎在 Issues 中共同讨论
 

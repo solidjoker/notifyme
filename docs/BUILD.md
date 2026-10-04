@@ -1,7 +1,7 @@
 # 构建指南（从源码构建 Android APK）
 
 本文面向需要自行构建 notifyme Android 客户端的开发者。
-普通用户请直接从 [Releases](https://github.com/solidjoker/notifyme/releases) 下载 `notifyme-open.apk` 安装。
+普通用户请直接从 [Releases](https://github.com/solidjoker/notifyme/releases/latest) 下载 `notifyme-open.apk` 安装。
 
 ---
 
@@ -118,11 +118,57 @@ adb install -r app\build\outputs\apk\open\debug\notifyme-open.apk
 
 ---
 
-## 发布版签名（可选）
+## 发布版签名
 
-仓库默认构建 debug 包。如需发布签名版，在 `app/build.gradle.kts` 的 `buildTypes.release`
-中配置 `signingConfig`，并将密钥库信息放入本机 `secrets.local.properties`（切勿入库），
-然后执行 `.\gradlew.bat assembleOpenRelease`。
+`assembleOpenRelease` 默认产出 **未签名** APK（构建不会失败，只会打印一行警告）。
+要产出可安装的签名包，需要提供一个密钥库；`app/build.gradle.kts` 的读取优先级为：
+
+**环境变量 > 仓库根目录 `keystore.properties` > 都没有（降级为不签名）**
+
+| 配置项 | `keystore.properties` 键 | 环境变量 |
+|---|---|---|
+| 密钥库文件 | `storeFile`（绝对路径，或相对仓库根的路径） | `NOTIFYME_KEYSTORE_FILE` |
+| 密钥库口令 | `storePassword` | `NOTIFYME_KEYSTORE_PASSWORD` |
+| 密钥别名 | `keyAlias` | `NOTIFYME_KEY_ALIAS` |
+| 密钥口令 | `keyPassword` | `NOTIFYME_KEY_PASSWORD` |
+
+### 本地签名
+
+```powershell
+# 1) 生成密钥库（放到仓库外，例如 ..\notifyme-secrets\）
+& "$env:JAVA_HOME\bin\keytool.exe" -genkeypair -v `
+  -keystore ..\notifyme-secrets\notifyme-release.jks `
+  -keyalg RSA -keysize 2048 -validity 10000 -alias notifyme `
+  -dname "CN=notifyme, O=notifyme, C=CN"
+
+# 2) 填配置（keystore.properties 已被 .gitignore 忽略，绝不入库）
+copy keystore.properties.example keystore.properties
+# 编辑 keystore.properties，填 storeFile / storePassword / keyAlias / keyPassword
+# 用记事本保存也没问题：构建脚本会忽略 UTF-8 BOM，路径分隔符 / 与 \ 都接受
+
+# 3) 构建并校验
+.\gradlew.bat assembleOpenRelease
+& "$env:ANDROID_HOME\build-tools\34.0.0\apksigner.bat" verify --print-certs `
+  app\build\outputs\apk\open\release\notifyme-open.apk
+```
+
+> **密钥库务必备份且不要更换**：Android 按签名识别应用，签名变了老用户无法原地升级，
+> 只能卸载重装，而卸载会清空应用私有目录里的全部消息与分析数据（JSONL）。
+
+### CI 自动签名与发布
+
+推送 `v*` 标签会触发 [.github/workflows/release.yml](../.github/workflows/release.yml)：
+校验标签与 `versionName` 一致 → 用 Secrets 里的密钥库签名 `assembleOpenRelease` →
+`apksigner verify` → 生成 `.sha256` → `gh release create` 发布为 latest。
+
+需要的 4 个仓库 Secrets（Settings → Secrets and variables → Actions）：
+`NOTIFYME_KEYSTORE_BASE64`（`[Convert]::ToBase64String([IO.File]::ReadAllBytes("notifyme-release.jks"))`）、
+`NOTIFYME_KEYSTORE_PASSWORD`、`NOTIFYME_KEY_ALIAS`、`NOTIFYME_KEY_PASSWORD`。
+
+推送 `main` 或开 PR 会触发 [.github/workflows/android.yml](../.github/workflows/android.yml)：
+单元测试 + `assembleOpenDebug` / `assembleBetaDebug` + server Python 语法检查 +
+隐私守卫（拒绝密钥文件入库、拒绝私有命名与个人用户目录残留），并上传 debug APK 产物。
+CI 不签名（debug 包用 Android 默认 debug 密钥）。
 
 ---
 
@@ -130,8 +176,12 @@ adb install -r app\build\outputs\apk\open\debug\notifyme-open.apk
 
 ```
 .
+├── .github/
+│   ├── workflows/              # android.yml（CI）+ release.yml（打 tag 自动签名发布）
+│   ├── ISSUE_TEMPLATE/         # bug / feature 表单 + 文档跳转
+│   └── pull_request_template.md
 ├── app/                        # Android 应用模块
-│   ├── build.gradle.kts        # flavor 配置（open/beta）、密钥注入、依赖
+│   ├── build.gradle.kts        # flavor（open/beta）、密钥注入、发布签名、依赖
 │   └── src/main/
 │       ├── AndroidManifest.xml # 服务/权限/Activity 声明
 │       ├── res/                # 布局、图标、主题、服务配置 XML
@@ -139,13 +189,15 @@ adb install -r app\build\outputs\apk\open\debug\notifyme-open.apk
 ├── server/                     # 可选配套 Flask 服务端（见 server/README.md）
 ├── docs/
 │   ├── BUILD.md                # 本文件
+│   ├── ROADMAP.md              # 里程碑 M0–M8、工作量、风险与决策门
 │   └── architecture/           # 架构文档与 9 张图源
 ├── gradle/wrapper/             # Gradle Wrapper（8.9）
 ├── gradlew / gradlew.bat       # Wrapper 启动脚本
 ├── PRIVACY.md                  # 隐私说明
 ├── THIRD-PARTY.md              # 第三方组件与许可证清单
 ├── LICENSE                     # MIT
-└── secrets.local.properties.example
+├── keystore.properties.example # 发布签名配置模板（真实文件 gitignore）
+└── secrets.local.properties.example  # beta flavor 密钥模板（真实文件 gitignore）
 ```
 
 **Kotlin 源码按职责分组：**

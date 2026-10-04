@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 路线图与里程碑（M0–M8）
+    url: https://github.com/solidjoker/notifyme/blob/main/docs/ROADMAP.md
+    about: 先看这里：功能是否已在计划中、优先级与依赖关系
+  - name: 构建与发布说明
+    url: https://github.com/solidjoker/notifyme/blob/main/docs/BUILD.md
+    about: 自行构建 APK、签名、CI 与发布流程
+  - name: 隐私说明
+    url: https://github.com/solidjoker/notifyme/blob/main/PRIVACY.md
+    about: 数据存在哪、什么时候会离开设备

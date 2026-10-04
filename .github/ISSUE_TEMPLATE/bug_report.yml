@@ -1,0 +1,81 @@
+name: Bug 报告
+description: 捕获、分析、提醒或同步出现异常
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈问题。请先搜索现有 Issues，避免重复。
+
+        > ⚠️ **隐私提醒**：不要粘贴真实聊天内容、真实密钥或服务器地址。
+        > 需要举例时请用「张三 / 会议改到明天 10 点」这类虚构内容，或先自行脱敏。
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么
+      description: 你做了什么、期望什么、实际发生了什么
+      placeholder: 例：开启通知使用权后重启手机，微信通知不再被捕获
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: 出问题的环节
+      multiple: true
+      options:
+        - 通知捕获（NotificationListener）
+        - 无障碍直读（A11y）
+        - 会话列表 / 首页
+        - AI 分析（S1 / S2）
+        - 本地模型下载与端侧推理
+        - 提醒（日历 / 闹钟）
+        - 服务端同步 / 历史回填
+        - PWA / 控制台
+        - 构建与发布
+        - 其他
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: App 版本与 flavor
+      description: 设置里或 APK 文件名可见；自建包请注明 commit
+      placeholder: v0.2.0 / open
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: 设备与系统
+      placeholder: 例：小米 14 / Android 14 (HyperOS)
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 越具体越好；说明是否重启过、是否切换过网络、是否刚授予/撤销过权限
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志（可选，请先脱敏）
+      description: |
+        `adb logcat -d | findstr /i notifyme`（Windows）或 `adb logcat -d | grep -i notifyme`。
+        长日志请放进折叠块或 gist，不要贴完整未过滤的 logcat。
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 已确认
+      options:
+        - label: 我已授予「通知使用权」，且系统未将其自动关闭
+          required: true
+        - label: 我已检查电池优化 / 后台限制设置
+        - label: 我没有在 Issue 中粘贴真实聊天内容或真实密钥
+          required: true

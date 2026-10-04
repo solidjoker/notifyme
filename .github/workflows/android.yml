@@ -1,0 +1,80 @@
+name: build
+
+# 每次 push / PR 都验证：双 flavor 能构建、单测通过、服务端 Python 语法正确、
+# 且没有把私有命名或本机密钥文件带进仓库。
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  android:
+    name: Android 构建 + 单测
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle (cache)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Prepare wrapper for CI
+        run: |
+          # 仓库默认 distributionUrl 指向腾讯云镜像（方便国内本地构建）；
+          # GitHub 托管 runner 走官方源更稳。只改工作区，不提交。
+          sed -i 's#^distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.9-bin.zip#' \
+            gradle/wrapper/gradle-wrapper.properties
+          chmod +x gradlew
+          grep '^distributionUrl' gradle/wrapper/gradle-wrapper.properties
+
+      - name: Ensure Android SDK platform 34
+        run: |
+          SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n1 || true)
+          if [ -n "$SDKMANAGER" ] && [ ! -d "$ANDROID_HOME/platforms/android-34" ]; then
+            "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0"
+          fi
+
+      - name: Unit tests + assemble (open & beta)
+        run: ./gradlew --stacktrace testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug
+
+      - name: Python syntax check (server)
+        run: python3 -m py_compile server/app.py server/android_db_extract.py server/pc_db_extract.py server/gen_icons.py
+
+      - name: Guard - no private naming or local secrets in repo
+        run: |
+          test ! -f secrets.local.properties || { echo "::error::secrets.local.properties 不得入库"; exit 1; }
+          test ! -f keystore.properties     || { echo "::error::keystore.properties 不得入库"; exit 1; }
+          test ! -f secrets.local.bat       || { echo "::error::secrets.local.bat 不得入库"; exit 1; }
+          # 会泄露私有母仓库的旧命名（代码与文档都不许出现；.github 自身含该正则，排除）
+          if git grep -InE 'qiyeweixin|weixin_android|WeixinAndroid|weixin-monitor' -- . ':(exclude).github'; then
+            echo "::error::发现会泄露私有母仓库的旧命名残留"
+            exit 1
+          fi
+          # 个人用户目录（占位符 C:\Users\<你> 除外）
+          if git grep -In 'C:\\Users\\' -- . | grep -v 'C:\\Users\\<' > /dev/null; then
+            echo "::error::发现真实个人用户目录路径，请改为占位符 C:\\Users\\<你>"
+            exit 1
+          fi
+
+      - name: Upload debug APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: notifyme-debug-apks
+          path: |
+            app/build/outputs/apk/open/debug/notifyme-open.apk
+            app/build/outputs/apk/beta/debug/notifyme-test.apk
+          if-no-files-found: error
+          retention-days: 14

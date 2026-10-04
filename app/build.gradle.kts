@@ -1,3 +1,5 @@
+import java.io.File
+import java.io.StringReader
 import java.util.Properties
 
 plugins {
@@ -5,18 +7,59 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+/**
+ * 读取 .properties，容忍 UTF-8 BOM。
+ *
+ * Windows 记事本与 PowerShell 5.1 的 Set-Content/Out-File 默认会写 BOM（EF BB BF），
+ * 而 java.util.Properties 会把 BOM 当作第一个键名的一部分（键变成 "\uFEFFstoreFile"），
+ * 结果是配置「看起来填对了却静默读不到值」——签名退回未签名、beta 密钥注入变空串。
+ */
+fun loadPropsIgnoringBom(file: File): Properties = Properties().apply {
+    if (file.exists()) load(StringReader(file.readText().removePrefix("\uFEFF")))
+}
+
 // 测试版默认值来源：secrets.local.properties（本机密钥，已 gitignore，绝不入库）。
 // open flavor 一律注入空串，保证发布包不含任何密钥。
 val secretsFile = rootProject.file("secrets.local.properties")
-val secrets = Properties().apply {
-    if (secretsFile.exists()) secretsFile.inputStream().use { load(it) }
-}
+val secrets = loadPropsIgnoringBom(secretsFile)
 
 fun secret(key: String): String = secrets.getProperty(key, "").orEmpty()
 
 /** buildConfigField 字符串字面量转义（防密钥里出现引号/反斜杠打坏生成代码） */
 fun bcString(value: String): String =
     "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+// ---------------------------------------------------------------------------
+// 发布签名（release signing）
+//
+// 配置来源二选一，环境变量优先（CI 从 GitHub Secrets 注入）：
+//   1. 仓库根目录 keystore.properties（本机，已 gitignore；模板见 keystore.properties.example）
+//   2. 环境变量 NOTIFYME_KEYSTORE_FILE / _KEYSTORE_PASSWORD / _KEY_ALIAS / _KEY_PASSWORD
+//
+// 两者都缺失或密钥库文件不存在时，release 构建退回「未签名」并只打警告、不失败——
+// 保证任何人 clone 仓库后 assembleOpenRelease 都能跑通（拿到的 APK 需自行签名才能安装）。
+// 详见 docs/BUILD.md「发布签名与 Release」。
+// ---------------------------------------------------------------------------
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = loadPropsIgnoringBom(keystorePropsFile)
+
+/** 签名配置读取：环境变量优先，其次 keystore.properties */
+fun signProp(propKey: String, envKey: String): String =
+    (System.getenv(envKey)?.takeIf { it.isNotBlank() }
+        ?: keystoreProps.getProperty(propKey)?.takeIf { it.isNotBlank() }
+        ?: "")
+
+/** 密钥库路径解析：绝对路径直接用，相对路径按仓库根目录解析 */
+fun resolveKeystoreFile(path: String): File? =
+    if (path.isBlank()) null else File(path).let { if (it.isAbsolute) it else rootProject.file(path) }
+
+val releaseStoreFile = resolveKeystoreFile(signProp("storeFile", "NOTIFYME_KEYSTORE_FILE"))
+val releaseStorePassword = signProp("storePassword", "NOTIFYME_KEYSTORE_PASSWORD")
+val releaseKeyAlias = signProp("keyAlias", "NOTIFYME_KEY_ALIAS")
+val releaseKeyPassword = signProp("keyPassword", "NOTIFYME_KEY_PASSWORD")
+
+val hasReleaseSigning = releaseStoreFile?.exists() == true &&
+    releaseStorePassword.isNotBlank() && releaseKeyAlias.isNotBlank() && releaseKeyPassword.isNotBlank()
 
 android {
     namespace = "com.notifyme.android"
@@ -26,8 +69,8 @@ android {
         applicationId = "com.notifyme.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.1.3"
+        versionCode = 5
+        versionName = "0.2.0"
     }
 
     buildFeatures {
@@ -67,6 +110,17 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = releaseStoreFile
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -74,6 +128,25 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                // 说清「为什么没签上」，否则用户只看到未签名 APK 却不知配置错在哪
+                val reason = when {
+                    releaseStoreFile == null ->
+                        if (keystorePropsFile.exists()) "keystore.properties 里没有有效的 storeFile"
+                        else "未找到 keystore.properties，也未设置 NOTIFYME_KEYSTORE_FILE"
+                    !releaseStoreFile.exists() -> "密钥库文件不存在：$releaseStoreFile"
+                    releaseStorePassword.isBlank() -> "缺少 storePassword / NOTIFYME_KEYSTORE_PASSWORD"
+                    releaseKeyAlias.isBlank() -> "缺少 keyAlias / NOTIFYME_KEY_ALIAS"
+                    releaseKeyPassword.isBlank() -> "缺少 keyPassword / NOTIFYME_KEY_PASSWORD"
+                    else -> "签名配置不完整"
+                }
+                logger.warn(
+                    "[notifyme] 发布签名未生效（$reason），assembleOpenRelease 将产出未签名 APK，" +
+                        "无法直接安装。配置方式见 docs/BUILD.md「发布版签名」。"
+                )
+            }
         }
     }
 
