@@ -1,0 +1,56 @@
+﻿%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true}}}%%
+flowchart LR
+    classDef src  fill:#fff3e0,stroke:#e65100,stroke-width:1.5px,color:#4e342e
+    classDef cap  fill:#e8f5e9,stroke:#2e7d32,stroke-width:1.5px,color:#1b5e20
+    classDef proc fill:#e3f2fd,stroke:#1565c0,stroke-width:1.5px,color:#0d47a1
+    classDef st   fill:#eceff1,stroke:#455a64,stroke-width:1.5px,color:#263238
+    classDef srv  fill:#f3e5f5,stroke:#6a1b9a,stroke-width:1.5px,color:#4a148c
+
+    WX["微信 com.tencent.mm"]:::src
+
+    subgraph CH1["通道 ① 通知监听 · 实时增量（主链路）"]
+        direction TB
+        NL["WeChatNotificationListener"]:::cap
+        NLF["过滤 com.tencent.mm<br/>丢弃 ongoing / 状态类 / 聚合摘要"]:::proc
+        NLP["解析 EXTRA_TITLE / EXTRA_TEXT<br/>MessagingStyle → EXTRA_MESSAGES 逐条"]:::proc
+        NLD["LRU 去重<br/>同 key 同内容只入库一次"]:::proc
+        NL --> NLF --> NLP --> NLD
+    end
+
+    subgraph CH2["通道 ② 无障碍直读 · 本机会话历史（免 root）"]
+        direction TB
+        A1["WeChatA11yExtractService<br/>控制台「开始提取」置位 startRequested"]:::cap
+        A2["识别会话标题<br/>资源 id 候选表 → 标题栏文本启发式"]:::proc
+        A3["循环：解析当前屏 → 向上翻页 → 去重合并<br/>气泡正文取行内面积最大文本节点"]:::proc
+        A4["连续 NO_NEW_LIMIT 屏无新增判定到顶<br/>时间戳按采集顺序每秒递减估算<br/>source = a11y-extract"]:::proc
+        A1 --> A2 --> A3 --> A4
+    end
+
+    subgraph CH3["通道 ③ 服务端数据库直读 · 完整历史（需 PC + root 通道）"]
+        direction TB
+        H["HistorySync<br/>启动自动触发 · 6 小时冷却"]:::cap
+        S1["POST /admin/extract?source=android|pc|all<br/>后台线程异步执行"]:::srv
+        S2["android_db_extract.py<br/>MD5(IMEI+uin)[:7] 推导密钥<br/>AES-CBC 逐页解密 · pageSize=1024<br/>PBKDF2-HMAC-SHA1 · 4000 迭代"]:::srv
+        S3["pc_db_extract.py<br/>PC 微信 4.x message_0.db + contact.db"]:::srv
+        S4["轮询 GET /admin/extract/status<br/>→ GET /messages?limit=1000"]:::srv
+        H --> S1
+        S1 --> S2
+        S1 --> S3
+        S1 --> S4
+    end
+
+    MSG[("MessageStore<br/>files/messages.jsonl<br/>ChatMessage: sender/text/timestamp<br/>/conversation/isGroup/source")]:::st
+    PEND[("PendingQueue<br/>files/pending.jsonl<br/>自增 id 便于精确剔除")]:::st
+    SRVDB[("服务端 messages.db<br/>UNIQUE(conversation,sender,timestamp,text)<br/>跨来源按秒级归一键去重")]:::st
+
+    WX -->|"系统通知"| NL
+    WX -->|"AccessibilityEvent"| A1
+    WX -.->|"MuMuManager root shell<br/>cp + adb pull"| S2
+
+    NLD -->|"ChatMessage"| MSG
+    A4 -->|"mergeAndCollect"| MSG
+    S4 -->|"MessageStore.merge 秒级去重回填"| MSG
+
+    MSG -->|"新增条目挂载"| PEND
+    PEND -->|"SyncWorker 通道 1<br/>POST /weixin"| SRVDB
+    MSG -->|"AnalysisWorker 取最近 ≤10 条组 case"| ANA["会话窗口 case<br/>caseId = sha1(conversation|windowEnd)[:16]"]:::proc

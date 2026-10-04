@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 我方聊天气泡：微信绿圆角（会话详情页右侧，对齐微信 #95EC69） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/bubble_me" />
+    <corners android:radius="8dp" />
+</shape>

@@ -1,0 +1,327 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">微信分析助手</string>
+    <string name="listener_service_label">微信通知监听器</string>
+
+    <string name="permission_granted">通知监听权限已授予</string>
+    <string name="permission_missing">通知监听权限未授予，点击去系统设置开启</string>
+    <string name="btn_open_settings">打开通知监听设置</string>
+    <string name="btn_refresh">刷新列表</string>
+    <string name="btn_clear">清除记录</string>
+    <string name="empty_hint">暂无捕获到的微信消息</string>
+    <string name="clear_done">已清除全部记录</string>
+    <string name="btn_collapse_all">全部折叠</string>
+    <string name="btn_expand_all">全部展开</string>
+    <string name="msg_count">%1$d 条</string>
+    <string name="date_unknown_label">未标注日期</string>
+
+    <!-- 分析结果联动与列表页 -->
+    <string name="analysis_label_todo">⚡ 待办</string>
+    <string name="analysis_label_done">已分析</string>
+    <string name="analysis_due_prefix">截止：</string>
+    <string name="analysis_list_title">分析结果</string>
+    <string name="btn_open_analysis">查看分析结果</string>
+    <string name="analysis_stats_format">已分析 %1$d 个会话 / 待办 %2$d 个</string>
+    <string name="analysis_only_todo">只看待办</string>
+    <string name="analysis_list_empty">暂无分析结果</string>
+    <string name="group_tag">群聊</string>
+    <string name="private_tag">私聊</string>
+    <string name="home_title">微信分析助手</string>
+    <string name="nav_back">←</string>
+    <string name="console_title">控制台</string>
+    <string name="watchlist_title">重点关注会话</string>
+    <string name="reminder_list_title">已创建的提醒</string>
+
+    <!-- 定时上报到服务器 -->
+    <string name="sync_section_title">📤 定时上报到服务器</string>
+    <string name="sync_server_hint">http://192.168.1.100:8000/weixin</string>
+    <string name="sync_token_hint">访问令牌（可选，与服务端 WEIXIN_TOKEN 对应）</string>
+    <string name="sync_interval_label">上报周期</string>
+    <string name="btn_save_sync">保存并启用定时上报</string>
+    <string name="btn_sync_now">立即同步一次</string>
+    <string name="sync_status_none">尚未同步</string>
+    <string name="sync_saved">已保存并启用定时上报</string>
+    <string name="sync_disabled">未配置服务器地址，定时上报已停用</string>
+    <string name="sync_url_empty">请先填写服务器地址</string>
+    <string name="sync_enqueued">已加入同步队列，稍后刷新查看状态</string>
+    <!-- 与 SyncConfig.INTERVAL_OPTIONS 一一对应 -->
+    <string-array name="sync_interval_labels">
+        <item>15 分钟</item>
+        <item>30 分钟</item>
+        <item>60 分钟</item>
+        <item>120 分钟</item>
+    </string-array>
+
+    <!-- 保活状态 -->
+    <string name="keepalive_section_title">🛡 保活状态</string>
+    <string name="keepalive_running">前台服务：运行中</string>
+    <string name="keepalive_stopped">前台服务：未运行</string>
+    <string name="keepalive_notification_title">微信分析助手运行中</string>
+    <string name="battery_whitelisted">电池优化：已忽略（白名单内）</string>
+    <string name="battery_not_whitelisted">电池优化：未忽略（建议加入白名单）</string>
+    <string name="btn_battery_whitelist">加入电池优化白名单</string>
+    <string name="btn_battery_whitelisted">已在白名单</string>
+
+    <!-- 控制台入口 -->
+    <string name="btn_console">控制台</string>
+
+    <!-- 初次使用向导 -->
+    <string name="onboarding_welcome_title">欢迎使用微信分析助手</string>
+    <string name="onboarding_welcome_text">本 App 通过系统官方「通知监听」能力读取微信通知消息，不注入微信、不破解协议。捕获的消息可以定时上报到你自己的服务器，也可以交给后端模型分析重点任务并自动创建日历提醒。</string>
+    <string name="onboarding_step2_title">第 2 步：对接微信</string>
+    <string name="onboarding_step2_text">请点击下方按钮跳转系统设置，在列表中找到「微信消息获取」并打开通知访问开关。授权后返回本页即可继续。</string>
+    <string name="onboarding_btn_open_listener">去开启通知监听权限</string>
+    <string name="onboarding_step2_pending">尚未检测到授权，请完成后再继续</string>
+    <string name="onboarding_step3_title">第 3 步：完成</string>
+    <string name="onboarding_step3_text">对接完成！之后可在首页进入「控制台」配置服务器上报、后端分析与日历提醒。</string>
+    <string name="onboarding_no_more">不再显示本向导</string>
+    <string name="btn_prev">← 上一步</string>
+    <string name="btn_next">下一步 →</string>
+    <string name="btn_finish">完成</string>
+    <string name="onboarding_page_indicator">第 %1$d / %2$d 步</string>
+
+    <!-- 控制台（分区标题带 emoji 图标字符，不引图标库） -->
+    <string name="console_section_listener">💬 微信对接状态</string>
+    <string name="listener_granted">通知监听权限：已授予</string>
+    <string name="listener_missing">通知监听权限：未授予</string>
+    <string name="listener_connected">监听服务：已连接</string>
+    <string name="listener_disconnected">监听服务：未连接（保活看门狗会自动重绑）</string>
+    <string name="btn_go_grant">去授权</string>
+    <string name="btn_reopen_onboarding">重新打开使用向导</string>
+    <string name="console_section_watchlist">⭐ 重点关注会话</string>
+    <string name="btn_open_watchlist">管理重点关注会话</string>
+    <string name="sync_push_switch">启用服务器上报（关闭后消息继续累积，开启时补报）</string>
+
+    <!-- 聊天记录提取（服务端安卓库直读，走 serverUrl 同源 /admin/extract） -->
+    <string name="extract_section_title">📥 聊天记录提取</string>
+    <string name="extract_hint">从安卓微信本地数据库直接提取完整聊天记录到服务器（需 MuMu root 通道，在 PC 服务端执行）</string>
+    <string name="btn_extract_now">立即提取</string>
+    <string name="btn_extract_running">提取中…</string>
+    <string name="extract_status_none">尚未提取</string>
+    <string name="extract_status_running">正在提取，请稍候…</string>
+    <string name="extract_status_query_fail">提取状态查询失败（请检查服务器地址与令牌）</string>
+    <string name="extract_need_server">请先在上方配置服务器地址</string>
+    <string name="extract_trigger_fail">触发失败：%1$s</string>
+    <string name="extract_poll_timeout">提取仍在进行中，稍后重新进入控制台查看结果</string>
+    <string name="extract_auto_switch">启动时自动提取聊天记录（冷启动一次，6 小时内不重复）</string>
+    <string name="extract_auto_status_none">自动提取：尚未运行</string>
+
+    <!-- 本机无障碍直读（无需 root 的聊天记录提取路线） -->
+    <string name="a11y_service_label">微信聊天直读</string>
+    <string name="a11y_service_desc">在微信聊天界面逐屏向上翻页，把屏幕上的消息读入本 App。仅在您主动点「开始提取」后运行，期间可随时停止。</string>
+    <string name="a11y_service_summary">本机直读微信聊天记录</string>
+    <string name="a11y_card_title">📱 本机无障碍直读（无需 root）</string>
+    <string name="a11y_hint">使用说明：① 先在微信里打开要提取的会话；② 回到本页点「开始提取」，App 会自动跳回微信并逐屏向上翻页收集；③ 提取中请不要操作手机，可随时回本页点「停止」。说明：界面拿不到精确时间，时间戳为估算值，记录带 a11y-extract 来源标记。</string>
+    <string name="btn_a11y_permission">去开启无障碍权限</string>
+    <string name="btn_a11y_start">开始提取</string>
+    <string name="btn_a11y_stop">停止</string>
+    <string name="a11y_status_none">尚未提取</string>
+    <string name="a11y_status_permission_missing">无障碍服务未开启，点上方按钮去系统设置开启</string>
+    <string name="a11y_jump_wechat">已跳回微信，将自动开始提取当前会话</string>
+    <string name="a11y_no_wechat">未检测到微信，请先安装并登录微信</string>
+
+    <!-- 后端分析 -->
+    <string name="analysis_section_title">🧠 后端分析</string>
+    <string name="analysis_enabled_switch">启用后端分析</string>
+    <string name="s1_section_title">System 1 · 轻量判定（laya 协议）</string>
+    <string name="s1_type_label">类型</string>
+    <!-- 与 AnalysisConfig.S1_TYPE_LOCAL / S1_TYPE_REMOTE / S1_TYPE_LOCAL_MODEL 一一对应 -->
+    <string-array name="s1_type_labels">
+        <item>本地启发式（本机 127.0.0.1:8124）</item>
+        <item>自建服务地址</item>
+        <item>本地 MiniCPM4-0.5B（端侧快筛）</item>
+    </string-array>
+    <string name="s2_section_title">System 2 · 深度分析（OpenAI 兼容）</string>
+    <string name="s2_enabled_switch">启用 System 2 深分析（S1 命中升级条件时调用）</string>
+    <string name="s2_provider_label">服务商</string>
+    <!-- 与 AnalysisConfig.S2_PROVIDER_JEV / GLM / CUSTOM / LOCAL 一一对应 -->
+    <string-array name="s2_provider_labels">
+        <item>JEV</item>
+        <item>GLM coding plan</item>
+        <item>自定义 OpenAI 兼容</item>
+        <item>本地 MiniCPM3-4B（端侧）</item>
+    </string-array>
+    <string name="s2_baseurl_hint">System 2 服务地址，如 https://open.bigmodel.cn/api/coding/paas/v4</string>
+    <string name="s2_apikey_hint">System 2 API 密钥（Bearer）</string>
+    <string name="s2_model_hint">System 2 模型名，如 glm-5.3-flash</string>
+    <string name="btn_test_s2_connection">测试 System 2 连接</string>
+
+    <!-- 本地模型管理 -->
+    <string name="model_manage_entry">本地模型管理</string>
+    <string name="model_page_title">本地模型</string>
+    <string name="model_page_desc">端侧推理模型下载到本机后无需联网即可分析。文件较大，建议在 Wi-Fi 下下载；下载支持断点续传，杀进程后回到本页自动继续。模型来源：ModelScope（OpenBMB / MNN 官方仓）。</string>
+    <string name="model_s1_name">MiniCPM4-0.5B（MNN 4bit）</string>
+    <string name="model_s1_role">System 1 轻量判定 · 端侧快筛 · 311 MB</string>
+    <string name="model_s2_name">MiniCPM3-4B（GGUF Q4_K_M）</string>
+    <string name="model_s2_role">System 2 深度分析 · 端侧生成 · 2.47 GB（需 8GB+ 内存机型，推理较慢）</string>
+    <string name="model_status_none">未下载 · %1$s</string>
+    <string name="model_status_partial">未下载完成 · 共 %1$s，已下载 %2$s（可续传）</string>
+    <string name="model_status_downloading">下载中 %1$d%%（%2$s / %3$s）</string>
+    <string name="model_status_ready">已下载 · 校验通过（%1$s）</string>
+    <string name="model_status_error">下载失败%1$s：%2$s</string>
+    <string name="model_status_error_resume">，已下载 %1$s 可续传</string>
+    <string name="model_btn_download">下载</string>
+    <string name="model_btn_cancel">取消下载</string>
+    <string name="model_btn_retry">重试下载</string>
+    <string name="model_btn_ready">已就绪</string>
+    <string name="model_btn_delete">删除</string>
+    <string name="model_delete_title">删除模型</string>
+    <string name="model_delete_message">删除 %1$s？将释放 %2$s 存储空间。</string>
+    <string name="model_cancel_toast">已取消下载，已下载部分保留可续传</string>
+    <string name="model_no_space">存储空间不足：需要约 %1$s，当前可用 %2$s</string>
+    <string name="model_engine_note">说明：端侧推理引擎（MNN / llama.cpp 原生库）当前版本尚未编译进 App，模型下载完成后分析会提示「引擎未就绪」；云端服务（JEV / GLM）不受影响，可正常分析。</string>
+    <string name="analysis_preset_label">服务预设</string>
+    <string name="analysis_baseurl_hint">分析服务地址，如 http://127.0.0.1:8124</string>
+    <string name="analysis_user_hint">Basic 账号（公网入口用，可空）</string>
+    <string name="analysis_pass_hint">Basic 密码（可空）</string>
+    <string name="analysis_model_hint">模型名，默认 laya-multilingual</string>
+    <string name="btn_save_analysis">保存分析配置</string>
+    <string name="btn_test_connection">测试连接</string>
+    <string name="btn_analysis_now">立即分析一次</string>
+    <string name="analysis_status_none">尚未分析</string>
+    <string name="analysis_saved">分析配置已保存</string>
+    <string name="analysis_testing">正在测试连接…</string>
+    <string name="analysis_enqueued">已加入分析队列，稍后刷新查看状态</string>
+    <string name="analysis_preset_labels_hint">切换预设会回填该预设上次保存的值</string>
+    <string name="analysis_protocol_label">协议</string>
+    <string name="analysis_apikey_hint">API 密钥（Bearer；laya 直连 JEV 时用，可空）</string>
+    <string-array name="analysis_preset_labels">
+        <item>systemone（laya 决策）</item>
+        <item>glm（OpenAI 兼容）</item>
+        <item>custom</item>
+    </string-array>
+    <!-- 与 AnalysisConfig.PROTOCOL_VALUES 一一对应 -->
+    <string-array name="analysis_protocol_labels">
+        <item>laya（System One 决策）</item>
+        <item>openai（OpenAI 兼容对话）</item>
+    </string-array>
+
+    <!-- 顾问复盘（Fable 层） -->
+    <string name="advisor_section_title">🧭 顾问复盘</string>
+    <string name="advisor_auto_switch">每 7 天自动复盘分析结果（生成调优建议报告）</string>
+    <string name="btn_advisor_now">立即顾问复盘</string>
+    <string name="advisor_enqueued">已加入顾问复盘队列，稍后刷新查看报告</string>
+    <string name="advisor_status_none">尚未复盘</string>
+    <string name="advisor_report_none">暂无顾问报告</string>
+
+    <!-- 日历提醒（三级降级链） -->
+    <string name="reminder_section_title">📅 日历提醒</string><string name="reminder_enabled_switch">任务消息自动创建日历提醒</string>
+    <string name="reminder_lead_label">提前提醒</string>
+    <string name="btn_open_reminders">已创建的提醒</string>
+    <string name="reminder_no_permission">无日历权限时将降级为「唤起日历 App / App 内提醒」</string>
+    <string name="reminder_list_empty">暂无提醒记录</string>
+    <string name="reminder_chain_desc">三级降级保证提醒可达：① 有可写日历时直接写入系统日历（含提前提醒）；② 没有日历账户时唤起系统日历 App，预填后手动保存；③ 连日历 App 都没有时，用 App 内闹钟到点弹通知兜底。</string>
+    <!-- 提醒状态徽标 -->
+    <string name="reminder_status_calendar">已建日历事件</string>
+    <string name="reminder_status_intent">已唤起日历，待手动保存</string>
+    <string name="reminder_status_alarm">已设App内提醒</string>
+    <string name="reminder_status_failed">失败</string>
+    <string name="reminder_action_reopen">再次唤起</string>
+    <string name="reminder_action_retry">重试</string>
+    <string name="reminder_retry_done">重试完成</string>
+    <string-array name="reminder_lead_labels">
+        <item>15 分钟</item>
+        <item>1 小时</item>
+        <item>1 天</item>
+    </string-array>
+
+    <!-- 重点关注会话 -->
+    <string name="watchlist_hint">说明：名单为空 = 全部关注（默认）。勾选具体会话后只分析名单内的会话。点右侧「提示词」可为该会话设置自定义分析提示词。</string>
+    <string name="btn_watch_all">全部关注</string>
+    <string name="btn_watch_none">全部取消</string>
+    <string name="watchlist_add_hint">手动添加会话名</string>
+    <string name="btn_add">添加</string>
+    <string name="watchlist_empty">暂无尽知的会话，先回到首页接收一些消息</string>
+
+    <!-- 会话级自定义提示词 -->
+    <string name="btn_edit_prompt">提示词</string>
+    <string name="prompt_marker_set">✎ 有自定义提示词</string>
+    <string name="prompt_edit_hint">为该会话设置自定义分析提示词（留空 = 用全局默认）。点下方模板可直接填入编辑框，记得把 {我}、{重要的人}、{关系} 等占位符替换成真实称呼。</string>
+    <string name="prompt_template_1_label">群聊重点关注</string>
+    <string name="prompt_template_2_label">任务提取</string>
+    <string name="prompt_template_3_label">重要人物消息</string>
+    <string name="prompt_template_1">群里我是\"{我}\"，重要的人是\"{重要的人}\"，你需要重点关注\"{重要的人}\"的发言，判断其中是否有需要我执行的任务或需要立即响应的事项。</string>
+    <string name="prompt_template_2">我是\"{我}\"，请从这段对话中提取所有指派给\"{我}\"的任务，输出每项任务的截止时间和建议动作；与\"{我}\"无关的闲聊降低重要度。</string>
+    <string name="prompt_template_3">对方是我的\"{关系}\"（如领导/客户/家人），请重点关注其语气、紧急程度和需要立即响应的事项；涉及承诺、截止时间、数字的内容务必标为待办。</string>
+    <string name="prompt_edit_default_hint">例：群里我是\"小明\"，重要的人是\"郑十\"，你需要重点关注\"郑十\"的发言……</string>
+    <string name="prompt_edit_save">保存</string>
+    <string name="prompt_edit_clear">清除（恢复默认）</string>
+    <string name="prompt_edit_saved">已保存</string>
+    <string name="prompt_edit_cleared">已清除，恢复全局默认</string>
+    <string name="analysis_prompt_enabled">✎ 已启用自定义提示词</string>
+
+    <!-- 首页会话头快捷入口 -->
+    <string name="quick_watch">⭐ 关注</string>
+    <string name="quick_watched">⭐ 已关注</string>
+    <string name="quick_prompt">✎ 提示词</string>
+    <string name="quick_analyze">🔍 分析</string>
+    <string name="quick_result">📋 结果</string>
+    <string name="quick_watch_added">已加入重点关注</string>
+    <string name="quick_watch_removed">已取消重点关注</string>
+    <string name="analysis_list_title_conv">%1$s 的分析结果</string>
+
+    <!-- 首页组头：分析角标与点击提示 -->
+    <string name="home_header_hint">点会话名查看对话与分析 · 点右侧箭头折叠</string>
+
+    <!-- 删除：左滑删除会话/日期 + 批量删除 -->
+    <string name="common_cancel">取消</string>
+    <string name="common_delete">删除</string>
+    <string name="confirm_delete_conversation">确定删除会话「%1$s」的全部消息吗？分析记录与提醒将一并删除，不可恢复。</string>
+    <string name="confirm_delete_conversations">确定删除选中的 %1$d 个会话吗？消息、分析记录与提醒将一并删除，不可恢复。</string>
+    <string name="confirm_delete_date">确定删除「%1$s」的 %2$d 条消息吗？此操作不可恢复。</string>
+    <string name="confirm_delete_messages">确定删除选中的 %1$d 条消息吗？此操作不可恢复。</string>
+    <string name="batch_delete_action">删除</string>
+    <string name="batch_selected_n">已选 %1$d 个会话</string>
+    <string name="msg_selected_n">已选 %1$d 条消息</string>
+    <string name="delete_done">已删除 %1$d 条消息</string>
+
+    <!-- 闪电标记阅读后清除 -->
+    <string name="analysis_clear_mark">✕ 清除标记</string>
+    <string name="analysis_mark_cleared">⚡ 标记已清除</string>
+
+    <!-- 提醒管理 -->
+    <string name="reminder_action_delete">删除/取消</string>
+    <string name="reminder_list_title_conv">%1$s 的提醒</string>
+    <string name="reminder_deleted">提醒已取消：闹钟已取消%1$s</string>
+
+    <!-- 首页汇总分区 / 分层折叠 / 搜索 -->
+    <string name="search_hint">搜索会话 / 发送者 / 消息内容</string>
+    <string name="section_watchlist">⭐ 重点关注 %1$d</string>
+    <string name="section_others">其它会话 %1$d</string>
+    <string name="search_no_result">没有匹配的会话或消息</string>
+    <string name="header_badge_todo">⚡%1$d</string>
+    <string name="header_badge_analyzed">●</string>
+
+    <!-- 会话详情页 -->
+    <string name="conversation_title">会话详情</string>
+    <string name="analysis_panel_title">🧠 会话分析</string>
+    <string name="analysis_none_hint">本会话尚未分析，点击下方按钮立即分析</string>
+    <string name="btn_analyze_this">立即分析本会话</string>
+    <string name="analysis_enqueued_conv">已开始分析本会话，结果出来后会自动刷新</string>
+    <string name="analysis_last_time">最近分析：%1$s</string>
+    <string name="chip_need_action_yes">⚡ 需要行动 %1$d%%</string>
+    <string name="chip_need_action_no">✓ 无需行动 %1$d%%</string>
+    <string name="chip_importance">重要度 %1$.1f</string>
+    <string name="chip_due_window">截止：%1$s</string>
+    <string name="chip_topic">主题：%1$s</string>
+    <string name="chip_escalated">已深分析</string>
+    <string name="s2_summary_label">摘要</string>
+    <string name="s2_action_label">建议</string>
+    <string name="s2_tasks_label">任务清单</string>
+    <string name="s2_task_format">%1$s：%2$s（%3$s）</string>
+    <string name="s2_task_format_no_when">%1$s：%2$s</string>
+
+    <!-- topic 取值 -> 中文（未知值原样显示） -->
+    <string name="topic_work_task">工作任务</string>
+    <string name="topic_schedule">日程安排</string>
+    <string name="topic_notice">通知公告</string>
+    <string name="topic_smalltalk">闲聊</string>
+    <string name="topic_risk">风险信号</string>
+
+    <!-- due_window 取值 -> 中文（未知值原样显示） -->
+    <string name="due_none">无明确时间</string>
+    <string name="due_today">今天</string>
+    <string name="due_tomorrow">明天</string>
+    <string name="due_this_week">本周内</string>
+    <string name="due_later">更晚</string>
+</resources>

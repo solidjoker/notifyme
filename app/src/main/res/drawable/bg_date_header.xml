@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 日期组头背景：浅灰底 + 8dp 圆角，视觉上比消息卡片低一层 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/chip_bg" />
+    <corners android:radius="8dp" />
+</shape>

@@ -1,0 +1,104 @@
+﻿%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true}}}%%
+flowchart TB
+    classDef ui   fill:#e1f5fe,stroke:#0277bd,stroke-width:1.5px,color:#01579b
+    classDef svc  fill:#e8f5e9,stroke:#2e7d32,stroke-width:1.5px,color:#1b5e20
+    classDef work fill:#fff8e1,stroke:#f9a825,stroke-width:1.5px,color:#f57f17
+    classDef dom  fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1.5px,color:#4a148c
+    classDef st   fill:#eceff1,stroke:#455a64,stroke-width:1.5px,color:#263238
+
+    subgraph L1["① UI 层 · Activity（传统 View + RecyclerView，刻意不引 Compose）"]
+        direction LR
+        MAIN["MainActivity<br/>首页 · 会话分组 / 日期分层<br/>搜索 · 折叠 · 权限引导 · 保活状态"]:::ui
+        CONSOLE["ConsoleActivity<br/>控制台 · 8 张配置卡片"]:::ui
+        CONV["ConversationActivity<br/>会话详情 + 会话级分析面板"]:::ui
+        ANALYSIS["AnalysisListActivity<br/>分析结果 · 只看待办"]:::ui
+        WATCH["WatchlistActivity<br/>重点关注会话名单"]:::ui
+        REMUI["ReminderListActivity<br/>提醒列表 · 再次唤起 / 重试"]:::ui
+        PROMPT["PromptEditActivity<br/>会话级提示词 · 3 内置模板"]:::ui
+        MODELS["ModelListActivity<br/>本地模型下载 / 进度 / 删除"]:::ui
+        ONBOARD["OnboardingActivity<br/>首次三步向导"]:::ui
+    end
+
+    subgraph L2["② 采集与常驻层 · 系统绑定组件"]
+        direction LR
+        NL["WeChatNotificationListener<br/>NotificationListenerService<br/>包名过滤 · 丢弃 ongoing/摘要<br/>EXTRA_MESSAGES 解析 · LRU 去重"]:::svc
+        A11Y["WeChatA11yExtractService<br/>AccessibilityService<br/>标题识别 · 逐屏翻页 · 防碎裂降级"]:::svc
+        KA["KeepAliveService<br/>前台服务 dataSync<br/>60s 看门狗 requestRebind"]:::svc
+        BOOT["BootReceiver<br/>BOOT_COMPLETED"]:::svc
+        ALARMR["ReminderReceiver<br/>到点高优先级通知"]:::svc
+    end
+
+    subgraph L3["③ 后台任务层 · WorkManager（UniqueWork + UPDATE）"]
+        direction LR
+        SYNCW["SyncWorker<br/>三通道上报<br/>消息 / 分析 / 顾问"]:::work
+        ANAW["AnalysisWorker<br/>逐会话窗口 case 分析<br/>单轮 ≤10 会话 · 间隔 500ms"]:::work
+        ADVW["AdvisorWorker<br/>近 7 天复盘<br/>≤50 case · 摘要截 30 字"]:::work
+        MDW["ModelDownloadWorker<br/>前台下载 · .part 续传<br/>每 512KB 写进度"]:::work
+        SCHED["SyncScheduler · AnalysisScheduler · AdvisorScheduler<br/>周期 15/30/60/120 分钟 · NetworkType.CONNECTED"]:::work
+    end
+
+    subgraph L4["④ 领域 / 决策层"]
+        direction LR
+        CASE["AnalysisCase<br/>会话窗口 case<br/>caseId = sha1(conversation|windowEnd)[:16]"]:::dom
+        FORK["ForkPrefilter<br/>fork1 本地启发式预筛<br/>系统消息 / 纯表情 / 广告 / 窗口过小"]:::dom
+        CAL["CalendarHelper<br/>三级降级提醒链"]:::dom
+        ALARMH["AlarmHelper<br/>setAndAllowWhileIdle"]:::dom
+        REPLY["MessageReplier<br/>RemoteInput 直接回复<br/>仅用户手动触发"]:::dom
+        HIST["HistorySync<br/>启动回填 · 6 小时冷却"]:::dom
+        ENGINE["LocalLlmEngine<br/>端侧推理抽象<br/>当前 UnavailableLocalLlmEngine 占位"]:::dom
+    end
+
+    subgraph L5["⑤ 存储层 · app 私有目录（卸载即删）"]
+        direction LR
+        F1[("messages.jsonl<br/>MessageStore")]:::st
+        F2[("pending.jsonl<br/>PendingQueue")]:::st
+        F3[("analysis.jsonl<br/>AnalysisStore")]:::st
+        F4[("reminders.jsonl<br/>ReminderStore")]:::st
+        F5[("advisor_reports.jsonl<br/>AdvisorStore")]:::st
+        F6[("files/models/{modelId}/<br/>LocalModelStore")]:::st
+        PREFS["SharedPreferences ×12<br/>analysis_config · sync_config · watchlist<br/>prompt_config · app_state · history_sync<br/>a11y_extract · keepalive_state · local_model_store<br/>analysis_sync · advisor_store · collapse_state"]:::st
+    end
+
+    APPENTRY["MainApplication<br/>Application 入口 · 启动日志"]:::svc
+
+    MAIN --> CONSOLE
+    MAIN --> CONV
+    CONSOLE --> WATCH
+    CONSOLE --> ANALYSIS
+    CONSOLE --> REMUI
+    CONSOLE --> MODELS
+    CONV --> PROMPT
+    MAIN -.->|"首次启动自动弹出"| ONBOARD
+
+    NL --> F1
+    NL --> F2
+    A11Y -->|"mergeAndCollect"| F1
+    KA -.->|"requestRebind"| NL
+    BOOT -.->|"startForegroundService"| KA
+    APPENTRY -.-> KA
+
+    SCHED --> SYNCW
+    SCHED --> ANAW
+    SCHED --> ADVW
+    MODELS --> MDW
+    MDW --> F6
+
+    SYNCW --> F2
+    SYNCW --> F3
+    SYNCW --> F5
+    ANAW --> CASE
+    CASE --> FORK
+    ANAW --> ENGINE
+    ANAW --> F3
+    ANAW --> CAL
+    CAL --> ALARMH
+    ALARMH -.-> ALARMR
+    CAL --> F4
+    ADVW --> F5
+    HIST --> F1
+    CONSOLE --> PREFS
+    ANALYSIS --> F3
+    REMUI --> F4
+    WATCH --> PREFS
+    PROMPT --> PREFS
+    CONV --> REPLY

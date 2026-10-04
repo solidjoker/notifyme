@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 重点关注会话行：勾选框（点击切换关注）+ ✎ 提示词小标（已设自定义提示词时显示）+ 提示词按钮 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingStart="16dp"
+    android:paddingTop="4dp"
+    android:paddingEnd="8dp"
+    android:paddingBottom="4dp">
+
+    <CheckedTextView
+        android:id="@+id/tvWatchName"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:checkMark="?android:attr/listChoiceIndicatorMultiple"
+        android:gravity="center_vertical"
+        android:minHeight="40dp"
+        android:textColor="@color/text_primary"
+        android:textSize="15sp" />
+
+    <TextView
+        android:id="@+id/tvPromptMarker"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="8dp"
+        android:text="@string/prompt_marker_set"
+        android:textColor="@color/brand_green"
+        android:textSize="11sp"
+        android:visibility="gone" />
+
+    <Button
+        android:id="@+id/btnEditPrompt"
+        android:layout_width="wrap_content"
+        android:layout_height="36dp"
+        android:background="@drawable/btn_secondary"
+        android:minHeight="0dp"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:text="@string/btn_edit_prompt"
+        android:textColor="@color/text_primary"
+        android:textSize="12sp" />
+</LinearLayout>

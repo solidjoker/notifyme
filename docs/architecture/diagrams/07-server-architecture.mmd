@@ -1,0 +1,133 @@
+﻿%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true,'curve':'basis'}}}%%
+flowchart TB
+
+subgraph CLIENTS["客户端 · 三个入口"]
+    direction LR
+    AND["Android App<br/>weixin-monitor-open/test.apk<br/>SyncWorker · HistorySync"]
+    IOS["iPhone / iPad<br/>PWA 添加到主屏幕<br/>只读客户端（无采集能力）"]
+    BRW["浏览器<br/>GET / 最简消息页"]
+end
+
+subgraph FLASK["server/app.py · Flask 单文件 1491 行<br/>app.run host=0.0.0.0 port=PORT(默认8000) threaded=True"]
+    direction TB
+
+    subgraph AUTH["鉴权层"]
+        CK["check_token()  @152<br/>接受 Header X-Token 或 Query ?token=<br/>WEIXIN_TOKEN 未设置时全部放行<br/>例外：/console/manifest.json 与 /sw.js 免鉴权"]
+    end
+
+    subgraph WRITE["写入 API（Android 上报）"]
+        direction LR
+        RWX["POST /weixin  @174<br/>receive_weixin()<br/>必填字段校验 _validate_item @254<br/>返回 received/duplicated/invalid"]
+        RAN["POST /analysis  @348<br/>receive_analysis()<br/>case_id 唯一键去重"]
+        RAD["POST /advisor  @529<br/>receive_advisor()<br/>report_id 去重"]
+    end
+
+    subgraph READ["查询 API（PWA / App 回读）"]
+        direction LR
+        QM["GET /messages  @276<br/>conversation 模糊 · date · limit≤1000<br/>timestamp DESC + source 徽标"]
+        QA["GET /analysis  @438<br/>todo_only=1 只看待办<br/>s1/s2 反解析为对象"]
+        QAD["GET /advisor  @584"]
+    end
+
+    subgraph EXTRACT["提取编排 · 服务端触发 DB 直读"]
+        direction TB
+        AE["POST /admin/extract  @648<br/>full=1 全量 · source ∈ android|pc|all<br/>409 = 已在跑"]
+        ST["_extract_status 内存态 @609<br/>{running, last} + _extract_lock"]
+        BG["_run_extract_bg(full, source)  @622<br/>daemon Thread<br/>mod = __import__(leg + '_db_extract')<br/>result[leg] = mod.run_extract(full=full)<br/>单腿失败不拖垮另一腿"]
+        AS["GET /admin/extract/status  @679<br/>{ok, running, last}<br/>scanned/inserted/duplicated/skipped/elapsed_sec"]
+        AE --> BG
+        BG --> ST
+        ST --> AS
+    end
+
+    subgraph PWA["PWA 控制台 · 零 CDN 全内联"]
+        direction LR
+        CP["GET /console  @1344<br/>CONSOLE_HTML 常量 @705<br/>HTML+CSS+JS 全内联<br/>?token= 写 localStorage 后从地址栏抹除"]
+        MF["GET /console/manifest.json  @1355<br/>name 微信分析助手<br/>theme_color #07C160 · standalone"]
+        SW["GET /sw.js  @1369<br/>scope /<br/>骨架 cache-first<br/>API 永远走网络"]
+        IC["GET /console/icons/&lt;path&gt;  @1361"]
+    end
+
+    IDX["GET /  @1381<br/>最近 100 条倒序 · 群聊绿标<br/>来源徽标 橙=通知 / 蓝=数据库"]
+
+    LOCK["_write_lock = threading.Lock()  @58<br/>JSONL 追加写互斥"]
+end
+
+subgraph STORE["server/data/ · 落地存储（备份=拷贝这些文件）"]
+    direction TB
+    JSONL[("messages.jsonl<br/>原始归档 · 含重复上报<br/>字段与 Android 上报格式一致")]
+    DB[("messages.db · SQLite<br/>表 messages：sender/text/timestamp/<br/>conversation/is_group/received_at/source<br/>UNIQUE idx_messages_dedup<br/>(conversation,sender,timestamp,text)<br/>表 analyses：case_id UNIQUE +<br/>importance/escalated/s1/s2/forks/filtered")]
+    ADV[("advisor_reports.json<br/>ADVISOR_PATH @55")]
+    ADB[("android_db/EnMicroMsg.db<br/>模拟器拉回的加密原件 · gitignored")]
+    AST[("android_db/state.json<br/>增量游标 = 上次 max msgId")]
+    PST[("pc_db/state.json")]
+end
+
+subgraph LEGS["提取腿 · 两条独立实现"]
+    direction TB
+    subgraph ALEG["android_db_extract.py · 20979 B"]
+        direction TB
+        A1["MuMuManager.exe sh -v 0 -c<br/>root shell（adb shell 无 su）"]
+        A2["定位 MicroMsg/ 下 32位hex 账户目录<br/>= md5('mm'+uin)，内含 EnMicroMsg.db"]
+        A3["解析 default_uin ← MMKV<br/>files/mmkv/system_config_prefs<br/>（protobuf varint）"]
+        A4["IMEI 候选链：service call iphonesubinfo<br/>→ WLOGIN_DEVICE_INFO.xml<br/>→ 兜底 1234567890ABCDEF"]
+        A5["密钥 = MD5(IMEI + str(uin))[:7].lower()<br/>WCDB2/SQLCipher 页加密<br/>pageSize=1024 · PBKDF2-HMAC-SHA1<br/>4000 轮 · HMAC off · reserve=16(仅IV)"]
+        A6["root cp → /data/local/tmp && chmod 644<br/>adb pull → data/android_db/"]
+        A7["纯 Python pycryptodome 逐页 AES-CBC<br/>用第1页 page-size 字段验证密钥命中"]
+        A8["读 message / rcontact / chatroom<br/>私聊 talker=wxid → rcontact 备注/昵称<br/>群聊 talker=群id@chatroom<br/>群内容 = 发送者wxid + 换行 + 正文<br/>isSend=1 → sender 记为「我」<br/>type=1 原文，其余类型占位符"]
+        A9["写 messages.db source='android-db'<br/>跨源去重键 (conversation,sender,秒级ts,text)<br/>清理设备临时文件"]
+        A1 --> A2 --> A3 --> A4 --> A5 --> A6 --> A7 --> A8 --> A9
+    end
+    subgraph PLEG["pc_db_extract.py · 17082 B"]
+        direction TB
+        P1["PC 微信 4.x Msg*.db<br/>SQLCipher 4 · pageSize=4096<br/>HMAC-SHA512 · 256000 轮"]
+        P2["密钥来自内存搜索/进程注入<br/>WX_TOOLCHAIN 环境变量<br/>参考 reverse/case-wechat4/wx_read_test.py"]
+        P3["MSG_DB_REL=message/message_0.db<br/>CONTACT_DB_REL=contact/contact.db<br/>SKIP_USERS={qqmail,fmessage,medianote,...}<br/>SOURCE_TAG='pc-db'"]
+        P4["snapshot_and_decrypt → 临时目录<br/>_contact_name_map / _resolve_self_username<br/>_parse_row → run_extract(full, account)"]
+        P1 --> P2 --> P3 --> P4
+    end
+end
+
+AND -->|"HTTPS POST 三通道"| CK
+IOS -->|"?token= / X-Token"| CK
+BRW --> IDX
+CK --> RWX
+CK --> RAN
+CK --> RAD
+CK --> QM
+CK --> QA
+CK --> QAD
+CK --> AE
+CK --> CP
+CP --> MF
+CP --> SW
+CP --> IC
+RWX --> LOCK
+LOCK --> JSONL
+RWX --> DB
+RAN --> DB
+RAD --> ADV
+QM --> DB
+QA --> DB
+QAD --> ADV
+BG --> ALEG
+BG --> PLEG
+A9 --> DB
+A9 --> AST
+ADB -.->|"adb pull 源"| A6
+P4 --> DB
+P4 --> PST
+CP -->|"fetch /messages /analysis /advisor"| QM
+
+classDef ext fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000
+classDef app fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef srv fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000
+classDef store fill:#f5f5f5,stroke:#616161,stroke-width:2px,color:#000
+classDef leg fill:#ede7f6,stroke:#4527a0,stroke-width:2px,color:#000
+classDef auth fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#000
+
+class AND,IOS,BRW ext
+class CK auth
+class RWX,RAN,RAD,QM,QA,QAD,AE,AS,BG,ST,CP,MF,SW,IC,IDX,LOCK,FLASK,WRITE,READ,EXTRACT,PWA,AUTH srv
+class JSONL,DB,ADV,ADB,AST,PST store
+class A1,A2,A3,A4,A5,A6,A7,A8,A9,P1,P2,P3,P4,ALEG,PLEG,LEGS leg

@@ -1,0 +1,81 @@
+// Copyright (c) 2026 solidjoker
+// SPDX-License-Identifier: MIT
+
+package com.qiyeweixin.weixin_android
+
+import android.content.Context
+
+/**
+ * 端侧推理引擎抽象：对上层（AnalysisWorker）只暴露「system+user -> text」。
+ *
+ * 接入点设计（调研报告 §3 步骤 3）：
+ *  - S1 快筛（MiniCPM4-0.5B-MNN）：复用 AnalysisWorker.runS1OpenAi 的
+ *    system prompt + 防御式 JSON 解析，引擎只需实现本接口；
+ *  - S2 深分析（MiniCPM3-4B-GGUF）：同理复用 runS2OpenAi 的 prompt 与解析。
+ *
+ * 下一步引擎实现路线（二选一或并存，此处均为占位）：
+ *  1. MNN-LLM：NDK 源码编译 arm64-v8a + x86_64 so（build_64.sh 参数见调研报告
+ *     §2.4），JNI 封装参考官方 MnnLlmChat 的 ChatService；加载入口为模型目录
+ *     下的 config.json（llm_model/llm_weight/backend_type 等字段）。
+ *  2. llama.cpp：MiniCPM3-4B GGUF 可用第三方 AAR
+ *     `dev.ffmpegkit-maintained:llama-android:0.1.1`（仅 arm64-v8a、无流式），
+ *     x86_64（MuMu 模拟器）需自编译或付费版。
+ *
+ * 当前交付的是 UnavailableLocalLlmEngine：模型文件已就绪时分析链路可走通到
+ * 引擎调用点并优雅报「引擎未就绪」，JNI 库编好后替换实现即可，上层零改动。
+ */
+interface LocalLlmEngine {
+
+    /** 引擎可用（native 库已加载）；不可用时应由上层降级，不要直接调 chat。 */
+    val isReady: Boolean
+
+    /** 引擎不可用的原因说明（用于状态文案与日志）。 */
+    val unavailableReason: String
+
+    /**
+     * 生成式对话：system prompt + user 文本 -> 模型输出原文。
+     * 实现要求：线程安全由上层 Mutex 保证（AnalysisWorker.ANALYSIS_MUTEX）；
+     * 非流式，一次返回完整文本；超时/内存不足时抛 LocalEngineException。
+     */
+    suspend fun chat(system: String, user: String, maxTokens: Int): String
+}
+
+/** 本地引擎统一异常：message 直接展示到分析状态行。 */
+class LocalEngineException(message: String) : Exception(message)
+
+/** 推理库尚未编译进 APK 时的占位实现。 */
+class UnavailableLocalLlmEngine : LocalLlmEngine {
+    override val isReady: Boolean = false
+    override val unavailableReason: String = "本地推理引擎未就绪（MNN/llama.cpp 原生库未编译）"
+    override suspend fun chat(system: String, user: String, maxTokens: Int): String {
+        throw LocalEngineException(unavailableReason)
+    }
+}
+
+/**
+ * 引擎工厂：按模型 id 返回对应引擎实例（全局单例，避免重复加载常驻内存）。
+ * JNI 实现落地后在这里换为真实引擎（并按机型 RAM 做 4B 模型准入）。
+ */
+object LocalLlmEngines {
+
+    @Volatile
+    private var instances = mapOf<String, LocalLlmEngine>()
+
+    @Synchronized
+    fun forModel(context: Context, modelId: String): LocalLlmEngine {
+        instances[modelId]?.let { return it }
+        // TODO(engine)：MNN/llama.cpp so 编译完成后，这里按模型 id 返回
+        //  MnnLlmEngine(modelDir=LocalModelStore.modelDir(context, modelId))
+        //  并在 load 失败（内存不足/架构不支持）时回落 UnavailableLocalLlmEngine。
+        val engine: LocalLlmEngine = UnavailableLocalLlmEngine()
+        instances = instances + (modelId to engine)
+        return engine
+    }
+
+    /** 释放全部已加载引擎（内存压力大或模型被删除时调用）。 */
+    @Synchronized
+    fun releaseAll() {
+        // UnavailableLocalLlmEngine 无资源；真实引擎落地后在此释放 native 句柄
+        instances = emptyMap()
+    }
+}

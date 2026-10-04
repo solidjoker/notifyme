@@ -1,0 +1,64 @@
+﻿%%{init: {'theme':'base','themeVariables':{'fontSize':'15px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true,'curve':'basis'}}}%%
+flowchart TB
+    classDef ext  fill:#fff3e0,stroke:#e65100,stroke-width:1.5px,color:#4e342e
+    classDef app  fill:#e8f5e9,stroke:#2e7d32,stroke-width:1.5px,color:#1b5e20
+    classDef srv  fill:#e3f2fd,stroke:#1565c0,stroke-width:1.5px,color:#0d47a1
+    classDef llm  fill:#f3e5f5,stroke:#6a1b9a,stroke-width:1.5px,color:#4a148c
+    classDef store fill:#eceff1,stroke:#455a64,stroke-width:1.5px,color:#263238
+
+    WX["微信 App<br/>com.tencent.mm"]:::ext
+
+    subgraph DEV["📱 Android 设备 / MuMu 模拟器"]
+        direction TB
+        NL["WeChatNotificationListener<br/>通知监听服务（零注入）"]:::app
+        A11Y["WeChatA11yExtractService<br/>无障碍直读服务（免 root）"]:::app
+        CORE["微信分析助手 App 主体<br/>采集 · 分析 · 提醒 · 上报"]:::app
+        STORE[("files/*.jsonl<br/>SharedPreferences<br/>files/models/")]:::store
+        NL --> CORE
+        A11Y --> CORE
+        CORE <--> STORE
+    end
+
+    subgraph HOST["💻 PC 本机 · Windows"]
+        direction TB
+        FLASK["Flask 服务端<br/>server/app.py · 0.0.0.0:8000"]:::srv
+        ADBEX["android_db_extract.py<br/>EnMicroMsg.db 解密直读"]:::srv
+        PCEX["pc_db_extract.py<br/>PC 微信 4.x 库直读"]:::srv
+        DB[("messages.db · messages.jsonl<br/>analyses 表 · advisor_reports.json<br/>android_db/ · pc_db/")]:::store
+        FRPC["frpc 隧道<br/>localPort 8000 → remotePort 23444"]:::srv
+        FLASK --> ADBEX
+        FLASK --> PCEX
+        FLASK <--> DB
+        FRPC --> FLASK
+    end
+
+    subgraph VPS["☁️ VPS 公网入口"]
+        direction TB
+        NGINX["nginx :443<br/>location /mmonitor/"]:::srv
+        FRPS["frps :23444<br/>allowPorts 白名单"]:::srv
+        NGINX --> FRPS
+    end
+
+    subgraph AI["🧠 外部模型 / 下载服务"]
+        direction TB
+        LAYA["laya · JEV SystemOne<br/>POST /v1/systemone<br/>GET /v1/models"]:::llm
+        GLM["OpenAI 兼容通道 · GLM<br/>POST /chat/completions"]:::llm
+        MS["ModelScope CDN<br/>MiniCPM4-0.5B-MNN 311MB<br/>MiniCPM3-4B-GGUF 2.47GB"]:::llm
+    end
+
+    MUMU["MuMuManager.exe<br/>root shell + adb pull"]:::ext
+    IPHONE["📱 iPhone Safari<br/>PWA 纯查看端"]:::ext
+
+    WX -->|"① 系统通知官方回调"| NL
+    WX -->|"② 无障碍事件 · 逐屏向上翻页"| A11Y
+    CORE -->|"③ POST /weixin 消息<br/>POST /analysis 分析<br/>POST /advisor 复盘"| FLASK
+    CORE -->|"④ POST /admin/extract 触发<br/>GET /admin/extract/status 轮询<br/>GET /messages?limit=1000 回填"| FLASK
+    CORE -->|"⑤ S1 轻量判定<br/>noul / choice / score 题集"| LAYA
+    CORE -->|"⑥ S2 深度分析<br/>顾问复盘报告"| GLM
+    CORE -->|"⑦ 模型文件下载<br/>Range 断点续传"| MS
+    ADBEX --> MUMU
+    MUMU -->|"拉取加密库快照"| WX
+    CORE -->|"局域网直连<br/>http://IP:8000/weixin"| FLASK
+    FRPC -.->|"内网穿透"| FRPS
+    IPHONE -->|"https://your-domain.example<br/>/mmonitor/console?token="| NGINX
+    FLASK -->|"GET /console 单页应用<br/>GET /sw.js · manifest.json"| IPHONE

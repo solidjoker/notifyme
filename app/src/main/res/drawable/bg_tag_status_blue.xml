@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 提醒状态徽标：蓝底白字小圆角（已唤起日历，待手动保存） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/status_info" />
+    <corners android:radius="4dp" />
+</shape>

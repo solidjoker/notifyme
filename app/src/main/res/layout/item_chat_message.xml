@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 聊天气泡条目：时间分隔（>5 分钟跨段时显示）+ 左/右气泡。
+     对方消息左侧灰白气泡、我方右侧绿气泡（对齐微信视觉）；
+     群聊在气泡上方显示发言人小字。左右两侧通过 llOther/llMe 两个容器切换。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <!-- 时间分隔：跨段时由代码填充并显示 -->
+    <TextView
+        android:id="@+id/tvTimeDivider"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="6dp"
+        android:layout_marginBottom="6dp"
+        android:textColor="@color/time_gray"
+        android:textSize="11sp"
+        android:visibility="gone" />
+
+    <!-- 对方（左侧）气泡行 -->
+    <LinearLayout
+        android:id="@+id/llOther"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="start"
+            android:orientation="vertical">
+
+            <!-- 群聊发言人小字（私聊隐藏） -->
+            <TextView
+                android:id="@+id/tvSender"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_marginBottom="2dp"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/tvBubbleOther"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="48dp"
+                android:background="@drawable/bg_bubble_other"
+                android:padding="10dp"
+                android:textColor="@color/text_primary"
+                android:textIsSelectable="true"
+                android:textSize="15sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- 我方（右侧）气泡行：通知监听只捕获他人消息，当前不会有我方消息，
+         布局保留以便未来接入聊天记录提取后展示完整双向对话 -->
+    <LinearLayout
+        android:id="@+id/llMe"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="end"
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tvBubbleMe"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="48dp"
+            android:background="@drawable/bg_bubble_me"
+            android:padding="10dp"
+            android:textColor="@color/text_primary"
+            android:textIsSelectable="true"
+            android:textSize="15sp" />
+    </LinearLayout>
+
+</LinearLayout>

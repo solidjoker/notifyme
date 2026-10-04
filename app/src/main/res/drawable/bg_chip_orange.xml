@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- S1 判定 chip：需要行动时的浅橙底（配 accent_orange 文字） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/chip_orange_bg" />
+    <corners android:radius="10dp" />
+</shape>

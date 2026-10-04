@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 会话分组头卡片：badge + 会话名 + 分析角标 + 消息数 + 折叠箭头，下方最新一条预览。
+     点击热区分开：点文字区进会话详情页，点箭头折叠/展开（Adapter 里分别绑定）。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginBottom="8dp"
+    android:background="@drawable/bg_card"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <!-- 多选模式勾选标记：正常态隐藏，批量删除时由 Adapter 控制 -->
+        <TextView
+            android:id="@+id/tvSelectCheck"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:textSize="15sp"
+            android:visibility="gone" />
+
+        <!-- 群/私 badge：背景与文字色由 Adapter 按类型设置 -->
+        <TextView
+            android:id="@+id/tvTag"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingStart="6dp"
+            android:paddingTop="2dp"
+            android:paddingEnd="6dp"
+            android:paddingBottom="2dp"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/tvConversation"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <!-- 分析角标：有待办=橙底「⚡N」，已分析=灰点；未分析隐藏 -->
+        <TextView
+            android:id="@+id/tvAnalysisBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:paddingStart="6dp"
+            android:paddingTop="2dp"
+            android:paddingEnd="6dp"
+            android:paddingBottom="2dp"
+            android:textSize="11sp"
+            android:visibility="gone" />
+
+        <!-- 日历提醒标记：该会话存在提醒记录时显示，点击进该会话的提醒列表 -->
+        <TextView
+            android:id="@+id/tvReminderBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:text="📅"
+            android:textSize="13sp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/tvCount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp" />
+
+        <!-- 折叠箭头：独立点击热区（padding 扩大触控范围），只负责折叠/展开 -->
+        <TextView
+            android:id="@+id/tvArrow"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:padding="8dp"
+            android:textColor="@color/text_secondary"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <!-- 最新一条预览：折叠时也有信息量 -->
+    <TextView
+        android:id="@+id/tvPreview"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:ellipsize="end"
+        android:singleLine="true"
+        android:textColor="@color/text_secondary"
+        android:textSize="13sp" />
+
+    <!-- 快捷入口行：关注 / 提示词注入 / 立即分析 / 分析结果，四格等宽。
+         折叠态下同样可用；各 chip 点击逻辑在 Adapter 绑定。 -->
+    <LinearLayout
+        android:id="@+id/quickChipsRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:baselineAligned="false"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/btnQuickWatch"
+            android:layout_width="0dp"
+            android:layout_height="34dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_chip"
+            android:gravity="center"
+            android:singleLine="true"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/btnQuickPrompt"
+            android:layout_width="0dp"
+            android:layout_height="34dp"
+            android:layout_marginStart="6dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_chip"
+            android:gravity="center"
+            android:singleLine="true"
+            android:textSize="11sp" />
+
+        <!-- 分析格：chip + 底部不确定进度条（分析入队后由 Adapter 显示） -->
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="34dp"
+            android:layout_marginStart="6dp"
+            android:layout_weight="1">
+
+            <TextView
+                android:id="@+id/btnQuickAnalyze"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@drawable/bg_chip"
+                android:gravity="center"
+                android:singleLine="true"
+                android:textSize="11sp" />
+
+            <ProgressBar
+                android:id="@+id/progressAnalyze"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="4dp"
+                android:layout_gravity="bottom"
+                android:indeterminate="true"
+                android:indeterminateTint="@color/brand_green"
+                android:visibility="gone" />
+        </FrameLayout>
+
+        <TextView
+            android:id="@+id/btnQuickResult"
+            android:layout_width="0dp"
+            android:layout_height="34dp"
+            android:layout_marginStart="6dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_chip"
+            android:gravity="center"
+            android:singleLine="true"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+</LinearLayout>

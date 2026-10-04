@@ -1,0 +1,47 @@
+﻿%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true}}}%%
+flowchart TB
+    classDef in   fill:#e8f5e9,stroke:#2e7d32,stroke-width:1.5px,color:#1b5e20
+    classDef dec  fill:#fff8e1,stroke:#f9a825,stroke-width:2px,color:#f57f17
+    classDef lv   fill:#e3f2fd,stroke:#1565c0,stroke-width:1.5px,color:#0d47a1
+    classDef st   fill:#eceff1,stroke:#455a64,stroke-width:1.5px,color:#263238
+    classDef fail fill:#ffebee,stroke:#c62828,stroke-width:1.5px,color:#b71c1c
+
+    IN["AnalysisWorker 落库后<br/>needAction = true 且提醒开关开启<br/>→ CalendarHelper.createReminder(dedupKey = caseId)"]:::in
+
+    IN --> PERM{"READ_CALENDAR /<br/>WRITE_CALENDAR<br/>运行时权限已授予？<br/>（控制台开启提醒开关时申请）"}:::dec
+    PERM -->|"拒绝"| ROLLBACK["自动回退提醒开关<br/>记录 STATUS_FAILED"]:::fail
+    PERM -->|"已授予"| PARSE
+
+    PARSE["parseDueTime(dueTimeText, baseTime)<br/>支持：yyyy-MM-dd HH:mm<br/>M月d日 H点 / HH:mm<br/>今天 / 明天 / 后天 HH:mm<br/>周X HH:mm · 下午/晚上 +12h<br/>解析失败 → 分析时间 +1 小时<br/>事件默认占 1 小时"]:::in
+
+    PARSE --> D1{"① dedupKey 已存在于<br/>ReminderStore？"}:::dec
+    D1 -->|"是"| DUP["去重跳过<br/>同一窗口永不重复创建<br/>（成功/失败都只建一次）"]:::st
+
+    D1 -->|"否"| CHAIN["runReminderChain()"]:::in
+
+    CHAIN --> L1{"Level 1<br/>findWritableCalendar()<br/>CALENDAR_ACCESS_LEVEL 可写？"}:::dec
+    L1 -->|"有可写日历账户"| D2{"② eventExists()<br/>CalendarContract.Events<br/>按 title + dtstart 查重"}:::dec
+    D2 -->|"已存在"| DUP2["去重跳过<br/>防「本地记录被删但日历已有事件」"]:::st
+    D2 -->|"不存在"| INS["insertEvent()<br/>provider 直接插入事件<br/>+ 写 CalendarContract.Reminders 行<br/>提前量 reminderLeadMinutes + METHOD_ALERT<br/>日历到点自己弹提醒"]:::lv
+    INS --> ST1["STATUS_CALENDAR<br/>🟢 已建日历事件<br/>calendarEventId 记录在案"]:::st
+
+    L1 -->|"无可写日历"| L2{"Level 2<br/>系统里有日历 App<br/>可响应 ACTION_INSERT？"}:::dec
+    L2 -->|"有"| INTENT["buildCalendarInsertIntent()<br/>Intent.ACTION_INSERT 预填<br/>标题 / 时间 / 描述<br/>唤起系统日历由用户手动保存"]:::lv
+    INTENT --> ST2["STATUS_INTENT<br/>🔵 已唤起日历待保存<br/>列表页可「再次唤起」重放 intent"]:::st
+
+    L2 -->|"连日历 App 都没有<br/>（如本模拟器）"| L3["Level 3 · App 内闹钟兜底<br/>AlarmHelper.schedule()<br/>setAndAllowWhileIdle<br/>（刻意不用 setExactAndAllowWhileIdle<br/>→ 不申请 SCHEDULE_EXACT_ALARM）<br/>触发时间 = 事件时间 − 提前量<br/>已过点则 1 秒后尽快补提醒"]:::lv
+    L3 --> RCV["ReminderReceiver<br/>action REMINDER_ALERT · exported=false<br/>渠道 reminder_alert IMPORTANCE_HIGH<br/>发送前再防御性检查 POST_NOTIFICATIONS"]:::lv
+    RCV --> ST3["STATUS_ALARM<br/>🟠 已设 App 内提醒<br/>通知点击 → ConversationActivity<br/>无会话名回退首页"]:::st
+
+    L3 -->|"AlarmManager 也不可用"| ST4["STATUS_FAILED<br/>🔴 失败 + note 原因<br/>列表页可「重试」重跑三级链<br/>dedupKey 不变：先删旧记录再写新记录"]:::fail
+
+    ST1 --> FILE[("ReminderStore<br/>files/reminders.jsonl<br/>ReminderRecord: dedupKey/title/description<br/>/conversation/eventTime/calendarEventId<br/>/createdAt/status/note")]:::st
+    ST2 --> FILE
+    ST3 --> FILE
+    ST4 --> FILE
+    DUP --> FILE
+    DUP2 --> FILE
+    FILE --> UI["ReminderListActivity<br/>倒序展示 + 状态徽标<br/>🟢已建日历 / 🔵待保存 / 🟠App内 / 🔴失败"]:::st
+
+    NOTE["天然去重设计：AlarmManager PendingIntent<br/>requestCode = dedupKey.hashCode()<br/>intent 不含变化 data + FLAG_UPDATE_CURRENT<br/>→ 同一 dedupKey 重复设置会覆盖旧闹钟"]:::st
+    L3 -.-> NOTE

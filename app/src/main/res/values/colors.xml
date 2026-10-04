@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 启动图标底色（微信绿） -->
+    <color name="ic_launcher_background">#07C160</color>
+
+    <!-- ===== 设计规范色板（微信绿现代卡片风） ===== -->
+    <color name="brand_green">#07C160</color>
+    <color name="text_primary">#1A1A1A</color>
+    <color name="text_secondary">#888888</color>
+    <color name="page_bg">#F5F6F7</color>
+    <color name="card_bg">#FFFFFF</color>
+    <color name="divider">#E5E5E5</color>
+    <color name="danger_red">#FA5151</color>
+
+    <!-- 状态语义色 -->
+    <color name="status_ok">#07C160</color>
+    <color name="status_error">#FA5151</color>
+    <color name="status_gray">#888888</color>
+    <!-- 提醒状态徽标：唤起日历待保存（微信蓝） -->
+    <color name="status_info">#576B95</color>
+
+    <!-- 标签 badge -->
+    <color name="tag_group_bg">#07C160</color>
+    <color name="tag_private_bg">#FFE9E9E9</color>
+
+    <!-- 分析结果标签：待办橙 / 已分析浅灰 -->
+    <color name="accent_orange">#FF8F1F</color>
+    <color name="tag_analyzed_bg">#FFF0F0F0</color>
+
+    <!-- 会话详情页聊天气泡：对方白 / 我方微信绿（对齐微信视觉） -->
+    <color name="bubble_other">#FFFFFF</color>
+    <color name="bubble_me">#95EC69</color>
+    <!-- S1 chips：待办橙底（浅） / 中性灰底 -->
+    <color name="chip_orange_bg">#FFF1E0</color>
+    <color name="chip_bg">#F0F0F0</color>
+    <color name="time_gray">#B2B2B2</color>
+</resources>

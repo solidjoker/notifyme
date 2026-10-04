@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 微信聊天无障碍直读服务配置：
+     只监听微信窗口（DEBUG 包运行时会追加本 App 便于采集引擎自检，见服务 onServiceConnected）；
+     canRetrieveWindowContent 是读屏前提；canPerformGestures 供翻页手势兜底 -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:canPerformGestures="true"
+    android:notificationTimeout="100"
+    android:packageNames="com.tencent.mm"
+    android:description="@string/a11y_service_desc"
+    android:summary="@string/a11y_service_summary" />

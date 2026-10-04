@@ -1,0 +1,126 @@
+﻿%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true,'curve':'basis'}}}%%
+flowchart TB
+
+subgraph SRC["仓库 · C:\project\qiyeweixin\weixin_android"]
+    direction TB
+    RG["settings.gradle.kts<br/>rootProject.name = WeixinAndroid · include :app<br/>FAIL_ON_PROJECT_REPOS + google/mavenCentral"]
+    RB["build.gradle.kts 根<br/>com.android.application 8.5.2 apply false<br/>org.jetbrains.kotlin.android 2.0.20 apply false"]
+    AB["app/build.gradle.kts<br/>namespace/applicationId com.qiyeweixin.weixin_android<br/>compileSdk 34 · minSdk 26 · targetSdk 34<br/>versionCode 4 · versionName 0.1.3<br/>Java 17 · jvmTarget 17 · buildConfig=true<br/>release: isMinifyEnabled=false"]
+    SEC[("secrets.local.properties · gitignored<br/>GLM_BASE_URL / GLM_API_KEY / GLM_MODEL<br/>JEV_URL / JEV_API_KEY<br/>MONITOR_URL / MONITOR_TOKEN")]
+    DEP["依赖仅 4 个<br/>androidx.core:core-ktx:1.13.1<br/>androidx.recyclerview:recyclerview:1.3.2<br/>androidx.work:work-runtime-ktx:2.9.1<br/>com.squareup.okhttp3:okhttp:4.12.0<br/>JSON 用平台内置 org.json（无 Gson/Moshi）"]
+    NOWRAP["仓库不含 gradle-wrapper jar<br/>首次需 gradle wrapper --gradle-version 8.9"]
+end
+
+subgraph FLAVOR["productFlavors · flavorDimensions += channel"]
+    direction LR
+    subgraph OPEN["open · 对外发布"]
+        direction TB
+        O1["全部 DEFAULT_* buildConfigField = 空串<br/>APK 内不含任何密钥字符串"]
+        O2["DEFAULT_ANALYSIS_PROTOCOL / URL / KEY / MODEL<br/>DEFAULT_LAYA_URL / KEY<br/>DEFAULT_SERVER_URL / MONITOR_TOKEN<br/>全部为空 → 用户自行填写"]
+        O3["已知症状（设计如此）：<br/>无预置模型 · 无历史回填"]
+    end
+    subgraph BETA["beta · 内部测试（产品名 test）"]
+        direction TB
+        B1["applicationIdSuffix .test<br/>versionNameSuffix -test<br/>resValue app_name = 微信分析助手·测试"]
+        B2["DEFAULT_ANALYSIS_PROTOCOL = openai<br/>DEFAULT_ANALYSIS_URL = secret GLM_BASE_URL<br/>DEFAULT_ANALYSIS_KEY = secret GLM_API_KEY<br/>DEFAULT_ANALYSIS_MODEL = secret GLM_MODEL<br/>DEFAULT_LAYA_URL = secret JEV_URL<br/>DEFAULT_LAYA_KEY = secret JEV_API_KEY<br/>DEFAULT_SERVER_URL = secret MONITOR_URL<br/>DEFAULT_MONITOR_TOKEN = secret MONITOR_TOKEN"]
+        B3["AGP 禁止 flavor 名以 test 开头<br/>故内部名 beta，产品名 test<br/>首次启动 seed 进 BuildConfig（仅填充可改）"]
+    end
+end
+
+subgraph BUILD["构建产物"]
+    direction LR
+    REN["applicationVariants.all 重命名<br/>channel = if flavorName==beta then test else flavorName<br/>outputFileName = weixin-monitor-<channel>.apk"]
+    APK1[("weixin-monitor-open.apk<br/>apk/ 目录现存 3912820 B")]
+    APK2[("weixin-monitor-test.apk")]
+end
+
+subgraph DEVICE["设备安装与授权（adb install 之后）"]
+    direction TB
+    D0["adb install app/build/outputs/apk/debug/app-debug.apk"]
+    D1["通知监听 = 特殊权限<br/>BIND_NOTIFICATION_LISTENER_SERVICE<br/>不能运行时申请<br/>必须去 Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS 手动开"]
+    D2["验证：adb shell settings get secure<br/>enabled_notification_listeners"]
+    D3["无障碍服务<br/>BIND_ACCESSIBILITY_SERVICE<br/>系统设置 → 无障碍 手动开启"]
+    D4["电池白名单<br/>REQUEST_IGNORE_BATTERY_OPTIMIZATIONS<br/>主页 btnBatteryWhitelist"]
+    D5["开机自启 BootReceiver<br/>BOOT_COMPLETED → KeepAliveService<br/>Android 12+ 后台起 FGS 会被拒<br/>ForegroundServiceStartNotAllowedException<br/>兜底：来通知时系统自动 bind 监听器<br/>+ 60s 看门狗 requestRebind"]
+    D6["日志：adb logcat -s WeChatListener:I"]
+    D0 --> D1 --> D2
+    D0 --> D3
+    D0 --> D4
+    D0 --> D5
+end
+
+subgraph SVRSTART["服务端启动 · PC 宿主机"]
+    direction TB
+    S0["依赖：requirements.txt 仅 flask==3.1.3<br/>用父项目虚拟环境<br/>.venv\Scripts\python.exe weixin_android\server\app.py<br/>默认 0.0.0.0:8000 · set PORT=9000 可改"]
+    BAT["server\启动服务.bat 三件事"]
+    S1["① set WEIXIN_TOKEN<br/>真值在 gitignored server\secrets.local.bat<br/>改令牌必须同步改 App 的「访问令牌」<br/>并重按「保存并启用定时上报」，否则 401"]
+    S2["② adb connect 127.0.0.1:16384（MuMu）<br/>adb reverse tcp:8000 tcp:8000<br/>模拟器内 http://127.0.0.1:8000 直达宿主<br/>免局域网 IP / 防火墙问题"]
+    S3["③ 前台运行 Flask，Ctrl+C 停止"]
+    S4["注意：adb reverse 存活于 adbd<br/>模拟器重启即失效 → 每次重跑 bat"]
+    S5["Windows 防火墙：放行入站 TCP 8000 Private<br/>New-NetFirewallRule -DisplayName WeixinServer 8000<br/>-Direction Inbound -Protocol TCP -LocalPort 8000<br/>-Action Allow -Profile Private"]
+    S6["可选计划任务（每小时增量提取）<br/>schtasks /create /tn WeixinAndroidExtract<br/>/tr .venv\Scripts\python.exe ...\android_db_extract.py<br/>/sc hourly"]
+    BAT --> S1
+    BAT --> S2
+    BAT --> S3
+    S3 --> S4
+    S0 --> S5
+end
+
+subgraph DEPLOY["两条访问链路"]
+    direction TB
+    subgraph LAN["链路 A · 局域网 / 模拟器直连"]
+        direction LR
+        L1["App 服务器地址<br/>http://127.0.0.1:8000/weixin<br/>或 http://<宿主局域网IP>:8000/weixin"]
+        L2["adb reverse tcp:8000 tcp:8000"]
+        L3["Flask 0.0.0.0:8000"]
+        L1 --> L2 --> L3
+    end
+    subgraph PUB["链路 B · 公网 HTTPS"]
+        direction LR
+        P1["App / iPhone PWA<br/>https://your-domain.example/mmonitor/weixin<br/>https://your-domain.example/mmonitor/console?token="]
+        P2["VPS nginx :443<br/>/etc/nginx/sites-enabled/your-domain.example<br/>location /mmonitor/ 反代块"]
+        P3["VPS 本地 127.0.0.1:23444<br/>frps · /etc/frps/frps.toml<br/>allowPorts 必须含 23444<br/>否则 port not allowed"]
+        P4["宿主机 frpc 隧道<br/>frpc/frpc.toml<br/>mmonitor 块 localPort 8000 → remotePort 23444<br/>热重载 curl -u admin:... 127.0.0.1:7400/api/reload"]
+        P5["Flask 127.0.0.1:8000"]
+        P1 --> P2 --> P3 --> P4 --> P5
+    end
+    DBG["排障顺序：Flask 存活<br/>（127.0.0.1:8000/messages 带 token → 200）<br/>→ frpc 隧道在跑 → nginx"]
+    SEC2["安全红线：默认定位局域网/自控服务器<br/>Flask 内置服务器不用于高并发生产<br/>公网必须 WEIXIN_TOKEN（长随机）+ HTTPS<br/>可 caddy/nginx 反代或 frp，绝不裸奔<br/>令牌当密码，永不提交<br/>messages.jsonl / messages.db 含聊天原文"]
+    PUB --> DBG
+    DBG --> SEC2
+end
+
+RG --> AB
+RB --> AB
+SEC -->|"secret(key) 读取<br/>bcString(value) 转义反斜杠+引号"| FLAVOR
+AB --> FLAVOR
+DEP --> AB
+NOWRAP -.->|"gradle wrapper --gradle-version 8.9<br/>然后 gradlew.bat assembleDebug"| BUILD
+OPEN --> REN
+BETA --> REN
+REN --> APK1
+REN --> APK2
+APK1 --> D0
+APK2 --> D0
+D1 -.->|"监听器采集 → SyncWorker 上报"| L1
+S2 -.-> L2
+S0 --> L3
+S0 --> P5
+
+classDef src fill:#eceff1,stroke:#37474f,stroke-width:2px,color:#000
+classDef fl fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000
+classDef bld fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef dev fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000
+classDef srv fill:#ede7f6,stroke:#4527a0,stroke-width:2px,color:#000
+classDef net fill:#e0f7fa,stroke:#00695c,stroke-width:2px,color:#000
+classDef store fill:#f5f5f5,stroke:#616161,stroke-width:2px,color:#000
+classDef warn fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#000
+
+class RG,RB,AB,DEP,NOWRAP src
+class O1,O2,O3,B1,B2,B3,OPEN,BETA,FLAVOR fl
+class REN,BUILD bld
+class D0,D1,D2,D3,D4,D5,D6,DEVICE dev
+class S0,BAT,S1,S2,S3,S4,S6,SVRSTART srv
+class L1,L2,L3,P1,P2,P3,P4,P5,LAN,PUB,DEPLOY net
+class SEC,APK1,APK2 store
+class S5,DBG,SEC2 warn

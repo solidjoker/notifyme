@@ -1,0 +1,79 @@
+﻿%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true}}}%%
+flowchart TB
+    classDef start fill:#e8f5e9,stroke:#2e7d32,stroke-width:1.5px,color:#1b5e20
+    classDef fork  fill:#fff8e1,stroke:#f9a825,stroke-width:2px,color:#f57f17
+    classDef llmcall  fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1.5px,color:#4a148c
+    classDef out   fill:#e3f2fd,stroke:#1565c0,stroke-width:1.5px,color:#0d47a1
+    classDef stop  fill:#eceff1,stroke:#455a64,stroke-width:1.5px,color:#263238
+    classDef dec   fill:#ffebee,stroke:#c62828,stroke-width:1.5px,color:#b71c1c
+
+    TRIG["触发：AnalysisScheduler 周期任务<br/>（15/30/60/120 分钟）或控制台「立即分析」<br/>或会话详情页「立即分析本会话」<br/>inputData KEY_FORCE_CONVERSATION"]:::start
+
+    GATE{"enabled 开关关闭<br/>或当前预设槽位 URL 为空？"}:::dec
+    TRIG --> GATE
+    GATE -->|"是"| SKIP["直接 Result.success()<br/>不产生任何网络请求"]:::stop
+
+    GATE -->|"否"| LOOP["遍历重点关注会话<br/>WatchlistStore：空名单 = 全部关注<br/>SENTINEL_NONE = 一个都不关注<br/>每会话取最近 ≤10 条组成 case 窗口<br/>单轮 ≤ MAX_CONVERSATIONS_PER_ROUND=10 · 间隔 500ms"]:::start
+
+    LOOP --> DEDUP{"caseId 已存在于<br/>analysis.jsonl？<br/>（强制分析单会话时跳过）"}:::dec
+    DEDUP -->|"是 · 窗口无新消息"| SKIP2["跳过，不重复分析"]:::stop
+
+    DEDUP -->|"否"| F1
+
+    subgraph FORK1["fork 1 · prefilter — 廉价本地启发式预筛（零网络、零模型成本）"]
+        F1["ForkPrefilter.evaluate(kase)<br/>初始 prob=1.0，乘性惩罚：<br/>· 窗口 &lt;2 条 → ×0.3<br/>· 垃圾占比 ≥80% → ×0.05<br/>· 垃圾占比 ≥50% → ×0.3<br/>· 全窗口无文字 → min(prob, 0.02)<br/>垃圾 = 系统提示语 / 纯表情标签 / 广告链接"]:::fork
+    end
+
+    F1 --> F1D{"prob &lt; SHARP_THRESHOLD<br/>= 0.15 ?"}:::dec
+    F1D -->|"是 · verdict=sharp"| FILT["就地结案 filteredRecord()<br/>filtered=true · protocol=prefilter<br/>s1/s2 字段全部兜底 · forks 只含 prefilter<br/>不调 laya / S2"]:::stop
+
+    F1D -->|"否 · verdict=split"| F2
+
+    subgraph FORK2["fork 2 · s1 — System 1 轻量判定"]
+        F2{"AnalysisConfig.s1Type ?"}:::fork
+        F2A["runS1SystemOne()<br/>laya 协议 · POST {baseUrl}/v1/systemone<br/>state.chat{relationship:wechat_work,<br/>conversation, messages:[[from,text]], latest_from}<br/>+ state.background ← PromptStore 会话级提示词<br/>题集一次批量 fan-out"]:::llmcall
+        F2B["runS1Local()<br/>端侧 MiniCPM4-0.5B-MNN<br/>复用 openai 风格 prompt + 防御式解析"]:::llmcall
+        F2 -->|"remote / systemone 预设"| F2A
+        F2 -->|"local_model"| F2B
+    end
+
+    F2A --> S1OUT["S1 判定结果（防御式解析，字段缺失不崩）<br/>need_action: noul → {value, prob}<br/>importance: score 0-9<br/>due_window: choice none/today/tomorrow/this_week/later<br/>topic: choice work_task/schedule/notice/smalltalk/risk<br/>confidence"]:::out
+    F2B --> S1OUT
+
+    S1OUT --> F2REC["forks += {fork:s1, prob:needActionProb,<br/>verdict: needAction ? split : sharp,<br/>note: s1.toInjectText()}<br/>logcat tag = AgentTree"]:::out
+
+    F2REC --> F3
+
+    subgraph FORK3["fork 3 · escalate — S1→S2 自动升级判定（JEV 体系没有、本 App 新增）"]
+        F3{"s1.shouldEscalate() ?<br/>need_action prob ≥ 0.5<br/>或 importance ≥ 6<br/>或 confidence &lt; 0.5<br/>任一命中即升级"}:::fork
+    end
+
+    F3 -->|"否 · verdict=sharp"| SETTLE["结案：只保留 S1 结论<br/>escalated = false"]:::stop
+    F3 -->|"是 · verdict=split"| S2SEL
+
+    S2SEL{"config.s2Enabled 且<br/>s2Provider = local ?"}:::dec
+    S2SEL -->|"是"| S2L["runS2Local()<br/>端侧 MiniCPM3-4B-GGUF Q4_K_M"]:::llmcall
+    S2SEL -->|"否 · 走云端 openai 槽位"| S2C{"config.s2Slot() != null ?<br/>（开关关闭或未配置则跳过）"}:::dec
+    S2C -->|"是"| S2R["runS2OpenAi()<br/>POST {url}/chat/completions<br/>S1 判定结论注入 S2 prompt<br/>服务商：jev / glm / custom"]:::llmcall
+    S2C -->|"否"| SETTLE
+
+    S2L --> S2OUT["S2 深分析结果<br/>summary · due_time<br/>suggested_action · tasks[]<br/>失败不拖垮 case：保留 S1，escalated=false"]:::out
+    S2R --> S2OUT
+    S2OUT --> REC
+
+    SETTLE --> REC
+    FILT --> REC
+
+    REC["AnalysisCaseRecord 落库<br/>AnalysisStore → files/analysis.jsonl<br/>含 forks 决策轨迹数组 + raw_json 原文"]:::out
+
+    REC --> NA{"needAction = true<br/>且提醒开关开启？"}:::dec
+    NA -->|"是"| CAL["CalendarHelper.create<br/>dedupKey = caseId<br/>→ 三级降级提醒链"]:::out
+    NA -->|"否"| END["本轮结束 · recordResult 写状态文案<br/>网络/HTTP 失败 → Result.retry()"]:::stop
+    CAL --> END
+
+    REC -->|"SyncWorker 通道 2"| UP["POST {server}/analysis<br/>case_id 唯一去重 · snake_case<br/>不带 raw_json"]:::out
+
+    ADV["AdvisorWorker（Fable 层）<br/>通读近 7 天 case · ≤50 个 · 摘要截 30 字<br/>调 System 2 服务商生成复盘<br/>{summary, suggestions:[{type,title,detail}]}<br/>type ∈ prompt/watchlist/threshold/other"]:::llmcall
+    REC -.->|"每 7 天周期 或 控制台「顾问复盘」"| ADV
+    ADV --> ADVS[("AdvisorStore<br/>files/advisor_reports.jsonl")]:::out
+    ADVS -->|"SyncWorker 通道 3"| UP2["POST {server}/advisor<br/>服务端按 report_id 去重<br/>→ data/advisor_reports.json"]:::out
