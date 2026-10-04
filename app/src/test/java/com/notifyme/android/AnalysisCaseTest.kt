@@ -158,7 +158,7 @@ class AnalysisCaseTest {
     }
 
     @Test
-    fun `buildStateJson 按窗口顺序输出 messages 且 from 恒为 other`() {
+    fun `buildStateJson 按窗口顺序输出 messages 且通知消息 from 为 other`() {
         val kase = AnalysisCase.fromMessages(
             AppSourceRegistry.PKG_WECHAT,
             "张三",
@@ -190,6 +190,54 @@ class AnalysisCaseTest {
 
         assertEquals("李四: 评审改到三点", arr.getJSONObject(0).getString("text"))
         assertEquals("王五: 收到", arr.getJSONObject(1).getString("text"))
+    }
+
+    @Test
+    fun `buildStateJson 自己发出的消息 from 为 me 且 latest_from 跟随末条`() {
+        val kase = AnalysisCase.fromMessages(
+            AppSourceRegistry.PKG_WECHAT,
+            "张三",
+            listOf(
+                msg("好的我来处理", 1_000L, sender = ChatMessage.SENDER_SELF),
+                msg("麻烦尽快", 2_000L)
+            )
+        )!!
+
+        val chat = kase.buildStateJson().getJSONObject("chat")
+        val arr = chat.getJSONArray("messages")
+        assertEquals("me", arr.getJSONObject(0).getString("from"))
+        assertEquals("好的我来处理", arr.getJSONObject(0).getString("text"))
+        assertEquals("other", arr.getJSONObject(1).getString("from"))
+        assertEquals("末条是对方消息", "other", chat.getString("latest_from"))
+    }
+
+    @Test
+    fun `buildStateJson 末条是自己消息时 latest_from 为 me`() {
+        val kase = AnalysisCase.fromMessages(
+            AppSourceRegistry.PKG_WECHAT,
+            "张三",
+            listOf(
+                msg("明天交", 1_000L),
+                msg("收到", 2_000L, sender = ChatMessage.SENDER_SELF)
+            )
+        )!!
+        assertEquals("me", kase.buildStateJson().getJSONObject("chat").getString("latest_from"))
+    }
+
+    @Test
+    fun `buildStateJson 群聊自己消息 text 带名前缀且 from 为 me`() {
+        val kase = AnalysisCase.fromMessages(
+            AppSourceRegistry.PKG_WECHAT,
+            "项目群",
+            listOf(
+                msg("我来发版", 1_000L, conversation = "项目群",
+                    sender = ChatMessage.SENDER_SELF, isGroup = true)
+            )
+        )!!
+        val row = kase.buildStateJson().getJSONObject("chat")
+            .getJSONArray("messages").getJSONObject(0)
+        assertEquals("me", row.getString("from"))
+        assertEquals("我: 我来发版", row.getString("text"))
     }
 
     @Test
@@ -246,6 +294,19 @@ class AnalysisCaseTest {
             listOf(msg("评审改到三点", 1_000L, conversation = "项目群", sender = "李四", isGroup = true))
         )!!
         assertEquals("对方: 李四: 评审改到三点", kase.windowText())
+    }
+
+    @Test
+    fun `windowText 自己消息以 我 开头`() {
+        val kase = AnalysisCase.fromMessages(
+            AppSourceRegistry.PKG_WECHAT,
+            "张三",
+            listOf(
+                msg("明天能交吗", 1_000L),
+                msg("可以", 2_000L, sender = ChatMessage.SENDER_SELF)
+            )
+        )!!
+        assertEquals("对方: 明天能交吗\n我: 可以", kase.windowText())
     }
 
     // ---------------- S1 题集 ----------------

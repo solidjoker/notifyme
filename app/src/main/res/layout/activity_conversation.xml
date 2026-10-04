@@ -195,4 +195,46 @@
         </LinearLayout>
     </androidx.core.widget.NestedScrollView>
 
+    <!-- 快速回复栏：仅当该会话有存活的「直接回复」通知 action 时显示（代码控制） -->
+    <LinearLayout
+        android:id="@+id/llQuickReply"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/card_bg"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="8dp"
+        android:visibility="gone">
+
+        <EditText
+            android:id="@+id/etQuickReply"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_reply_input"
+            android:hint="@string/quick_reply_hint"
+            android:importantForAutofill="no"
+            android:inputType="textMultiLine|textCapSentences"
+            android:maxLines="3"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:textColor="@color/text_primary"
+            android:textColorHint="@color/text_secondary"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/btnQuickReplySend"
+            android:layout_width="wrap_content"
+            android:layout_height="44dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/btn_primary"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:text="@string/quick_reply_send"
+            android:textColor="@color/card_bg"
+            android:textSize="14sp" />
+    </LinearLayout>
+
 </LinearLayout>

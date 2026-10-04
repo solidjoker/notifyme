@@ -141,6 +141,11 @@
     <string name="overlay_permission_ok">悬浮窗权限已授予</string>
     <string name="overlay_desc">重要消息以悬浮卡出现在任意界面之上；无权限时降级为系统横幅。MIUI/HyperOS 还需在系统设置允许「后台弹出界面」。</string>
     <string name="overlay_debug_test">调试：弹一张测试悬浮卡</string>
+    <string name="quick_reply_hint">快速回复（通过通知栏直接回复发送）</string>
+    <string name="quick_reply_send">发送</string>
+    <string name="quick_reply_empty">内容不能为空</string>
+    <string name="quick_reply_failed">发送失败：通知已过期，请等新通知或去微信里回复</string>
+    <string name="quick_reply_sent">已发送</string>
     <string name="sync_push_switch">启用服务器上报（关闭后消息继续累积，开启时补报）</string>
 
     <!-- 聊天记录提取（服务端安卓库直读，走 serverUrl 同源 /admin/extract） -->

@@ -450,7 +450,7 @@ class A11yExtractService : AccessibilityService() {
         }?.first?.trim()
         val sender = when {
             !nickname.isNullOrBlank() -> nickname
-            content.second.centerX() > screenW / 2 -> "我"
+            content.second.centerX() > screenW / 2 -> ChatMessage.SENDER_SELF
             else -> conversation
         }
         return ChatMessage(
@@ -560,7 +560,7 @@ class A11yExtractService : AccessibilityService() {
             val r = Rect()
             row.getBoundsInScreen(r)
             if (!r.isEmpty) {
-                return if (r.centerX() > screenW / 2) "我" else conversation
+                return if (r.centerX() > screenW / 2) ChatMessage.SENDER_SELF else conversation
             }
         }
         for (i in 0 until row.childCount) {
@@ -570,7 +570,7 @@ class A11yExtractService : AccessibilityService() {
                     val r = Rect()
                     child.getBoundsInScreen(r)
                     if (!r.isEmpty) {
-                        return if (r.centerX() > screenW / 2) "我" else conversation
+                        return if (r.centerX() > screenW / 2) ChatMessage.SENDER_SELF else conversation
                     }
                 }
             }

@@ -14,8 +14,9 @@ import java.security.MessageDigest
  *  - 一条 case = 一个重点关注会话的最近 ≤10 条消息组成的窗口；
  *  - state 结构与 JEV build_state() 输出对齐：
  *    state.chat{relationship:"wechat_work", conversation, messages:[[from,text]...], latest_from}
- *    from 只用 me/other（通知监听只捕获他人消息，故恒为 other；
- *    群聊消息在 text 前带发言者名，保留发言人信息）；
+ *    from 按发送者取 me/other（M3/W3）：通知监听只捕获他人消息故恒 other，
+ *    a11y 直读把右侧气泡（自己发出）标 me；
+ *    群聊消息在 text 前带发言者名，保留发言人信息；
  *  - caseId = sha1(pkg|conversation|windowEnd) 前 16 位：
  *    窗口内容没变（无新消息 -> 窗口末条时间戳不变）就不重分析。
  *    M2 起指纹含包名：微信/飞书里同名会话是两个 case，不会共用 caseId。
@@ -65,7 +66,8 @@ data class AnalysisCase(
                 "${msg.sender}: ${msg.text}"
             } else msg.text
             arr.put(JSONObject().apply {
-                put("from", "other")
+                // 自己发出的消息（a11y 右侧气泡）标 me；通知捕获恒 other
+                put("from", if (msg.isSelf) "me" else "other")
                 put("text", text)
             })
         }
@@ -73,18 +75,20 @@ data class AnalysisCase(
             put("chat", JSONObject().apply {
                 put("relationship", "wechat_work")
                 put("messages", arr)
-                put("latest_from", "other")
+                // 末条发言者：自己/对方，与 messages 末行 from 一致
+                put("latest_from", if (messages.last().isSelf) "me" else "other")
             })
             if (background.isNotBlank()) put("background", background)
         }
     }
 
-    /** 人类可读的窗口文本（openai 协议 S1/S2 的 user 消息用） */
+    /** 人类可读的窗口文本（openai 协议 S1/S2 的 user 消息用）：按发送者标我/对方视角。 */
     fun windowText(): String = messages.joinToString("\n") { msg ->
         val text = if (isGroup && msg.sender.isNotEmpty() && msg.sender != conversation) {
             "${msg.sender}: ${msg.text}"
         } else msg.text
-        "对方: $text"
+        val speaker = if (msg.isSelf) "我" else "对方"
+        "$speaker: $text"
     }
 
     companion object {
@@ -218,6 +222,9 @@ data class AnalysisCase(
         const val S1_OPENAI_SYSTEM_PROMPT =
             "You are a strict conversation judgment engine for WeChat Work messages. " +
                 "The user gives you one conversation window (recent lines, Chinese). " +
+                "Lines prefixed \"我: \" are the USER'S OWN sent messages; other lines are from " +
+                "the conversation partner. Only count obligations the USER still has to fulfill " +
+                "(their own sent messages create none). " +
                 "Judge the window as a whole and output ONLY a JSON object, no other text:\n" +
                 "{\"need_action_prob\": 0.0-1.0 (probability that the window contains a task, " +
                 "request or deadline the user must act on), " +
@@ -274,7 +281,8 @@ data class AnalysisCase(
         fun buildS2SystemPrompt(s1: S1Result, background: String = ""): String {
             val bgSection = if (background.isBlank()) "" else
                 "背景信息（分析该会话时必须纳入考量）：$background\n"
-            return "你是企业微信会话深分析助手。S1 快速判定的结论：${s1.toInjectText()}。\n" +
+            return "你是微信会话深分析助手。窗口里「我:」开头是用户自己发出的消息，" +
+                "不要把它们当成用户待办。S1 快速判定的结论：${s1.toInjectText()}。\n" +
                 bgSection +
                 "请基于同一会话窗口做深度分析，只输出一个 JSON 对象，不要输出任何其他文字：\n" +
                 "{\"summary\": \"≤20字的会话摘要\", " +

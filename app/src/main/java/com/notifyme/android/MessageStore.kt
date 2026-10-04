@@ -42,6 +42,9 @@ data class ChatMessage(
     /** 会话复合键：M2 起会话身份是 (pkg, conversation)，不再是裸会话名。 */
     val convKey: ConvKey get() = ConvKey(pkg, conversation)
 
+    /** 是否为「我自己发出」的消息：通知监听只捕获他人消息；a11y 右侧气泡标记为我。 */
+    val isSelf: Boolean get() = sender == SENDER_SELF
+
     fun toJson(): JSONObject = JSONObject().apply {
         put("sender", sender)
         put("text", text)
@@ -58,6 +61,9 @@ data class ChatMessage(
     }
 
     companion object {
+        /** 自己发送消息的规范发送者名（a11y 采集右侧气泡时使用）。 */
+        const val SENDER_SELF = "我"
+
         fun fromJson(obj: JSONObject): ChatMessage = ChatMessage(
             sender = obj.optString("sender"),
             text = obj.optString("text"),

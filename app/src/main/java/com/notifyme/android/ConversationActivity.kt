@@ -78,6 +78,7 @@ class ConversationActivity : Activity() {
     private lateinit var tvPromptBadge: TextView
     private lateinit var tvLastAnalysisTime: TextView
     private lateinit var btnAnalyzeThis: Button
+    private lateinit var llQuickReply: View
 
     private val timeFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
     private val handler = Handler(Looper.getMainLooper())
@@ -137,9 +138,12 @@ class ConversationActivity : Activity() {
         tvPromptBadge = findViewById(R.id.tvPromptBadge)
         tvLastAnalysisTime = findViewById(R.id.tvLastAnalysisTime)
         btnAnalyzeThis = findViewById(R.id.btnAnalyzeThis)
+        llQuickReply = findViewById(R.id.llQuickReply)
 
         findViewById<TextView>(R.id.btnBack).setOnClickListener { finish() }
         findViewById<TextView>(R.id.tvTitle).text = conversation
+
+        setupQuickReply()
 
         btnAnalyzeThis.setOnClickListener {
             AnalysisScheduler.enqueueAnalysisNow(this, key)
@@ -174,6 +178,7 @@ class ConversationActivity : Activity() {
             .sortedBy { it.timestamp }
         renderHeader(messages.lastOrNull()?.isGroup ?: false)
         renderChat(messages)
+        refreshQuickReply()
         val record = AnalysisStore.latestByConvKey(this)[key]
         renderAnalysisPanel(record)
         shownAnalyzedAt = record?.analyzedAt ?: 0L
@@ -213,40 +218,91 @@ class ConversationActivity : Activity() {
             }
             lastTimestamp = msg.timestamp
 
-            // 通知监听只捕获他人消息 -> 一律左侧气泡；群聊显示发言人
-            val sender = item.findViewById<TextView>(R.id.tvSender)
-            if (msg.isGroup && msg.sender.isNotEmpty() && msg.sender != conversation) {
-                sender.visibility = View.VISIBLE
-                sender.text = msg.sender
-            } else {
-                sender.visibility = View.GONE
-            }
-
-            val bubble = item.findViewById<TextView>(R.id.tvBubbleOther)
-            bubble.text = msg.text
-            // 多选态关闭文本选择，避免长按弹出系统复制菜单挡住勾选
-            bubble.setTextIsSelectable(!selecting)
             val isSelected = msg in selectedMessages
-            bubble.setBackgroundResource(
-                if (isSelected) R.drawable.bg_bubble_selected else R.drawable.bg_bubble_other
-            )
 
-            // 长按气泡/条目进入多选；选择态点击气泡勾选/取消
+            // 长按/点击（多选态）对左右气泡都生效，下面给两种气泡分别绑定
             val handleLongPress = View.OnLongClickListener {
                 startMsgSelection(msg)
                 true
             }
-            item.setOnLongClickListener(handleLongPress)
-            bubble.setOnLongClickListener(handleLongPress)
-            item.setOnClickListener {
+            val handleClick = View.OnClickListener {
                 if (selectActionMode != null) toggleMsgSelection(msg)
             }
-            bubble.setOnClickListener {
-                if (selectActionMode != null) toggleMsgSelection(msg)
+
+            if (msg.isSelf) {
+                // 自己发出（a11y 直读右侧气泡）：隐藏左行，显示右绿气泡
+                item.findViewById<View>(R.id.llOther).visibility = View.GONE
+                val llMe = item.findViewById<View>(R.id.llMe)
+                llMe.visibility = View.VISIBLE
+                val meBubble = item.findViewById<TextView>(R.id.tvBubbleMe)
+                meBubble.text = msg.text
+                meBubble.setTextIsSelectable(!selecting)
+                meBubble.setBackgroundResource(
+                    if (isSelected) R.drawable.bg_bubble_selected else R.drawable.bg_bubble_me
+                )
+                item.setOnLongClickListener(handleLongPress)
+                meBubble.setOnLongClickListener(handleLongPress)
+                item.setOnClickListener(handleClick)
+                meBubble.setOnClickListener(handleClick)
+            } else {
+                // 对方消息：左灰白气泡；群聊显示发言人
+                val sender = item.findViewById<TextView>(R.id.tvSender)
+                if (msg.isGroup && msg.sender.isNotEmpty() && msg.sender != conversation) {
+                    sender.visibility = View.VISIBLE
+                    sender.text = msg.sender
+                } else {
+                    sender.visibility = View.GONE
+                }
+
+                val bubble = item.findViewById<TextView>(R.id.tvBubbleOther)
+                bubble.text = msg.text
+                // 多选态关闭文本选择，避免长按弹出系统复制菜单挡住勾选
+                bubble.setTextIsSelectable(!selecting)
+                bubble.setBackgroundResource(
+                    if (isSelected) R.drawable.bg_bubble_selected else R.drawable.bg_bubble_other
+                )
+
+                item.setOnLongClickListener(handleLongPress)
+                bubble.setOnLongClickListener(handleLongPress)
+                item.setOnClickListener(handleClick)
+                bubble.setOnClickListener(handleClick)
             }
 
             chatContainer.addView(item)
         }
+    }
+
+    // ================= 快速回复 =================
+
+    /** 绑定快速回复栏：发送通过存活通知的 RemoteInput action，失败给明确文案。 */
+    private fun setupQuickReply() {
+        val et = findViewById<android.widget.EditText>(R.id.etQuickReply)
+        findViewById<Button>(R.id.btnQuickReplySend).setOnClickListener {
+            val text = et.text.toString().trim()
+            if (text.isEmpty()) {
+                Toast.makeText(this, R.string.quick_reply_empty, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val action = ReplyActionStore.actionFor(key)
+            if (action == null) {
+                Toast.makeText(this, R.string.quick_reply_failed, Toast.LENGTH_LONG).show()
+                llQuickReply.visibility = View.GONE
+                return@setOnClickListener
+            }
+            if (MessageReplier.reply(this, action, text)) {
+                et.text.clear()
+                Toast.makeText(this, R.string.quick_reply_sent, Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, R.string.quick_reply_failed, Toast.LENGTH_LONG).show()
+                llQuickReply.visibility = View.GONE
+            }
+        }
+    }
+
+    /** 回复栏可见性：只有该会话当前有存活的可回复通知 action 才显示。 */
+    private fun refreshQuickReply() {
+        llQuickReply.visibility =
+            if (ReplyActionStore.actionFor(key) != null) View.VISIBLE else View.GONE
     }
 
     // ================= 消息多选删除 =================

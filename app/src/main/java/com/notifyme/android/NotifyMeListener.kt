@@ -94,6 +94,8 @@ class NotifyMeListener : NotificationListenerService() {
         MessageStore.append(applicationContext, message)
         // 同步进入待上报队列（核心过滤逻辑不变，仅追加一行）
         PendingQueue.append(applicationContext, message)
+        // 缓存原始通知供「快速回复」使用（无回复 action 时内部不占缓存）
+        ReplyActionStore.put(message.convKey, sbn)
         // 成功入库后才算「观察到该来源」，避免空内容通知污染来源列表
         AppSourceStore.recordSeen(applicationContext, pkg, raw.appLabel)
         Log.i(TAG, "捕获消息[$pkg]: $message")
