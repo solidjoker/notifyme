@@ -245,6 +245,9 @@ class ConsoleActivity : Activity() {
         findViewById<Button>(R.id.btnOpenWatchlist).setOnClickListener {
             startActivity(Intent(this, WatchlistActivity::class.java))
         }
+        findViewById<Button>(R.id.btnOpenSources).setOnClickListener {
+            startActivity(Intent(this, SourcesActivity::class.java))
+        }
     }
 
     private fun refreshListenerStatus() {

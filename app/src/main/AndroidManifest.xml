@@ -53,6 +53,7 @@
         <activity android:name=".ConsoleActivity" android:exported="false" />
         <activity android:name=".OnboardingActivity" android:exported="false" />
         <activity android:name=".WatchlistActivity" android:exported="false" />
+        <activity android:name=".SourcesActivity" android:exported="false" />
         <activity android:name=".ReminderListActivity" android:exported="false" />
         <activity android:name=".AnalysisListActivity" android:exported="false" />
         <activity android:name=".ConversationActivity" android:exported="false" />

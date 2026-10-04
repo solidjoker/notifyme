@@ -90,6 +90,10 @@
     <string name="btn_reopen_onboarding">重新打开使用向导</string>
     <string name="console_section_watchlist">⭐ 重点关注会话</string>
     <string name="btn_open_watchlist">管理重点关注会话</string>
+    <string name="btn_open_sources">管理通知来源（微信 / 飞书 / 钉钉…）</string>
+    <string name="sources_title">通知来源</string>
+    <string name="sources_hint">勾选的 App 通知才会入库。默认全部启用；未知 App 首次有通知后自动出现在列表中。标注「直读」的 App 支持无障碍聊天页直读。</string>
+    <string name="sources_empty">暂无来源（先等一条通知进来）</string>
     <string name="sync_push_switch">启用服务器上报（关闭后消息继续累积，开启时补报）</string>
 
     <!-- 聊天记录提取（服务端安卓库直读，走 serverUrl 同源 /admin/extract） -->
