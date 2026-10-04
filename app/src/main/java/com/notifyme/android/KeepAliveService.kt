@@ -22,7 +22,7 @@ import android.util.Log
  *
  * 原理：
  *  - START_STICKY 前台服务让进程保有优先级，被杀后系统会尝试拉起；
- *  - 内置看门狗每 60 秒检查一次 WeChatNotificationListener 的连接状态，
+ *  - 内置看门狗每 60 秒检查一次 NotifyMeListener 的连接状态，
  *    断绑时用官方 API requestRebind 请求系统重绑（API 24+）。
  *
  * 注意：本服务只是「提高存活概率 + 断绑自愈」，无法对抗用户手动「强行停止」
@@ -82,13 +82,13 @@ class KeepAliveService : Service() {
     private val watchdog = object : Runnable {
         override fun run() {
             beat(this@KeepAliveService)
-            if (!WeChatNotificationListener.connected) {
+            if (!NotifyMeListener.connected) {
                 Log.w(TAG, "通知监听服务未连接，请求系统重绑")
                 try {
                     NotificationListenerService.requestRebind(
                         ComponentName(
                             this@KeepAliveService,
-                            WeChatNotificationListener::class.java
+                            NotifyMeListener::class.java
                         )
                     )
                 } catch (e: Exception) {

@@ -244,7 +244,7 @@ class ConsoleActivity : Activity() {
     private fun refreshListenerStatus() {
         val granted = NotificationManagerCompat.getEnabledListenerPackages(this)
             .contains(packageName)
-        val connected = WeChatNotificationListener.connected
+        val connected = NotifyMeListener.connected
         tvListenerStatus.text = getString(
             if (granted) R.string.listener_granted else R.string.listener_missing
         ) + "\n" + getString(
