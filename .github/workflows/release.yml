@@ -20,24 +20,36 @@ permissions:
 jobs:
   release:
     name: 签名构建并发布 Release
-    runs-on: ubuntu-latest
+    # 与 android.yml 同口径钉住 24.04：签名发布流程不该被 runner 镜像迁移打断
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Setup Gradle (cache)
-        uses: gradle/actions/setup-gradle@v4
+        # 停在 v5：gradle/actions v6 起缓存组件不再开源（见 android.yml 同一处注释）
+        uses: gradle/actions/setup-gradle@v5
 
       - name: Prepare wrapper for CI
         run: |
           sed -i 's#^distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.9-bin.zip#' \
             gradle/wrapper/gradle-wrapper.properties
           chmod +x gradlew
+
+      - name: Ensure Android SDK platform 34 and apksigner
+        run: |
+          # 后面的「Verify APK signature」要用 build-tools 里的 apksigner，
+          # 所以这里除了 platform-34，还要确认 apksigner 存在，缺哪个补哪个。
+          SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n1 || true)
+          if [ -n "$SDKMANAGER" ] && { [ ! -d "$ANDROID_HOME/platforms/android-34" ] || ! ls -d "$ANDROID_HOME"/build-tools/*/apksigner >/dev/null 2>&1; }; then
+            "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0"
+          fi
+          ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n1
 
       - name: Verify tag matches versionName
         run: |

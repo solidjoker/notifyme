@@ -18,18 +18,22 @@ concurrency:
 jobs:
   android:
     name: Android 构建 + 单测
-    runs-on: ubuntu-latest
+    # 钉住 24.04 而不用 ubuntu-latest：后者将于 2026-10-19 迁到 Ubuntu 26，
+    # 预装的 JDK / Android SDK 组合会变，而 CI 是这个仓库唯一的自动化护栏。
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Setup Gradle (cache)
-        uses: gradle/actions/setup-gradle@v4
+        # 停在 v5：gradle/actions v6 起缓存组件不再开源，升级即接受 Gradle Terms of Use，
+        # 并移除了 configuration-cache 支持。对本仓库（MIT）没有升级收益。
+        uses: gradle/actions/setup-gradle@v5
 
       - name: Prepare wrapper for CI
         run: |
@@ -70,7 +74,7 @@ jobs:
           fi
 
       - name: Upload debug APKs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: notifyme-debug-apks
           path: |
