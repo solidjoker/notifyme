@@ -321,9 +321,10 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - MuMu x86_64 实测（Qwen2.5-0.5B-Instruct q4_k_m）：
   模型加载约 1.1s，完整补全 **4064ms**，输出连贯中文，原生链路验证通过
 - 243 单测全绿；双 flavor assemble 通过
-- 遗留：S1 模型当前是 MNN 格式（llama.cpp 不识别），需换 GGUF 版 S1
-  或另接 MNN；S2（4B/2.47GB）真机 8GB+ 内存/时延待真机 W1 取证。
-  已补（M4.3）：`LocalDeviceCapabilities` S2 准入（8GB+ RAM 且 arm64，
+- 遗留：S2（4B/2.47GB）真机 8GB+ 内存/时延待真机 W1 取证。
+  S1 已切换为 GGUF（M4.4）：原 MiniCPM4 S1 是 MNN 格式 llama.cpp 不识别，
+  改用已实测的 Qwen2.5-0.5B-Instruct GGUF（469MB），离线 S1 真正可用。
+  另已补（M4.3）：`LocalDeviceCapabilities` S2 准入（8GB+ RAM 且 arm64，
   引擎工厂与下载按钮双拦截）；`MainApplication.onTrimMemory`（≥MODERATE）/
   `onLowMemory` 释放引擎
 

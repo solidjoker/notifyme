@@ -44,21 +44,18 @@ object LocalModelStore {
         val totalBytes: Long get() = files.sumOf { it.size }
     }
 
-    private const val MS_S1 = "https://www.modelscope.cn/models/MNN/MiniCPM4-0.5B-MNN/resolve/master"
+    private const val MS_S1 = "https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/master"
     private const val MS_S2 = "https://www.modelscope.cn/models/OpenBMB/MiniCPM3-4B-GGUF/resolve/master"
 
     val MODELS: List<LocalModel> = listOf(
         LocalModel(
             id = MODEL_S1,
-            displayName = "MiniCPM4-0.5B（MNN 4bit）",
+            displayName = "Qwen2.5-0.5B-Instruct（GGUF Q4_K_M）",
             roleLabel = "System 1 轻量判定 · 端侧快筛",
-            sizeLabel = "311 MB",
+            sizeLabel = "469 MB",
             files = listOf(
-                ModelFile("config.json", "$MS_S1/config.json", 338L),
-                ModelFile("llm.mnn", "$MS_S1/llm.mnn", 422_080L),
-                ModelFile("llm.mnn.weight", "$MS_S1/llm.mnn.weight", 309_150_586L),
-                ModelFile("llm_config.json", "$MS_S1/llm_config.json", 753L),
-                ModelFile("tokenizer.txt", "$MS_S1/tokenizer.txt", 1_485_381L)
+                ModelFile("qwen2.5-0.5b-instruct-q4_k_m.gguf",
+                    "$MS_S1/qwen2.5-0.5b-instruct-q4_k_m.gguf", 491_400_032L)
             )
         ),
         LocalModel(
