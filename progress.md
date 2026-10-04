@@ -272,6 +272,37 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - 遗留：真机「仅端侧」抓包验证零云端请求（与 M2 真机回归一并）；
   银行卡 13–19 位数字刻意保守（快递单号也遮盖）；非发送者名单内人名无法识别
 
+### 9. M9 悬浮通知 + 微信专项 W2–W4（本次会话，2026-10-05）
+
+按用户「微信是现在需要重点攻克的一个」「移动端应用需要做成悬浮」两条指示，
+把微信工作拆成 W1 真机回归 / W2 悬浮 / W3 微信特有能力 / W4 体验打磨四线并行推进。
+
+- 提交（均未推送）：
+  - `6e1a569` M9 主体（14 文件，+903）：`OverlayManager` 权限/降级路由、
+    `OverlayService`（specialUse FGS，卡片栈 + 边缘吸附球 + 面板）、
+    `OverlayConfig`（默认关卡、球开、5s 自消）、`OverlayActionReceiver`
+  - `64dbbe8` M9 控制台调试测试卡按钮（仅 debug）
+  - `6bd4120` W3：自发消息 me/other 视角贯穿 + 会话详情页快速回复
+  - `548e5ef` W4：采集诊断页 + 标题栏一键打开来源应用
+- W3 要点：
+  - `ChatMessage.isSelf` / `SENDER_SELF="我"`，`A11yExtractService` 三处右侧气泡判定统一常量
+  - `AnalysisCase.buildStateJson` 与 `latest_from` 由硬编码 other 改为 me/other；
+    S1/S2 prompt 明确「我:」开头是用户自发消息、不产生待办，修掉自发消息误判任务
+  - `ReplyActionStore`：进程内 LRU50 缓存每会话存活通知的 RemoteInput action，
+    会话详情页底部回复栏按 action 存活显隐，过期有「去微信里回复」兜底文案
+- W4 要点：
+  - `CaptureStats` 本次启动通知漏斗（posted→blocked/disabled/ongoing/empty/
+    duplicate/parseFailed→stored），监听器每个丢弃点计数
+  - `MessageStore.storageStats` / `StorageStats`：原始/有效/损坏行数 + 文件字节
+  - `CaptureDiagnosticsActivity` 四段只读诊断（权限服务、本次漏斗、本地存储、
+    各 App 累计 + 排查提示），控制台卡 2 入口
+- 测试：237 → **243** 全绿；双 flavor assemble 通过
+- MuMu 模拟器（Android 15）实测：悬浮卡 900×345 正常绘制、球拖动吸附、
+  面板开合、5s 自消、dismiss 移除、诊断页四段渲染均通过，无崩溃
+- W1 真机端到端回归**仍阻塞**：MuMu 微信停在登录页（账号待用户手动登录，密码不经助手），
+  真机 ebb079b5 未连接。待登录/连机后跑 捕获→分析→脱敏→悬浮 全链路，
+  并补 MIUI「后台弹出界面」、heads-up 降级、飞书/钉钉真机通知形状取证
+
 ## 四、构建与运行
 
 ```powershell
@@ -308,7 +339,7 @@ ADB/设备要点（踩过的坑）：
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
-> 当前状态：**M3 已完成**（237 个单测全绿，见 §三.8，M2 七提交 + M3 两提交均未推送）；**M0 代码与 CI 侧已完成**，只剩 D5 的正式密钥库 + 4 个 Secrets（等用户提供带 `administration` 的 token）；下一步 **M4 端侧推理引擎**（决策门 D3 已定：llama.cpp AAR spike 先行；M9 悬浮通知按设备验证节奏插入）。
+> 当前状态：**M9 代码已完成**（M9 + 微信专项 W2–W4 共 4 提交，243 个单测全绿，见 §三.9，模拟器实测通过；连同 M2/M3 共 15 提交均未推送）；**W1 真机回归阻塞**（等用户登录微信或连接真机 ebb079b5）；**M0 代码与 CI 侧已完成**，只剩 D5 的正式密钥库 + 4 个 Secrets（等用户提供带 `administration` 的 token）；下一步按用户微信优先指示先做 W1 真机端到端，随后回到 **M4 端侧推理引擎**（决策门 D3：llama.cpp AAR spike 先行）。
 > 下面 8 项是 README 的对外表述，保留原样；执行时以 ROADMAP 为准。
 
 1. **iOS 原生查看端 + 提醒推送**：在 iPhone 上看分析结果并收到提醒（iOS 不允许后台捕获其他 App 通知，故不含本地捕获；当前仅 PWA 查看端）

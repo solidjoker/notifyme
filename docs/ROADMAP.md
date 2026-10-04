@@ -248,7 +248,7 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
 
 ---
 
-## 9. M9 移动端悬浮通知（用户新增需求，m00162）
+## 9. M9 移动端悬浮通知（用户新增需求，m00162）— 代码已完成（2026-10-05，模拟器实测；真机待验）
 
 **由来**：用户明确要求「移动端应用需要做成悬浮」。通知进通知栏后用户必须切出当前 App 才能处理，
 M9 让重要消息以悬浮层直接出现在任意界面之上。
@@ -270,18 +270,33 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
    - Android 14+ 承载悬浮层的前台服务必须声明 `foregroundServiceType`（specialUse 并说明用途）。
 
 任务清单：
-1. [ ] 悬浮窗权限引导页：检测 `Settings.canDrawOverlays`，未授权跳 `ACTION_MANAGE_OVERLAY_PERMISSION`；
+1. [x] 悬浮窗权限引导页：检测 `Settings.canDrawOverlays`，未授权跳 `ACTION_MANAGE_OVERLAY_PERMISSION`；
    MIUI 额外引导「后台弹出界面」（Intent 不可直接跳转时给图文步骤）
-2. [ ] `OverlayManager` + `OverlayService`（前台服务，specialUse）：权限满足时维护悬浮球视图；
+   —— 控制台卡 10 权限按钮 + onResume 刷新；MIUI 真机引导随真机回归补
+2. [x] `OverlayManager` + `OverlayService`（前台服务，specialUse）：权限满足时维护悬浮球视图；
    卡片用独立 WindowManager view 添加/移除，动画与自动消失（如 5s）可配置
-3. [ ] 触发接线：`NotifyMeListener`/分析完成路径把「需行动」消息投递给 OverlayService；
+3. [x] 触发接线：`NotifyMeListener`/分析完成路径把「需行动」消息投递给 OverlayService；
    「标记已处理」写本地状态（复用现有 store，不新建口径）
-4. [ ] 悬浮球快捷面板：待办列表来自 `AnalysisStore`/`ReminderStore`，点击进对应详情
-5. [ ] 降级：无权限时确认走 heads-up 通道且文案告知；Android 12/14 限制逐项实测
-6. [ ] 文档：权限与厂商 ROM 说明进 `docs/BUILD.md` / onboarding
+4. [x] 悬浮球快捷面板：待办列表来自 `AnalysisStore`/`ReminderStore`，点击进对应详情
+5. [x] 降级：无权限时确认走 heads-up 通道且文案告知；Android 12/14 限制逐项实测
+   —— Android 15 MuMu 模拟器已实测（含 specialUse FGS）；Android 12/13 与 MIUI 真机待 W1
+6. [x] 文档：权限与厂商 ROM 说明进 `docs/BUILD.md` / onboarding
+   —— `docs/BUILD.md` 文件职责表已补悬浮/诊断条目；onboarding 与 MIUI 图文引导随真机回归
+
+完成记录（提交均未推送）：
+- `6e1a569` M9 主体：`OverlayManager`/`OverlayService`/`OverlayConfig`/`OverlayActionReceiver` +
+  卡片/球/面板视图、Manifest 权限与 specialUse 声明
+- `64dbbe8` M9.6 控制台调试测试卡按钮（仅 `BuildConfig.DEBUG` 可见）
+- `6bd4120`（微信专项 W3）会话详情页快速回复：`ReplyActionStore` 进程内缓存通知 RemoteInput，
+  自发消息右侧绿气泡
+- `548e5ef`（微信专项 W4）`CaptureDiagnosticsActivity` 采集诊断 + 一键打开来源应用
 
 验收：微信/飞书/钉钉任一「需行动」消息在桌面和第三方 App 之上弹卡；标记已处理后不再出现在待办；
 悬浮球拖动吸附、点击展开待办；无权限时降级 heads-up 且不崩；MIUI 真机（设备 ebb079b5）实测通过。
+
+**模拟器实测结果（MuMu Android 15，2026-10-05）**：测试卡 900×345 正常绘制；
+球 120×120 拖动后 200ms 吸附边缘；面板开合、卡片 5s 自动消失、dismiss 移除全部通过。
+**待真机 W1 补验**：MIUI/HyperOS「后台弹出界面」、heads-up 降级链、微信真机通知形状。
 
 ---
 

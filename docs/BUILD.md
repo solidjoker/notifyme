@@ -212,6 +212,7 @@ CI 不签名（debug 包用 Android 默认 debug 密钥）。
 | 本地模型 | `LocalModelStore`、`ModelDownloadWorker`、`ModelListActivity` |
 | 结果与提醒 | `AnalysisListActivity`、`ReminderListActivity`、`ReminderReceiver`、`CalendarHelper`、`AlarmHelper` |
 | 关注与提示词 | `WatchlistActivity`、`PromptEditActivity` |
-| 悬浮通知（M9 规划） | `OverlayService`、`OverlayManager`（待实现） |
+| 悬浮通知（M9） | `OverlayService`、`OverlayManager`、`OverlayConfig`、`OverlayActionReceiver` |
+| 采集诊断 / 快速回复 | `CaptureDiagnosticsActivity`、`CaptureStats`、`ReplyActionStore`、`MessageReplier` |
 | 服务器同步 | `SyncConfig`、`SyncWorker`、`SyncScheduler`、`HistorySync` |
 | 应用骨架 | `MainApplication`、`OnboardingActivity`、`ConsoleActivity`、`BootReceiver`、`KeepAliveService`、`MessageReplier` |
