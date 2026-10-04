@@ -1,4 +1,4 @@
-﻿%%{init: {'theme':'base','themeVariables':{'fontSize':'15px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true,'curve':'basis'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontSize':'15px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true,'curve':'basis'}}}%%
 flowchart TB
     classDef ext  fill:#fff3e0,stroke:#e65100,stroke-width:1.5px,color:#4e342e
     classDef app  fill:#e8f5e9,stroke:#2e7d32,stroke-width:1.5px,color:#1b5e20
@@ -7,12 +7,14 @@ flowchart TB
     classDef store fill:#eceff1,stroke:#455a64,stroke-width:1.5px,color:#263238
 
     WX["微信 App<br/>com.tencent.mm"]:::ext
+    FS["飞书 App<br/>com.ss.android.lark"]:::ext
+    DT["钉钉 App<br/>com.alibaba.android.rimet"]:::ext
 
-    subgraph DEV["📱 Android 设备 / MuMu 模拟器"]
+    subgraph DEV["📱 Android 设备 / 真机（HyperOS）"]
         direction TB
-        NL["WeChatNotificationListener<br/>通知监听服务（零注入）"]:::app
-        A11Y["WeChatA11yExtractService<br/>无障碍直读服务（免 root）"]:::app
-        CORE["微信分析助手 App 主体<br/>采集 · 分析 · 提醒 · 上报"]:::app
+        NL["NotifyMeListener<br/>通知监听服务（零注入 · 按 AppSourceStore 启用集合过滤）"]:::app
+        A11Y["A11yExtractService<br/>无障碍直读服务（免 root · 目前仅微信）"]:::app
+        CORE["微信分析助手 App 主体<br/>多应用采集 · 分析 · 提醒 · 上报"]:::app
         STORE[("files/*.jsonl<br/>SharedPreferences<br/>files/models/")]:::store
         NL --> CORE
         A11Y --> CORE
@@ -50,6 +52,8 @@ flowchart TB
     IPHONE["📱 iPhone Safari<br/>PWA 纯查看端"]:::ext
 
     WX -->|"① 系统通知官方回调"| NL
+    FS -->|"① 系统通知官方回调"| NL
+    DT -->|"① 系统通知官方回调"| NL
     WX -->|"② 无障碍事件 · 逐屏向上翻页"| A11Y
     CORE -->|"③ POST /weixin 消息<br/>POST /analysis 分析<br/>POST /advisor 复盘"| FLASK
     CORE -->|"④ POST /admin/extract 触发<br/>GET /admin/extract/status 轮询<br/>GET /messages?limit=1000 回填"| FLASK

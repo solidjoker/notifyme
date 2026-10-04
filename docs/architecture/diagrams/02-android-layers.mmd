@@ -1,4 +1,4 @@
-﻿%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true}}}%%
 flowchart TB
     classDef ui   fill:#e1f5fe,stroke:#0277bd,stroke-width:1.5px,color:#01579b
     classDef svc  fill:#e8f5e9,stroke:#2e7d32,stroke-width:1.5px,color:#1b5e20
@@ -13,6 +13,7 @@ flowchart TB
         CONV["ConversationActivity<br/>会话详情 + 会话级分析面板"]:::ui
         ANALYSIS["AnalysisListActivity<br/>分析结果 · 只看待办"]:::ui
         WATCH["WatchlistActivity<br/>重点关注会话名单"]:::ui
+        SOURCES["SourcesActivity<br/>通知来源勾选（M2 新增）"]:::ui
         REMUI["ReminderListActivity<br/>提醒列表 · 再次唤起 / 重试"]:::ui
         PROMPT["PromptEditActivity<br/>会话级提示词 · 3 内置模板"]:::ui
         MODELS["ModelListActivity<br/>本地模型下载 / 进度 / 删除"]:::ui
@@ -21,8 +22,8 @@ flowchart TB
 
     subgraph L2["② 采集与常驻层 · 系统绑定组件"]
         direction LR
-        NL["WeChatNotificationListener<br/>NotificationListenerService<br/>包名过滤 · 丢弃 ongoing/摘要<br/>EXTRA_MESSAGES 解析 · LRU 去重"]:::svc
-        A11Y["WeChatA11yExtractService<br/>AccessibilityService<br/>标题识别 · 逐屏翻页 · 防碎裂降级"]:::svc
+        NL["NotifyMeListener<br/>NotificationListenerService<br/>AppSourceStore 启用集合过滤 · 丢弃 ongoing/摘要<br/>EXTRA_MESSAGES 解析 · LRU 去重"]:::svc
+        A11Y["A11yExtractService<br/>AccessibilityService（仅微信启用）<br/>标题识别 · 逐屏翻页 · 防碎裂降级"]:::svc
         KA["KeepAliveService<br/>前台服务 dataSync<br/>60s 看门狗 requestRebind"]:::svc
         BOOT["BootReceiver<br/>BOOT_COMPLETED"]:::svc
         ALARMR["ReminderReceiver<br/>到点高优先级通知"]:::svc
@@ -39,7 +40,7 @@ flowchart TB
 
     subgraph L4["④ 领域 / 决策层"]
         direction LR
-        CASE["AnalysisCase<br/>会话窗口 case<br/>caseId = sha1(conversation|windowEnd)[:16]"]:::dom
+        CASE["AnalysisCase<br/>会话窗口 case<br/>caseId = sha1(pkg|conversation|windowEnd)[:16]"]:::dom
         FORK["ForkPrefilter<br/>fork1 本地启发式预筛<br/>系统消息 / 纯表情 / 广告 / 窗口过小"]:::dom
         CAL["CalendarHelper<br/>三级降级提醒链"]:::dom
         ALARMH["AlarmHelper<br/>setAndAllowWhileIdle"]:::dom
@@ -56,7 +57,7 @@ flowchart TB
         F4[("reminders.jsonl<br/>ReminderStore")]:::st
         F5[("advisor_reports.jsonl<br/>AdvisorStore")]:::st
         F6[("files/models/{modelId}/<br/>LocalModelStore")]:::st
-        PREFS["SharedPreferences ×12<br/>analysis_config · sync_config · watchlist<br/>prompt_config · app_state · history_sync<br/>a11y_extract · keepalive_state · local_model_store<br/>analysis_sync · advisor_store · collapse_state"]:::st
+        PREFS["SharedPreferences ×13<br/>analysis_config · sync_config · watchlist<br/>prompt_config · app_state · history_sync<br/>a11y_extract · keepalive_state · local_model_store<br/>analysis_sync · advisor_store · collapse_state · app_sources"]:::st
     end
 
     APPENTRY["MainApplication<br/>Application 入口 · 启动日志"]:::svc
@@ -64,6 +65,7 @@ flowchart TB
     MAIN --> CONSOLE
     MAIN --> CONV
     CONSOLE --> WATCH
+    CONSOLE --> SOURCES
     CONSOLE --> ANALYSIS
     CONSOLE --> REMUI
     CONSOLE --> MODELS

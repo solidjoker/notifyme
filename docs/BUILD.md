@@ -111,7 +111,7 @@ adb install -r app\build\outputs\apk\open\debug\notifyme-open.apk
 
 首次进入按引导授予以下权限：
 
-1. **通知使用权**（设置 → 通知访问权限）— 必需，用于捕获微信通知
+1. **通知使用权**（设置 → 通知访问权限）— 必需，用于捕获各 App（微信 / 飞书 / 钉钉…）通知
 2. （可选）**无障碍服务** — 启用微信界面直读（在微信聊天界面翻页读取消息）
 3. （可选）**日历权限** — 用于写入待办事件
 4. （可选）**忽略电池优化** — 保持后台监听与同步任务可靠调度
@@ -204,12 +204,14 @@ CI 不签名（debug 包用 Android 默认 debug 密钥）。
 
 | 职责 | 文件 |
 |---|---|
-| 通知采集 | `WeChatNotificationListener`、`WeChatA11yExtractService`、`A11yExtractStore` |
+| 通知采集 | `NotifyMeListener`、`A11yExtractService`、`A11yExtractStore` |
+| 应用源管理 | `AppSourceRegistry`、`AppSourceStore`、`SourcesActivity`、`ConvKey` |
 | 本地存储 | `MessageStore`、`AnalysisStore`、`AdvisorStore`、`ReminderStore`、`PromptStore`、`WatchlistStore`、`PendingQueue` |
 | 首页与会话 | `MainActivity`、`ConversationActivity`、`FullHeightRecyclerView` |
 | AI 分析 | `AnalysisConfig`、`AnalysisWorker`、`AnalysisScheduler`、`AnalysisCase`、`AdvisorWorker`、`AdvisorScheduler`、`LocalLlmEngine`、`ForkPrefilter` |
 | 本地模型 | `LocalModelStore`、`ModelDownloadWorker`、`ModelListActivity` |
 | 结果与提醒 | `AnalysisListActivity`、`ReminderListActivity`、`ReminderReceiver`、`CalendarHelper`、`AlarmHelper` |
 | 关注与提示词 | `WatchlistActivity`、`PromptEditActivity` |
+| 悬浮通知（M9 规划） | `OverlayService`、`OverlayManager`（待实现） |
 | 服务器同步 | `SyncConfig`、`SyncWorker`、`SyncScheduler`、`HistorySync` |
 | 应用骨架 | `MainApplication`、`OnboardingActivity`、`ConsoleActivity`、`BootReceiver`、`KeepAliveService`、`MessageReplier` |

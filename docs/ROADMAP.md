@@ -1,7 +1,7 @@
 # notifyme 路线图与执行计划
 
 > 制定日期：2026-10-04　依据：`progress.md` + 代码实测核对（所有结论均带 `文件:行` 证据）
-> 本文是 README「下一步计划」8 项的**可执行展开**：拆成 M0–M8 里程碑，含任务清单、验收口径、工作量与风险。
+> 本文是 README「下一步计划」8 项的**可执行展开**：拆成 M0–M9 里程碑（M9 为用户新增的悬浮窗需求），含任务清单、验收口径、工作量与风险。
 > 硬约束沿用 `progress.md` §六：只在本仓库开发、open flavor 零预置、密钥不入库、未经明确要求不推送/不发版。
 
 ---
@@ -44,10 +44,11 @@
 | **M6 UI 优化** | #5 | 大会话性能、可读性、多端适配 | — | 2–4 天 | 低 |
 | **M7 通知之外的信息融入** | #3 | 自己发出的消息等旁路数据入库并参与分析 | M2 | 3–5 天 | 中 |
 | **M8 智能硬件联动** | #7 | Wear OS / 家居设备通知与提醒联动 | M2 | 待评估 | 中高 |
+| **M9 移动端悬浮通知** | 用户新增需求 | 悬浮通知卡片 + 常驻悬浮球，离开 App 也能即时处理 | M2 | 3–5 天 | 中（厂商ROM 适配） |
 
-**推荐执行顺序**：`M0 → M1 → M2 → M3 → M4`，M5/M6 视决策插入，M7/M8 收尾。
+**推荐执行顺序**：`M0 → M1 → M2 → M3 → M4`，M5/M6 视决策插入，M9 在 M3/M4 端侧能力稳定后插入，M7/M8 收尾。
 理由：M0 修好公开路径并给出 CI（之后所有重构才有护栏）；M1 必须在 M2 之前——schema 迁移直接动用户已有 `messages.jsonl`，出错不可逆；
-M2 是产品级最大解锁且是 M7/M8 的前置；M4 风险最高，刻意排在有测试网之后。
+M2 是产品级最大解锁且是 M7/M8/M9 的前置；M4 风险最高，刻意排在有测试网之后。
 
 ---
 
@@ -135,27 +136,31 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
 
 ---
 
-## 4. M2 跨应用通知管理（README 路线图 #2）
+## 4. M2 跨应用通知管理（README 路线图 #2）— 已完成（2026-10-05）
 
 **目标**：从微信专用 → 任意 App 通知统一管理；微信只是第一个「应用源」。
 
 任务清单：
-1. **schema v2**：`ChatMessage` 增 `pkg: String`（默认 `com.tencent.mm`）+ 可选 `appLabel`；`toJson`/`fromJson` 向后兼容（缺字段读默认值）
-   - 迁移策略：**读时补齐**，不做一次性重写文件（避免大文件迁移中断损坏）；提供「设置 → 数据 → 规范化」手动触发全量重写
-   - 服务端 `_validate_item`（`server/app.py:257`）接受可选 `pkg`，缺省按 `com.tencent.mm` 入库；`/messages` 支持 `pkg` 过滤；PWA 控制台加应用列与筛选
-2. **应用源注册表** `AppSourceRegistry`：`AppSource(pkg, label, parser, a11yConfig?)`
-   - `WeChatSource`：现有 MessagingStyle 解析 + 群聊/私聊判定 + a11y 控件 id 表（把 `WeChatA11yExtractService.kt:223-227` 的 5 个 id 移进配置）
-   - `GenericSource`：兜底解析 `Notification.extras`（title/text/bigText/subText/MessagingStyle），任何 App 都能入库
-3. **监听器改造**：`WeChatNotificationListener` → `NotifyMeListener`，去掉 `PKG_WECHAT` 单包判定（`:32,160`），改为「已启用应用源集合」过滤；保留每源独立的会话名/发送者提取
-4. **a11y 直读**：仅微信启用（其余 App 无稳定控件 id），注册表里 `a11yConfig == null` 即跳过；`ConsoleActivity.kt:533` 的拉起 Intent 改为按当前会话 `pkg` 取 launch intent
-5. **UI**：设置页新增「通知来源」多选（列出已安装且有通知的 App）；首页加应用筛选 chips；关注列表 `WatchlistStore` 的 key 从 `conversation` 升级为 `(pkg, conversation)`（含兼容读）
-6. **数据一致性**：`AnalysisStore`/`ReminderStore`/`PendingQueue` 的会话键同步升级为复合键，删除路径（M1 已测）跟着改
+1. [x] **schema v2**：`ChatMessage` 增 `pkg: String`（默认 `com.tencent.mm`）+ 可选 `appLabel`；`toJson`/`fromJson` 向后兼容（缺字段读默认值）
+   - 迁移策略：**读时补齐**，不做一次性重写文件（避免大文件迁移中断损坏）
+   - 服务端接受可选 `pkg`，缺省按 `com.tencent.mm` 入库；`/messages` 支持 `pkg` 过滤；PWA 控制台加应用角标与筛选（见 `7b154b0`）
+2. [x] **应用源注册表** `AppSourceRegistry`：`AppSource(pkg, label, parser, a11yConfig?)`
+   - 微信源：现有 MessagingStyle 解析 + 群聊/私聊判定 + a11y 控件 id 表（5 个 id 移进配置）
+   - 飞书/钉钉源：`PrefixImParser`（全角/半角冒号、长发送者名折叠等均有单测）；未收录 App 回落 `GenericNotificationParser`
+3. [x] **监听器改造**：`WeChatNotificationListener` → `NotifyMeListener`，去掉单包判定，改为按 `AppSourceStore` 启用集合过滤
+4. [x] **a11y 直读**：仅微信启用（其余 App 无稳定控件 id），注册表里 `a11yConfig == null` 即跳过；服务类改名 `A11yExtractService`
+5. [x] **UI**：控制台新增「通知来源」管理页 `SourcesActivity`（勾选启停，已观察来源自动出现）；PWA 加「全部/微信/飞书/钉钉」筛选；关注名单 `WatchlistStore` 的 key 升级为复合键 id
+6. [x] **数据一致性**：`AnalysisStore`/`PromptStore`/`ReminderStore`/`PendingQueue`/折叠态/提醒链全部升级为 `ConvKey`，删除路径跟着改；String 兼容重载全部删除，不留两套口径
+
+提交链（均未推送）：`79a16c3` M2.1 schema → `d758a69` M2.2 监听器 → `9263b95` M2.3 a11y → `dc99281` M2.4 全链路 ConvKey → `7b154b0` M2.5 服务端/PWA → `56581ed` M2.6 来源管理 UI。
 
 验收：
-- 微信链路回归无损（现有五项删除功能 + 分析 + 提醒全部照旧）
-- 至少 2 个非微信 App（如短信/Telegram/邮件）通知能入库、分组、进分析
-- 老 `messages.jsonl`（无 `pkg`）升级后仍可读、可删、可同步，不丢行
-- M1 单测扩充到复合键路径并全绿
+- [x] 微信链路代码级回归：五项删除功能 + 分析 + 提醒全部走 ConvKey 且 201 单测全绿（真机端到端回归留待下一个调试装机轮次）
+- [x] 非微信解析器单测入库/分组/群私聊判定全绿（飞书/钉钉合成通知样本）；**真机通知形状取证仍待办**——真实 `dumpsys notification` 形状未抓，解析器刻意保守，取证方法见各文件注释
+- [x] 老 `messages.jsonl`（无 `pkg`）读时回填默认微信，可正常读、删、同步，不丢行（`SchemaV2Test` 覆盖同名会话跨 App 删除隔离）
+- [x] M1 单测扩充到复合键路径并全绿（189 → 201）
+
+遗留：真机飞书/钉钉通知实测验证（列入下一轮设备调试）；首页/控制台安卓端尚未加 App 筛选 chips（PWA 已有，安卓端入口是来源管理页）。
 
 ---
 
@@ -236,7 +241,44 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
 
 ---
 
-## 9. 决策门汇总
+## 9. M9 移动端悬浮通知（用户新增需求，m00162）
+
+**由来**：用户明确要求「移动端应用需要做成悬浮」。通知进通知栏后用户必须切出当前 App 才能处理，
+M9 让重要消息以悬浮层直接出现在任意界面之上。
+
+**形态（已与用户确认的设计基线）**：
+1. **悬浮通知卡片**（角标卡，屏幕顶部/右上角）：新消息触发，显示
+   - 来源 App 名 · 会话名 · 发送者 · 内容摘要（一行/两行，超长省略）；
+   - 两个操作：「标记已处理」（本地标记，不进待办列表，卡片消失）、「打开详情」
+     （拉起 `ConversationActivity`，对应会话）；
+   - 仅对 S1 判定需要行动（或重点关注名单内）的消息弹卡，普通消息仍走系统通知，避免打扰。
+2. **常驻悬浮球**（边缘停靠）：
+   - 拖动后自动吸附屏幕左右边缘，点击展开快捷面板（最近待办 / 最近 N 条未处理消息 / 一键进 App）；
+   - 无待办时半透明缩小，不遮挡操作。
+3. **降级链**：
+   - `SYSTEM_ALERT_WINDOW` 被拒 → 引导用户去系统设置开启；被拒期间悬浮卡降级为系统 heads-up 通知
+     （现有通知渠道已支持），功能不中断只是不能覆盖在其它 App 上；
+   - MIUI/HyperOS 除悬浮窗权限外还需开启「后台弹出界面」，否则卡片不显示——设置引导里单列说明；
+   - Android 12+ 从后台启动 Activity 受限：「打开详情」若不能直接拉起，先给一条全屏 intent 通知兜底；
+   - Android 14+ 承载悬浮层的前台服务必须声明 `foregroundServiceType`（specialUse 并说明用途）。
+
+任务清单：
+1. [ ] 悬浮窗权限引导页：检测 `Settings.canDrawOverlays`，未授权跳 `ACTION_MANAGE_OVERLAY_PERMISSION`；
+   MIUI 额外引导「后台弹出界面」（Intent 不可直接跳转时给图文步骤）
+2. [ ] `OverlayManager` + `OverlayService`（前台服务，specialUse）：权限满足时维护悬浮球视图；
+   卡片用独立 WindowManager view 添加/移除，动画与自动消失（如 5s）可配置
+3. [ ] 触发接线：`NotifyMeListener`/分析完成路径把「需行动」消息投递给 OverlayService；
+   「标记已处理」写本地状态（复用现有 store，不新建口径）
+4. [ ] 悬浮球快捷面板：待办列表来自 `AnalysisStore`/`ReminderStore`，点击进对应详情
+5. [ ] 降级：无权限时确认走 heads-up 通道且文案告知；Android 12/14 限制逐项实测
+6. [ ] 文档：权限与厂商 ROM 说明进 `docs/BUILD.md` / onboarding
+
+验收：微信/飞书/钉钉任一「需行动」消息在桌面和第三方 App 之上弹卡；标记已处理后不再出现在待办；
+悬浮球拖动吸附、点击展开待办；无权限时降级 heads-up 且不崩；MIUI 真机（设备 ebb079b5）实测通过。
+
+---
+
+## 10. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：
 
@@ -258,7 +300,7 @@ D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再
 
 ---
 
-## 10. 非目标（明确不做）
+## 11. 非目标（明确不做）
 
 - 不做云端多用户 / 账号体系（服务端始终是单用户自托管）
 - 不引入 Room / Compose / DI 框架做大重构（`MessageStore.kt:57-66` 的取舍仍然成立，除非 M6 评测推翻）

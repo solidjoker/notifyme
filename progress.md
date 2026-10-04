@@ -230,6 +230,26 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - 损坏行：`MessageStoreCore.rewrite` **原样保留**解析失败的行；`PendingQueueCore.rewrite` 按解析后对象**重新序列化**，损坏行会被丢弃
 - 未覆盖：`ForkRecord.filtered/protocol` 落库字段、`CalendarHelper` 三级降级链（不参与 schema 变更，顺延到 M2）；detekt/ktlint 基线未上
 
+### 7. M2 跨应用通知管理（本次会话·已完成，2026-10-05）
+
+从「微信专用」改为「多应用通知统一管理」，全程身份模型升级为 `ConvKey(pkg, conversation)`。
+
+- 提交链（均未推送）：
+  - `79a16c3` M2.1 schema v2：`ChatMessage` 加 `pkg`（默认微信）+ `appLabel`，读时回填；微信/飞书/钉钉三源解析器
+  - `d758a69` M2.2 监听器：`WeChatNotificationListener` → `NotifyMeListener`，按 `AppSourceStore` 启用集合过滤
+  - `9263b95` M2.3 a11y：`WeChatA11yExtractService` → `A11yExtractService`，仅注册表带 a11yConfig 的源直读（目前仅微信）
+  - `dc99281` M2.4 全链路 ConvKey：MainActivity/ConversationActivity/各 store/提醒链全部复合键化，删除 String 兼容重载
+  - `7b154b0` M2.5 服务端/PWA：pkg 入库回填、`/messages` 与 `/analysis` 支持 pkg 过滤、去重索引加 pkg 维度、控制台 App 角标与筛选
+  - `56581ed` M2.6 来源管理 UI：`SourcesActivity` 勾选启停，控制台入口
+- 新增/重写文件：`AppSourceRegistry.kt`（包名→parser/可选 a11yConfig 路由）、`AppSourceStore.kt`（启用态+已观察来源）、
+  `ConvKey`（id=`pkg|conversation`）、飞书/钉钉走 `PrefixImParser`、未收录 App 走 `GenericNotificationParser`、
+  `PromptStore` 改 ConvKey 键、`SourcesActivity` + 两个布局
+- 折叠态日期 key 改为 `ConvKey.id + U+0001 + dayKey`（避开会话名里的 `|`）
+- 测试：189 → **201**，全绿；`SchemaV2Test` 覆盖同名会话跨 App 删除隔离，
+  `NotificationParserTest` 覆盖飞书/钉钉合成样本；双 flavor assemble 通过
+- 遗留：飞书/钉钉真实通知形状未在真机取证（解析器刻意保守）；真机端到端回归留下一轮设备调试；
+  用户新增悬浮需求已写成 **M9**（悬浮卡片 + 常驻悬浮球 + SYSTEM_ALERT_WINDOW 降级链）
+
 ## 四、构建与运行
 
 ```powershell
@@ -265,8 +285,8 @@ ADB/设备要点（踩过的坑）：
 
 ## 五、下一步计划（路线图，对应 README）
 
-> **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M8 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
-> 当前状态：**M1 已完成**（142 个单测全绿，见 §三.6）；**M0 代码与 CI 侧已完成**，只剩 D5 的正式密钥库 + 4 个 Secrets（等用户提供带 `administration` 的 token）；下一步 **M2 跨应用通知管理**。
+> **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
+> 当前状态：**M2 已完成**（201 个单测全绿，见 §三.7，提交 M2.1–M2.6 均未推送）；**M0 代码与 CI 侧已完成**，只剩 D5 的正式密钥库 + 4 个 Secrets（等用户提供带 `administration` 的 token）；下一步 **M3 隐私脱敏**（M9 悬浮通知按设备验证节奏插入）。
 > 下面 8 项是 README 的对外表述，保留原样；执行时以 ROADMAP 为准。
 
 1. **iOS 原生查看端 + 提醒推送**：在 iPhone 上看分析结果并收到提醒（iOS 不允许后台捕获其他 App 通知，故不含本地捕获；当前仅 PWA 查看端）

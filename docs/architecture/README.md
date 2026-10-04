@@ -1,4 +1,4 @@
-# 微信分析助手 · 架构与功能图集
+# 架构与功能图集
 
 > 本目录是对 notifyme Android 端（`app/src/main/java/com/notifyme/android/`）**现有代码**的逆向梳理成果，不是设计提案。
 > 所有节点、类名、方法名、常量、行号、路径均来自实际源码与配置文件。
@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：`versionName 0.1.3` / `versionCode 4`，41 个 Kotlin 文件 + `server/app.py` 1491 行
+> - 代码基线：图 01–03 已更新到 **M2 完成态（versionName 0.2.0 / versionCode 5）**；图 04–09 仍为 M2 前基线（0.1.3，41 个 Kotlin 文件 + `server/app.py` 1491 行），其中类名已被 M2 重命名的在正文里标注新名
 
 ---
 
@@ -14,9 +14,9 @@
 
 | # | 图 | 回答的问题 | 尺寸 (px) |
 |---|---|---|---|
-| 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3194 × 1389 |
-| 02 | [Android 分层架构](#02-android-分层架构) | 40 个 Kotlin 文件各自属于哪一层？ | 4966 × 1692 |
-| 03 | [三条采集通道](#03-三条采集通道) | 消息是怎么进来的？为什么需要三条路？ | 3087 × 915 |
+| 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3286 × 1456 |
+| 02 | [Android 分层架构](#02-android-分层架构) | 40+ 个 Kotlin 文件各自属于哪一层？ | 5250 × 1713 |
+| 03 | [三条采集通道](#03-三条采集通道) | 消息是怎么进来的？为什么需要三条路？ | 3218 × 990 |
 | 04 | [分析决策流水线](#04-分析决策流水线) | 一条消息如何变成一条待办？ | 1010 × 4995 |
 | 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1999 × 3051 |
 | 06 | [功能全景脑图](#06-功能全景脑图) | 这个 App 到底有哪些功能？ | 2738 × 1357 |
@@ -32,7 +32,7 @@
 
 ![系统上下文图](diagrams/01-system-context.png)
 
-- 📱 **Android 设备 / MuMu 模拟器** — `WeChatNotificationListener`（通知监听，零注入）+ `WeChatA11yExtractService`（无障碍直读，免 root）+ App 主体 + 私有目录存储
+- 📱 **Android 设备 / 真机（HyperOS）** — `NotifyMeListener`（通知监听，零注入，按 AppSourceStore 启用集合过滤）+ `A11yExtractService`（无障碍直读，免 root，目前仅微信）+ App 主体 + 私有目录存储
 - 💻 **PC 本机 Windows** — `server/app.py` Flask `0.0.0.0:8000`、`android_db_extract.py`、`pc_db_extract.py`、`messages.db`、frpc 隧道（localPort 8000 → remotePort 23444）
 - ☁️ **VPS 公网入口** — nginx `:443` `location /mmonitor/` → frps `:23444`（allowPorts 白名单）
 - 🧠 **外部模型** — laya/JEV `POST /v1/systemone`、OpenAI 兼容通道 `POST /chat/completions`、ModelScope CDN（MiniCPM4-0.5B-MNN 311MB / MiniCPM3-4B-GGUF 2.47GB）
@@ -50,8 +50,8 @@
 
 | 层 | 内容 |
 |---|---|
-| ① UI 层 | 9 个 Activity：Main（首页）· Console（控制台 8 卡）· Conversation（会话详情+分析面板）· AnalysisList · Watchlist · ReminderList · PromptEdit · ModelList · Onboarding |
-| ② 采集与常驻层 | `WeChatNotificationListener` · `WeChatA11yExtractService` · `KeepAliveService`（60s 看门狗 requestRebind）· `BootReceiver` · `ReminderReceiver` |
+| ① UI 层 | 10 个 Activity：Main（首页）· Console（控制台 8 卡）· Conversation（会话详情+分析面板）· AnalysisList · Watchlist · **Sources（通知来源，M2 新增）** · ReminderList · PromptEdit · ModelList · Onboarding |
+| ② 采集与常驻层 | `NotifyMeListener`（M2 前名 `WeChatNotificationListener`）· `A11yExtractService`（M2 前名 `WeChatA11yExtractService`）· `KeepAliveService`（60s 看门狗 requestRebind）· `BootReceiver` · `ReminderReceiver` |
 | ③ 后台任务层 | 4 个 Worker：Sync（三通道上报）· Analysis（逐会话窗口 case）· Advisor（近 7 天复盘）· ModelDownload（.part 断点续传）；3 个 Scheduler 全部 `enqueueUniquePeriodicWork` + UPDATE 策略 |
 | ④ 领域 / 决策层 | `AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` |
 | ⑤ 存储层 | 6 个 JSONL/目录 + 12 个 SharedPreferences 文件（见下方存储清单） |
@@ -92,7 +92,7 @@ prefs app_state                 OnboardingActivity.kt:29 向导完成标记
 
 | 通道 | 机制 | 覆盖范围 | 代价 / 限制 |
 |---|---|---|---|
-| ① 通知监听（主链路） | 官方 `NotificationListenerService`，包名过滤 `com.tencent.mm`，丢弃 ongoing/聚合摘要，`EXTRA_MESSAGES` 逐条解析发言人，LRU 去重 | 实时增量 | 免打扰群与前台会话**不产生通知**→ 完全不可见；拿不到服务启动前的历史；`EXTRA_TEXT` 可能只是"3 条新消息"摘要 |
+| ① 通知监听（主链路） | 官方 `NotificationListenerService`，按 `AppSourceStore` 启用集合过滤（默认全收，黑名单/被停用包跳过），丢弃 ongoing/聚合摘要，`EXTRA_MESSAGES` 逐条解析发言人，LRU 去重 | 实时增量，M2 起覆盖微信/飞书/钉钉等多 App | 免打扰群与前台会话**不产生通知**→ 完全不可见；拿不到服务启动前的历史；`EXTRA_TEXT` 可能只是"3 条新消息"摘要 |
 | ② 无障碍直读 | `AccessibilityService`，控制台点「开始提取」后自动跳回微信，逐屏向上翻页去重合并，连续 `NO_NEW_LIMIT` 屏无新增判定到顶 | 本机会话历史，**免 root** | 时间戳只能按采集顺序每秒递减**估算**（记录标 `source=a11y-extract`）；微信改版会导致 UI 碎裂，靠 resource-id 候选表 + 最大面积文本节点启发式 + 整屏文本行兜底三级降级 |
 | ③ 服务端数据库直读 | `android_db_extract.py` / `pc_db_extract.py`，在 PC 上解密微信本地库 | **完整历史**，含自己发出的消息 | 需要 MuMu root 通道（仅 MuMu 12）；微信版本相关（已验证 8.0.78）；只有文本，媒体是占位符 |
 
