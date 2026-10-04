@@ -190,6 +190,13 @@
     <string name="diag_hint_restart">监听服务显示未连接时，可在控制台关闭再打开通知监听开关</string>
     <string name="open_source_app">打开应用</string>
     <string name="open_source_app_failed">无法打开：未找到该应用</string>
+    <string name="smoke_title">推理冒烟测试</string>
+    <string name="smoke_run">加载 smoke.gguf 并生成</string>
+    <string name="smoke_missing_model">未找到 files/smoke.gguf</string>
+    <string name="smoke_loading">加载与生成中（首次加载较慢）…</string>
+    <string name="smoke_done">完成，耗时 %1$d ms</string>
+    <string name="smoke_failed">失败：%1$s</string>
+    <string name="btn_engine_smoke">调试：端侧推理冒烟</string>
     <string name="sync_push_switch">启用服务器上报（关闭后消息继续累积，开启时补报）</string>
 
     <!-- 聊天记录提取（服务端安卓库直读，走 serverUrl 同源 /admin/extract） -->

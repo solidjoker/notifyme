@@ -1225,6 +1225,7 @@ class ConsoleActivity : Activity() {
         val switchBall = findViewById<Switch>(R.id.switchOverlayBall)
         val btnPermission = findViewById<Button>(R.id.btnOverlayPermission)
         val btnDebugTest = findViewById<Button>(R.id.btnOverlayDebugTest)
+        val btnEngineSmoke = findViewById<Button>(R.id.btnEngineSmoke)
 
         // 仅 debug 构建显示：合成一条微信风格卡片验证悬浮层，release 自动隐藏
         if (BuildConfig.DEBUG) btnDebugTest.visibility = View.VISIBLE
@@ -1238,6 +1239,12 @@ class ConsoleActivity : Activity() {
                     text = "明天下午3点前把方案发我，记得打电话 13812345678"
                 )
             )
+        }
+
+        // 仅 debug：端侧推理冒烟页
+        if (BuildConfig.DEBUG) btnEngineSmoke.visibility = View.VISIBLE
+        btnEngineSmoke.setOnClickListener {
+            startActivity(Intent(this, EngineSmokeActivity::class.java))
         }
 
         var state = OverlayConfig.get(this)

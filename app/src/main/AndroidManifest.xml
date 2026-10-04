@@ -59,6 +59,7 @@
         <activity android:name=".SourcesActivity" android:exported="false" />
         <activity android:name=".RedactorPreviewActivity" android:exported="false" />
         <activity android:name=".CaptureDiagnosticsActivity" android:exported="false" />
+        <activity android:name=".EngineSmokeActivity" android:exported="false" />
         <activity android:name=".ReminderListActivity" android:exported="false" />
         <activity android:name=".AnalysisListActivity" android:exported="false" />
         <activity android:name=".ConversationActivity" android:exported="false" />
