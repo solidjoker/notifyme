@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 微信聊天无障碍直读服务配置：
-     只监听微信窗口（DEBUG 包运行时会追加本 App 便于采集引擎自检，见服务 onServiceConnected）；
-     canRetrieveWindowContent 是读屏前提；canPerformGestures 供翻页手势兜底 -->
+<!-- 聊天记录无障碍直读服务配置（M2 起多源）：
+     不再写死 android:packageNames：是否接管由 AppSourceRegistry 的 a11yConfig 决定，
+     支持哪些 App 改注册表即可，无需改本配置；
+     canRetrieveWindowContent 是读屏前提；canPerformGestures 供翻页手势兜底。
+     DEBUG 包自检（事件来自本 App）见服务 onAccessibilityEvent。 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled"
     android:accessibilityFeedbackType="feedbackGeneric"
@@ -9,6 +11,5 @@
     android:canRetrieveWindowContent="true"
     android:canPerformGestures="true"
     android:notificationTimeout="100"
-    android:packageNames="com.tencent.mm"
     android:description="@string/a11y_service_desc"
     android:summary="@string/a11y_service_summary" />

@@ -6,6 +6,7 @@ package com.notifyme.android
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Path
 import android.graphics.Rect
 import android.provider.Settings
@@ -15,29 +16,33 @@ import android.view.accessibility.AccessibilityNodeInfo
 import kotlin.concurrent.thread
 
 /**
- * 微信聊天记录无障碍直读服务（无需 root 的本机直读路线）。
+ * 聊天记录无障碍直读服务（M2 起由微信专用的 WeChatA11yExtractService 改名/扩展而来）。
+ *
+ * 支持哪些 App 完全由 [AppSourceRegistry] 的 [A11yConfig] 决定：
+ * 注册表里 a11yConfig == null 的 App（如尚未取证的飞书/钉钉）即使窗口事件到来也不接管，
+ * 宁可不直读也不猜控件 id。
  *
  * 工作流程：
  *  1. 用户在系统设置为本 App 开启无障碍服务；
- *  2. 在微信里打开目标会话，回到控制台点「开始提取」（置位 startRequested 并跳回微信）；
- *  3. 服务收到微信窗口事件后开 worker 线程接管：
+ *  2. 在目标 App 里打开目标会话，回到控制台选择「提取目标」并点「开始提取」
+ *     （置位 startRequested/targetPkg 并跳回目标 App）；
+ *  3. 服务收到目标窗口事件后开 worker 线程接管：
  *     识别会话标题 → 循环「解析当前屏 → 向上翻页 → 去重合并」；
  *  4. 连续 [NO_NEW_LIMIT] 屏无新增判定到顶（或用户停止/翻页失败）→ 结束；
  *  5. 时间戳按采集顺序（新→旧）从当前时间每秒递减估算，记录带 source=a11y-extract；
  *  6. 结果经 MessageStore.mergeAndCollect 入库，新增条目挂 PendingQueue 走既有同步链路。
  *
- * 防碎裂（微信 UI 结构随版本漂移）：
- *  - 会话标题：资源 id 候选表 → 标题栏区域文本启发式；
+ * 防碎裂（各 App UI 结构随版本漂移）：
+ *  - 会话标题：配置的资源 id 候选表 → 标题栏区域文本启发式；
  *  - 消息正文：行内面积最大文本节点（气泡正文）→ 昵称取正文上方小字；
  *  - 整屏零命中时降级「整屏文本行」兜底收集，每级失败都记 logcat（tag=A11yExtract）。
  *
  * 可中断：stopRequested 每屏检查；杀进程/服务断连只是本次提取终止，不影响 App 其它功能。
  */
-class WeChatA11yExtractService : AccessibilityService() {
+class A11yExtractService : AccessibilityService() {
 
     companion object {
         private const val TAG = "A11yExtract"
-        private const val WECHAT_PKG = "com.tencent.mm"
 
         /** 入库/上报的来源标记：服务端 messages.source 直接收该值 */
         const val SOURCE_TAG = "a11y-extract"
@@ -54,12 +59,20 @@ class WeChatA11yExtractService : AccessibilityService() {
         /** 控制台「开始提取」置位；服务在目标窗口事件里消费（一次性） */
         @Volatile
         var startRequested = false
+            private set
 
         /** 控制台「停止」置位；采集循环每屏检查 */
         @Volatile
         var stopRequested = false
+            private set
 
-        fun requestStart() {
+        /** 本次提取的目标包名；窗口事件只接受这个包（DEBUG 自检除外） */
+        @Volatile
+        var targetPkg: String = AppSourceRegistry.PKG_WECHAT
+            private set
+
+        fun requestStart(pkg: String) {
+            targetPkg = pkg
             stopRequested = false
             startRequested = true
         }
@@ -83,28 +96,25 @@ class WeChatA11yExtractService : AccessibilityService() {
     @Volatile
     private var running = false
 
-    override fun onServiceConnected() {
-        super.onServiceConnected()
-        // DEBUG 包追加监听本 App：没有可用微信会话时也能对采集引擎做端到端自检；
-        // Release 包只监听微信（以 XML 配置为准）
-        if (BuildConfig.DEBUG) {
-            serviceInfo = serviceInfo.apply {
-                packageNames = arrayOf(WECHAT_PKG, packageName)
-            }
-            Log.i(TAG, "DEBUG 包：追加监听本 App（$packageName）用于自检")
-        }
-    }
-
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null || !startRequested || running) return
         val pkg = event.packageName?.toString() ?: return
+        // DEBUG 包自检：允许事件来自本 App（无真实 IM 会话时验证采集引擎端到端链路）
         val selfTarget = BuildConfig.DEBUG && pkg == packageName
-        if (pkg != WECHAT_PKG && !selfTarget) return
+        if (pkg != targetPkg && !selfTarget) return
+
+        // 注册表没配 a11y 的 App 不接管；自检时借微信的标题 id 配置
+        val cfg = AppSourceRegistry.a11yConfigFor(pkg)
+            ?: if (selfTarget) {
+                AppSourceRegistry.a11yConfigFor(AppSourceRegistry.PKG_WECHAT)
+            } else null
+        if (cfg == null) return
+
         startRequested = false
         running = true
         thread(name = "a11y-extract") {
             try {
-                runExtraction()
+                runExtraction(pkg, cfg)
             } catch (t: Throwable) {
                 Log.e(TAG, "提取异常终止", t)
                 A11yExtractStore.finish(
@@ -129,22 +139,27 @@ class WeChatA11yExtractService : AccessibilityService() {
 
     // ---------------- 提取主流程 ----------------
 
-    private fun runExtraction() {
+    private fun runExtraction(pkg: String, cfg: A11yConfig) {
         Thread.sleep(800) // 等目标窗口稳定
+        val excludeTitles = buildExcludeTitles(pkg, cfg)
+        val appLabel = excludeTitles.firstOrNull { it.isNotBlank() } ?: pkg
         val root0 = rootInActiveWindow
-        val conversation = root0?.let { detectConversationTitle(it) }.orEmpty()
+        val conversation = root0
+            ?.let { detectConversationTitle(it, cfg, excludeTitles) }
+            .orEmpty()
         if (conversation.isBlank()) {
             A11yExtractStore.finish(
                 this,
-                "未识别到会话标题：请先在微信里打开要提取的会话，再点「开始提取」",
+                "未识别到会话标题：请先在「$appLabel」里打开要提取的会话，再点「开始提取」",
                 0, ""
             )
             Log.w(TAG, "标题识别失败，提取取消")
             return
         }
+        val convKey = ConvKey(pkg, conversation)
         // 群/私聊标记参考本地已有记录；界面本身拿不到可靠群标记
         val isGroup = MessageStore.readRecent(this, 500)
-            .firstOrNull { it.conversation == conversation }?.isGroup ?: false
+            .firstOrNull { it.convKey == convKey }?.isGroup ?: false
 
         // 起始屏必须能找到消息列表，否则说明不在聊天页（如登录页/通讯录），直接中止。
         // 防碎裂的「整屏文本行兜底」只在提取中途结构漂移时启用，不在起始屏启用。
@@ -159,10 +174,10 @@ class WeChatA11yExtractService : AccessibilityService() {
             return
         }
 
-        Log.i(TAG, "开始提取会话「$conversation」（isGroup=$isGroup）")
+        Log.i(TAG, "开始提取 $pkg 会话「$conversation」（isGroup=$isGroup）")
         A11yExtractStore.update(this, true, "正在提取「$conversation」…", 0, conversation)
 
-        // ordered：全局消息列表，新消息在头部；seen 做「会话+发送者+文本」内存去重
+        // ordered：全局消息列表，新消息在头部；seen 做「包+会话+发送者+文本」内存去重
         val ordered = ArrayDeque<ChatMessage>()
         val seen = HashSet<String>()
         var noNewScreens = 0
@@ -180,7 +195,7 @@ class WeChatA11yExtractService : AccessibilityService() {
                 continue
             }
             val before = seen.size
-            collectScreen(root, conversation, isGroup, ordered, seen)
+            collectScreen(root, pkg, conversation, isGroup, ordered, seen)
             screens++
             val addedNow = seen.size - before
             Log.i(TAG, "第 $screens 屏：新增 $addedNow 条，累计 ${seen.size} 条")
@@ -216,25 +231,37 @@ class WeChatA11yExtractService : AccessibilityService() {
         A11yExtractStore.finish(this, status, added.size, conversation)
     }
 
-    // ---------------- 会话标题识别 ----------------
+    /**
+     * 标题识别要排除的名字集合：注册表配置的 selfTitles（内置名）+ PackageManager 实时名。
+     * 实时名查不到不影响内置名生效。
+     */
+    private fun buildExcludeTitles(pkg: String, cfg: A11yConfig): Set<String> {
+        val out = cfg.selfTitles.toMutableSet()
+        try {
+            val pmName = packageManager.getApplicationLabel(
+                packageManager.getApplicationInfo(pkg, 0)
+            ).toString()
+            if (pmName.isNotBlank()) out += pmName
+        } catch (_: PackageManager.NameNotFoundException) {
+            // 包没装：实时名拿不到，沿用配置
+        }
+        return out
+    }
 
-    /** 微信各版本聊天页标题资源 id 候选（防碎裂：逐个尝试，全落空再走启发式） */
-    private val titleIdCandidates = listOf(
-        "com.tencent.mm:id/obn",
-        "com.tencent.mm:id/kk",
-        "com.tencent.mm:id/j3t",
-        "com.tencent.mm:id/gas",
-        "com.tencent.mm:id/action_bar_title"
-    )
+    // ---------------- 会话标题识别 ----------------
 
     private val timeTextPattern = Regex(".*\\d{1,2}:\\d{2}.*")
 
-    private fun detectConversationTitle(root: AccessibilityNodeInfo): String {
-        for (id in titleIdCandidates) {
+    private fun detectConversationTitle(
+        root: AccessibilityNodeInfo,
+        cfg: A11yConfig,
+        excludeTitles: Set<String>
+    ): String {
+        for (id in cfg.titleViewIds) {
             val t = root.findAccessibilityNodeInfosByViewId(id)
                 ?.firstOrNull { !it.text.isNullOrBlank() }
                 ?.text?.toString()?.trim()
-            if (!t.isNullOrBlank() && t != "微信") {
+            if (!t.isNullOrBlank() && t !in excludeTitles) {
                 Log.i(TAG, "标题命中资源 id：$id -> $t")
                 return t
             }
@@ -250,7 +277,7 @@ class WeChatA11yExtractService : AccessibilityService() {
                 t.isNotBlank() && b.top in 1 until (screenH * 0.15).toInt() &&
                     t.length <= 30 && !timeTextPattern.matches(t) &&
                     t.any { it.isLetterOrDigit() } &&
-                    !t.endsWith("%") && t != "微信"
+                    !t.endsWith("%") && t !in excludeTitles
             }
             .minByOrNull { it.second.top }
             ?.first
@@ -271,6 +298,7 @@ class WeChatA11yExtractService : AccessibilityService() {
      */
     private fun collectScreen(
         root: AccessibilityNodeInfo,
+        pkg: String,
         conversation: String,
         isGroup: Boolean,
         ordered: ArrayDeque<ChatMessage>,
@@ -288,9 +316,9 @@ class WeChatA11yExtractService : AccessibilityService() {
         var parsed = 0
         for (i in rowParent.childCount - 1 downTo 0) {
             val row = rowParent.getChild(i) ?: continue
-            val msg = parseRow(row, conversation, isGroup, screenW)
+            val msg = parseRow(row, pkg, conversation, isGroup, screenW)
             if (msg != null) {
-                val key = "${msg.conversation}${msg.sender}|${msg.text}"
+                val key = "$pkg|${msg.conversation}${msg.sender}|${msg.text}"
                 if (seen.add(key)) {
                     ordered.addFirst(msg)
                     parsed++
@@ -299,7 +327,7 @@ class WeChatA11yExtractService : AccessibilityService() {
         }
         if (parsed == 0 && seen.isEmpty()) {
             Log.w(TAG, "列表节点存在但整屏零解析，降级整屏文本行兜底")
-            fallbackCollectAllText(root, conversation, isGroup, ordered, seen)
+            fallbackCollectAllText(root, pkg, conversation, isGroup, ordered, seen)
         }
     }
 
@@ -311,7 +339,7 @@ class WeChatA11yExtractService : AccessibilityService() {
 
     /**
      * 找消息列表。三级匹配（防碎裂）：
-     *  1. 首选可滚动的 ListView/RecyclerView（微信聊天页的标准结构）；
+     *  1. 首选可滚动的 ListView/RecyclerView（聊天页的标准结构）；
      *  2. 不可滚动的 ListView/RecyclerView：消息不足一屏时列表不滚动，仍是聊天页；
      *  3. 兜底任意可滚动容器：直接子项 ≥2 时自身即行容器；
      *     只有唯一内容子容器时取其内容子容器（ScrollView+LinearLayout 类结构）。
@@ -351,7 +379,7 @@ class WeChatA11yExtractService : AccessibilityService() {
                         bestTyped = node
                         bestTypedArea = a
                     } else if (!node.isScrollable && a > bestTypedNoScrollArea) {
-                        // 消息不足一屏时微信列表不可滚动，仍应识别为聊天页
+                        // 消息不足一屏时列表不可滚动，仍应识别为聊天页
                         bestTypedNoScroll = node
                         bestTypedNoScrollArea = a
                     }
@@ -385,6 +413,7 @@ class WeChatA11yExtractService : AccessibilityService() {
      */
     private fun parseRow(
         row: AccessibilityNodeInfo,
+        pkg: String,
         conversation: String,
         isGroup: Boolean,
         screenW: Int
@@ -398,7 +427,8 @@ class WeChatA11yExtractService : AccessibilityService() {
                     text = "[图片]",
                     timestamp = 0L,
                     conversation = conversation,
-                    isGroup = isGroup
+                    isGroup = isGroup,
+                    pkg = pkg
                 )
             } else null
         }
@@ -423,12 +453,20 @@ class WeChatA11yExtractService : AccessibilityService() {
             content.second.centerX() > screenW / 2 -> "我"
             else -> conversation
         }
-        return ChatMessage(sender, text, 0L, conversation, isGroup)
+        return ChatMessage(
+            sender = sender,
+            text = text,
+            timestamp = 0L,
+            conversation = conversation,
+            isGroup = isGroup,
+            pkg = pkg
+        )
     }
 
-    /** 兜底：整屏文本行逐行收集（标题栏/状态栏区域除外），发送者留空。 */
+    /** 兜底：整屏文本行逐行收集（标题栏区域除外），发送者留空。 */
     private fun fallbackCollectAllText(
         root: AccessibilityNodeInfo,
+        pkg: String,
         conversation: String,
         isGroup: Boolean,
         ordered: ArrayDeque<ChatMessage>,
@@ -443,9 +481,18 @@ class WeChatA11yExtractService : AccessibilityService() {
             if (text.isBlank() || text.length > 500) return@forEach
             if (b.top < (screenH * 0.15).toInt()) return@forEach
             if (timeSepPattern.matches(text) && text.length <= 20) return@forEach
-            val key = "$conversation|$text"
+            val key = "$pkg|$conversation|$text"
             if (seen.add(key)) {
-                ordered.addFirst(ChatMessage("", text, 0L, conversation, isGroup))
+                ordered.addFirst(
+                    ChatMessage(
+                        sender = "",
+                        text = text,
+                        timestamp = 0L,
+                        conversation = conversation,
+                        isGroup = isGroup,
+                        pkg = pkg
+                    )
+                )
             }
         }
     }

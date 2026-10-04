@@ -342,6 +342,28 @@
                     android:textColor="@color/text_secondary"
                     android:textSize="12sp" />
 
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/a11y_target_label"
+                        android:textColor="@color/text_primary"
+                        android:textSize="13sp" />
+
+                    <Spinner
+                        android:id="@+id/spinnerA11yTarget"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1" />
+                </LinearLayout>
+
                 <Button
                     android:id="@+id/btnA11yPermission"
                     android:layout_width="match_parent"

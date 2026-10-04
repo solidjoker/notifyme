@@ -119,10 +119,15 @@ class ConsoleActivity : Activity() {
     private lateinit var tvAutoExtractStatus: TextView
 
     // 本机无障碍直读（无需 root）
+    private lateinit var spinnerA11yTarget: Spinner
     private lateinit var btnA11yPermission: Button
     private lateinit var btnA11yStart: Button
     private lateinit var btnA11yStop: Button
     private lateinit var tvA11yStatus: TextView
+
+    /** 无障碍提取目标：与 spinner 顺序一一对应的包名（仅装有 a11y 配置且已安装的源） */
+    private val a11yTargetPkgs = mutableListOf<String>()
+    private val a11yTargetLabels = mutableListOf<String>()
 
     private lateinit var switchAdvisorAuto: Switch
     private lateinit var tvAdvisorStatus: TextView
@@ -217,6 +222,7 @@ class ConsoleActivity : Activity() {
         switchAutoExtract = findViewById(R.id.switchAutoExtract)
         tvAutoExtractStatus = findViewById(R.id.tvAutoExtractStatus)
 
+        spinnerA11yTarget = findViewById(R.id.spinnerA11yTarget)
         btnA11yPermission = findViewById(R.id.btnA11yPermission)
         btnA11yStart = findViewById(R.id.btnA11yStart)
         btnA11yStop = findViewById(R.id.btnA11yStop)
@@ -523,35 +529,92 @@ class ConsoleActivity : Activity() {
     // ---------- 本机无障碍直读（无需 root） ----------
 
     private fun setupA11yExtractSection() {
+        setupA11yTargetSpinner()
         btnA11yPermission.setOnClickListener {
             // 无障碍权限只能用户在系统设置手动开启，引导跳转
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
         btnA11yStart.setOnClickListener {
-            WeChatA11yExtractService.requestStart()
-            // 跳回微信：微信会恢复上次打开的会话，服务在窗口事件里自动接管
-            val intent = packageManager.getLaunchIntentForPackage("com.tencent.mm")
+            val targetPkg = selectedA11yPkg()
+            if (targetPkg == null) {
+                Toast.makeText(this, R.string.a11y_no_app, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            A11yExtractService.requestStart(targetPkg)
+            // 跳回目标 App：它会恢复上次打开的会话，服务在窗口事件里自动接管
+            val intent = packageManager.getLaunchIntentForPackage(targetPkg)
             if (intent != null) {
                 startActivity(intent)
-                Toast.makeText(this, R.string.a11y_jump_wechat, Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    this,
+                    getString(R.string.a11y_jump_app, selectedA11yLabel()),
+                    Toast.LENGTH_LONG
+                ).show()
             } else {
-                WeChatA11yExtractService.requestStop() // 没装微信，撤回开始标记
-                Toast.makeText(this, R.string.a11y_no_wechat, Toast.LENGTH_SHORT).show()
+                A11yExtractService.requestStop() // 没装目标 App，撤回开始标记
+                Toast.makeText(
+                    this,
+                    getString(R.string.a11y_no_app, selectedA11yLabel()),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
             refreshA11yStatus()
         }
         btnA11yStop.setOnClickListener {
-            WeChatA11yExtractService.requestStop()
+            A11yExtractService.requestStop()
             refreshA11yStatus()
         }
     }
 
+    /**
+     * 填充提取目标下拉框：注册表里带 a11yConfig 的源，且本机确实安装了才列出。
+     * 顺序沿用注册表（当前只有微信；飞书/钉钉取证后自动出现，无需再改界面）。
+     */
+    private fun setupA11yTargetSpinner() {
+        a11yTargetPkgs.clear()
+        a11yTargetLabels.clear()
+        for (source in AppSourceRegistry.knownSources()) {
+            if (source.a11yConfig == null) continue
+            if (!isPackageInstalled(source.pkg)) continue
+            a11yTargetPkgs += source.pkg
+            a11yTargetLabels += source.label
+        }
+        val adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            a11yTargetLabels
+        ).also {
+            it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        spinnerA11yTarget.adapter = adapter
+    }
+
+    private fun isPackageInstalled(pkg: String): Boolean = try {
+        packageManager.getPackageInfo(pkg, 0)
+        true
+    } catch (_: PackageManager.NameNotFoundException) {
+        false
+    }
+
+    private fun selectedA11yPkg(): String? =
+        spinnerA11yTarget.selectedItemPosition
+            .takeIf { it in a11yTargetPkgs.indices }
+            ?.let { a11yTargetPkgs[it] }
+
+    private fun selectedA11yLabel(): String =
+        spinnerA11yTarget.selectedItemPosition
+            .takeIf { it in a11yTargetLabels.indices }
+            ?.let { a11yTargetLabels[it] }
+            .orEmpty()
+
     /** 状态行 + 三按钮联动：未开权限 / 空闲 / 提取中 三态 */
     private fun refreshA11yStatus() {
-        val enabled = WeChatA11yExtractService.isEnabled(this)
+        val enabled = A11yExtractService.isEnabled(this)
         val state = A11yExtractStore.read(this)
+        val hasTarget = a11yTargetPkgs.isNotEmpty()
+        spinnerA11yTarget.isEnabled = !state.running
         btnA11yPermission.isEnabled = !enabled
-        btnA11yStart.isEnabled = enabled && !state.running
+        btnA11yStart.isEnabled = enabled && hasTarget && !state.running
         btnA11yStop.isEnabled = enabled && state.running
         val text = when {
             !enabled -> getString(R.string.a11y_status_permission_missing)

@@ -32,7 +32,7 @@ class MainApplication : Application() {
                 object : BroadcastReceiver() {
                     override fun onReceive(context: Context, intent: Intent) {
                         Log.i("MainApplication", "收到 A11Y_DEBUG_START 广播，置位开始提取")
-                        WeChatA11yExtractService.requestStart()
+                        A11yExtractService.requestStart(packageName)
                     }
                 },
                 IntentFilter("$packageName.A11Y_DEBUG_START"),

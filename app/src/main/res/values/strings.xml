@@ -107,18 +107,19 @@
     <string name="extract_auto_status_none">自动提取：尚未运行</string>
 
     <!-- 本机无障碍直读（无需 root 的聊天记录提取路线） -->
-    <string name="a11y_service_label">微信聊天直读</string>
-    <string name="a11y_service_desc">在微信聊天界面逐屏向上翻页，把屏幕上的消息读入本 App。仅在您主动点「开始提取」后运行，期间可随时停止。</string>
-    <string name="a11y_service_summary">本机直读微信聊天记录</string>
+    <string name="a11y_service_label">聊天记录直读</string>
+    <string name="a11y_service_desc">在已支持 App 的聊天界面逐屏向上翻页，把屏幕上的消息读入本 App。仅在您主动点「开始提取」后运行，期间可随时停止。</string>
+    <string name="a11y_service_summary">本机直读聊天记录（微信/飞书/钉钉……）</string>
     <string name="a11y_card_title">📱 本机无障碍直读（无需 root）</string>
-    <string name="a11y_hint">使用说明：① 先在微信里打开要提取的会话；② 回到本页点「开始提取」，App 会自动跳回微信并逐屏向上翻页收集；③ 提取中请不要操作手机，可随时回本页点「停止」。说明：界面拿不到精确时间，时间戳为估算值，记录带 a11y-extract 来源标记。</string>
+    <string name="a11y_hint">使用说明：① 先在目标 App 里打开要提取的会话；② 回到本页选择「提取目标」并点「开始提取」，App 会自动跳回目标 App 并逐屏向上翻页收集；③ 提取中请不要操作手机，可随时回本页点「停止」。说明：界面拿不到精确时间，时间戳为估算值，记录带 a11y-extract 来源标记。</string>
+    <string name="a11y_target_label">提取目标</string>
     <string name="btn_a11y_permission">去开启无障碍权限</string>
     <string name="btn_a11y_start">开始提取</string>
     <string name="btn_a11y_stop">停止</string>
     <string name="a11y_status_none">尚未提取</string>
     <string name="a11y_status_permission_missing">无障碍服务未开启，点上方按钮去系统设置开启</string>
-    <string name="a11y_jump_wechat">已跳回微信，将自动开始提取当前会话</string>
-    <string name="a11y_no_wechat">未检测到微信，请先安装并登录微信</string>
+    <string name="a11y_jump_app">已跳回%1$s，将自动开始提取当前会话</string>
+    <string name="a11y_no_app">未检测到%1$s，请先安装并登录</string>
 
     <!-- 后端分析 -->
     <string name="analysis_section_title">🧠 后端分析</string>

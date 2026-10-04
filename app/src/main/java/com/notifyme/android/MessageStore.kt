@@ -21,7 +21,7 @@ import java.util.Locale
  * @param conversation 会话名（群聊为群名，私聊通常等于 sender）
  * @param isGroup      是否群聊（依据通知是否带 MessagingStyle 判断）
  * @param source       来源标记：空 = 通知监听（时间戳真实）；
- *                     a11y-extract = 无障碍直读（时间戳为估算值，见 WeChatA11yExtractService）
+ *                     a11y-extract = 无障碍直读（时间戳为估算值，见 A11yExtractService）
  * @param pkg          应用包名（schema v2，M2 跨应用通知管理引入）。
  *                     缺省＝微信，因此老数据（schema v1 无此字段）读进来自动归微信——
  *                     这就是 ROADMAP M2 说的「读时补齐」：不做一次性重写，

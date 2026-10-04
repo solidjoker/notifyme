@@ -94,7 +94,7 @@
           只监听微信窗口（DEBUG 包运行时追加本 App 用于采集引擎自检）。
         -->
         <service
-            android:name=".WeChatA11yExtractService"
+            android:name=".A11yExtractService"
             android:label="@string/a11y_service_label"
             android:exported="true"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
