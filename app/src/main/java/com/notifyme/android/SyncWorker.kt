@@ -66,19 +66,29 @@ class SyncWorker(
             return Result.success()
         }
 
+        // M3 隐私模式门控：
+        //  - LOCAL_ONLY：消息/分析/顾问三通道整体不发送，队列与水位保持，
+        //    模式切回后下个周期自然补报；
+        //  - CLOUD_REDACT：各通道在发送一刻替换（见 push* 内部）。
+        val privacy = PrivacyConfig.get(applicationContext)
+        if (privacy.localOnly) {
+            recordResult(config, "已跳过：仅端侧模式，云端上报整体停用（数据继续留在本机）")
+            return Result.success()
+        }
+
         val okParts = mutableListOf<String>()
         val extraParts = mutableListOf<String>()
 
         // ---- 第一步：消息上报（原链路，其结果决定 Worker 的 success/retry/failure） ----
-        val msgResult = pushMessages(config, url, okParts, extraParts)
+        val msgResult = pushMessages(config, url, privacy, okParts, extraParts)
 
         // ---- 第二步：分析结果上报（独立通道，失败不影响消息通道已成功的状态，
         //      也不触发 WorkManager 重试——未推进水位，下轮自然补报） ----
-        pushAnalysis(config, url, okParts, extraParts)
+        pushAnalysis(config, url, privacy, okParts, extraParts)
 
         // ---- 第三步：顾问报告上报（独立通道，语义与分析通道一致：
         //      404 静默跳过，失败不影响主通道、不触发重试，下轮自然补报） ----
-        pushAdvisor(config, url, okParts, extraParts)
+        pushAdvisor(config, url, privacy, okParts, extraParts)
 
         val parts = mutableListOf<String>()
         if (okParts.isNotEmpty()) parts += "成功：" + okParts.joinToString(" + ")
@@ -98,18 +108,25 @@ class SyncWorker(
     private fun pushMessages(
         config: SyncConfig,
         url: String,
+        privacy: PrivacyModeState,
         okParts: MutableList<String>,
         extraParts: MutableList<String>
     ): Result {
         val pending = PendingQueue.readAll(applicationContext)
         if (pending.isEmpty()) return Result.success()
 
+        // M3 出设备脱敏：按会话分组替换消息文本/发送者/会话名；
+        // PendingEntry.id 不在 message 内，removeSent 仍按原 id 剔除
+        val outgoing = if (privacy.cloudRedact) {
+            redactMessages(pending.map { it.message }, privacy.enabledRules)
+        } else pending.map { it.message }
+
         val body = JSONArray().apply {
-            pending.forEach { entry ->
-                put(entry.message.toJson().apply {
+            outgoing.forEach { message ->
+                put(message.toJson().apply {
                     // 上报协议用蛇形命名，移除本地存储的驼峰键
                     remove("isGroup")
-                    put("is_group", entry.message.isGroup)
+                    put("is_group", message.isGroup)
                 })
             }
         }.toString()
@@ -166,11 +183,29 @@ class SyncWorker(
     private fun pushAnalysis(
         config: SyncConfig,
         serverUrl: String,
+        privacy: PrivacyModeState,
         okParts: MutableList<String>,
         extraParts: MutableList<String>
     ) {
-        val records = AnalysisStore.readUnsynced(applicationContext)
-        if (records.isEmpty()) return
+        val allRecords = AnalysisStore.readUnsynced(applicationContext)
+        if (allRecords.isEmpty()) return
+
+        // M3 CLOUD_REDACT：只放行脱敏态产出的记录。模式切换前落库的旧记录
+        // （redacted=false，会话名为原文、s2 文本可能引用原文）直接隔离在本机——
+        // 水位一旦越过它们就不再补报，宁可不传也不发送未脱敏内容。
+        val records = if (privacy.cloudRedact) {
+            val quarantined = allRecords.count { !it.redacted }
+            if (quarantined > 0) {
+                extraParts += "分析：$quarantined 个旧记录未脱敏，已留本机"
+            }
+            allRecords.filter { it.redacted }
+        } else allRecords
+        if (records.isEmpty()) {
+            // 全被隔离：把水位推进到全部记录的最大 analyzedAt，
+            // 避免每个周期重复写隔离提示（记录已明确永不以原文上报）
+            AnalysisStore.markSynced(applicationContext, allRecords.maxOf { it.analyzedAt })
+            return
+        }
 
         var base = serverUrl.trim().trimEnd('/')
         if (base.endsWith("/weixin")) base = base.dropLast("/weixin".length)
@@ -241,18 +276,45 @@ class SyncWorker(
     private fun pushAdvisor(
         config: SyncConfig,
         serverUrl: String,
+        privacy: PrivacyModeState,
         okParts: MutableList<String>,
         extraParts: MutableList<String>
     ) {
         val reports = AdvisorStore.readUnsynced(applicationContext)
         if (reports.isEmpty()) return
 
+        // M3 CLOUD_REDACT：报告是模型产出的聚合文本，没有窗口发送者名单可做
+        // 姓名映射；用无 nameMap 的脱敏器过一遍自由文本字段（summary 与
+        // suggestions 的 title/detail），手机号/身份证/银行卡/邮箱/链接/金额/
+        // 地址七类仍被遮盖；type/report_id/model_used 等结构字段不动。
+        val reportCore = if (privacy.cloudRedact) {
+            RedactorCore(privacy.enabledRules, emptyMap())
+        } else null
+
         var base = serverUrl.trim().trimEnd('/')
         if (base.endsWith("/weixin")) base = base.dropLast("/weixin".length)
         val url = "$base/advisor"
 
         val body = JSONArray().apply {
-            reports.forEach { put(it.toJson()) }
+            reports.forEach { report ->
+                put(if (reportCore == null) report.toJson() else JSONObject().apply {
+                    put("report_id", report.reportId)
+                    put("created_at", report.createdAt)
+                    put("period_days", report.periodDays)
+                    put("case_count", report.caseCount)
+                    put("summary", reportCore.redact(report.summary).text)
+                    put("suggestions", JSONArray().apply {
+                        report.suggestions.forEach { s ->
+                            put(JSONObject().apply {
+                                put("type", s.type)
+                                put("title", reportCore.redact(s.title).text)
+                                put("detail", reportCore.redact(s.detail).text)
+                            })
+                        }
+                    })
+                    put("model_used", report.modelUsed)
+                })
+            }
         }.toString()
 
         val request = Request.Builder()

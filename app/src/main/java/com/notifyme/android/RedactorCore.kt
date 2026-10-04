@@ -20,6 +20,42 @@ data class RedactionResult(
 }
 
 /**
+ * 姓名/群名稳定别名（M3）：无状态、无需本地映射表。
+ *
+ * token = 前缀 + sha256(名字) 前 6 位十六进制——同一个名字在任意时间、
+ * 任意会话里都得到同一个别名，模型仍能在窗口内追踪「同一个人」；
+ * 不同名字得到不同别名。别名不含名字原文，也不保存身份映射。
+ *
+ * 局限（写进 PRIVACY.md）：哈希别名不是加密强度的匿名——拿到候选名单者
+ * 可逐个哈希比对。真正强匿名请关闭姓名规则或用本地随机映射（未实现）。
+ */
+object NameAliases {
+    fun person(name: String): String = "[人名${hashShort(name)}]"
+    fun group(name: String): String = "[群${hashShort(name)}]"
+
+    private fun hashShort(name: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(name.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }.take(6)
+    }
+
+    /**
+     * 为一个分析窗口构建姓名映射：会话名（群→群别名）+ 窗口内全部发送者。
+     * 发送者与会话同名时不重复（群里发言人恰为群名的情况沿用会话别名）。
+     */
+    fun nameMapFor(conversation: String, isGroup: Boolean, senders: Collection<String>): Map<String, String> {
+        val map = LinkedHashMap<String, String>()
+        if (conversation.isNotEmpty()) {
+            map[conversation] = if (isGroup) group(conversation) else person(conversation)
+        }
+        senders.filter { it.isNotEmpty() && it != conversation }.forEach { s ->
+            map.putIfAbsent(s, person(s))
+        }
+        return map
+    }
+}
+
+/**
  * 脱敏规则清单与默认启用集合。规则 id 会原样写进分析记录（只存 id，不存原文）。
  */
 object RedactorRules {
@@ -157,6 +193,92 @@ class RedactorCore(
                 ),
                 "[地址]"
             )
+        )
+    }
+}
+
+/**
+ * 窗口级脱敏产物（M3.4）：出设备 case 副本 + 证据。
+ * 证据只含规则 id 与命中数，绝不包含原文片段。
+ * caseId/pkg/windowEnd 保持不变——身份与去重仍是本地口径，
+ * 云端只看到占位符，本地提醒/记录仍挂在同一个 case 上。
+ */
+data class RedactedCase(
+    val case: AnalysisCase,
+    private val core: RedactorCore,
+    val hitCount: Int,
+    val rules: List<String>
+) {
+    /** 出设备的旁路文本（会话级自定义提示词等）走同一把脱敏器，口径一致。 */
+    fun redactExtra(text: String): String =
+        if (text.isEmpty()) text else core.redact(text).text
+}
+
+/**
+ * 构造 case 的脱敏副本（M3.4）：窗口级收集姓名（会话名 + 全部发送者），
+ * 用同一把 [RedactorCore] 逐条替换消息文本与发送者名——窗口内同一个人
+ * 始终得到同一个别名，模型仍能追踪对话关系。
+ *
+ * 注意：消息文本里出现、但既不是会话名也不在窗口发送者集合里的名字
+ * 不会被替换（无法无中生有地识别人名），该局限写进 PRIVACY.md。
+ */
+fun redactCase(
+    kase: AnalysisCase,
+    enabledRules: Set<String> = RedactorRules.ALL
+): RedactedCase {
+    val senders = LinkedHashSet<String>()
+    kase.messages.forEach { if (it.sender.isNotEmpty()) senders.add(it.sender) }
+    val nameMap = NameAliases.nameMapFor(kase.conversation, kase.isGroup, senders)
+    val core = RedactorCore(enabledRules, nameMap)
+
+    var hits = 0
+    val hitRules = LinkedHashSet<String>()
+    val aliasConversation = nameMap[kase.conversation] ?: kase.conversation
+    val newMessages = kase.messages.map { msg ->
+        val r = core.redact(msg.text)
+        hits += r.hitCount
+        hitRules += r.rules
+        msg.copy(
+            text = r.text,
+            sender = nameMap[msg.sender] ?: msg.sender,
+            conversation = aliasConversation
+        )
+    }
+    return RedactedCase(
+        case = kase.copy(conversation = aliasConversation, messages = newMessages),
+        core = core,
+        hitCount = hits,
+        rules = hitRules.toList()
+    )
+}
+
+/**
+ * 批量消息脱敏（M3.5 上报通道）：输入跨会话的消息集合（PendingQueue），
+ * 按 [ChatMessage.convKey] 分组、各自建立窗口级姓名映射，返回与输入
+ * **一一对应、顺序不变**的脱敏副本（id 等其余字段原样保留）。
+ */
+fun redactMessages(
+    messages: List<ChatMessage>,
+    enabledRules: Set<String> = RedactorRules.ALL
+): List<ChatMessage> {
+    class Ctx(val core: RedactorCore, val nameMap: Map<String, String>)
+
+    val byConv = HashMap<ConvKey, Ctx>()
+    messages.groupBy { it.convKey }.forEach { (_, group) ->
+        val nameMap = NameAliases.nameMapFor(
+            group.first().conversation,
+            group.any { it.isGroup },
+            group.mapTo(LinkedHashSet()) { it.sender }
+        )
+        byConv[group.first().convKey] =
+            Ctx(RedactorCore(enabledRules, nameMap), nameMap)
+    }
+    return messages.map { msg ->
+        val ctx = byConv.getValue(msg.convKey)
+        msg.copy(
+            text = ctx.core.redact(msg.text).text,
+            sender = ctx.nameMap[msg.sender] ?: msg.sender,
+            conversation = ctx.nameMap[msg.conversation] ?: msg.conversation
         )
     }
 }

@@ -52,7 +52,14 @@ data class AnalysisCaseRecord(
     /** 每个分叉的判定记录（时间序：prefilter -> s1 -> escalate） */
     val forks: List<ForkRecord> = emptyList(),
     /** fork 1 预筛就地结案标记：true 时未调 laya/S2，s1/s2 字段均为兜底值 */
-    val filtered: Boolean = false
+    val filtered: Boolean = false,
+    // ---- M3 脱敏证据：只存规则 id / 命中数，不存任何原文片段 ----
+    /** true = 该 case 出设备前经过脱敏（云端收到的是占位符文本） */
+    val redacted: Boolean = false,
+    /** 实际命中的规则 id（规则清单顺序去重） */
+    val redactionRules: List<String> = emptyList(),
+    /** 窗口内总命中替换数（所有消息、所有规则求和） */
+    val redactionHits: Int = 0
 ) {
     /** 会话复合键（M2）：分析结果归属哪个 App 的哪个会话。 */
     val convKey: ConvKey get() = ConvKey(pkg, conversation)
@@ -138,6 +145,13 @@ data class AnalysisCaseRecord(
         // fork 层轨迹：snake_case 键名，同步到服务端 /analysis 时随记录上报
         put("forks", JSONArray().apply { forks.forEach { put(it.toJson()) } })
         put("filtered", filtered)
+        // 脱敏证据仅在发生脱敏时写出，保持其余记录紧凑；随 /analysis 上报后
+        // 服务端可统计脱敏覆盖率，却拿不到被替换的内容
+        if (redacted) {
+            put("redacted", true)
+            put("redaction_rules", JSONArray(redactionRules))
+            put("redaction_hits", redactionHits)
+        }
     }
 
     companion object {
@@ -184,7 +198,15 @@ data class AnalysisCaseRecord(
                 s2SuggestedAction = s2?.optString("suggested_action").orEmpty(),
                 s2Tasks = tasks,
                 forks = forks,
-                filtered = obj.optBoolean("filtered")
+                filtered = obj.optBoolean("filtered"),
+                redacted = obj.optBoolean("redacted"),
+                redactionRules = obj.optJSONArray("redaction_rules")
+                    ?.let { arr ->
+                        (0 until arr.length()).mapNotNull {
+                            arr.optString(it).ifEmpty { null }
+                        }
+                    }.orEmpty(),
+                redactionHits = obj.optInt("redaction_hits")
             )
         }
     }

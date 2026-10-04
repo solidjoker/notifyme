@@ -205,8 +205,39 @@ class RedactorCoreTest {
         assertEquals("找[人名1]签字", r.text)
     }
 
-    // ---------------- 规则子集 ----------------
+    // ---------------- NameAliases ----------------
 
+    @Test
+    fun `同名得到相同别名异名不同且不含原文`() {
+        val a1 = NameAliases.person("张三")
+        val a2 = NameAliases.person("张三")
+        val b = NameAliases.person("李四")
+        assertEquals(a1, a2)
+        assertFalse(a1 == b)
+        assertFalse(a1.contains("张三"))
+        assertTrue(a1.startsWith("[人名"))
+        assertTrue(NameAliases.group("项目群").startsWith("[群"))
+    }
+
+    @Test
+    fun `nameMapFor 群聊会话名用群别名并收集发送者`() {
+        val map = NameAliases.nameMapFor(
+            "项目群", true, listOf("李四", "王五", "李四")
+        )
+        assertEquals(NameAliases.group("项目群"), map["项目群"])
+        assertEquals(NameAliases.person("李四"), map["李四"])
+        assertEquals(NameAliases.person("王五"), map["王五"])
+        assertEquals(3, map.size)
+    }
+
+    @Test
+    fun `nameMapFor 私聊发送者与会话同名时不重复`() {
+        val map = NameAliases.nameMapFor("张三", false, listOf("张三"))
+        assertEquals(1, map.size)
+        assertEquals(NameAliases.person("张三"), map["张三"])
+    }
+
+    // ---------------- 规则子集 ----------------
     @Test
     fun `只启用部分规则时其它规则不生效`() {
         val r = redact(

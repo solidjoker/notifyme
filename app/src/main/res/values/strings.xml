@@ -94,6 +94,38 @@
     <string name="sources_title">通知来源</string>
     <string name="sources_hint">勾选的 App 通知才会入库。默认全部启用；未知 App 首次有通知后自动出现在列表中。标注「直读」的 App 支持无障碍聊天页直读。</string>
     <string name="sources_empty">暂无来源（先等一条通知进来）</string>
+
+    <!-- M3 隐私脱敏 -->
+    <string name="privacy_section_title">隐私脱敏</string>
+    <string name="privacy_mode_off">关闭</string>
+    <string name="privacy_mode_cloud">出设备脱敏</string>
+    <string name="privacy_mode_local">仅端侧分析</string>
+    <string name="privacy_mode_off_desc">当前：不脱敏，消息原文按现有链路处理。</string>
+    <string name="privacy_mode_cloud_desc">当前：只在发往云端/上报时替换为占位符，本地存储与端侧模型仍是原文。</string>
+    <string name="privacy_mode_local_desc">当前：云端分析与上报整体停用，只允许端侧本地模型分析。</string>
+    <string name="privacy_rules_btn">脱敏规则（%1$d/%2$d）</string>
+    <string name="privacy_bypass_btn">不脱敏白名单会话（%1$d）</string>
+    <string name="privacy_preview_btn">预览脱敏效果</string>
+    <string name="privacy_rules_dialog_title">勾选启用的脱敏规则</string>
+    <string name="privacy_bypass_dialog_title">勾选允许原文发送的会话</string>
+    <string name="privacy_bypass_empty">暂无会话（先等一条通知进来）</string>
+    <!-- 规则中文名（多选对话框） -->
+    <string name="rule_label_phone">手机号 / 400 电话</string>
+    <string name="rule_label_id_card">身份证号</string>
+    <string name="rule_label_bank_card">银行卡 / 长账号</string>
+    <string name="rule_label_email">邮箱</string>
+    <string name="rule_label_url">链接网址</string>
+    <string name="rule_label_amount">金额</string>
+    <string name="rule_label_address">地址</string>
+    <string name="rule_label_name">姓名 / 群名</string>
+    <string name="common_save">保存</string>
+    <string name="privacy_preview_title">脱敏预览</string>
+    <string name="privacy_preview_original">原文（只存你设备）</string>
+    <string name="privacy_preview_will_send">将发送（出设备文本）</string>
+    <string name="privacy_preview_empty">暂无消息（先等一条通知进来）</string>
+    <string name="privacy_preview_banner_off">模式：关闭——将发送文本与原文相同。</string>
+    <string name="privacy_preview_banner_cloud">模式：出设备脱敏——下面即云端/上报实际收到的文本。</string>
+    <string name="privacy_preview_banner_local">模式：仅端侧分析——云端不发送任何内容，下列文本仅用于核对规则效果。</string>
     <string name="sync_push_switch">启用服务器上报（关闭后消息继续累积，开启时补报）</string>
 
     <!-- 聊天记录提取（服务端安卓库直读，走 serverUrl 同源 /admin/extract） -->

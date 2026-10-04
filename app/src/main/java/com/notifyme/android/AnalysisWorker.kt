@@ -81,6 +81,14 @@ class AnalysisWorker(
 
         // System 1 两条路径：本地 MiniCPM4-0.5B（端侧引擎）或 laya 服务（本地/自建地址）
         val s1Local = config.s1Type == AnalysisConfig.S1_TYPE_LOCAL_MODEL
+
+        // M3 仅端侧模式：云端链路整体停用。S1 配的是云端模型 -> 本轮无分析可做，
+        // 明确文案、不重试（本地 S1 + 云端 S2 的情况在 S2 分支单独门控）
+        val privacy = PrivacyConfig.get(applicationContext)
+        if (privacy.localOnly && !s1Local) {
+            recordResult(config, "成功：仅端侧模式且 System 1 未配置本地模型，本轮不执行云端分析")
+            return Result.success()
+        }
         val slot = config.s1Slot()
         // 容忍用户填到 /v1 为止的地址（如 https://api.typesafe.ai/v1）：统一去掉再拼路径
         val baseUrl = slot.url.trim().trimEnd('/').removeSuffix("/v1")
@@ -302,11 +310,21 @@ class AnalysisWorker(
         )
         val s1Local = config.s1Type == AnalysisConfig.S1_TYPE_LOCAL_MODEL
 
+        // ---- M3 出设备脱敏：本地（含 prefilter/本地模型/本地落库）一律用原文 kase；
+        // 云端 S1/S2 统一用 sendCase（会话名、发送者、正文均已替换为占位符/别名）。
+        // 会话级提示词 background 同走脱敏，防止用户写进提示词的身份信息漏出设备。
+        val privacy = PrivacyConfig.get(applicationContext)
+        val redaction = if (privacy.shouldRedact(ConvKey(kase.pkg, kase.conversation))) {
+            redactCase(kase, privacy.enabledRules)
+        } else null
+        val sendCase = redaction?.case ?: kase
+        val cloudBackground = redaction?.redactExtra(background) ?: background
+
         // ---- fork 2：S1 判定 ----
         val result = if (s1Local) {
             runS1Local(kase, background)
         } else {
-            runS1SystemOne(config, slot, baseUrl, kase, background)
+            runS1SystemOne(config, slot, baseUrl, sendCase, cloudBackground)
         }
         val s1Raw = result.first
         val s1 = result.second
@@ -369,10 +387,11 @@ class AnalysisWorker(
                 }
             } else {
                 // S2 走云端 openai 协议槽位（开关关闭或未配置则跳过，只出 S1）
-                val s2Slot = config.s2Slot()
+                // M3 仅端侧模式：云端 S2 即使已配置也不调用
+                val s2Slot = if (privacy.cloudBlocked) null else config.s2Slot()
                 if (s2Slot != null) {
                     try {
-                        val s2 = runS2OpenAi(s2Slot, kase, s1, background)
+                        val s2 = runS2OpenAi(s2Slot, sendCase, s1, cloudBackground)
                         escalated = true
                         s2Summary = s2.summary
                         s2DueTime = s2.dueTime
@@ -385,7 +404,13 @@ class AnalysisWorker(
                         Log.w(TAG, "S2 深分析失败，保留 S1 结论: ${e.message}")
                     }
                 } else {
-                    Log.i(TAG, "满足升级条件但 System 2 未启用或未配置，跳过 S2: ${kase.conversation}")
+                    Log.i(
+                        TAG,
+                        if (privacy.cloudBlocked)
+                            "仅端侧模式禁止云端 S2，跳过: ${kase.conversation}"
+                        else
+                            "满足升级条件但 System 2 未启用或未配置，跳过 S2: ${kase.conversation}"
+                    )
                 }
             }
         }
@@ -410,7 +435,10 @@ class AnalysisWorker(
             s2DueTime = s2DueTime,
             s2SuggestedAction = s2SuggestedAction,
             s2Tasks = s2Tasks,
-            forks = forks
+            forks = forks,
+            redacted = redaction != null,
+            redactionRules = redaction?.rules ?: emptyList(),
+            redactionHits = redaction?.hitCount ?: 0
         )
     }
 
