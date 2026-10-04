@@ -40,4 +40,18 @@ class MainApplication : Application() {
             )
         }
     }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // 端侧引擎常驻内存最贵；到达明显的内存压力档位就全部释放，
+        // 下次分析时按需重新加载
+        if (level >= TRIM_MEMORY_MODERATE) {
+            LocalLlmEngines.releaseAll()
+        }
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        LocalLlmEngines.releaseAll()
+    }
 }

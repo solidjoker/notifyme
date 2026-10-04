@@ -322,8 +322,10 @@ Git 提交身份（本仓库局部配置，未改全局）：
   模型加载约 1.1s，完整补全 **4064ms**，输出连贯中文，原生链路验证通过
 - 243 单测全绿；双 flavor assemble 通过
 - 遗留：S1 模型当前是 MNN 格式（llama.cpp 不识别），需换 GGUF 版 S1
-  或另接 MNN；S2（4B/2.47GB）真机 8GB+ 内存/时延、S2 准入判定
-  （RAM/ABI）、onTrimMemory 释放均待真机 W1 同批做
+  或另接 MNN；S2（4B/2.47GB）真机 8GB+ 内存/时延待真机 W1 取证。
+  已补（M4.3）：`LocalDeviceCapabilities` S2 准入（8GB+ RAM 且 arm64，
+  引擎工厂与下载按钮双拦截）；`MainApplication.onTrimMemory`（≥MODERATE）/
+  `onLowMemory` 释放引擎
 
 ## 四、构建与运行
 

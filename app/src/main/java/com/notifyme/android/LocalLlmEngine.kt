@@ -91,6 +91,12 @@ object LocalLlmEngines {
         if (!LocalModelStore.isReady(context, modelId)) {
             return unavailable("模型尚未下载完成：${model.displayName}")
         }
+
+        // S2（4B）真机准入：架构/内存不达条件不开放，避免加载到一半 OOM
+        if (modelId == LocalModelStore.MODEL_S2) {
+            LocalDeviceCapabilities.s2BlockReason(context)?.let { return unavailable(it) }
+        }
+
         val file = java.io.File(LocalModelStore.modelDir(context, modelId), gguf.name)
         if (!file.exists()) {
             return unavailable("模型文件缺失：${gguf.name}")

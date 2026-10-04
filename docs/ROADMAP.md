@@ -212,8 +212,8 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
    模拟器（MuMu x86_64）：加载 1.1s、补全 4064ms；真机与峰值 RSS/发热待 W1 同批记录
 2. [x] 实现引擎 `LlamaCppEngine`：加载/卸载生命周期、异常 → 抛 `LocalEngineException`
    （上层已有降级文案）；未知/MNN/未下载模型均优雅降级为不可用引擎
-3. [ ] 准入判定：`ActivityManager.memoryInfo` + `Build.SUPPORTED_ABIS` → S2（2.47 GB）仅在 8 GB+ RAM 且 arm64 时开放，否则 UI 明确禁用并给理由
-4. [~] `LocalLlmEngines.releaseAll()` 已实现 Closeable 释放；接 `onTrimMemory`/`onLowMemory` 待做
+3. [x] 准入判定：`ActivityManager.memoryInfo` + `Build.SUPPORTED_ABIS` → S2（2.47 GB）仅在 8 GB+ RAM 且 arm64 时开放，否则引擎工厂返回带理由的不可用引擎（`LocalDeviceCapabilities`）
+4. [x] `LocalLlmEngines.releaseAll()` 接 `MainApplication.onTrimMemory`（≥MODERATE）/`onLowMemory`
 5. [ ] `ModelDownloadWorker`/`ModelListActivity`：断点续传校验（`LocalModelStore.kt:116` 已按 size 校验）、下载失败重试文案
 6. [ ] 分析质量对比：同一批会话，云端 vs 端侧 S1 判定一致率、S2 摘要可用性，写进 `docs/` 评测记录
 

@@ -90,6 +90,13 @@ class ModelListActivity : Activity() {
 
     private fun startDownload(modelId: String) {
         val model = LocalModelStore.model(modelId) ?: return
+        // S2（4B）真机准入：架构/内存不达条件不允许白下 2.47GB
+        if (modelId == LocalModelStore.MODEL_S2) {
+            LocalDeviceCapabilities.s2BlockReason(this)?.let { reason ->
+                Toast.makeText(this, reason, Toast.LENGTH_LONG).show()
+                return
+            }
+        }
         // 存储空间预检：模型大小 + 100MB 余量（.part 与正式文件短时并存）
         val available = StatFs(filesDir.absolutePath).availableBytes
         if (available < model.totalBytes + 100L * 1024 * 1024) {
