@@ -241,6 +241,7 @@ Git 提交身份（本仓库局部配置，未改全局）：
   - `dc99281` M2.4 全链路 ConvKey：MainActivity/ConversationActivity/各 store/提醒链全部复合键化，删除 String 兼容重载
   - `7b154b0` M2.5 服务端/PWA：pkg 入库回填、`/messages` 与 `/analysis` 支持 pkg 过滤、去重索引加 pkg 维度、控制台 App 角标与筛选
   - `56581ed` M2.6 来源管理 UI：`SourcesActivity` 勾选启停，控制台入口
+  - `4d304bf` M2.7 文档收尾：M2 归档、M9 写入、架构图 01–03 重渲染
 - 新增/重写文件：`AppSourceRegistry.kt`（包名→parser/可选 a11yConfig 路由）、`AppSourceStore.kt`（启用态+已观察来源）、
   `ConvKey`（id=`pkg|conversation`）、飞书/钉钉走 `PrefixImParser`、未收录 App 走 `GenericNotificationParser`、
   `PromptStore` 改 ConvKey 键、`SourcesActivity` + 两个布局
@@ -249,6 +250,27 @@ Git 提交身份（本仓库局部配置，未改全局）：
   `NotificationParserTest` 覆盖飞书/钉钉合成样本；双 flavor assemble 通过
 - 遗留：飞书/钉钉真实通知形状未在真机取证（解析器刻意保守）；真机端到端回归留下一轮设备调试；
   用户新增悬浮需求已写成 **M9**（悬浮卡片 + 常驻悬浮球 + SYSTEM_ALERT_WINDOW 降级链）
+
+### 8. M3 隐私脱敏（本次会话·已完成，2026-10-05）
+
+数据出设备前可选脱敏，三档策略 + 全云端链路接线，本地身份与去重语义不变。
+
+- 提交（未推送）：
+  - `b21f067` M3.1 脱敏内核 `RedactorCore`：手机号/身份证/银行卡/邮箱/URL/金额/地址/姓名 8 类规则，
+    类型占位符（`[手机号]` 等）保留结构，纯 JVM 27 个单测
+  - `ce6468a` M3.2-M3.6：三档策略 + 控制台隐私卡 + AnalysisWorker/SyncWorker 接线 + 脱敏预览页
+- 三档：**关闭**（默认，升级不改变行为）/ **出设备脱敏**（云端 S1/S2 与上报在发送一刻替换）/
+  **仅端侧分析**（云端分析与三条上报通道整体停用）
+- 姓名用稳定哈希别名：`[人名xxxxxx]`（SHA-256 前 6 位），窗口内同一人始终同一别名；
+  非加密强匿名，取舍写进 `PRIVACY.md`
+- 接线口径：云端用 `redactCase` 副本（正文/发送者/会话名都替换），本地模型/prefilter 用原文；
+  caseId/pkg/windowEnd 不变；会话级提示词 background 也走脱敏；
+  SyncWorker 分析通道只放行 `redacted` 记录，未脱敏旧记录隔离本机不补报
+- 新增文件：`PrivacyConfig.kt`（prefs `privacy_config`）、`RedactorPreviewActivity.kt` + 两个预览布局；
+  `AnalysisCaseRecord` 加 `redacted/redactionRules/redactionHits`（只存 id 与计数，不存原文）
+- 测试：201 → **237**（RedactorCoreTest 30 + PrivacyModeStateTest 6），双 flavor assemble 通过
+- 遗留：真机「仅端侧」抓包验证零云端请求（与 M2 真机回归一并）；
+  银行卡 13–19 位数字刻意保守（快递单号也遮盖）；非发送者名单内人名无法识别
 
 ## 四、构建与运行
 
@@ -286,7 +308,7 @@ ADB/设备要点（踩过的坑）：
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
-> 当前状态：**M2 已完成**（201 个单测全绿，见 §三.7，提交 M2.1–M2.6 均未推送）；**M0 代码与 CI 侧已完成**，只剩 D5 的正式密钥库 + 4 个 Secrets（等用户提供带 `administration` 的 token）；下一步 **M3 隐私脱敏**（M9 悬浮通知按设备验证节奏插入）。
+> 当前状态：**M3 已完成**（237 个单测全绿，见 §三.8，M2 七提交 + M3 两提交均未推送）；**M0 代码与 CI 侧已完成**，只剩 D5 的正式密钥库 + 4 个 Secrets（等用户提供带 `administration` 的 token）；下一步 **M4 端侧推理引擎**（决策门 D3 已定：llama.cpp AAR spike 先行；M9 悬浮通知按设备验证节奏插入）。
 > 下面 8 项是 README 的对外表述，保留原样；执行时以 ROADMAP 为准。
 
 1. **iOS 原生查看端 + 提醒推送**：在 iPhone 上看分析结果并收到提醒（iOS 不允许后台捕获其他 App 通知，故不含本地捕获；当前仅 PWA 查看端）
