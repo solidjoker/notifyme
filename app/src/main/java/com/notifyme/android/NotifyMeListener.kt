@@ -58,40 +58,66 @@ class NotifyMeListener : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
+        CaptureStats.onPosted()
         val pkg = sbn.packageName
 
         // 1) 自身/系统/系统 UI 永不入库（本 App 自己的提醒通知会造成回环）
-        if (AppSourceRegistry.isBlocked(pkg)) return
+        if (AppSourceRegistry.isBlocked(pkg)) {
+            CaptureStats.onBlocked()
+            return
+        }
 
-        val notification = sbn.notification ?: return
+        val notification = sbn.notification ?: run { CaptureStats.onEmpty(); return }
 
         // 2) 「已启用应用源集合」过滤：用户在设置里关掉的来源直接跳过
-        if (!AppSourceStore.isEnabled(applicationContext, pkg)) return
+        if (!AppSourceStore.isEnabled(applicationContext, pkg)) {
+            CaptureStats.onDisabled()
+            return
+        }
 
         // 3) 丢弃系统/常驻类通知：
         //    - ongoing（如「微信正在运行」的前台服务通知）；
         //    - CATEGORY_SERVICE / CATEGORY_STATUS 等状态类；
         //    - group summary（聚合摘要通知，避免与单条重复入库）。
-        if (sbn.isOngoing) return
+        if (sbn.isOngoing) {
+            CaptureStats.onOngoing()
+            return
+        }
         if (notification.category == Notification.CATEGORY_SERVICE ||
             notification.category == Notification.CATEGORY_STATUS
-        ) return
-        if (notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
+        ) {
+            CaptureStats.onOngoing()
+            return
+        }
+        if (notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) {
+            CaptureStats.onOngoing()
+            return
+        }
 
         // 4) 系统通知 → 纯数据（此步之后解析逻辑就能在 JVM 单测里复用）
         val raw = toRawNotification(pkg, notification, sbn.postTime)
 
         // 5) 标题与正文（含 bigText）都为空的通知（如纯状态更新）没有意义，丢弃
-        if (raw.title.isEmpty() && raw.text.isEmpty() && raw.bigText.isEmpty()) return
+        if (raw.title.isEmpty() && raw.text.isEmpty() && raw.bigText.isEmpty()) {
+            CaptureStats.onEmpty()
+            return
+        }
 
         // 6) 去重：同 key 且内容指纹一致 -> 视为同一条的刷新，跳过
         val fingerprint = "${raw.title}|${raw.text}|${raw.bigText}"
-        if (recentKeys[sbn.key] == fingerprint) return
+        if (recentKeys[sbn.key] == fingerprint) {
+            CaptureStats.onDuplicate()
+            return
+        }
         recentKeys[sbn.key] = fingerprint
 
         // 7) 按来源规则解析；入库 + 记录来源 + 日志
-        val message = AppSourceRegistry.parserFor(pkg).parse(raw) ?: return
+        val message = AppSourceRegistry.parserFor(pkg).parse(raw) ?: run {
+            CaptureStats.onParseFailed()
+            return
+        }
         MessageStore.append(applicationContext, message)
+        CaptureStats.onStored(pkg)
         // 同步进入待上报队列（核心过滤逻辑不变，仅追加一行）
         PendingQueue.append(applicationContext, message)
         // 缓存原始通知供「快速回复」使用（无回复 action 时内部不占缓存）

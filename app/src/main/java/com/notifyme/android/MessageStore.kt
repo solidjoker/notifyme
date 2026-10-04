@@ -188,6 +188,11 @@ object MessageStore {
     fun normalizeSchema(context: Context): Int = core(context).normalizeSchema()
 
     /**
+     * 存储层诊断（W4）：原始行数 / 可解析行数 / 损坏行数 / 文件字节数。
+     */
+    fun storageStats(context: Context): StorageStats = core(context).storageStats()
+
+    /**
      * 删除指定的消息集合（会话详情页多选删除用），返回实际删除条数。
      * 按完整字段匹配；文件里若有完全相同的重复消息，按选中条数依次删除。
      */
@@ -224,6 +229,21 @@ internal fun chatMessageFullKey(m: ChatMessage): String =
     "${m.pkg}|${m.conversation}|${m.sender}|${m.text}|${m.timestamp}|${m.isGroup}|${m.source}"
 
 /**
+ * 消息存储文件诊断快照（W4 采集诊断页）。
+ *
+ * @param totalLines   原始行数（含损坏行）
+ * @param validLines   可解析为 [ChatMessage] 的行数
+ * @param corruptLines 无法解析的行数（重写文件时仍原样保留，不自动删除）
+ * @param sizeBytes    messages.jsonl 当前字节数
+ */
+data class StorageStats(
+    val totalLines: Int,
+    val validLines: Int,
+    val corruptLines: Int,
+    val sizeBytes: Long
+)
+
+/**
  * [MessageStore] 的无 Android 依赖内核：只认一个 [JsonlStore]（即一个文件）
  * 与一个变更回调，因此可以在 JVM 单测里用临时目录直接跑全部分支。
  *
@@ -243,6 +263,27 @@ internal class MessageStoreCore(
     fun append(message: ChatMessage) {
         store.appendLine(message.toJson().toString())
         onChange()
+    }
+
+    /** 存储层统计：原始行数、可解析行数、损坏行数、文件字节数。 */
+    fun storageStats(): StorageStats {
+        if (!store.exists()) return StorageStats(0, 0, 0, 0)
+        val lines = store.readRawLines()
+        var valid = 0
+        for (line in lines) {
+            try {
+                ChatMessage.fromJson(JSONObject(line))
+                valid++
+            } catch (e: Exception) {
+                // 损坏行计入 corrupt
+            }
+        }
+        return StorageStats(
+            totalLines = lines.size,
+            validLines = valid,
+            corruptLines = lines.size - valid,
+            sizeBytes = store.file.length()
+        )
     }
 
     /**

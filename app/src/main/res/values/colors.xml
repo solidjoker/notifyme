@@ -34,4 +34,6 @@
     <color name="chip_orange_bg">#FFF1E0</color>
     <color name="chip_bg">#F0F0F0</color>
     <color name="time_gray">#B2B2B2</color>
+    <!-- 采集诊断：异常红 -->
+    <color name="diag_red">#E64340</color>
 </resources>

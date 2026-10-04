@@ -146,6 +146,50 @@
     <string name="quick_reply_empty">内容不能为空</string>
     <string name="quick_reply_failed">发送失败：通知已过期，请等新通知或去微信里回复</string>
     <string name="quick_reply_sent">已发送</string>
+
+    <!-- W4 采集诊断 -->
+    <string name="diagnostics_title">采集诊断</string>
+    <string name="diagnostics_refresh">刷新</string>
+    <string name="diag_section_services">权限与服务状态</string>
+    <string name="diag_section_session">本次启动以来</string>
+    <string name="diag_section_dropped">丢弃通知明细</string>
+    <string name="diag_section_session_pkg">本次各来源入库</string>
+    <string name="diag_section_storage">本地消息存储</string>
+    <string name="diag_section_alltime">各来源累计统计</string>
+    <string name="diag_section_hints">排查提示</string>
+    <string name="diag_listener_auth">通知监听授权</string>
+    <string name="diag_listener_connected">监听服务已连接</string>
+    <string name="diag_a11y">无障碍提取</string>
+    <string name="diag_overlay">悬浮窗权限</string>
+    <string name="diag_status_on">正常</string>
+    <string name="diag_status_off">未启用</string>
+    <string name="diag_posted">收到通知</string>
+    <string name="diag_stored">成功入库</string>
+    <string name="diag_last_stored">最近入库时间</string>
+    <string name="diag_drop_blocked">系统 / 本应用通知</string>
+    <string name="diag_drop_disabled">来源被停用</string>
+    <string name="diag_drop_ongoing">常驻 / 状态类通知</string>
+    <string name="diag_drop_empty">空内容通知</string>
+    <string name="diag_drop_duplicate">重复通知</string>
+    <string name="diag_drop_parse">解析失败</string>
+    <string name="diag_value_na">暂无</string>
+    <string name="diag_file_size">文件大小</string>
+    <string name="diag_total_lines">原始行数</string>
+    <string name="diag_valid_lines">有效行数</string>
+    <string name="diag_corrupt_lines">损坏行数</string>
+    <string name="diag_no_data">还没有任何已存储的消息</string>
+    <string name="diag_conversations">会话总数</string>
+    <string name="diag_self_messages">自己发出的消息</string>
+    <string name="diag_pkg_total">累计消息</string>
+    <string name="diag_pkg_conversations">会话数</string>
+    <string name="diag_pkg_groups">群聊数</string>
+    <string name="diag_pkg_latest">最近消息时间</string>
+    <string name="diag_hint_wechat_notification">确认系统设置里微信允许通知，且通知样式不是「不设通知」</string>
+    <string name="diag_hint_foreground">正在微信里打开着的会话不产生通知，离开微信页面后才会被捕获</string>
+    <string name="diag_hint_dnd">免打扰群 / 系统免打扰期间的消息不会进入通知监听</string>
+    <string name="diag_hint_restart">监听服务显示未连接时，可在控制台关闭再打开通知监听开关</string>
+    <string name="open_source_app">打开应用</string>
+    <string name="open_source_app_failed">无法打开：未找到该应用</string>
     <string name="sync_push_switch">启用服务器上报（关闭后消息继续累积，开启时补报）</string>
 
     <!-- 聊天记录提取（服务端安卓库直读，走 serverUrl 同源 /admin/extract） -->

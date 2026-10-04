@@ -59,6 +59,28 @@ class MessageStoreCoreTest {
         source = source
     )
 
+    @Test
+    fun `storageStats 空存储返回全零`() {
+        val s = core.storageStats()
+        assertEquals(0, s.totalLines)
+        assertEquals(0, s.validLines)
+        assertEquals(0, s.corruptLines)
+        assertEquals(0L, s.sizeBytes)
+    }
+
+    @Test
+    fun `storageStats 区分有效行与损坏行且体积随文件`() {
+        core.append(msg("在吗", 1_000L))
+        core.append(msg("你好", 2_000L))
+        JsonlStore(dataFile).appendLine("这不是JSON{")
+
+        val s = core.storageStats()
+        assertEquals(3, s.totalLines)
+        assertEquals(2, s.validLines)
+        assertEquals(1, s.corruptLines)
+        assertTrue(s.sizeBytes > 0L)
+    }
+
     /** 直接往数据文件里塞原始行（构造损坏行、乱序行等测试现场）。 */
     private fun writeRaw(vararg lines: String) {
         dataFile.parentFile?.mkdirs()

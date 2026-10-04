@@ -143,6 +143,16 @@ class ConversationActivity : Activity() {
         findViewById<TextView>(R.id.btnBack).setOnClickListener { finish() }
         findViewById<TextView>(R.id.tvTitle).text = conversation
 
+        findViewById<Button>(R.id.btnOpenApp).setOnClickListener {
+            val intent = packageManager.getLaunchIntentForPackage(key.pkg)
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+            } else {
+                Toast.makeText(this, R.string.open_source_app_failed, Toast.LENGTH_SHORT).show()
+            }
+        }
+
         setupQuickReply()
 
         btnAnalyzeThis.setOnClickListener {

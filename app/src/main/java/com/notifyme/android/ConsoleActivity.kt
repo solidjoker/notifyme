@@ -254,6 +254,9 @@ class ConsoleActivity : Activity() {
         findViewById<Button>(R.id.btnOpenSources).setOnClickListener {
             startActivity(Intent(this, SourcesActivity::class.java))
         }
+        findViewById<Button>(R.id.btnOpenDiagnostics).setOnClickListener {
+            startActivity(Intent(this, CaptureDiagnosticsActivity::class.java))
+        }
     }
 
     private fun refreshListenerStatus() {
