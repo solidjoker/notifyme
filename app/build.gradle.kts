@@ -64,6 +64,7 @@ val hasReleaseSigning = releaseStoreFile?.exists() == true &&
 android {
     namespace = "com.notifyme.android"
     compileSdk = 34
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "com.notifyme.android"
@@ -71,6 +72,23 @@ android {
         targetSdk = 34
         versionCode = 5
         versionName = "0.2.0"
+
+        ndk {
+            // 真机 arm64 + MuMu 模拟器 x86_64；不含 32 位与其它 ABI
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
+        externalNativeBuild {
+            cmake {
+                arguments += "-DCMAKE_BUILD_TYPE=Release"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.31.6"
+        }
     }
 
     buildFeatures {

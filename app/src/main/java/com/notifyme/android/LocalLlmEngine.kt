@@ -58,24 +58,56 @@ class UnavailableLocalLlmEngine : LocalLlmEngine {
  */
 object LocalLlmEngines {
 
+    /** S2（4B）上下文长度；留足会话窗口又控制内存。 */
+    private const val S2_N_CTX = 4096
+    private const val DEFAULT_N_CTX = 2048
+
     @Volatile
     private var instances = mapOf<String, LocalLlmEngine>()
 
     @Synchronized
     fun forModel(context: Context, modelId: String): LocalLlmEngine {
         instances[modelId]?.let { return it }
-        // TODO(engine)：MNN/llama.cpp so 编译完成后，这里按模型 id 返回
-        //  MnnLlmEngine(modelDir=LocalModelStore.modelDir(context, modelId))
-        //  并在 load 失败（内存不足/架构不支持）时回落 UnavailableLocalLlmEngine。
-        val engine: LocalLlmEngine = UnavailableLocalLlmEngine()
+        val engine = createEngine(context.applicationContext, modelId)
         instances = instances + (modelId to engine)
         return engine
+    }
+
+    private fun unavailable(reason: String): LocalLlmEngine = object : LocalLlmEngine {
+        override val isReady = false
+        override val unavailableReason = reason
+        override suspend fun chat(system: String, user: String, maxTokens: Int): String =
+            throw LocalEngineException(reason)
+    }
+
+    private fun createEngine(context: Context, modelId: String): LocalLlmEngine {
+        val model = LocalModelStore.model(modelId)
+            ?: return unavailable("未知模型: $modelId")
+
+        // llama.cpp only runs GGUF. S1 ships in MNN format and is not supported here.
+        val gguf = model.files.firstOrNull { it.name.endsWith(".gguf") }
+            ?: return unavailable("该模型为 MNN 格式，llama.cpp 路径不支持（待 MNN 接入）")
+
+        if (!LocalModelStore.isReady(context, modelId)) {
+            return unavailable("模型尚未下载完成：${model.displayName}")
+        }
+        val file = java.io.File(LocalModelStore.modelDir(context, modelId), gguf.name)
+        if (!file.exists()) {
+            return unavailable("模型文件缺失：${gguf.name}")
+        }
+
+        val nCtx = if (modelId == LocalModelStore.MODEL_S2) S2_N_CTX else DEFAULT_N_CTX
+        return try {
+            LlamaCppEngine(file, nCtx)
+        } catch (e: Throwable) {
+            unavailable("引擎加载失败：${e.message ?: "未知错误"}")
+        }
     }
 
     /** 释放全部已加载引擎（内存压力大或模型被删除时调用）。 */
     @Synchronized
     fun releaseAll() {
-        // UnavailableLocalLlmEngine 无资源；真实引擎落地后在此释放 native 句柄
+        instances.values.forEach { (it as? java.io.Closeable)?.close() }
         instances = emptyMap()
     }
 }

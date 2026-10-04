@@ -44,12 +44,24 @@ jobs:
           chmod +x gradlew
           grep '^distributionUrl' gradle/wrapper/gradle-wrapper.properties
 
-      - name: Ensure Android SDK platform 34
+      - name: Ensure Android SDK platform 34, NDK and CMake
         run: |
           SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n1 || true)
-          if [ -n "$SDKMANAGER" ] && [ ! -d "$ANDROID_HOME/platforms/android-34" ]; then
-            "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0"
+          if [ -n "$SDKMANAGER" ]; then
+            [ -d "$ANDROID_HOME/platforms/android-34" ] || \
+              "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0"
+            # M4 native build: versions must match app/build.gradle.kts / CMake
+            [ -d "$ANDROID_HOME/ndk/27.2.12479018" ] || \
+              "$SDKMANAGER" "ndk;27.2.12479018"
+            [ -d "$ANDROID_HOME/cmake/3.31.6" ] || \
+              "$SDKMANAGER" "cmake;3.31.6"
           fi
+
+      - name: Fetch llama.cpp v0.5.0 (M4 native source, not committed)
+        run: |
+          git clone --depth 1 --branch v0.5.0 \
+            https://github.com/ggml-org/llama.cpp third_party/llama.cpp
+          git -C third_party/llama.cpp describe --tags
 
       - name: Unit tests + assemble (open & beta)
         run: ./gradlew --stacktrace testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug

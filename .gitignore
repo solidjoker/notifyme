@@ -1,6 +1,7 @@
-# ===== Gradle / Android =====
+# Gradle / Android
 .gradle/
 build/
+app/.cxx/
 local.properties
 *.keystore
 *.jks
@@ -34,3 +35,7 @@ Thumbs.db
 captures/
 *.apk
 *.aab
+
+# M4 spike：llama.cpp 源码（构建时本地/CI 拉取，不入仓库）
+third_party/
+build-native.log
