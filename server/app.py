@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: MIT
 
 """
-微信消息接收服务端
-====================
+消息接收服务端（M2 起支持多应用：微信 / 飞书 / 钉钉）
+======================================================
 配合 notifyme Android 端使用：
-安卓端监听微信通知，定时把消息以 JSON 数组的形式 POST 到本服务的 /weixin 接口。
+安卓端监听通知栏，定时把消息以 JSON 数组的形式 POST 到本服务的 /weixin 接口
+（接口名沿用历史路径，已不限于微信）。
 
 上报协议：
     POST serverUrl
@@ -18,6 +19,7 @@
         timestamp    number 消息时间戳（毫秒）
         conversation str    会话名（群名或联系人名）
         is_group     bool   是否群聊
+        pkg          str    可选，来源 App 包名；缺省按微信处理
 
 启动：
     python app.py            # 默认监听 0.0.0.0:8000
@@ -57,6 +59,20 @@ JSONL_PATH = os.path.join(DATA_DIR, "messages.jsonl")  # 原文存档（与安�
 DB_PATH = os.path.join(DATA_DIR, "messages.db")        # SQLite 查询库
 ADVISOR_PATH = os.path.join(DATA_DIR, "advisor_reports.json")  # 顾问层报告存档（JSON 数组）
 
+# 来源 App：包名 -> 中文名（与安卓端 AppSourceRegistry 口径一致）。
+# 老客户端上报不带 pkg，统一按微信回填——不搞一次性迁移，每次写入就地补。
+DEFAULT_PKG = "com.tencent.mm"
+PKG_LABELS = {
+    "com.tencent.mm": "微信",
+    "com.ss.android.lark": "飞书",
+    "com.alibaba.android.rimet": "钉钉",
+}
+
+
+def pkg_label(pkg):
+    """包名转中文名；未知包名回落到包名本身，不瞎猜。"""
+    return PKG_LABELS.get(pkg, pkg or DEFAULT_PKG)
+
 # 写入锁：保护 jsonl 文件和 SQLite 的并发写入
 _write_lock = threading.Lock()
 
@@ -88,16 +104,9 @@ def init_db():
                 timestamp     INTEGER,   -- 消息时间戳（毫秒）
                 conversation  TEXT,
                 is_group      INTEGER,   -- SQLite 无布尔型，0/1 存储
-                received_at   INTEGER    -- 服务端接收时间（毫秒）
+                received_at   INTEGER,   -- 服务端接收时间（毫秒）
+                pkg           TEXT       -- 来源 App 包名（M2）
             )
-            """
-        )
-        # 唯一索引：同一条消息（会话+发送者+时间戳+内容）只入库一次，
-        # 防止手机端重试导致重复。重复插入会抛 IntegrityError，按“重复”计数。
-        conn.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_dedup
-            ON messages (conversation, sender, timestamp, text)
             """
         )
         # 迁移：老库补 source 列，区分消息来源
@@ -111,6 +120,21 @@ def init_db():
             conn.execute(
                 "ALTER TABLE messages ADD COLUMN source TEXT "
                 "NOT NULL DEFAULT 'android-notification'")
+        # M2 迁移：老库补 pkg 列并回填微信（历史数据全部来自微信）。
+        if "pkg" not in cols:
+            conn.execute(
+                "ALTER TABLE messages ADD COLUMN pkg TEXT "
+                f"NOT NULL DEFAULT '{DEFAULT_PKG}'")
+        # 去重唯一索引（M2 版）：列补齐后再（重）建，去重维度含 pkg——
+        # 不同 App 的同名会话里同发送者同毫秒同内容不再被误判为重复。
+        # 老库的旧索引不含 pkg，先丢弃再建新索引（索引定义无法直接改）。
+        conn.execute("DROP INDEX IF EXISTS idx_messages_dedup")
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_dedup
+            ON messages (pkg, conversation, sender, timestamp, text)
+            """
+        )
         # 分析结果表：App 侧会话级分析（S1 轻量模型 + S2 深度分析）的上报存档
         # case_id 唯一：同一次分析重复上报直接跳过
         # s1 / s2 存 JSON 原文；need_action / importance 单独抽列方便过滤
@@ -129,7 +153,8 @@ def init_db():
                 s2            TEXT,          -- S2 结果 JSON 原文（未升级为 NULL）
                 analyzed_at   TEXT,          -- App 侧分析完成时间（原样存）
                 protocol      TEXT,          -- 协议版本
-                received_at   INTEGER        -- 服务端接收时间（毫秒）
+                received_at   INTEGER,       -- 服务端接收时间（毫秒）
+                pkg           TEXT           -- 来源 App 包名（M2）
             )
             """
         )
@@ -143,6 +168,11 @@ def init_db():
             conn.execute(
                 "ALTER TABLE analyses ADD COLUMN filtered INTEGER "
                 "NOT NULL DEFAULT 0")
+        # M2 迁移：老库补 pkg 列并回填微信（历史分析全部来自微信）。
+        if "pkg" not in acols:
+            conn.execute(
+                "ALTER TABLE analyses ADD COLUMN pkg TEXT "
+                f"NOT NULL DEFAULT '{DEFAULT_PKG}'")
         conn.commit()
     finally:
         conn.close()
@@ -220,13 +250,17 @@ def receive_weixin():
                 source = item.get("source")
                 if not isinstance(source, str) or not source.strip():
                     source = "android-notification"
+                # pkg：老客户端不带，就地按微信回填（不做一次性批量迁移）
+                pkg = item.get("pkg")
+                if not isinstance(pkg, str) or not pkg.strip():
+                    pkg = DEFAULT_PKG
                 try:
                     conn.execute(
                         """
                         INSERT INTO messages
                             (sender, text, timestamp, conversation, is_group,
-                             received_at, source)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                             received_at, source, pkg)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             item["sender"],
@@ -236,6 +270,7 @@ def receive_weixin():
                             1 if item["is_group"] else 0,
                             now_ms,
                             source.strip(),
+                            pkg.strip(),
                         ),
                     )
                     received += 1
@@ -281,6 +316,7 @@ def query_messages():
     """
     查询消息。
     参数：
+        pkg           来源 App 包名（精确匹配）；缺省不按 App 过滤
         conversation  会话名（模糊匹配）
         date          YYYY-MM-DD，按消息 timestamp 过滤当天
         limit         返回条数，默认 100，上限 1000
@@ -290,6 +326,7 @@ def query_messages():
     if auth_err:
         return auth_err
 
+    pkg = request.args.get("pkg", "").strip()
     conversation = request.args.get("conversation", "").strip()
     date_str = request.args.get("date", "").strip()
     try:
@@ -299,9 +336,15 @@ def query_messages():
     except ValueError:
         limit = 100
 
-    sql = "SELECT sender, text, timestamp, conversation, is_group, received_at, source FROM messages"
+    sql = ("SELECT sender, text, timestamp, conversation, is_group, "
+           "received_at, source, pkg FROM messages")
     conditions = []
     params = []
+
+    # 来源 App 精确过滤
+    if pkg:
+        conditions.append("pkg = ?")
+        params.append(pkg)
 
     # 会话名模糊过滤
     if conversation:
@@ -338,6 +381,7 @@ def query_messages():
             "is_group": bool(r[4]),
             "received_at": r[5],
             "source": r[6],
+            "pkg": r[7],
         }
         for r in rows
     ]
@@ -361,6 +405,7 @@ def receive_analysis():
         s2            dict  {summary, due_time, suggested_action, tasks}（可空）
         analyzed_at   str   App 侧分析完成时间
         protocol      str   协议版本
+        pkg           str   可选，来源 App 包名；缺省按微信处理
     case_id 已存在的跳过（duplicated），缺 case_id/conversation 的跳过（invalid）。
     返回：{"ok": true, "received": n, "duplicated": m, "invalid": k}
     """
@@ -398,14 +443,19 @@ def receive_analysis():
                         importance = s1["importance"]
                 forks = item.get("forks") if isinstance(
                     item.get("forks"), list) else None
+                # pkg：与消息表口径一致，老上报缺省按微信回填
+                apkg = item.get("pkg")
+                if not isinstance(apkg, str) or not apkg.strip():
+                    apkg = DEFAULT_PKG
                 try:
                     conn.execute(
                         """
                         INSERT INTO analyses
                             (case_id, conversation, window_end, message_count,
                              need_action, importance, escalated, s1, s2,
-                             analyzed_at, protocol, received_at, forks, filtered)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             analyzed_at, protocol, received_at, forks, filtered,
+                             pkg)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             item["case_id"],
@@ -425,6 +475,7 @@ def receive_analysis():
                             json.dumps(forks, ensure_ascii=False)
                                 if forks else None,
                             1 if item.get("filtered") else 0,
+                            apkg.strip(),
                         ),
                     )
                     received += 1
@@ -443,6 +494,7 @@ def query_analysis():
     """
     查询分析结果。
     参数：
+        pkg           来源 App 包名（精确匹配）
         conversation  会话名（模糊匹配）
         todo_only     1/true 只看 need_action=true 的
         limit         默认 100，上限 1000
@@ -452,6 +504,7 @@ def query_analysis():
     if auth_err:
         return auth_err
 
+    pkg = request.args.get("pkg", "").strip()
     conversation = request.args.get("conversation", "").strip()
     todo_only = request.args.get("todo_only", "").lower() in ("1", "true", "yes")
     try:
@@ -463,8 +516,11 @@ def query_analysis():
 
     sql = ("SELECT case_id, conversation, window_end, message_count, "
            "need_action, importance, escalated, s1, s2, analyzed_at, "
-           "protocol, received_at, forks, filtered FROM analyses")
+           "protocol, received_at, forks, filtered, pkg FROM analyses")
     conditions, params = [], []
+    if pkg:
+        conditions.append("pkg = ?")
+        params.append(pkg)
     if conversation:
         conditions.append("conversation LIKE ?")
         params.append(f"%{conversation}%")
@@ -498,6 +554,7 @@ def query_analysis():
             # fork 层轨迹（App v0.1.2+；老数据为 None/False）
             "forks": json.loads(r[12]) if r[12] else None,
             "filtered": bool(r[13]),
+            "pkg": r[14],
         })
     return jsonify({"ok": True, "count": len(analyses), "analyses": analyses})
 
@@ -787,7 +844,13 @@ window.__WX_DIR = (function () {
   .msg .m-text { font-size: 15px; white-space: pre-wrap; word-break: break-all; }
   .badge { display: inline-block; border-radius: 4px; padding: 0 5px; font-size: 11px;
            color: #fff; margin-right: 4px; vertical-align: 1px; }
-  .b-db { background: #1989fa; } .b-nt { background: #ff976a; } .b-grp { background: #07c160; }
+  .b-db { background: #1989fa; } .b-nt { background: #ff976a; }
+  .b-grp { background: #07c160; } .b-app { background: #3370ff; }
+  /* App 过滤行：全部 / 微信 / 飞书 / 钉钉 */
+  .app-filter { display: flex; gap: 6px; margin-bottom: 10px; }
+  .af-tab { font-size: 13px; padding: 4px 12px; border-radius: 14px;
+            background: #fff; color: #666; border: 1px solid #e0e0e0; }
+  .af-tab.active { background: #07C160; color: #fff; border-color: #07C160; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
   .chip { background: #e8f7ef; color: #07C160; border-radius: 12px;
           padding: 3px 10px; font-size: 12px; }
@@ -890,7 +953,22 @@ function fmtDate(ms) {
 // ---------- 状态 ----------
 var CUR_TAB = 'conv';
 var MSGS = [], ANALYSES = [], ADVISORS = [];
-// 会话名 -> 最新一条 need_action 分析（待办角标 / 会话内分析区用）
+
+// 来源 App 口径（与服务端 PKG_LABELS 一致）：老数据没有 pkg，一律按微信
+var PKG_WX = 'com.tencent.mm';
+var PKG_LABELS = {
+  'com.tencent.mm': '微信',
+  'com.ss.android.lark': '飞书',
+  'com.alibaba.android.rimet': '钉钉'
+};
+function normPkg(p) { return p || PKG_WX; }
+function pkgLabel(p) { return PKG_LABELS[normPkg(p)] || normPkg(p); }
+// 会话复合身份（对齐安卓端 ConvKey）：pkg + U+0001 + 会话名
+function ckOf(o) { return normPkg(o.pkg) + '' + o.conversation; }
+// App 过滤：'' = 全部；否则只看该包名
+var APP_FILTER = '';
+
+// 复合会话键 -> 最新一条 need_action 分析（待办角标 / 会话内分析区用）
 var todoByConv = {};
 var LAST_SYNC = 0;   // 最近一次数据同步成功时间（毫秒）
 var LAST_ERR = '';   // 最近一次同步错误（空 = 正常）
@@ -938,10 +1016,11 @@ async function load() {
     todoByConv = {};
     ANALYSES.forEach(function (x) {
       if (x.s1 && x.s1.need_action && x.s1.need_action.value) {
-        // 同一会话保留 received_at 最新的一条
-        if (!todoByConv[x.conversation] ||
-            (x.received_at || 0) > (todoByConv[x.conversation].received_at || 0)) {
-          todoByConv[x.conversation] = x;
+        // 同一复合会话保留 received_at 最新的一条
+        var ck = ckOf(x);
+        if (!todoByConv[ck] ||
+            (x.received_at || 0) > (todoByConv[ck].received_at || 0)) {
+          todoByConv[ck] = x;
         }
       }
     });
@@ -1006,12 +1085,23 @@ function render() {
 function renderConvs() {
   CONV_NODES = [];
   // 搜索框放在列表外层：输入时只重绘 #conv-list，输入框焦点不丢
+  var appTabs = [['', '全部'], [PKG_WX, '微信'],
+    ['com.ss.android.lark', '飞书'], ['com.alibaba.android.rimet', '钉钉']];
+  var filterHtml = '<div class="app-filter">' + appTabs.map(function (t) {
+    return '<span class="af-tab' + (APP_FILTER === t[0] ? ' active' : '') +
+      '" onclick="setAppFilter(\'' + t[0] + '\')">' + t[1] + '</span>';
+  }).join('') + '</div>';
   var searchHtml = '<div class="search-wrap">' +
     '<input id="conv-search" type="search" placeholder="搜索会话 / 发送者 / 消息内容" ' +
     'value="' + esc(CONV_QUERY) + '" oninput="onConvSearch(this.value)"></div>';
-  if (!MSGS.length) return searchHtml + '<div class="empty">暂无消息</div>';
-  return searchHtml + '<div id="conv-list">' + renderConvList() + '</div>' +
+  if (!MSGS.length) return filterHtml + searchHtml + '<div class="empty">暂无消息</div>';
+  return filterHtml + searchHtml + '<div id="conv-list">' + renderConvList() + '</div>' +
     '<div class="refresh-note">下拉可刷新 · 每 30 秒自动同步</div>';
+}
+
+function setAppFilter(p) {
+  APP_FILTER = p;
+  render();
 }
 
 function onConvSearch(v) {
@@ -1020,17 +1110,20 @@ function onConvSearch(v) {
   if (el) el.innerHTML = renderConvList();
 }
 
-// 过滤 + 按会话分组 + 分区渲染（「⚡ 需关注」= 有 need_action 分析的会话）
+// 过滤（App + 搜索）+ 按复合会话分组 + 分区渲染（「⚡ 需关注」= 有 need_action 分析的会话）
 function renderConvList() {
   var q = CONV_QUERY.trim().toLowerCase();
   var groups = {}, order = [];
   MSGS.forEach(function (m) {
-    if (!groups[m.conversation]) { groups[m.conversation] = []; order.push(m.conversation); }
-    groups[m.conversation].push(m);
+    if (APP_FILTER && normPkg(m.pkg) !== APP_FILTER) return;
+    var ck = ckOf(m);
+    if (!groups[ck]) { groups[ck] = []; order.push(ck); }
+    groups[ck].push(m);
   });
   var watchHtml = '', restHtml = '';
-  order.forEach(function (name) {
-    var list = groups[name];
+  order.forEach(function (ck) {
+    var list = groups[ck];
+    var name = list[0].conversation;
     if (q) {
       // 会话名命中 -> 整组保留；否则只保留发送者/内容命中的消息
       if (name.toLowerCase().indexOf(q) < 0) {
@@ -1041,8 +1134,8 @@ function renderConvList() {
         if (!list.length) return;
       }
     }
-    var card = renderConvCard(name, list);
-    if (todoByConv[name]) watchHtml += card; else restHtml += card;
+    var card = renderConvCard(ck, name, list);
+    if (todoByConv[ck]) watchHtml += card; else restHtml += card;
   });
   var html = '';
   if (watchHtml) html += '<div class="sec-head warn">⚡ 需关注</div>' + watchHtml;
@@ -1053,15 +1146,19 @@ function renderConvList() {
 
 // 一级折叠组：会话（默认折叠，显示名称+条数+最新摘要+时间）；
 // 展开后有 need_action 分析块 + 按日期的二级折叠组
-function renderConvCard(name, list) {
-  var key = 'c:' + name;
+function renderConvCard(ck, name, list) {
+  var key = 'c:' + ck;
   var idx = CONV_NODES.length; CONV_NODES.push(key);
   var open = !!COLLAPSE[key];
   var latest = list[0];
-  var todo = todoByConv[name];
+  var todo = todoByConv[ck];
+  // App 角标：微信不显示（主场景），其它 App 显示中文名，防止同名会话混淆
+  var appBadge = normPkg(latest.pkg) === PKG_WX ? '' :
+    '<span class="badge b-app">' + esc(pkgLabel(latest.pkg)) + '</span>';
   var html = '<div class="card">' +
     '<div class="conv-head" onclick="toggleNode(' + idx + ')">' +
     '<span class="caret" id="caret-' + idx + '">' + (open ? '▾' : '▸') + '</span>' +
+    appBadge +
     '<span class="conv-name">' + esc(name) + '</span>' +
     (todo ? '<span class="todo-flag">⚡</span>' : '') +
     '<span class="conv-count">' + list.length + ' 条</span></div>' +
@@ -1088,6 +1185,8 @@ function renderConvCard(name, list) {
       (dOpen ? 'block' : 'none') + '">';
     byDate[d].forEach(function (m) {
       var badges = (m.is_group ? '<span class="badge b-grp">群</span>' : '') +
+        (normPkg(m.pkg) !== PKG_WX ? '<span class="badge b-app">' +
+          esc(pkgLabel(m.pkg)) + '</span>' : '') +
         (m.source === 'android-db' ? '<span class="badge b-db">库</span>' : '');
       html += '<div class="msg"><div class="m-meta">' + badges + esc(m.sender) +
         ' · ' + fmtTime(m.timestamp) + '</div>' +
@@ -1145,7 +1244,8 @@ function renderAnalysisBlock(a) {
 
 function renderTodos() {
   var todos = ANALYSES.filter(function (a) {
-    return a.s1 && a.s1.need_action && a.s1.need_action.value;
+    return (!APP_FILTER || normPkg(a.pkg) === APP_FILTER) &&
+      a.s1 && a.s1.need_action && a.s1.need_action.value;
   });
   // 重要度 high 优先，同级按上报时间倒序（最新在前）
   var impRank = { high: 0, mid: 1, low: 2 };
@@ -1159,8 +1259,11 @@ function renderTodos() {
   var html = '';
   todos.forEach(function (a) {
     var impCls = (a.s1 && a.s1.importance === 'high') ? 'imp-high' : '';
+    var appBadge = normPkg(a.pkg) === PKG_WX ? '' :
+      '<span class="badge b-app">' + esc(pkgLabel(a.pkg)) + '</span>';
     html += '<div class="card">' +
-      '<div class="conv-head"><span class="conv-name">' + esc(a.conversation) + '</span>' +
+      '<div class="conv-head">' + appBadge +
+      '<span class="conv-name">' + esc(a.conversation) + '</span>' +
       '<span class="' + impCls + '">' + esc((a.s1 && a.s1.importance) || '') + '</span></div>' +
       renderAnalysisBlock(a) +
       '<div class="conv-preview">窗口消息 ' + (a.message_count || 0) +
@@ -1172,13 +1275,16 @@ function renderTodos() {
 function renderStats() {
   var total = MSGS.length;
   var bySrc = {};
+  var byApp = {};
   var lastReport = 0;
   MSGS.forEach(function (m) {
     bySrc[m.source || 'unknown'] = (bySrc[m.source || 'unknown'] || 0) + 1;
+    var p = normPkg(m.pkg);
+    byApp[p] = (byApp[p] || 0) + 1;
     if ((m.received_at || 0) > lastReport) lastReport = m.received_at;
   });
   var analyzedConvs = {};
-  ANALYSES.forEach(function (a) { analyzedConvs[a.conversation] = 1; });
+  ANALYSES.forEach(function (a) { analyzedConvs[ckOf(a)] = 1; });
   function cell(num, label) {
     return '<div class="card"><div class="stat-num">' + num + '</div>' +
       '<div class="stat-label">' + label + '</div></div>';
@@ -1187,12 +1293,17 @@ function renderStats() {
     return (k === 'android-db' ? '数据库' : k === 'android-notification' ? '通知' : k) +
       ' ' + bySrc[k];
   }).join(' / ');
+  var appTxt = Object.keys(byApp).map(function (k) {
+    return pkgLabel(k) + ' ' + byApp[k];
+  }).join(' / ');
   return '<div class="stat-grid">' +
     cell(total, '消息总数（最近 1000 条内）') +
     cell(Object.keys(analyzedConvs).length, '已分析会话数') +
     cell(ANALYSES.length, '分析结果数') +
     cell(lastReport ? fmtTime(lastReport) : '—', '最近上报时间') +
-    '</div><div class="card"><div class="stat-label">来源分布</div>' +
+    '</div><div class="card"><div class="stat-label">应用分布</div>' +
+    '<div style="margin-top:6px;">' + esc(appTxt || '—') + '</div></div>' +
+    '<div class="card"><div class="stat-label">来源分布</div>' +
     '<div style="margin-top:6px;">' + esc(srcTxt || '—') + '</div></div>' +
     '<div class="refresh-note">下拉可刷新 · 每 30 秒自动同步</div>';
 }
@@ -1392,7 +1503,7 @@ def index():
     try:
         rows = conn.execute(
             """
-            SELECT sender, text, timestamp, conversation, is_group, source
+            SELECT sender, text, timestamp, conversation, is_group, source, pkg
             FROM messages ORDER BY timestamp DESC LIMIT 100
             """
         ).fetchall()
@@ -1423,16 +1534,21 @@ def index():
 
     # 拼接消息行
     items_html = ""
-    for sender, text, ts, conversation, is_group, source in rows:
+    for sender, text, ts, conversation, is_group, source, pkg in rows:
         time_str = datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M:%S")
         group_badge = '<span class="badge">群聊</span>' if is_group else ""
         src_badge = SOURCE_BADGE.get(source, "")
+        # App 角标：微信不显示（主场景），其它 App 显示中文名（esc 定义在下方，先占位）
+        app_badge = None
         # 简单转义防 XSS
         esc = lambda s: (s.replace("&", "&amp;").replace("<", "&lt;")
                           .replace(">", "&gt;").replace('"', "&quot;"))
+        if app_badge is None and (pkg or DEFAULT_PKG) != DEFAULT_PKG:
+            app_badge = (
+                f'<span class="badge badge-app">{esc(pkg_label(pkg))}</span>')
         items_html += (
             f'<div class="msg">'
-            f'<div class="meta">{group_badge}{src_badge}'
+            f'<div class="meta">{group_badge}{src_badge}{app_badge or ""}'
             f'<span class="conv">{esc(conversation)}</span>'
             f'<span class="sender">{esc(sender)}</span>'
             f'<span class="time">{time_str}</span></div>'
@@ -1447,7 +1563,7 @@ def index():
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>微信消息接收服务</title>
+<title>消息接收服务</title>
 <style>
   body {{ font-family: "Microsoft YaHei", sans-serif; max-width: 720px;
          margin: 0 auto; padding: 16px; background: #f5f5f5; color: #333; }}
@@ -1459,6 +1575,7 @@ def index():
            padding: 1px 6px; font-size: 12px; margin-right: 6px; }}
   .badge-db {{ background: #1989fa; }}
   .badge-notify {{ background: #ff976a; }}
+  .badge-app {{ background: #3370ff; }}
   .stats {{ background: #fff; border-radius: 8px; padding: 10px 14px;
            margin-bottom: 12px; font-size: 13px; color: #666;
            box-shadow: 0 1px 2px rgba(0,0,0,.08); }}
@@ -1470,7 +1587,7 @@ def index():
 </style>
 </head>
 <body>
-<h1>微信消息（最近 100 条）</h1>
+<h1>消息（最近 100 条）</h1>
 {stats_html}
 {items_html}
 </body>
