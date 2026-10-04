@@ -1017,6 +1017,18 @@
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
 
+                <Button
+                    android:id="@+id/btnOverlayDebugTest"
+                    android:layout_width="match_parent"
+                    android:layout_height="44dp"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/btn_secondary"
+                    android:minHeight="0dp"
+                    android:text="@string/overlay_debug_test"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp"
+                    android:visibility="gone" />
+
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

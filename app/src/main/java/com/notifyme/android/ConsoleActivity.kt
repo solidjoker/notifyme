@@ -1221,6 +1221,21 @@ class ConsoleActivity : Activity() {
         val switchCards = findViewById<Switch>(R.id.switchOverlayCards)
         val switchBall = findViewById<Switch>(R.id.switchOverlayBall)
         val btnPermission = findViewById<Button>(R.id.btnOverlayPermission)
+        val btnDebugTest = findViewById<Button>(R.id.btnOverlayDebugTest)
+
+        // 仅 debug 构建显示：合成一条微信风格卡片验证悬浮层，release 自动隐藏
+        if (BuildConfig.DEBUG) btnDebugTest.visibility = View.VISIBLE
+        btnDebugTest.setOnClickListener {
+            OverlayManager.show(
+                this,
+                OverlayManager.Card(
+                    pkg = AppSourceRegistry.PKG_WECHAT,
+                    conversation = "项目群",
+                    sender = "张三",
+                    text = "明天下午3点前把方案发我，记得打电话 13812345678"
+                )
+            )
+        }
 
         var state = OverlayConfig.get(this)
 

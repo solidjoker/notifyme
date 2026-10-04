@@ -140,6 +140,7 @@
     <string name="overlay_permission_btn">授予悬浮窗权限</string>
     <string name="overlay_permission_ok">悬浮窗权限已授予</string>
     <string name="overlay_desc">重要消息以悬浮卡出现在任意界面之上；无权限时降级为系统横幅。MIUI/HyperOS 还需在系统设置允许「后台弹出界面」。</string>
+    <string name="overlay_debug_test">调试：弹一张测试悬浮卡</string>
     <string name="sync_push_switch">启用服务器上报（关闭后消息继续累积，开启时补报）</string>
 
     <!-- 聊天记录提取（服务端安卓库直读，走 serverUrl 同源 /admin/extract） -->
