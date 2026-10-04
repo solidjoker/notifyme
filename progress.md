@@ -303,6 +303,28 @@ Git 提交身份（本仓库局部配置，未改全局）：
   真机 ebb079b5 未连接。待登录/连机后跑 捕获→分析→脱敏→悬浮 全链路，
   并补 MIUI「后台弹出界面」、heads-up 降级、飞书/钉钉真机通知形状取证
 
+### 10. M4 端侧推理引擎 spike（本次会话，2026-10-05）
+
+决策门 D3 的落地执行。第三方 llama.cpp AAR 只支持 arm64、无法在 MuMu 验证，
+改为本地/CI 拉 llama.cpp v0.5.0 源码 + CMake 交叉编译，双 ABI 出 so。
+
+- 提交（c1480b7、9d3d766 未推送）：
+  - `c1480b7` M4.1：app/src/main/cpp（CMake 静态链接 CPU 后端 + llama_jni.cpp
+    非流式 handle 桥：backendInit/create/complete/destroy）；
+    `LlamaJni`/`LlamaCppEngine`；`LocalLlmEngines` 工厂接 GGUF S2 并优雅降级；
+    Gradle ndkVersion/abiFilters/externalNativeBuild；CI 装 NDK/CMake+拉源码
+  - `9d3d766` M4.2：`EngineSmokeActivity` 调试冒烟页（release finish 兜底）
+- 关键设计：CPU 后端静态链接（`BUILD_SHARED_LIBS=OFF`、`GGML_BACKEND_DL=OFF`），
+  单 libnotifyme-llama.so 自包含、免后端加载路径；每会话线程 max(2,cores-2)；
+  每次补全新建 common_sampler（temp 0.3），采样历史不串
+- strip 后 so 仅 arm64 8.1MB / x86_64 8.9MB
+- MuMu x86_64 实测（Qwen2.5-0.5B-Instruct q4_k_m）：
+  模型加载约 1.1s，完整补全 **4064ms**，输出连贯中文，原生链路验证通过
+- 243 单测全绿；双 flavor assemble 通过
+- 遗留：S1 模型当前是 MNN 格式（llama.cpp 不识别），需换 GGUF 版 S1
+  或另接 MNN；S2（4B/2.47GB）真机 8GB+ 内存/时延、S2 准入判定
+  （RAM/ABI）、onTrimMemory 释放均待真机 W1 同批做
+
 ## 四、构建与运行
 
 ```powershell
@@ -339,7 +361,7 @@ ADB/设备要点（踩过的坑）：
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
-> 当前状态：**M9 代码已完成**（M9 + 微信专项 W2–W4 共 4 提交，243 个单测全绿，见 §三.9，模拟器实测通过；连同 M2/M3 共 15 提交均未推送）；**W1 真机回归阻塞**（等用户登录微信或连接真机 ebb079b5）；**M0 代码与 CI 侧已完成**，只剩 D5 的正式密钥库 + 4 个 Secrets（等用户提供带 `administration` 的 token）；下一步按用户微信优先指示先做 W1 真机端到端，随后回到 **M4 端侧推理引擎**（决策门 D3：llama.cpp AAR spike 先行）。
+> 当前状态：**M4 spike 已完成并在 MuMu 实测通过**（c1480b7/9d3d766，243 单测全绿，见 §三.10；S1 MNN 格式待换 GGUF）；**M9 代码已完成**（§三.9，模拟器实测；真机待验）；**W1 真机回归阻塞**（等用户登录微信或连真机 ebb079b5）；**M0 代码与 CI 侧已完成**，只剩 D5 正式密钥库 + 4 个 Secrets（等 `administration` 权限 token）；下一步按微信优先先做 W1 真机端到端（含 S2 4B 真机取证），随后补 M4 S1 GGUF 与准入判定。
 > 下面 8 项是 README 的对外表述，保留原样；执行时以 ROADMAP 为准。
 
 1. **iOS 原生查看端 + 提醒推送**：在 iPhone 上看分析结果并收到提醒（iOS 不允许后台捕获其他 App 通知，故不含本地捕获；当前仅 PWA 查看端）

@@ -187,27 +187,41 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
 
 ---
 
-## 6. M4 端侧推理引擎（README 路线图 #6，高风险）
+## 6. M4 端侧推理引擎（README 路线图 #6，高风险）— spike 已完成（2026-10-05）
 
 **目标**：`LocalLlmEngines.forModel` 返回真引擎，S1 快筛全离线可用。上层（`AnalysisWorker.runS1Local`/`runS2Local`）已按接口写好，**零改动**。
+
+> **执行结果（2026-10-05）**：未采用第三方 AAR（路线 A 的 AAR 只支持 arm64、
+> 无法在 MuMu 验证），改为**自己拉 llama.cpp v0.5.0 源码 + CMake 交叉编译**——
+> 同时产出 arm64-v8a 与 x86_64，CPU 后端静态链接、单 .so 自包含。
+> MuMu x86_64 冒烟实测：Qwen2.5-0.5B-Instruct 加载约 1.1s、补全 4064ms、输出连贯。
+> 提交 `c1480b7`（M4.1 引擎）/ `9d3d766`（M4.2 冒烟页），均未推送。
 
 决策门 D3（先拍板再动工）：
 | 路线 | 优点 | 代价 |
 |---|---|---|
 | **A. llama.cpp 第三方 AAR**（`dev.ffmpegkit-maintained:llama-android:0.1.1`） | 落地最快，纯 Gradle 依赖 | 仅 `arm64-v8a`、无流式；**x86_64 模拟器（MuMu）跑不了**，只能真机验证；S1 是 MNN 格式，需换 GGUF 模型 |
 | **B. MNN-LLM NDK 自编译** | `arm64-v8a` + `x86_64` 都能出 so，可在模拟器验证；与已下载的 S1 MNN 模型格式对齐 | 需 NDK 工具链与 `build_64.sh` 编译经验，JNI 封装工作量大 |
+| **C.（实际采用）llama.cpp 源码 CMake 自编译** | 双 ABI 出 so、MuMu 可验；静态后端单 so 免加载路径；版本可控 | 需本地/CI 拉源码（gitignore，不入仓库）；S1 MNN 格式仍需另接或换 GGUF |
 
 推荐：**先 A 做 spike 验证端到端链路与时延/内存，再按需要转 B**（S2 的 4B GGUF 本来就走 llama.cpp 路线）。
+实际执行以路线 C 完成 spike，结论见上。
 
 任务清单：
-1. Spike（1 天）：加载 S1 模型 → 一次 `chat(system,user,maxTokens)` → 记录首 token/总时延、峰值 RSS、发热；真机（8 GB+）与模拟器分别记录
-2. 实现 `LlamaEngine`（或 `MnnLlmEngine`）：加载/卸载生命周期、超时与 OOM → 抛 `LocalEngineException`（上层已有降级文案）
-3. 准入判定：`ActivityManager.memoryInfo` + `Build.SUPPORTED_ABIS` → S2（2.47 GB）仅在 8 GB+ RAM 且 arm64 时开放，否则 UI 明确禁用并给理由
-4. `LocalLlmEngines.releaseAll()` 接 `onTrimMemory`/`onLowMemory`；模型删除时释放对应 native 句柄
-5. `ModelDownloadWorker`/`ModelListActivity` 补：断点续传校验（`LocalModelStore.kt:116` 已按 size 校验）、下载失败重试文案
-6. 分析质量对比：同一批会话，云端 vs 端侧 S1 判定一致率、S2 摘要可用性，写进 `docs/` 评测记录
+1. [x] Spike（1 天）：加载 GGUF → 一次 `chat(system,user,maxTokens)` → 记录时延。
+   模拟器（MuMu x86_64）：加载 1.1s、补全 4064ms；真机与峰值 RSS/发热待 W1 同批记录
+2. [x] 实现引擎 `LlamaCppEngine`：加载/卸载生命周期、异常 → 抛 `LocalEngineException`
+   （上层已有降级文案）；未知/MNN/未下载模型均优雅降级为不可用引擎
+3. [ ] 准入判定：`ActivityManager.memoryInfo` + `Build.SUPPORTED_ABIS` → S2（2.47 GB）仅在 8 GB+ RAM 且 arm64 时开放，否则 UI 明确禁用并给理由
+4. [~] `LocalLlmEngines.releaseAll()` 已实现 Closeable 释放；接 `onTrimMemory`/`onLowMemory` 待做
+5. [ ] `ModelDownloadWorker`/`ModelListActivity`：断点续传校验（`LocalModelStore.kt:116` 已按 size 校验）、下载失败重试文案
+6. [ ] 分析质量对比：同一批会话，云端 vs 端侧 S1 判定一致率、S2 摘要可用性，写进 `docs/` 评测记录
 
 验收：飞行模式下 S1 分析全流程走通并出 ⚡ 标记；引擎不可用时降级文案正确、不崩；评测记录有真实数字。
+
+**spike 已证明**：GGUF 加载 + 模板套用 + prefill + 采样全链路在端侧工作。
+**剩余缺口**：S1 模型当前是 MNN 格式（llama.cpp 不识别），要么改下 GGUF 版
+S1 小模型，要么后续接 MNN；真机 8GB+ 上的 S2（4B）内存/时延待 W1 取证。
 
 ---
 
