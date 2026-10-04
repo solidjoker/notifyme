@@ -22,6 +22,12 @@ import java.util.Locale
  * @param isGroup      是否群聊（依据通知是否带 MessagingStyle 判断）
  * @param source       来源标记：空 = 通知监听（时间戳真实）；
  *                     a11y-extract = 无障碍直读（时间戳为估算值，见 WeChatA11yExtractService）
+ * @param pkg          应用包名（schema v2，M2 跨应用通知管理引入）。
+ *                     缺省＝微信，因此老数据（schema v1 无此字段）读进来自动归微信——
+ *                     这就是 ROADMAP M2 说的「读时补齐」：不做一次性重写，
+ *                     缺字段的行在下次被写入时才带上 pkg。
+ * @param appLabel     应用显示名快照，纯展示用；**不参与身份**（系统语言/应用改名会变），
+ *                     空表示当时没拿到，UI 回落到包名
  */
 data class ChatMessage(
     val sender: String,
@@ -29,8 +35,13 @@ data class ChatMessage(
     val timestamp: Long,
     val conversation: String,
     val isGroup: Boolean,
-    val source: String = ""
+    val source: String = "",
+    val pkg: String = AppSourceRegistry.PKG_WECHAT,
+    val appLabel: String = ""
 ) {
+    /** 会话复合键：M2 起会话身份是 (pkg, conversation)，不再是裸会话名。 */
+    val convKey: ConvKey get() = ConvKey(pkg, conversation)
+
     fun toJson(): JSONObject = JSONObject().apply {
         put("sender", sender)
         put("text", text)
@@ -39,6 +50,11 @@ data class ChatMessage(
         put("isGroup", isGroup)
         // 仅非空时输出：空来源走服务端默认（通知监听），避免覆盖默认口径
         if (source.isNotEmpty()) put("source", source)
+        // pkg 始终写出：老客户端把它当未知字段忽略即可；写出来才能让
+        // 「规范化」重写幂等，也便于人工翻 jsonl 时看清归属
+        put("pkg", pkg)
+        // appLabel 只在拿到时写：它是展示快照，写空串只会污染数据
+        if (appLabel.isNotEmpty()) put("appLabel", appLabel)
     }
 
     companion object {
@@ -48,7 +64,9 @@ data class ChatMessage(
             timestamp = obj.optLong("timestamp"),
             conversation = obj.optString("conversation"),
             isGroup = obj.optBoolean("isGroup"),
-            source = obj.optString("source")
+            source = obj.optString("source"),
+            pkg = obj.optString("pkg").ifEmpty { AppSourceRegistry.PKG_WECHAT },
+            appLabel = obj.optString("appLabel")
         )
     }
 }
@@ -143,18 +161,38 @@ object MessageStore {
     @Synchronized
     fun clear(context: Context) = core(context).clear()
 
-    /** 删除指定会话的全部消息，返回实际删除条数。 */
+    /** 删除指定会话（复合键）的全部消息，返回实际删除条数。 */
+    @Synchronized
+    fun deleteConversation(context: Context, key: ConvKey): Int =
+        core(context).deleteConversation(key)
+
+    /**
+     * 兼容入口：裸会话名＝schema v1 口径，一律按微信处理。
+     * 只留给还没迁到复合键的调用方（如历史同步回填），新代码请用 [ConvKey] 重载。
+     */
     @Synchronized
     fun deleteConversation(context: Context, conversation: String): Int =
-        core(context).deleteConversation(conversation)
+        core(context).deleteConversation(ConvKey.legacy(conversation))
 
     /**
      * 删除指定会话在某一日期 key 下的消息，返回实际删除条数。
      * @param dayKey yyyy-MM-dd（本机时区）或 [DAY_KEY_UNKNOWN]（未标注日期）
      */
     @Synchronized
+    fun deleteDate(context: Context, key: ConvKey, dayKey: String): Int =
+        core(context).deleteDate(key, dayKey)
+
+    /** 兼容入口，同 [deleteConversation] 的裸会话名重载。 */
+    @Synchronized
     fun deleteDate(context: Context, conversation: String, dayKey: String): Int =
-        core(context).deleteDate(conversation, dayKey)
+        core(context).deleteDate(ConvKey.legacy(conversation), dayKey)
+
+    /**
+     * 「设置 → 数据 → 规范化」：把还是 schema v1（没有 pkg 字段）的行补齐后整体重写。
+     * @return 被补齐的行数；0 表示无需重写（此时不动文件）
+     */
+    @Synchronized
+    fun normalizeSchema(context: Context): Int = core(context).normalizeSchema()
 
     /**
      * 删除指定的消息集合（会话详情页多选删除用），返回实际删除条数。
@@ -186,10 +224,11 @@ object MessageStore {
 
 /**
  * 消息全字段匹配键（会话详情页多选删除用）：[MessageStoreCore] 与 [PendingQueueCore]
- * 共用同一口径，M2 给 [ChatMessage] 加 `pkg` 时只需改这一处。
+ * 共用同一口径。M2 已加上 `pkg`——两个不同 App 里出现同名同文同时刻的消息
+ * 现在不再会被误判为同一条。
  */
 internal fun chatMessageFullKey(m: ChatMessage): String =
-    "${m.conversation}|${m.sender}|${m.text}|${m.timestamp}|${m.isGroup}|${m.source}"
+    "${m.pkg}|${m.conversation}|${m.sender}|${m.text}|${m.timestamp}|${m.isGroup}|${m.source}"
 
 /**
  * [MessageStore] 的无 Android 依赖内核：只认一个 [JsonlStore]（即一个文件）
@@ -247,13 +286,51 @@ internal class MessageStoreCore(
         onChange()
     }
 
-    /** 删除指定会话的全部消息，返回实际删除条数。 */
-    fun deleteConversation(conversation: String): Int =
-        rewrite { it.conversation != conversation }
+    /**
+     * 删除指定会话（复合键）的全部消息，返回实际删除条数。
+     * 老数据行没有 pkg 字段，读进来落到默认微信，因此 [ConvKey.legacy] 也能删到它们。
+     */
+    fun deleteConversation(key: ConvKey): Int =
+        rewrite { it.convKey != key }
 
     /** 删除指定会话在某一日期 key 下的消息，返回实际删除条数。 */
-    fun deleteDate(conversation: String, dayKey: String): Int =
-        rewrite { !(it.conversation == conversation && MessageStore.dayKeyOf(it) == dayKey) }
+    fun deleteDate(key: ConvKey, dayKey: String): Int =
+        rewrite { !(it.convKey == key && MessageStore.dayKeyOf(it) == dayKey) }
+
+    /**
+     * schema v1 → v2 规范化：逐行补齐缺省的 `pkg`（老数据按微信）后整体重写。
+     *
+     * 取舍：
+     *  - 返回 0 时**不碰文件**，也不发变更通知（「已规范化」不该假装改动过）；
+     *  - 损坏行原样保留，与 [rewrite] 同口径——规范化只补字段，绝不清理数据；
+     *  - 由用户手动触发（设置 → 数据 → 规范化），不做开机自动迁移：
+     *    大文件迁移中途被杀会留下半截文件，而读时补齐已经保证老数据可用。
+     *
+     * @return 被补齐（原本没有 pkg）的行数
+     */
+    fun normalizeSchema(): Int {
+        if (!store.exists()) return 0
+        val raw = store.readRawLines()
+        val out = ArrayList<String>(raw.size)
+        var fixed = 0
+        for (line in raw) {
+            val obj = try {
+                JSONObject(line)
+            } catch (e: Exception) {
+                null
+            }
+            if (obj == null) {
+                out += line // 损坏行原样保留
+                continue
+            }
+            if (obj.optString("pkg").isEmpty()) fixed += 1
+            out += ChatMessage.fromJson(obj).toJson().toString()
+        }
+        if (fixed == 0) return 0
+        store.overwrite(out)
+        onChange()
+        return fixed
+    }
 
     /**
      * 删除指定的消息集合，返回实际删除条数。
@@ -326,12 +403,17 @@ internal class MessageStoreCore(
         return removed
     }
 
+    /**
+     * 合并去重键。M2 起加上包名前缀：不同 App 的同名会话不再互相吞消息。
+     * 老数据行缺 pkg → 读进来是微信默认值，与同一条消息的新写法算出同一个键，
+     * 因此「读时补齐」不会造成重复入库。
+     */
     private fun dedupKey(m: ChatMessage): String =
         if (m.source == "a11y-extract") {
             // 无障碍直读的时间戳是估算值（每次运行都变），不参与去重，
             // 否则同一会话重复提取会反复插入重复消息
-            "${m.conversation}${m.sender}|${m.text}|a11y"
+            "${m.pkg}|${m.conversation}${m.sender}|${m.text}|a11y"
         } else {
-            "${m.conversation}${m.sender}|${m.text}|${m.timestamp / 1000}"
+            "${m.pkg}|${m.conversation}${m.sender}|${m.text}|${m.timestamp / 1000}"
         }
 }

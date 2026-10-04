@@ -133,7 +133,7 @@ class MessageStoreCoreTest {
             """{"sender":"李四","text":"在","timestamp":2000,"conversation":"李四","isGroup":false}"""
         )
 
-        val removed = core.deleteConversation("张三")
+        val removed = core.deleteConversation(ConvKey.legacy("张三"))
 
         assertEquals(1, removed)
         assertTrue(
@@ -152,7 +152,7 @@ class MessageStoreCoreTest {
         core.append(msg("b1", 3_000L, conversation = "项目群", sender = "李四", isGroup = true))
         changeCount = 0 // append 也会通知，这里只关心删除这一次
 
-        assertEquals(2, core.deleteConversation("张三"))
+        assertEquals(2, core.deleteConversation(ConvKey.legacy("张三")))
         assertEquals(listOf("b1"), core.readRecent().map { it.text })
         assertEquals("删除命中应恰好通知一次", 1, changeCount)
     }
@@ -163,7 +163,7 @@ class MessageStoreCoreTest {
         val before = dataFile.lastModified()
         changeCount = 0
 
-        assertEquals(0, core.deleteConversation("不存在的会话"))
+        assertEquals(0, core.deleteConversation(ConvKey.legacy("不存在的会话")))
 
         assertEquals("无命中不该碰文件", before, dataFile.lastModified())
         assertEquals("无命中不该触发 UI 刷新", 0, changeCount)
@@ -179,7 +179,7 @@ class MessageStoreCoreTest {
         core.append(drop)
         core.append(otherConv)
 
-        val removed = core.deleteDate("张三", MessageStore.dayKeyOf(drop))
+        val removed = core.deleteDate(ConvKey.legacy("张三"), MessageStore.dayKeyOf(drop))
 
         assertEquals(1, removed)
         assertEquals(listOf("别的会话", "别的天"), core.readRecent().map { it.text })
@@ -191,7 +191,7 @@ class MessageStoreCoreTest {
         core.append(msg("有时间", 1_700_000_000_000L))
         core.append(msg("没时间", 0L))
 
-        val removed = core.deleteDate("张三", MessageStore.DAY_KEY_UNKNOWN)
+        val removed = core.deleteDate(ConvKey.legacy("张三"), MessageStore.DAY_KEY_UNKNOWN)
 
         assertEquals(1, removed)
         assertEquals(listOf("有时间"), core.readRecent().map { it.text })

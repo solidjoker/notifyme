@@ -14,6 +14,7 @@ import java.io.File
  * @param title           事件标题
  * @param description     事件描述（发送者/原文/会话），「再次唤起」重放 intent 用
  * @param conversation    来源会话名，App 内提醒通知点击跳详情页用
+ * @param pkg             来源 App 包名（M2，缺省＝微信，老记录读进来自动归微信）
  * @param eventTime       事件开始时间（毫秒）；0 表示当时解析失败
  * @param calendarEventId 系统日历事件 id；非日历直写级别为 -1
  * @param createdAt       记录创建时间（毫秒）
@@ -29,8 +30,12 @@ data class ReminderRecord(
     val calendarEventId: Long,
     val createdAt: Long,
     val status: String,
-    val note: String
+    val note: String,
+    val pkg: String = AppSourceRegistry.PKG_WECHAT
 ) {
+    /** 来源会话复合键（M2）。 */
+    val convKey: ConvKey get() = ConvKey(pkg, conversation)
+
     fun toJson(): JSONObject = JSONObject().apply {
         put("dedup_key", dedupKey)
         put("title", title)
@@ -41,6 +46,7 @@ data class ReminderRecord(
         put("created_at", createdAt)
         put("status", status)
         put("note", note)
+        put("pkg", pkg)
     }
 
     companion object {
@@ -72,7 +78,8 @@ data class ReminderRecord(
                 calendarEventId = obj.optLong("calendar_event_id", -1L),
                 createdAt = obj.optLong("created_at"),
                 status = status,
-                note = note
+                note = note,
+                pkg = obj.optString("pkg").ifEmpty { AppSourceRegistry.PKG_WECHAT }
             )
         }
     }

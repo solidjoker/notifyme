@@ -146,7 +146,7 @@ class PendingQueueCoreTest {
         core.append(msg("b", 2_000L, conversation = "李四", sender = "李四"))
         core.append(msg("c", 3_000L, conversation = "张三"))
 
-        assertEquals(2, core.removeByConversations(listOf("张三", "王五")))
+        assertEquals(2, core.removeByConversations(listOf(ConvKey.legacy("张三"), ConvKey.legacy("王五"))))
         assertEquals(listOf("b"), core.readAll().map { it.message.text })
     }
 
@@ -155,7 +155,7 @@ class PendingQueueCoreTest {
         core.append(msg("a", 1_000L))
         val before = dataFile.lastModified()
 
-        assertEquals(0, core.removeByConversations(listOf("不存在")))
+        assertEquals(0, core.removeByConversations(listOf(ConvKey.legacy("不存在"))))
 
         assertEquals(before, dataFile.lastModified())
         assertEquals(1, core.readAll().size)
@@ -171,7 +171,7 @@ class PendingQueueCoreTest {
         core.append(drop)
         core.append(other)
 
-        assertEquals(1, core.removeByConversationDay("张三", MessageStore.dayKeyOf(drop)))
+        assertEquals(1, core.removeByConversationDay(ConvKey.legacy("张三"), MessageStore.dayKeyOf(drop)))
         // readAll 按 id 升序，剩下的仍是写入顺序
         assertEquals(listOf("别的天", "别的会话"), core.readAll().map { it.message.text })
     }
@@ -181,7 +181,7 @@ class PendingQueueCoreTest {
         core.append(msg("有时间", 1_700_000_000_000L))
         core.append(msg("没时间", 0L))
 
-        assertEquals(1, core.removeByConversationDay("张三", MessageStore.DAY_KEY_UNKNOWN))
+        assertEquals(1, core.removeByConversationDay(ConvKey.legacy("张三"), MessageStore.DAY_KEY_UNKNOWN))
         assertEquals(listOf("有时间"), core.readAll().map { it.message.text })
     }
 
@@ -227,12 +227,13 @@ class PendingQueueCoreTest {
     fun `重写时损坏行会被丢弃（与 MessageStore 的已知差异）`() {
         writeRaw(rawEntry(1, "a", 1_000L, conversation = "张三"), """{坏行""", rawEntry(2, "b", 2_000L, conversation = "李四"))
 
-        val removed = core.removeByConversations(listOf("张三"))
+        val removed = core.removeByConversations(listOf(ConvKey.legacy("张三")))
 
         assertEquals("损坏行不计入删除条数", 1, removed)
         assertFalse(
-            "记录现状：PendingQueue 重写按解析后的对象重新序列化，损坏行不保留。" +
-                "MessageStore 的重写则原样保留损坏行。要不要统一口径留到 M2 决定。",
+            "记录现状（M2 已拍板不统一）：PendingQueue 重写按解析后的对象重新序列化，损坏行不保留；" +
+                "MessageStore 的重写则原样保留损坏行。理由：损坏队列条目永远发不出去，" +
+                "保留只会反复搬运、越积越多。",
             dataFile.readLines().contains("""{坏行""")
         )
         assertEquals(listOf("b"), core.readAll().map { it.message.text })
@@ -242,7 +243,7 @@ class PendingQueueCoreTest {
     fun `全部删完时删除文件`() {
         core.append(msg("a", 1_000L))
         core.append(msg("b", 2_000L))
-        assertEquals(2, core.removeByConversations(listOf("张三")))
+        assertEquals(2, core.removeByConversations(listOf(ConvKey.legacy("张三"))))
         assertFalse(dataFile.exists())
     }
 

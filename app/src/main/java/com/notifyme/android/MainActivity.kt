@@ -380,7 +380,9 @@ class MainActivity : Activity() {
             if (r.calendarEventId > 0L) CalendarHelper.deleteEvent(this, r.calendarEventId)
             ReminderStore.remove(this, r.dedupKey)
         }
-        PendingQueue.removeByConversations(this, set)
+        // Stage A 过渡：UI 分组仍是裸会话名，这里显式按微信转复合键；
+        // Stage D 会把本函数整体改成 ConvKey 口径并删掉这次转换。
+        PendingQueue.removeByConversations(this, set.map { ConvKey.legacy(it) })
         convs.forEach { AnalysisStore.deleteByConversation(this, it) }
         var total = 0
         convs.forEach { total += MessageStore.deleteConversation(this, it) }
@@ -411,7 +413,7 @@ class MainActivity : Activity() {
                 adapter.notifyItemChanged(position)
             }
             .setPositiveButton(R.string.common_delete) { _, _ ->
-                PendingQueue.removeByConversationDay(this, conv, dayKey)
+                PendingQueue.removeByConversationDay(this, ConvKey.legacy(conv), dayKey)
                 val n = MessageStore.deleteDate(this, conv, dayKey)
                 refreshMessages()
                 Toast.makeText(this, getString(R.string.delete_done, n), Toast.LENGTH_SHORT).show()
@@ -799,7 +801,8 @@ class MainActivity : Activity() {
             holder.tvArrow.setOnClickListener { onToggle(header.conversation) }
 
             // 快捷入口：关注（切换，文案/颜色反映状态）。选择态屏蔽 chips 操作
-            val watchedNow = WatchlistStore.isWatched(ctx, header.conversation)
+            // Stage A 过渡：header 尚未带 pkg，显式按微信转复合键（Stage D 随 header.ConvKey 化删除）
+            val watchedNow = WatchlistStore.isWatched(ctx, ConvKey.legacy(header.conversation))
             holder.btnQuickWatch.text = ctx.getString(
                 if (watchedNow) R.string.quick_watched else R.string.quick_watch
             )

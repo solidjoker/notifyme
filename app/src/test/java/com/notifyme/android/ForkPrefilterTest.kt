@@ -25,6 +25,7 @@ class ForkPrefilterTest {
     private fun kase(vararg texts: String): AnalysisCase = AnalysisCase(
         caseId = "test-case",
         conversation = "张三",
+        pkg = AppSourceRegistry.PKG_WECHAT,
         isGroup = false,
         windowEnd = 1_000L,
         messages = texts.mapIndexed { i, t ->

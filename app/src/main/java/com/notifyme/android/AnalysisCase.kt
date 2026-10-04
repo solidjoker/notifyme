@@ -16,8 +16,10 @@ import java.security.MessageDigest
  *    state.chat{relationship:"wechat_work", conversation, messages:[[from,text]...], latest_from}
  *    from 只用 me/other（通知监听只捕获他人消息，故恒为 other；
  *    群聊消息在 text 前带发言者名，保留发言人信息）；
- *  - caseId = sha1(conversation|windowEnd) 前 16 位：
+ *  - caseId = sha1(pkg|conversation|windowEnd) 前 16 位：
  *    窗口内容没变（无新消息 -> 窗口末条时间戳不变）就不重分析。
+ *    M2 起指纹含包名：微信/飞书里同名会话是两个 case，不会共用 caseId。
+ *    注意：升级后老 caseId（不含 pkg）对不上，老窗口会重分析一次，记录会新增一行。
  *
  * S1 判定题集（对齐 JEV 校准题风格：instructions/criteria 一律英文、
  * 聊天内容保留中文、noul/choice/score 题型互斥）：
@@ -34,6 +36,8 @@ import java.security.MessageDigest
 data class AnalysisCase(
     val caseId: String,
     val conversation: String,
+    /** 该 case 所属 App 包名（M2：窗口消息同属一个 App）；落库记录的 pkg 从这里取。 */
+    val pkg: String,
     val isGroup: Boolean,
     /** 窗口末条消息时间戳（毫秒）：窗口指纹的一部分 */
     val windowEnd: Long,
@@ -87,30 +91,43 @@ data class AnalysisCase(
         /** 会话窗口大小：对齐 JEV build_state 取最近 10 条的惯例 */
         const val WINDOW_SIZE = 10
 
-        /** caseId：sha1(conversation|windowEnd) 前 16 位十六进制。 */
-        fun caseIdOf(conversation: String, windowEnd: Long): String {
+        /** caseId：sha1(pkg|conversation|windowEnd) 前 16 位十六进制。 */
+        fun caseIdOf(pkg: String, conversation: String, windowEnd: Long): String {
             val digest = MessageDigest.getInstance("SHA-1")
-                .digest("$conversation|$windowEnd".toByteArray(Charsets.UTF_8))
+                .digest("$pkg|$conversation|$windowEnd".toByteArray(Charsets.UTF_8))
             return digest.joinToString("") { "%02x".format(it) }.take(16)
         }
 
         /**
          * 从一个会话的消息列表构建 case。
+         * @param pkg      该会话所属 App 包名（caseId 指纹的一部分）
          * @param messages 该会话全部已知消息（任意顺序），内部取最近 [WINDOW_SIZE] 条
          * @return 消息为空时返回 null
          */
-        fun fromMessages(conversation: String, messages: List<ChatMessage>): AnalysisCase? {
+        fun fromMessages(pkg: String, conversation: String, messages: List<ChatMessage>): AnalysisCase? {
             if (messages.isEmpty()) return null
             val window = messages.sortedBy { it.timestamp }.takeLast(WINDOW_SIZE)
             val windowEnd = window.last().timestamp
             return AnalysisCase(
-                caseId = caseIdOf(conversation, windowEnd),
+                caseId = caseIdOf(pkg, conversation, windowEnd),
                 conversation = conversation,
+                pkg = pkg,
                 isGroup = window.last().isGroup,
                 windowEnd = windowEnd,
                 messages = window
             )
         }
+
+        /**
+         * 兼容入口（schema v1 口径，按微信算指纹）：供老测试与尚未迁移的调用方使用。
+         * 新代码请用带 `pkg` 的三参重载。
+         */
+        fun caseIdOf(conversation: String, windowEnd: Long): String =
+            caseIdOf(AppSourceRegistry.PKG_WECHAT, conversation, windowEnd)
+
+        /** 兼容入口，同 [caseIdOf] 二参重载。 */
+        fun fromMessages(conversation: String, messages: List<ChatMessage>): AnalysisCase? =
+            fromMessages(AppSourceRegistry.PKG_WECHAT, conversation, messages)
 
         // ---------------- S1 判定题集 ----------------
 

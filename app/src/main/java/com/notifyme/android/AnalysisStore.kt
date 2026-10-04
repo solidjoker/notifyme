@@ -17,8 +17,9 @@ import java.io.File
  *  escalated, s2:{summary, due_time, suggested_action, tasks[]},
  *  analyzedAt, protocol, raw_json}
  *
- * @param caseId        窗口指纹（sha1(conversation|windowEnd) 前 16 位），去重键
+ * @param caseId        窗口指纹（sha1(pkg|conversation|windowEnd) 前 16 位），去重键
  * @param conversation  会话名
+ * @param pkg           应用包名（schema v2，M2 引入）；缺省＝微信，老记录读进来自动归微信
  * @param windowEnd     窗口末条消息时间戳（毫秒）
  * @param messageCount  窗口内消息条数（≤10）
  * @param analyzedAt    分析完成时间（毫秒）
@@ -33,6 +34,7 @@ data class AnalysisCaseRecord(
     val analyzedAt: Long,
     val protocol: String,
     val rawJson: String,
+    val pkg: String = AppSourceRegistry.PKG_WECHAT,
     // ---- S1 判定 ----
     val s1NeedAction: Boolean,
     val s1NeedActionProb: Double,
@@ -52,6 +54,9 @@ data class AnalysisCaseRecord(
     /** fork 1 预筛就地结案标记：true 时未调 laya/S2，s1/s2 字段均为兜底值 */
     val filtered: Boolean = false
 ) {
+    /** 会话复合键（M2）：分析结果归属哪个 App 的哪个会话。 */
+    val convKey: ConvKey get() = ConvKey(pkg, conversation)
+
     /**
      * 一个分叉的判定记录。
      * prob 统一语义：该分叉判为 split/正向的概率——
@@ -107,6 +112,8 @@ data class AnalysisCaseRecord(
         put("analyzed_at", analyzedAt)
         put("protocol", protocol)
         put("raw_json", rawJson)
+        // pkg 始终写出，口径与 ChatMessage.toJson 一致（老客户端忽略未知字段即可）
+        put("pkg", pkg)
         put("s1", JSONObject().apply {
             put("need_action", JSONObject().apply {
                 put("value", s1NeedAction)
@@ -164,6 +171,7 @@ data class AnalysisCaseRecord(
                 analyzedAt = obj.optLong("analyzed_at"),
                 protocol = obj.optString("protocol"),
                 rawJson = obj.optString("raw_json"),
+                pkg = obj.optString("pkg").ifEmpty { AppSourceRegistry.PKG_WECHAT },
                 s1NeedAction = needAction.optBoolean("value"),
                 s1NeedActionProb = needAction.optDouble("prob"),
                 s1Importance = s1.optDouble("importance"),
@@ -256,11 +264,18 @@ object AnalysisStore {
 
     /**
      * 每个会话的最新一条 case 记录（按 windowEnd 取新，会话详情页与首页角标用）。
-     * 返回 Map<会话名, 最新 case 记录>。
+     * 返回 Map<会话名, 最新 case 记录>。**老口径，按裸会话名分组**：
+     * 两个 App 里同名会话的角标会合并；M2 UI 迁移后请改用 [latestByConvKey]。
      */
     fun latestByConversation(context: Context): Map<String, AnalysisCaseRecord> =
         readRecent(context, 500)
             .groupBy { it.conversation }
+            .mapValues { (_, list) -> list.maxByOrNull { it.windowEnd }!! }
+
+    /** [ConvKey] 口径的最新记录：M2 起同名会话在不同 App 里分别给角标。 */
+    fun latestByConvKey(context: Context): Map<ConvKey, AnalysisCaseRecord> =
+        readRecent(context, 500)
+            .groupBy { it.convKey }
             .mapValues { (_, list) -> list.maxByOrNull { it.windowEnd }!! }
 
     /** 删除一条 case 记录（闪电标记阅读后清除），返回是否实际删除。 */
@@ -268,10 +283,15 @@ object AnalysisStore {
     fun deleteCase(context: Context, caseId: String): Boolean =
         rewrite(context) { it.caseId != caseId } > 0
 
-    /** 删除某会话的全部 case 记录（删除整个会话时联动），返回实际删除条数。 */
+    /** 删除某会话（复合键）的全部 case 记录（删除整个会话时联动），返回实际删除条数。 */
+    @Synchronized
+    fun deleteByConversation(context: Context, key: ConvKey): Int =
+        rewrite(context) { it.convKey != key }
+
+    /** 兼容入口：裸会话名按微信处理（新代码请用 [ConvKey] 重载）。 */
     @Synchronized
     fun deleteByConversation(context: Context, conversation: String): Int =
-        rewrite(context) { it.conversation != conversation }
+        deleteByConversation(context, ConvKey.legacy(conversation))
 
     /**
      * 整体读入、按 [keep] 过滤、重写文件；返回丢弃条数。

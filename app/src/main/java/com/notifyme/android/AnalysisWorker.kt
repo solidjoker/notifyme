@@ -130,18 +130,19 @@ class AnalysisWorker(
         s2LocalSkip: String? = null
     ): Result {
 
-        // 按会话分组 -> 组 case -> 过滤重点关注 -> caseId 去重
+        // 按 (pkg, 会话名) 分组 -> 组 case -> 过滤重点关注 -> caseId 去重。
+        // M2 起必须按 ConvKey 分组：只按会话名会把不同 App 里的同名会话拼成一个 case。
         val analyzedIds = AnalysisStore.loadCaseIds(applicationContext)
         val byConversation = MessageStore.readRecent(applicationContext, 500)
-            .groupBy { it.conversation }
+            .groupBy { it.convKey }
 
         val cases = byConversation
             .asSequence()
-            .filter { (conv, _) ->
-                forceConversation == null || conv == forceConversation
+            .filter { (key, _) ->
+                forceConversation == null || key.conversation == forceConversation
             }
-            .filter { (conv, _) -> WatchlistStore.isWatched(applicationContext, conv) }
-            .mapNotNull { (conv, list) -> AnalysisCase.fromMessages(conv, list) }
+            .filter { (key, _) -> WatchlistStore.isWatched(applicationContext, key) }
+            .mapNotNull { (key, list) -> AnalysisCase.fromMessages(key.pkg, key.conversation, list) }
             // 强制模式跳过去重（用户显式要求重分析）；否则窗口没变就跳过
             .filter { forceConversation != null || it.caseId !in analyzedIds }
             .sortedBy { it.windowEnd } // 先旧后新
@@ -248,6 +249,7 @@ class AnalysisWorker(
     ): AnalysisCaseRecord = AnalysisCaseRecord(
         caseId = kase.caseId,
         conversation = kase.conversation,
+        pkg = kase.pkg,
         windowEnd = kase.windowEnd,
         messageCount = kase.messages.size,
         analyzedAt = System.currentTimeMillis(),
@@ -380,6 +382,7 @@ class AnalysisWorker(
         return AnalysisCaseRecord(
             caseId = kase.caseId,
             conversation = kase.conversation,
+            pkg = kase.pkg,
             windowEnd = kase.windowEnd,
             messageCount = kase.messages.size,
             analyzedAt = System.currentTimeMillis(),

@@ -90,15 +90,18 @@ object PendingQueue {
     @Synchronized
     fun clear(context: Context) = core(context).clear()
 
-    /** 删除属于指定会话的待上报条目（本地删除会话时联动，避免已删消息仍被上报）。 */
+    /**
+     * 删除属于指定会话（复合键）的待上报条目（本地删除会话时联动，避免已删消息仍被上报）。
+     * M2 起按 [ConvKey] 匹配：只给会话名会误删同名会话在别的 App 里的条目。
+     */
     @Synchronized
-    fun removeByConversations(context: Context, conversations: Collection<String>): Int =
-        core(context).removeByConversations(conversations)
+    fun removeByConversations(context: Context, keys: Collection<ConvKey>): Int =
+        core(context).removeByConversations(keys)
 
     /** 删除指定会话某一日期 key 下的待上报条目。 */
     @Synchronized
-    fun removeByConversationDay(context: Context, conversation: String, dayKey: String): Int =
-        core(context).removeByConversationDay(conversation, dayKey)
+    fun removeByConversationDay(context: Context, key: ConvKey, dayKey: String): Int =
+        core(context).removeByConversationDay(key, dayKey)
 
     /** 删除与给定消息完全匹配的待上报条目（会话详情页多选删除时联动）。 */
     @Synchronized
@@ -111,9 +114,11 @@ object PendingQueue {
  * 因此可以在 JVM 单测里用临时目录直接跑全部分支（含 id 恢复、各条删除路径）。
  *
  * 行为与原 object 内联实现逐条对齐（M1 抽出时不改语义），其中一处**与 MessageStore 的
- * 已知差异**保留原样：重写按「解析后的对象」重新序列化，所以损坏行会在重写时被丢弃
- * （MessageStore 的重写则原样保留损坏行）。差异已由 PendingQueueCoreTest 记档，
- * 要不要统一口径留到 M2 改 schema 时一起决定。
+ * 已知差异**是刻意的（M2 已就「要不要统一」拍板：不统一）：
+ * 重写按「解析后的对象」重新序列化，所以损坏行会在重写时被丢弃，而 MessageStore
+ * 的重写原样保留损坏行。理由是两者语义不同——messages.jsonl 是**用户历史存档**，
+ * 损坏行也可能是能人工抢救的数据；pending.jsonl 是**待发送队列**，损坏条目永远
+ * 发不出去，留着只会在每次重写时被反复搬运、越积越多。差异由 PendingQueueCoreTest 记档。
  *
  * 线程安全：不加锁，由调用方（[PendingQueue] 的 @Synchronized）保证串行。
  */
@@ -154,14 +159,14 @@ internal class PendingQueueCore(private val store: JsonlStore) {
         nextId = 0L
     }
 
-    /** 删除属于指定会话的待上报条目，返回实际删除条数。 */
-    fun removeByConversations(conversations: Collection<String>): Int =
-        rewrite { it.message.conversation !in conversations }
+    /** 删除属于指定会话（复合键）的待上报条目，返回实际删除条数。 */
+    fun removeByConversations(keys: Collection<ConvKey>): Int =
+        rewrite { it.message.convKey !in keys }
 
     /** 删除指定会话某一日期 key 下的待上报条目，返回实际删除条数。 */
-    fun removeByConversationDay(conversation: String, dayKey: String): Int =
+    fun removeByConversationDay(key: ConvKey, dayKey: String): Int =
         rewrite {
-            !(it.message.conversation == conversation &&
+            !(it.message.convKey == key &&
                 MessageStore.dayKeyOf(it.message) == dayKey)
         }
 
