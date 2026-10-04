@@ -1,14 +1,14 @@
-﻿%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true,'curve':'basis'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true,'curve':'basis'}}}%%
 flowchart TB
 
-subgraph SRC["仓库 · C:\project\qiyeweixin\weixin_android"]
+subgraph SRC["仓库 · notifyme Android 端"]
     direction TB
-    RG["settings.gradle.kts<br/>rootProject.name = WeixinAndroid · include :app<br/>FAIL_ON_PROJECT_REPOS + google/mavenCentral"]
+    RG["settings.gradle.kts<br/>rootProject.name = notifyme · include :app<br/>FAIL_ON_PROJECT_REPOS + google/mavenCentral"]
     RB["build.gradle.kts 根<br/>com.android.application 8.5.2 apply false<br/>org.jetbrains.kotlin.android 2.0.20 apply false"]
-    AB["app/build.gradle.kts<br/>namespace/applicationId com.qiyeweixin.weixin_android<br/>compileSdk 34 · minSdk 26 · targetSdk 34<br/>versionCode 4 · versionName 0.1.3<br/>Java 17 · jvmTarget 17 · buildConfig=true<br/>release: isMinifyEnabled=false"]
+    AB["app/build.gradle.kts<br/>namespace/applicationId com.notifyme.android<br/>compileSdk 34 · minSdk 26 · targetSdk 34<br/>versionCode 4 · versionName 0.1.3<br/>Java 17 · jvmTarget 17 · buildConfig=true<br/>release: isMinifyEnabled=false"]
     SEC[("secrets.local.properties · gitignored<br/>GLM_BASE_URL / GLM_API_KEY / GLM_MODEL<br/>JEV_URL / JEV_API_KEY<br/>MONITOR_URL / MONITOR_TOKEN")]
     DEP["依赖仅 4 个<br/>androidx.core:core-ktx:1.13.1<br/>androidx.recyclerview:recyclerview:1.3.2<br/>androidx.work:work-runtime-ktx:2.9.1<br/>com.squareup.okhttp3:okhttp:4.12.0<br/>JSON 用平台内置 org.json（无 Gson/Moshi）"]
-    NOWRAP["仓库不含 gradle-wrapper jar<br/>首次需 gradle wrapper --gradle-version 8.9"]
+    NOWRAP["仓库内置 Gradle Wrapper 8.9<br/>gradlew.bat assembleOpenDebug / assembleBetaDebug"]
 end
 
 subgraph FLAVOR["productFlavors · flavorDimensions += channel"]
@@ -29,14 +29,14 @@ end
 
 subgraph BUILD["构建产物"]
     direction LR
-    REN["applicationVariants.all 重命名<br/>channel = if flavorName==beta then test else flavorName<br/>outputFileName = weixin-monitor-<channel>.apk"]
-    APK1[("weixin-monitor-open.apk<br/>apk/ 目录现存 3912820 B")]
-    APK2[("weixin-monitor-test.apk")]
+    REN["applicationVariants.all 重命名<br/>channel = if flavorName==beta then test else flavorName<br/>outputFileName = notifyme-<channel>.apk"]
+    APK1[("notifyme-open.apk<br/>apk/open/debug/ 目录")]
+    APK2[("notifyme-test.apk<br/>apk/beta/debug/ 目录")]
 end
 
 subgraph DEVICE["设备安装与授权（adb install 之后）"]
     direction TB
-    D0["adb install app/build/outputs/apk/debug/app-debug.apk"]
+    D0["adb install app/build/outputs/apk/open/debug/notifyme-open.apk"]
     D1["通知监听 = 特殊权限<br/>BIND_NOTIFICATION_LISTENER_SERVICE<br/>不能运行时申请<br/>必须去 Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS 手动开"]
     D2["验证：adb shell settings get secure<br/>enabled_notification_listeners"]
     D3["无障碍服务<br/>BIND_ACCESSIBILITY_SERVICE<br/>系统设置 → 无障碍 手动开启"]
@@ -51,14 +51,14 @@ end
 
 subgraph SVRSTART["服务端启动 · PC 宿主机"]
     direction TB
-    S0["依赖：requirements.txt 仅 flask==3.1.3<br/>用父项目虚拟环境<br/>.venv\Scripts\python.exe weixin_android\server\app.py<br/>默认 0.0.0.0:8000 · set PORT=9000 可改"]
+    S0["依赖：requirements.txt 仅 flask==3.1.3<br/>在 server/ 目录用本机 .venv<br/>.venv\Scripts\python.exe app.py<br/>默认 0.0.0.0:8000 · set PORT=9000 可改"]
     BAT["server\启动服务.bat 三件事"]
     S1["① set WEIXIN_TOKEN<br/>真值在 gitignored server\secrets.local.bat<br/>改令牌必须同步改 App 的「访问令牌」<br/>并重按「保存并启用定时上报」，否则 401"]
     S2["② adb connect 127.0.0.1:16384（MuMu）<br/>adb reverse tcp:8000 tcp:8000<br/>模拟器内 http://127.0.0.1:8000 直达宿主<br/>免局域网 IP / 防火墙问题"]
     S3["③ 前台运行 Flask，Ctrl+C 停止"]
     S4["注意：adb reverse 存活于 adbd<br/>模拟器重启即失效 → 每次重跑 bat"]
     S5["Windows 防火墙：放行入站 TCP 8000 Private<br/>New-NetFirewallRule -DisplayName WeixinServer 8000<br/>-Direction Inbound -Protocol TCP -LocalPort 8000<br/>-Action Allow -Profile Private"]
-    S6["可选计划任务（每小时增量提取）<br/>schtasks /create /tn WeixinAndroidExtract<br/>/tr .venv\Scripts\python.exe ...\android_db_extract.py<br/>/sc hourly"]
+    S6["可选计划任务（每小时增量提取）<br/>schtasks /create /tn NotifymeAndroidExtract<br/>/tr .venv\Scripts\python.exe ...\android_db_extract.py<br/>/sc hourly"]
     BAT --> S1
     BAT --> S2
     BAT --> S3
@@ -95,7 +95,7 @@ RB --> AB
 SEC -->|"secret(key) 读取<br/>bcString(value) 转义反斜杠+引号"| FLAVOR
 AB --> FLAVOR
 DEP --> AB
-NOWRAP -.->|"gradle wrapper --gradle-version 8.9<br/>然后 gradlew.bat assembleDebug"| BUILD
+NOWRAP -.->|"gradlew.bat assembleOpenDebug / assembleBetaDebug"| BUILD
 OPEN --> REN
 BETA --> REN
 REN --> APK1

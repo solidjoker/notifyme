@@ -5,7 +5,7 @@
 """
 微信消息接收服务端
 ====================
-配合 weixin_android 安卓端使用：
+配合 notifyme Android 端使用：
 安卓端监听微信通知，定时把消息以 JSON 数组的形式 POST 到本服务的 /weixin 接口。
 
 上报协议：

@@ -15,5 +15,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "WeixinAndroid"
+rootProject.name = "notifyme"
 include(":app")

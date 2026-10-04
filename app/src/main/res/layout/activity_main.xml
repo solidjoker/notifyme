@@ -237,7 +237,7 @@
             <!-- 消息列表：卡片化 item，统一滚动交给外层 ScrollView。
                  用 FullHeightRecyclerView 强制全高测量，规避 wrap_content 被压成
                  视口剩余高度后内外都滚不动的问题（见该类注释）。 -->
-            <com.qiyeweixin.weixin_android.FullHeightRecyclerView
+            <com.notifyme.android.FullHeightRecyclerView
                 android:id="@+id/recyclerMessages"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

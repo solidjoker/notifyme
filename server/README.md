@@ -1,10 +1,10 @@
 # 微信消息接收服务端
 
-配合 `weixin_android` 安卓端使用：安卓端监听微信通知，定时把消息以 JSON 数组的形式 POST 到本服务；本服务负责存档（jsonl）、入库（SQLite）、去重，并提供查询接口和一个极简网页查看页。
+配合 notifyme Android 端使用：安卓端监听微信通知，定时把消息以 JSON 数组的形式 POST 到本服务；本服务负责存档（jsonl）、入库（SQLite）、去重，并提供查询接口和一个极简网页查看页。
 
 ## 快速开始
 
-以下命令均假设在项目根目录 `C:\project\qiyeweixin` 下执行，使用母项目的 venv。
+以下命令均在本目录（`server/`）下执行，使用本目录的 `.venv` 虚拟环境（首次使用请先创建，见根目录 [README.md](../README.md) §服务端部署）。
 
 ### 0. 一键启动（MuMu 模拟器场景，推荐）
 
@@ -19,7 +19,7 @@
 ### 1. 安装依赖
 
 ```bash
-.venv\Scripts\pip.exe install -r weixin_android\server\requirements.txt
+.venv\Scripts\pip.exe install -r requirements.txt
 ```
 
 （如默认源拉取失败，可换镜像：`-i https://pypi.tuna.tsinghua.edu.cn/simple`）
@@ -27,13 +27,13 @@
 ### 2. 启动服务
 
 ```bash
-.venv\Scripts\python.exe weixin_android\server\app.py
+.venv\Scripts\python.exe app.py
 ```
 
 默认监听 `0.0.0.0:8000`。自定义端口（Windows cmd）：
 
 ```cmd
-set PORT=9000 && .venv\Scripts\python.exe weixin_android\server\app.py
+set PORT=9000 && .venv\Scripts\python.exe app.py
 ```
 
 ### 3. 设置访问令牌（强烈建议）
@@ -41,13 +41,13 @@ set PORT=9000 && .venv\Scripts\python.exe weixin_android\server\app.py
 Windows cmd：
 
 ```cmd
-set WEIXIN_TOKEN=你的复杂令牌 && .venv\Scripts\python.exe weixin_android\server\app.py
+set WEIXIN_TOKEN=你的复杂令牌 && .venv\Scripts\python.exe app.py
 ```
 
 Git Bash：
 
 ```bash
-WEIXIN_TOKEN=你的复杂令牌 .venv/Scripts/python.exe weixin_android/server/app.py
+WEIXIN_TOKEN=你的复杂令牌 .venv/Scripts/python.exe app.py
 ```
 
 设置后，安卓端和所有 API 请求都必须带请求头 `X-Token: 你的复杂令牌`，否则返回 401。
@@ -259,8 +259,8 @@ curl "http://127.0.0.1:8000/messages?conversation=家庭&date=2025-12-24&limit=5
 CLI（在 `server/` 目录下）：
 
 ```bash
-C:\project\qiyeweixin\.venv\Scripts\python.exe android_db_extract.py          # 增量
-C:\project\qiyeweixin\.venv\Scripts\python.exe android_db_extract.py --full   # 全量重扫
+.venv\Scripts\python.exe android_db_extract.py          # 增量
+.venv\Scripts\python.exe android_db_extract.py --full   # 全量重扫
 ```
 
 HTTP 触发（服务运行中）：
@@ -273,7 +273,7 @@ curl http://127.0.0.1:8000/admin/extract/status -H "X-Token: 你的令牌"
 **定时提取建议**：可用 Windows 任务计划程序每小时跑一次增量 CLI，命令示例：
 
 ```cmd
-schtasks /create /tn "WeixinAndroidExtract" /tr "\"C:\project\qiyeweixin\.venv\Scripts\python.exe\" C:\project\qiyeweixin\weixin_android\server\android_db_extract.py" /sc hourly
+schtasks /create /tn "NotifymeAndroidExtract" /tr "\"<你的仓库路径>\server\.venv\Scripts\python.exe\" <你的仓库路径>\server\android_db_extract.py" /sc hourly
 ```
 
 （也可在本项目里配一个 Blueprint 定时任务，让 agent 定期调 CLI 或 POST `/admin/extract`。）

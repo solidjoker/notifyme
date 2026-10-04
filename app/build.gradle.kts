@@ -19,12 +19,11 @@ fun bcString(value: String): String =
     "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
 android {
-    // 与母项目命名保持一致：qiyeweixin 的 Android 端等价物
-    namespace = "com.qiyeweixin.weixin_android"
+    namespace = "com.notifyme.android"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.qiyeweixin.weixin_android"
+        applicationId = "com.notifyme.android"
         minSdk = 26
         targetSdk = 34
         versionCode = 4
@@ -78,13 +77,13 @@ android {
         }
     }
 
-    // 输出 APK 改名：weixin-monitor-open.apk / weixin-monitor-test.apk
+    // 输出 APK 改名：notifyme-open.apk / notifyme-test.apk
     applicationVariants.all {
         val channel = if (flavorName == "beta") "test" else flavorName
         outputs.all {
             val impl = this as? com.android.build.gradle.internal.api.ApkVariantOutputImpl
             if (impl != null) {
-                impl.outputFileName = "weixin-monitor-$channel.apk"
+                impl.outputFileName = "notifyme-$channel.apk"
             }
         }
     }

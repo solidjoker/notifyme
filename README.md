@@ -1,14 +1,14 @@
-# 微信通知监听 · 本地智能分析助手
+# notifyme · 微信通知本地智能分析助手
 
 > **TodayToTomorrow for little mermaid**
 
-一个安卓本地优先的微信通知捕获、会话管理与 AI 分析工具：
-通知原文留在你自己的手机上，分析用你自己指定的模型，
+一个本地优先的微信通知捕获、会话管理与 AI 分析工具。
+通知原文留在你自己的设备上，分析用你自己指定的模型，
 需要行动的消息自动生成日历 / 闹钟提醒。
 
-- 🟢 发布版零预置：不内置任何服务器地址与密钥，未配置即完全离线
-- 🔒 本地 JSONL 存储，应用私有目录，卸载即净
-- 🧩 OpenAI 兼容接口：云端模型或本地 Agent 均可接入
+- 🤖 **Android**：现有 APK，独立运行，完全离线可用
+- 🍎 **iPhone**：PWA 查看端（需配套服务端）；原生 iOS 客户端规划中
+- 🖥️ **服务端（可选）**：跨设备查看、历史回填、公网访问
 
 ---
 
@@ -19,32 +19,26 @@
 - 通知监听服务 + 无障碍直读双通道捕获微信通知
 - 首页按「会话 → 日期」两级分组、折叠浏览
 - 关注列表（⭐）：空列表代表关注全部，也可精确指定
-- 删除能力：
-  - 左滑会话头：删除整个会话（分析记录与提醒一并清理）
-  - 左滑日期头：删除该会话某天的消息
-  - 长按会话头：ActionMode 多选，批量删除整个聊天室
-  - 会话详情页：长按气泡多选，批量删除单条消息
+- 多种删除方式：左滑会话/日期头、长按多选批量删除
 
 **AI 分析**
 
-- 会话级快速操作：⭐ 关注 / ✎ 提示词 / 🔍 分析 / 📋 结果
-- 分析按钮自带底部进度条，任务结束自动消失
 - 两阶段分析：一级判定是否需要行动，二级拆解任务
 - ⚡ 角标提示「待行动」结果，阅读后可一键清除标记
 - 支持自定义提示词（每个会话可独立配置）
 - 支持下载本地模型、端侧 Agent 推理
+- OpenAI 兼容接口：云端模型或本地 Agent 均可接入
 
 **提醒**
 
 - 三级降级提醒链：系统日历事件 → 日历插入 Intent → 本地闹钟
 - 📅 角标显示会话关联的提醒，点击进入提醒管理页
-- 提醒可删除 / 取消（同步取消闹钟与日历事件）
 
-**同步与回填**
+**同步与回填（需服务端）**
 
 - 消息可上报到自托管 Flask 服务端（局域网或经隧道公网）
 - WorkManager 周期任务，休眠 / 重启后仍可靠调度
-- 可选的安卓 / PC 微信数据库历史回填脚本（标准库实现）
+- 可选的安卓 / PC 微信数据库历史回填脚本
 
 ---
 
@@ -74,97 +68,31 @@
 
 ---
 
-## 文件说明
-
-```
-.
-├── app/                        # 安卓应用模块
-│   ├── build.gradle.kts        # flavor 配置（open/beta）、密钥注入、依赖
-│   └── src/main/
-│       ├── AndroidManifest.xml # 服务/权限/Activity 声明
-│       ├── res/                # 布局、图标、主题、服务配置 XML
-│       └── java/com/qiyeweixin/weixin_android/
-├── server/                     # 可选配套 Flask 服务端
-│   ├── app.py                  # 消息接收/查询 API、网页控制台
-│   ├── android_db_extract.py   # 安卓微信数据库历史回填（可选）
-│   ├── pc_db_extract.py        # PC 微信数据库历史回填（可选）
-│   ├── gen_icons.py            # PWA 图标生成（开发工具）
-│   ├── requirements.txt        # Python 依赖（仅 Flask）
-│   └── 启动服务.bat             # Windows 一键启动（路径可环境变量覆盖）
-├── docs/architecture/          # 架构文档与图源
-├── gradle/wrapper/             # Gradle Wrapper
-├── PRIVACY.md                  # 隐私说明
-├── THIRD-PARTY.md              # 第三方组件与许可证清单
-├── LICENSE                     # MIT
-└── secrets.local.properties.example
-```
-
-**Kotlin 源码按职责分组：**
-
-| 职责 | 文件 |
-|---|---|
-| 通知采集 | `WeChatNotificationListener`、`WeChatA11yExtractService`、`A11yExtractStore` |
-| 本地存储 | `MessageStore`、`AnalysisStore`、`AdvisorStore`、`ReminderStore`、`PromptStore`、`WatchlistStore`、`PendingQueue` |
-| 首页与会话 | `MainActivity`、`ConversationActivity`、`FullHeightRecyclerView` |
-| AI 分析 | `AnalysisConfig`、`AnalysisWorker`、`AnalysisScheduler`、`AnalysisCase`、`AdvisorWorker`、`AdvisorScheduler`、`LocalLlmEngine`、`ForkPrefilter` |
-| 本地模型 | `LocalModelStore`、`ModelDownloadWorker`、`ModelListActivity` |
-| 结果与提醒 | `AnalysisListActivity`、`ReminderListActivity`、`ReminderReceiver`、`CalendarHelper`、`AlarmHelper` |
-| 关注与提示词 | `WatchlistActivity`、`PromptEditActivity` |
-| 服务器同步 | `SyncConfig`、`SyncWorker`、`SyncScheduler`、`HistorySync` |
-| 应用骨架 | `MainApplication`、`OnboardingActivity`、`ConsoleActivity`、`BootReceiver`、`KeepAliveService`、`MessageReplier` |
-
----
-
 ## 快速开始
 
-### 环境要求
+### Android（现有 APK）
 
-- JDK 17
-- Android SDK，compileSdk 34，minSdk 26（Android 8.0+）
-- （可选）Python 3.10+ 用于配套服务端
+1. 从 [Releases](https://github.com/solidjoker/notifyme/releases) 下载 `notifyme-open.apk`，或按 [docs/BUILD.md](docs/BUILD.md) 自行构建
+2. 安装后按引导授予：
+   - **通知使用权**（设置 → 通知访问权限）— 必需
+   - （可选）**无障碍服务**：启用微信界面直读
+   - （可选）**日历权限**：用于写入待办事件
+3. 在 App「分析设置」中填入你自己的 OpenAI 兼容接口地址、密钥与模型名
 
-### 构建两个 flavor
+发布版（open flavor）不内置任何服务器地址与密钥，未配置即完全离线。
 
-项目有两个 flavor：
+### iPhone（PWA 查看端）
 
-- **open**：发布版，`com.qiyeweixin.weixin_android`，所有默认值为空，APK 内零密钥
-- **beta**：测试版，`com.qiyeweixin.weixin_android.test`，与主包共存同机，
-  默认值由本机 `secrets.local.properties` 注入
+iPhone 目前通过 PWA 查看已同步的消息与分析结果，需配套服务端：
 
-```powershell
-$env:JAVA_HOME = "你的 JDK 17 路径"
+1. 在电脑或服务器上部署服务端（见下方「服务端部署」）
+2. 用 Safari 打开 `http://<你的服务器地址>/console`
+3. 「分享 → 添加到主屏幕」即可像原生 App 一样使用
 
-# 发布版（无需任何密钥）
-.\gradlew.bat assembleOpenDebug
+> iOS 系统限制：无法像 Android 那样后台捕获通知，iPhone 端仅查看已同步数据。
+> 原生 iOS 客户端（含本地捕获能力）在规划中。
 
-# 测试版（如需预置默认值）：
-copy secrets.local.properties.example secrets.local.properties
-# 编辑填入你自己的地址与密钥（该文件已被 gitignore）
-.\gradlew.bat assembleBetaDebug
-```
-
-产物：`app/build/outputs/apk/<flavor>/debug/weixin-monitor-{open,test}.apk`
-
-### 安装与授权
-
-```powershell
-adb install -r app\build\outputs\apk\open\debug\weixin-monitor-open.apk
-```
-
-首次进入按引导授予：
-
-1. **通知使用权**（设置 → 通知访问权限）
-2. （可选）**无障碍服务**：启用微信界面直读
-3. （可选）日历权限，用于写入待办事件
-
-### 配置分析接口
-
-在 App「分析设置」中填入你自己的 OpenAI 兼容接口地址、密钥与模型名，
-或在 beta flavor 通过 `secrets.local.properties` 预置。发布版不内置任何地址。
-
----
-
-## 服务端部署（可选）
+### 服务端部署（可选）
 
 ```powershell
 cd server
@@ -183,9 +111,24 @@ python app.py
 
 ---
 
+## 从源码构建
+
+需要 JDK 17 + Android SDK（compileSdk 34，minSdk 26）。
+完整构建说明（环境配置、flavor 说明、密钥注入、adb 安装）见 [docs/BUILD.md](docs/BUILD.md)。
+
+快速构建发布版：
+
+```powershell
+$env:JAVA_HOME = "你的 JDK 17 路径"
+.\gradlew.bat assembleOpenDebug
+# 产物：app/build/outputs/apk/open/debug/notifyme-open.apk
+```
+
+---
+
 ## 隐私
 
-- 消息默认只存手机应用私有目录，配置前完全离线
+- 消息默认只存设备应用私有目录，配置前完全离线
 - 仅在你主动配置并点击时，数据才会发往你指定的接口
 - 支持按会话 / 按日期 / 批量删除；卸载即彻底清除
 
@@ -200,13 +143,14 @@ python app.py
 
 ## 下一步计划
 
-1. **跨应用通知管理**：从微信扩展到手机上所有 App 的通知，以及 PC 通知的统一管理
-2. **通知之外的信息融入**：把自己发出的消息等通知流之外的数据纳入方案
-3. **隐私信息保护**：端侧处理、敏感信息识别与脱敏的进一步强化
-4. **前端 UI 优化**：交互细节、可读性与多端适配
-5. **本地 Agent 与大模型优化**：端侧模型能力、提示词与分析质量
-6. **打通智能硬件**：与可穿戴 / 家居等设备的通知联动
-7. **其他**：欢迎在 Issues 中共同讨论
+1. **原生 iOS 客户端**：iPhone 本地捕获与分析能力（当前仅 PWA 查看端）
+2. **跨应用通知管理**：从微信扩展到手机上所有 App 的通知，以及 PC 通知的统一管理
+3. **通知之外的信息融入**：把自己发出的消息等通知流之外的数据纳入方案
+4. **隐私信息保护**：端侧处理、敏感信息识别与脱敏的进一步强化
+5. **前端 UI 优化**：交互细节、可读性与多端适配
+6. **本地 Agent 与大模型优化**：端侧模型能力、提示词与分析质量
+7. **打通智能硬件**：与可穿戴 / 家居等设备的通知联动
+8. **其他**：欢迎在 Issues 中共同讨论
 
 ## 参与贡献
 

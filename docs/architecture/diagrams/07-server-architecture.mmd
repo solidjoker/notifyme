@@ -1,9 +1,9 @@
-﻿%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true,'curve':'basis'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true,'curve':'basis'}}}%%
 flowchart TB
 
 subgraph CLIENTS["客户端 · 三个入口"]
     direction LR
-    AND["Android App<br/>weixin-monitor-open/test.apk<br/>SyncWorker · HistorySync"]
+    AND["Android App<br/>notifyme-open/test.apk<br/>SyncWorker · HistorySync"]
     IOS["iPhone / iPad<br/>PWA 添加到主屏幕<br/>只读客户端（无采集能力）"]
     BRW["浏览器<br/>GET / 最简消息页"]
 end

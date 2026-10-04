@@ -1,12 +1,12 @@
-﻿# 微信分析助手 · 架构与功能图集
+# 微信分析助手 · 架构与功能图集
 
-> 本目录是对 `C:\project\qiyeweixin\weixin_android` **现有代码**的逆向梳理成果，不是设计提案。
+> 本目录是对 notifyme Android 端（`app/src/main/java/com/notifyme/android/`）**现有代码**的逆向梳理成果，不是设计提案。
 > 所有节点、类名、方法名、常量、行号、路径均来自实际源码与配置文件。
 >
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：`versionName 0.1.3` / `versionCode 4`，40 个 Kotlin 文件 + `server/app.py` 1491 行
+> - 代码基线：`versionName 0.1.3` / `versionCode 4`，41 个 Kotlin 文件 + `server/app.py` 1491 行
 
 ---
 
@@ -249,17 +249,17 @@ CREATE TABLE analyses (
 
 ![构建与部署图](diagrams/08-build-deploy.png)
 
-**构建**：AGP 8.5.2 + Kotlin 2.0.20，compileSdk 34 / minSdk 26 / targetSdk 34，Java 17。仓库**不含 gradle-wrapper jar**，首次需 `gradle wrapper --gradle-version 8.9`，然后 `gradlew.bat assembleDebug`。
+**构建**：AGP 8.5.2 + Kotlin 2.0.20，compileSdk 34 / minSdk 26 / targetSdk 34，Java 17。仓库内置 Gradle Wrapper（8.9），直接 `gradlew.bat assembleOpenDebug` / `assembleBetaDebug` 即可（详见 [docs/BUILD.md](../BUILD.md)）。
 
 **两个 flavor**（`flavorDimensions += "channel"`）
 
 | | `open`（对外发布） | `beta`（内部测试，产品名 test） |
 |---|---|---|
-| applicationId | `com.qiyeweixin.weixin_android` | + `.test` 后缀 |
+| applicationId | `com.notifyme.android` | + `.test` 后缀 |
 | versionName | `0.1.3` | `0.1.3-test` |
 | 桌面名 | 微信分析助手 | 微信分析助手·测试 |
 | `DEFAULT_*` buildConfigField | **全部空串**，APK 内不含任何密钥 | 从 `secrets.local.properties` 经 `secret(key)` 读取，`bcString(value)` 转义反斜杠与引号 |
-| 产物 | `weixin-monitor-open.apk` | `weixin-monitor-test.apk` |
+| 产物 | `notifyme-open.apk` | `notifyme-test.apk` |
 
 beta 注入：`DEFAULT_ANALYSIS_PROTOCOL="openai"`、`GLM_BASE_URL`/`GLM_API_KEY`/`GLM_MODEL`、`JEV_URL`/`JEV_API_KEY`、`MONITOR_URL`/`MONITOR_TOKEN`。首次启动 seed 进配置（仅填充，可改）。
 
@@ -390,22 +390,10 @@ Get-ChildItem $d -Filter *.svg | ForEach-Object {
 
 ---
 
-## 与仓库根 README.md 的差异
+## 文档分工
 
-根 `README.md`（205 行）明显落后于代码：只记录了 5 个模块（`WeChatNotificationListener` / `MessageStore` / `MessageReplier` / `MainActivity` / `MainApplication`），而实际有 40 个 Kotlin 文件。以下能力在根 README 中**完全没有记录**：
+- 仓库根 [README.md](../../README.md)：面向用户的产品介绍、平台说明（Android APK / iPhone PWA）、快速开始与隐私法律。
+- [docs/BUILD.md](../BUILD.md)：面向开发者的构建指南（环境、flavor、密钥注入、adb 安装）。
+- 本目录：面向维护者的代码级架构逆向梳理，9 张图覆盖系统上下文到同步时序，所有类名/方法名/行号均来自实际源码。
 
-- 分析链路整体：`AnalysisWorker` / `AnalysisCase` / `ForkPrefilter` / `AnalysisConfig` / `AnalysisStore` / `AnalysisScheduler`
-- 顾问复盘：`AdvisorWorker` / `AdvisorStore` / `AdvisorScheduler`
-- 提醒体系：`CalendarHelper` / `AlarmHelper` / `ReminderReceiver` / `ReminderStore` / `ReminderListActivity`
-- 无障碍直读：`WeChatA11yExtractService` / `A11yExtractStore`
-- 保活：`KeepAliveService` / `BootReceiver`
-- 端侧模型：`LocalLlmEngine` / `LocalModelStore` / `ModelDownloadWorker` / `ModelListActivity`
-- 历史回填：`HistorySync`
-- 提示词：`PromptStore` / `PromptEditActivity`
-- 关注名单：`WatchlistStore` / `WatchlistActivity`
-- 引导页：`OnboardingActivity`
-- 会话详情：`ConversationActivity`
-- 服务端：`server/app.py` 的 `/analysis`、`/advisor`、`/admin/extract`、`/console` PWA，以及 `android_db_extract.py`、`pc_db_extract.py`
-- 构建：`open` / `beta` 双 flavor 与密钥注入策略
-
-根 README 里的「功能结构图」还停留在旧版本，且其中的去重键描述（`msg_ref`）已被 `caseId` 取代。根 README 提到的"未来扩展：在 MainApplication 起轻量 HTTP 转发器对接 PC 端 `web/api.py`，由 wxbot/LLM 起草回复、用户在安卓确认后由 MessageReplier 发送"——**仍未实现**，`MainApplication.onCreate` 目前只做启动日志、`ReminderReceiver.ensureChannel`、`HistorySync.maybeRunOnStartup`，以及 DEBUG 包下的 `A11Y_DEBUG_START` 广播自检通道。
+> 历史备注：本架构文档早期版本曾记录「根 README 落后于代码」的差异清单。根 README 已于本次精简重写后与代码对齐（含分析链路、提醒体系、无障碍直读、端侧模型、历史回填、双 flavor 构建等），该差异清单已失效并移除。

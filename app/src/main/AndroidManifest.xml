@@ -116,7 +116,7 @@
             android:name=".ReminderReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.qiyeweixin.weixin_android.action.REMINDER_ALERT" />
+                <action android:name="com.notifyme.android.action.REMINDER_ALERT" />
             </intent-filter>
         </receiver>
 

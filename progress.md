@@ -14,9 +14,10 @@
 需要行动的消息经三级降级链（系统日历事件 → 日历插入 Intent → 本地闹钟）生成提醒。
 
 - 包结构（双 flavor，`app/build.gradle.kts`）：
-  - `open`：applicationId `com.qiyeweixin.weixin_android`，**所有默认值注入空串，APK 内零密钥零预置**
-  - `beta`：applicationId `com.qiyeweixin.weixin_android.test`，与主包共存同机，
+  - `open`：applicationId `com.notifyme.android`，**所有默认值注入空串，APK 内零密钥零预置**
+  - `beta`：applicationId `com.notifyme.android.test`，与主包共存同机，
     默认值由本机 `secrets.local.properties` 注入（该文件已 gitignore）
+  - 产物 APK：`notifyme-open.apk` / `notifyme-test.apk`
 - 本地存储：应用私有目录 JSONL —— `files/messages.jsonl`、`files/analysis.jsonl`、
   `files/reminders.jsonl`、`files/pending.jsonl`
 - 采集通道：`NotificationListenerService`（通知监听）+ 无障碍服务直读微信界面
@@ -26,12 +27,11 @@
 
 ## 二、仓库来源与目录关系（重要，避免搞混）
 
-- 母仓库（私有，**保持不动**）：`C:\project\qiyeweixin`，远程
-  `git@github.com:solidjoker/qiyeweixin.git`，含 reverse/wxbot/aibot-bot/web 等全部子项目与完整历史。
-- 公开化时的暂存目录（已废弃，可删）：`C:\project\qiyeweixin-public`。
-- **正式工作目录：`C:\project\notifyme`** —— 仅含 weixin_android 内容（App + Flask server + docs），
+- 母仓库（私有，**保持不动**）：本地另一目录 + 私有远程，含 reverse/wxbot/aibot-bot/web 等全部子项目与完整历史。具体路径与 URL 属私有信息，不写入本公开仓库。
+- 公开化时的暂存目录（已废弃，可删）。
+- **正式工作目录：`C:\project\notifyme`** —— 仅含 notifyme Android 端内容（App + Flask server + docs），
   单一干净历史，不含逆向工具链。今后只在这里开发。
-- 公开版从母仓库 weixin_android 子目录脱敏拷贝而来，包含五项需求的全部最新代码
+- 公开版从母仓库 Android 子目录脱敏拷贝而来，包含五项需求的全部最新代码
   （那些改动在母仓库工作区尚未提交，公开版已收录）。
 
 Git 提交身份（本仓库局部配置，未改全局）：
@@ -85,6 +85,31 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - 仓库不含 APK / 构建产物 / server 数据与日志（均 gitignore）
 - 已发布：https://github.com/solidjoker/notifyme（main，单条干净历史）
 
+### 3. 包名精简重命名 + 文档重组（本次会话）
+
+围绕「以 Android 包 + iPhone 包为基础、服务器为可选项」精简公开仓库，并彻底移除
+`qiyeweixin` / `weixin_android` / `weixin-monitor` 等会泄露私有母仓库的旧命名：
+
+- **代码重命名**（已构建验证，`assembleOpenDebug` + `assembleBetaDebug` 均 exit 0）：
+  - 包目录 `com/qiyeweixin/weixin_android/` → `com/notifyme/android/`（41 个 .kt 文件 `package` 行同步改）
+  - `app/build.gradle.kts`：`namespace` + `applicationId` → `com.notifyme.android`
+  - `settings.gradle.kts`：`rootProject.name` `WeixinAndroid` → `notifyme`
+  - `AndroidManifest.xml` 自定义 action、`activity_main.xml` 自定义 View 全限定名、
+    `ReminderReceiver.ACTION_REMIND` 常量、若干注释/日志 → 全部 `com.notifyme.android` / notifyme
+  - APK 产物名 `weixin-monitor-{open,test}.apk` → `notifyme-{open,test}.apk`
+  - 校验：`grep -r 'qiyeweixin|weixin_android|WeixinAndroid|weixin-monitor' app/src` 无残留
+- **文档重组**：
+  - 根 `README.md` 重写：平台说明（Android 现有 APK / iPhone PWA 查看端 / 原生 iOS 规划中）、
+    服务器明确标为「可选」、快速开始面向用户（装 APK + 授权 + 配分析接口），
+    构建/flavor/密钥/adb 细节迁出到新文件 `docs/BUILD.md`
+  - 新增 `docs/BUILD.md`：环境要求、双 flavor 表、`secrets.local.properties` 注入键表、构建/安装/签名、目录结构
+  - `server/README.md`：把指向不存在的母仓库路径（`C:\project\qiyeweixin`、`weixin_android\server\...`）
+    全部改为本仓库相对路径（在 `server/` 下用本机 `.venv` 跑 `app.py` / `android_db_extract.py`）
+  - `docs/architecture/README.md` + `diagrams/07,08.mmd`：同步改名，并用 mmdc 重新渲染 07/08 的 .svg/.png
+  - 移除 `docs/architecture/README.md` 中已过时的「与根 README 的差异」清单（根 README 重写后已对齐）
+- **注意**：显示名（`app_name` 微信分析助手 等）未改，仅改包名/产物名；显示名属独立产品决策。
+- 版本号仍为 0.1.3 / versionCode 4（本次为命名精简，未升版本；如需发布再按语义升）。
+
 ## 四、构建与运行
 
 ```powershell
@@ -96,8 +121,8 @@ $env:ANDROID_HOME = "C:\Users\<你>\AppData\Local\Android\Sdk"
 cd C:\project\notifyme
 .\gradlew.bat assembleOpenDebug assembleBetaDebug
 # 产物：
-#   app\build\outputs\apk\open\debug\weixin-monitor-open.apk
-#   app\build\outputs\apk\beta\debug\weixin-monitor-test.apk
+#   app\build\outputs\apk\open\debug\notifyme-open.apk
+#   app\build\outputs\apk\beta\debug\notifyme-test.apk
 
 # beta 如需预置默认值（自行创建，勿提交）：
 copy secrets.local.properties.example secrets.local.properties
@@ -106,12 +131,12 @@ copy secrets.local.properties.example secrets.local.properties
 python -m py_compile server\app.py server\android_db_extract.py server\pc_db_extract.py server\gen_icons.py
 
 # 安装/启动 beta
-adb -s emulator-5554 install -r app\build\outputs\apk\beta\debug\weixin-monitor-test.apk
-adb shell monkey -p com.qiyeweixin.weixin_android.test -c android.intent.category.LAUNCHER 1
+adb -s emulator-5554 install -r app\build\outputs\apk\beta\debug\notifyme-test.apk
+adb shell monkey -p com.notifyme.android.test -c android.intent.category.LAUNCHER 1
 ```
 
 ADB/设备要点（踩过的坑）：
-- 组件类包名始终是 `com.qiyeweixin.weixin_android`（beta 只加 applicationIdSuffix），
+- 组件类包名始终是 `com.notifyme.android`（beta 只加 applicationIdSuffix），
   用 `monkey -p <包名> -c android.intent.category.LAUNCHER 1` 启动；不要用会报 Error type 3 的 `-n ...test/.MainActivity`
 - 设备自转横屏时：`adb shell settings put system accelerometer_rotation 0` 可立即恢复竖屏
   （`user_rotation` 在加速度模式开时不生效）
@@ -120,25 +145,26 @@ ADB/设备要点（踩过的坑）：
 
 ## 五、下一步计划（路线图，对应 README）
 
-1. **跨应用通知管理**：从微信扩展到手机所有 App 通知 + PC 通知的统一管理
-2. **通知之外的信息融入**：自己发出的消息等通知流外数据的接入方案
-3. **隐私信息保护**：端侧处理、敏感信息识别/脱敏强化
-4. **前端 UI 优化**：交互、可读性、多端适配
-5. **本地 Agent 与大模型优化**：端侧模型能力、提示词与分析质量
-6. **打通智能硬件**：可穿戴 / 家居等设备通知联动
-7. **其他**：Issues 共建
+1. **原生 iOS 客户端**：iPhone 本地捕获与分析能力（当前仅 PWA 查看端）
+2. **跨应用通知管理**：从微信扩展到手机所有 App 通知 + PC 通知的统一管理
+3. **通知之外的信息融入**：自己发出的消息等通知流外数据的接入方案
+4. **隐私信息保护**：端侧处理、敏感信息识别/脱敏强化
+5. **前端 UI 优化**：交互、可读性、多端适配
+6. **本地 Agent 与大模型优化**：端侧模型能力、提示词与分析质量
+7. **打通智能硬件**：可穿戴 / 家居等设备通知联动
+8. **其他**：Issues 共建
 
 ### 可选的收尾小事（下次可做）
 
 - [ ] GitHub 仓库 About/Topics、确认仓库可见性为 Public（如建仓时是 Private）
 - [ ] 正式版 APK 挂 Releases（当前仓库不含二进制），README 加下载徽章
 - [ ] 可选：英文版 README
-- [ ] 删除废弃暂存目录 `C:\project\qiyeweixin-public`
+- [ ] 删除废弃的公开化暂存目录（本地另一目录，已不再使用）
 - [ ] 五项需求已验证但版本号仍为 0.1.3；如需发布新版本，按语义升 versionName/versionCode
 
 ## 六、硬约束（务必遵守）
 
-- 仅在 `C:\project\notifyme` 开发并提交；母仓库 `C:\project\qiyeweixin` 不改动
+- 仅在 `C:\project\notifyme` 开发并提交；私有母仓库（本地另一目录）不改动
 - 密钥/真实服务器地址只放本地 `secrets.local.*`，绝不入库；open flavor 保持零预置
 - 不提交用户真实数据；测试数据用后即清
 - 未经用户明确要求不推送/不发布新版本（普通文档提交除外，需向用户说明）
