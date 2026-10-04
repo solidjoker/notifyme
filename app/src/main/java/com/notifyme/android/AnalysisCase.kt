@@ -118,17 +118,6 @@ data class AnalysisCase(
             )
         }
 
-        /**
-         * 兼容入口（schema v1 口径，按微信算指纹）：供老测试与尚未迁移的调用方使用。
-         * 新代码请用带 `pkg` 的三参重载。
-         */
-        fun caseIdOf(conversation: String, windowEnd: Long): String =
-            caseIdOf(AppSourceRegistry.PKG_WECHAT, conversation, windowEnd)
-
-        /** 兼容入口，同 [caseIdOf] 二参重载。 */
-        fun fromMessages(conversation: String, messages: List<ChatMessage>): AnalysisCase? =
-            fromMessages(AppSourceRegistry.PKG_WECHAT, conversation, messages)
-
         // ---------------- S1 判定题集 ----------------
 
         /** need_action 题（noul）：是否含需要我执行的任务/请求 */

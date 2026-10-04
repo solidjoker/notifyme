@@ -36,6 +36,7 @@ class ReminderReceiver : BroadcastReceiver() {
         const val EXTRA_DEDUP_KEY = "extra_dedup_key"
         const val EXTRA_TITLE = "extra_title"
         const val EXTRA_SUMMARY = "extra_summary"
+        const val EXTRA_PKG = "extra_pkg"
         const val EXTRA_CONVERSATION = "extra_conversation"
         const val EXTRA_EVENT_TIME = "extra_event_time"
 
@@ -48,7 +49,7 @@ class ReminderReceiver : BroadcastReceiver() {
                         CHANNEL_ID,
                         "任务提醒",
                         NotificationManager.IMPORTANCE_HIGH
-                    ).apply { description = "微信任务到点提醒（App 内闹钟兜底）" }
+                    ).apply { description = "任务到点提醒（App 内闹钟兜底）" }
                 )
             }
         }
@@ -62,6 +63,8 @@ class ReminderReceiver : BroadcastReceiver() {
         val dedupKey = intent.getStringExtra(EXTRA_DEDUP_KEY).orEmpty()
         val title = intent.getStringExtra(EXTRA_TITLE).orEmpty()
         val summary = intent.getStringExtra(EXTRA_SUMMARY).orEmpty()
+        val pkg = intent.getStringExtra(EXTRA_PKG)
+            ?.takeIf { it.isNotBlank() } ?: AppSourceRegistry.PKG_WECHAT
         val conversation = intent.getStringExtra(EXTRA_CONVERSATION).orEmpty()
         val eventTime = intent.getLongExtra(EXTRA_EVENT_TIME, 0L)
         Log.i("ReminderReceiver", "到点提醒触发: key=$dedupKey title=$title")
@@ -79,7 +82,7 @@ class ReminderReceiver : BroadcastReceiver() {
 
         // 点击跳转：优先来源会话详情页，其次首页
         val tapIntent = if (conversation.isNotEmpty()) {
-            ConversationActivity.createIntent(context, conversation)
+            ConversationActivity.createIntent(context, ConvKey(pkg, conversation))
         } else {
             Intent(context, MainActivity::class.java)
         }.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
@@ -98,7 +101,7 @@ class ReminderReceiver : BroadcastReceiver() {
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("微信任务提醒")
+            .setContentTitle("任务提醒")
             .setContentText("$title$timeText")
             .setStyle(NotificationCompat.BigTextStyle().bigText(content))
             .setPriority(NotificationCompat.PRIORITY_HIGH)

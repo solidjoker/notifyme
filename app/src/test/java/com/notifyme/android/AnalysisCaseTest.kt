@@ -55,7 +55,7 @@ class AnalysisCaseTest {
 
     @Test
     fun `fromMessages 空列表返回 null`() {
-        assertNull(AnalysisCase.fromMessages("张三", emptyList()))
+        assertNull(AnalysisCase.fromMessages(AppSourceRegistry.PKG_WECHAT, "张三", emptyList()))
     }
 
     @Test
@@ -69,7 +69,7 @@ class AnalysisCaseTest {
             msg("m4", 4_000L)
         )
 
-        val kase = AnalysisCase.fromMessages("张三", all)
+        val kase = AnalysisCase.fromMessages(AppSourceRegistry.PKG_WECHAT, "张三", all)
 
         assertNotNull(kase)
         assertEquals(listOf("m1", "m2", "m3", "m4", "m5"), kase!!.messages.map { it.text })
@@ -81,7 +81,7 @@ class AnalysisCaseTest {
     fun `fromMessages 超过窗口大小时只留最新 10 条`() {
         val all = (1..15).map { i -> msg("m$i", i * 1_000L) }
 
-        val kase = AnalysisCase.fromMessages("张三", all)!!
+        val kase = AnalysisCase.fromMessages(AppSourceRegistry.PKG_WECHAT, "张三", all)!!
 
         assertEquals(AnalysisCase.WINDOW_SIZE, kase.messages.size)
         assertEquals((6..15).map { "m$it" }, kase.messages.map { it.text })
@@ -95,13 +95,13 @@ class AnalysisCaseTest {
             msg("早", 1_000L, isGroup = false),
             msg("开会了", 2_000L, conversation = "张三", sender = "李四", isGroup = true)
         )
-        assertTrue(AnalysisCase.fromMessages("张三", all)!!.isGroup)
+        assertTrue(AnalysisCase.fromMessages(AppSourceRegistry.PKG_WECHAT, "张三", all)!!.isGroup)
 
         val reverted = listOf(
             msg("开会了", 1_000L, conversation = "张三", sender = "李四", isGroup = true),
             msg("好的", 2_000L, isGroup = false)
         )
-        assertFalse(AnalysisCase.fromMessages("张三", reverted)!!.isGroup)
+        assertFalse(AnalysisCase.fromMessages(AppSourceRegistry.PKG_WECHAT, "张三", reverted)!!.isGroup)
     }
 
     @Test
@@ -113,33 +113,33 @@ class AnalysisCaseTest {
 
     @Test
     fun `caseIdOf 给出 16 位小写十六进制且稳定`() {
-        val id = AnalysisCase.caseIdOf("张三", 1_700_000_000_000L)
+        val id = AnalysisCase.caseIdOf(AppSourceRegistry.PKG_WECHAT, "张三", 1_700_000_000_000L)
         assertEquals(16, id.length)
         assertTrue("caseId 应当是十六进制，实际 $id", Regex("[0-9a-f]{16}").matches(id))
-        assertEquals(id, AnalysisCase.caseIdOf("张三", 1_700_000_000_000L))
+        assertEquals(id, AnalysisCase.caseIdOf(AppSourceRegistry.PKG_WECHAT, "张三", 1_700_000_000_000L))
     }
 
     @Test
     fun `caseId 随会话名与窗口末条变化`() {
-        val base = AnalysisCase.caseIdOf("张三", 1_000L)
-        assertFalse(base == AnalysisCase.caseIdOf("李四", 1_000L))
-        assertFalse(base == AnalysisCase.caseIdOf("张三", 2_000L))
+        val base = AnalysisCase.caseIdOf(AppSourceRegistry.PKG_WECHAT, "张三", 1_000L)
+        assertFalse(base == AnalysisCase.caseIdOf(AppSourceRegistry.PKG_WECHAT, "李四", 1_000L))
+        assertFalse(base == AnalysisCase.caseIdOf(AppSourceRegistry.PKG_WECHAT, "张三", 2_000L))
     }
 
     @Test
     fun `fromMessages 的 caseId 等于 caseIdOf(会话, 窗口末条)`() {
         val all = listOf(msg("a", 1_000L), msg("b", 9_000L))
-        val kase = AnalysisCase.fromMessages("张三", all)!!
-        assertEquals(AnalysisCase.caseIdOf("张三", 9_000L), kase.caseId)
+        val kase = AnalysisCase.fromMessages(AppSourceRegistry.PKG_WECHAT, "张三", all)!!
+        assertEquals(AnalysisCase.caseIdOf(AppSourceRegistry.PKG_WECHAT, "张三", 9_000L), kase.caseId)
     }
 
     @Test
     fun `窗口内容没变时 caseId 不变（避免重复分析）`() {
         val all = listOf(msg("a", 1_000L), msg("b", 2_000L))
-        val first = AnalysisCase.fromMessages("张三", all)!!
+        val first = AnalysisCase.fromMessages(AppSourceRegistry.PKG_WECHAT, "张三", all)!!
         // 又来了一条更旧的消息（时间戳在窗口内但不是末条）：末条不变 → 指纹不变
         val withOlder = listOf(msg("a0", 500L)) + all
-        val second = AnalysisCase.fromMessages("张三", withOlder)!!
+        val second = AnalysisCase.fromMessages(AppSourceRegistry.PKG_WECHAT, "张三", withOlder)!!
         assertEquals(first.caseId, second.caseId)
     }
 
@@ -148,7 +148,7 @@ class AnalysisCaseTest {
     @Test
     fun `buildStateJson 的 chat 内不放 conversation 字段`() {
         // 回归测试：线上 api.typesafe.ai 对未知字段严格校验，多一个键就是 400 parsing error
-        val kase = AnalysisCase.fromMessages("张三", listOf(msg("在吗", 1_000L), msg("在", 2_000L)))!!
+        val kase = AnalysisCase.fromMessages(AppSourceRegistry.PKG_WECHAT, "张三", listOf(msg("在吗", 1_000L), msg("在", 2_000L)))!!
 
         val chat = kase.buildStateJson().getJSONObject("chat")
 
@@ -160,6 +160,7 @@ class AnalysisCaseTest {
     @Test
     fun `buildStateJson 按窗口顺序输出 messages 且 from 恒为 other`() {
         val kase = AnalysisCase.fromMessages(
+            AppSourceRegistry.PKG_WECHAT,
             "张三",
             listOf(msg("第一条", 1_000L), msg("第二条", 2_000L))
         )!!
@@ -177,6 +178,7 @@ class AnalysisCaseTest {
     fun `buildStateJson 群聊把发言人名放进 text 前缀`() {
         // from 只有 me/other 两个取值，发言人信息只能进 text
         val kase = AnalysisCase.fromMessages(
+            AppSourceRegistry.PKG_WECHAT,
             "项目群",
             listOf(
                 msg("评审改到三点", 1_000L, conversation = "项目群", sender = "李四", isGroup = true),
@@ -193,6 +195,7 @@ class AnalysisCaseTest {
     @Test
     fun `buildStateJson 私聊不加发言人前缀`() {
         val kase = AnalysisCase.fromMessages(
+            AppSourceRegistry.PKG_WECHAT,
             "张三",
             listOf(msg("在吗", 1_000L, conversation = "张三", sender = "张三"))
         )!!
@@ -203,6 +206,7 @@ class AnalysisCaseTest {
     @Test
     fun `buildStateJson 群聊里发言人等于会话名时不加前缀`() {
         val kase = AnalysisCase.fromMessages(
+            AppSourceRegistry.PKG_WECHAT,
             "张三",
             listOf(msg("在吗", 1_000L, conversation = "张三", sender = "张三", isGroup = true))
         )!!
@@ -212,7 +216,7 @@ class AnalysisCaseTest {
 
     @Test
     fun `buildStateJson 仅在背景非空时输出 background 字段`() {
-        val kase = AnalysisCase.fromMessages("张三", listOf(msg("在吗", 1_000L)))!!
+        val kase = AnalysisCase.fromMessages(AppSourceRegistry.PKG_WECHAT, "张三", listOf(msg("在吗", 1_000L)))!!
 
         assertFalse("空背景不该出现 background 键（旧版服务端会 4xx）", kase.buildStateJson().has("background"))
         assertFalse(kase.buildStateJson("   ").has("background"))
@@ -226,6 +230,7 @@ class AnalysisCaseTest {
     @Test
     fun `windowText 每行以 对方 开头并按窗口顺序换行`() {
         val kase = AnalysisCase.fromMessages(
+            AppSourceRegistry.PKG_WECHAT,
             "张三",
             listOf(msg("在吗", 1_000L), msg("有个事想确认", 2_000L))
         )!!
@@ -236,6 +241,7 @@ class AnalysisCaseTest {
     @Test
     fun `windowText 群聊保留发言人名`() {
         val kase = AnalysisCase.fromMessages(
+            AppSourceRegistry.PKG_WECHAT,
             "项目群",
             listOf(msg("评审改到三点", 1_000L, conversation = "项目群", sender = "李四", isGroup = true))
         )!!

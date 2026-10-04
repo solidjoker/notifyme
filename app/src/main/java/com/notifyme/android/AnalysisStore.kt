@@ -262,16 +262,6 @@ object AnalysisStore {
             .take(limit)
     }
 
-    /**
-     * 每个会话的最新一条 case 记录（按 windowEnd 取新，会话详情页与首页角标用）。
-     * 返回 Map<会话名, 最新 case 记录>。**老口径，按裸会话名分组**：
-     * 两个 App 里同名会话的角标会合并；M2 UI 迁移后请改用 [latestByConvKey]。
-     */
-    fun latestByConversation(context: Context): Map<String, AnalysisCaseRecord> =
-        readRecent(context, 500)
-            .groupBy { it.conversation }
-            .mapValues { (_, list) -> list.maxByOrNull { it.windowEnd }!! }
-
     /** [ConvKey] 口径的最新记录：M2 起同名会话在不同 App 里分别给角标。 */
     fun latestByConvKey(context: Context): Map<ConvKey, AnalysisCaseRecord> =
         readRecent(context, 500)
@@ -287,11 +277,6 @@ object AnalysisStore {
     @Synchronized
     fun deleteByConversation(context: Context, key: ConvKey): Int =
         rewrite(context) { it.convKey != key }
-
-    /** 兼容入口：裸会话名按微信处理（新代码请用 [ConvKey] 重载）。 */
-    @Synchronized
-    fun deleteByConversation(context: Context, conversation: String): Int =
-        deleteByConversation(context, ConvKey.legacy(conversation))
 
     /**
      * 整体读入、按 [keep] 过滤、重写文件；返回丢弃条数。

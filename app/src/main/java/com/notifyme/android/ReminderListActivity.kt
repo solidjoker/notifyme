@@ -27,12 +27,16 @@ import java.util.Locale
 class ReminderListActivity : Activity() {
 
     companion object {
+        private const val EXTRA_PKG = "pkg"
         private const val EXTRA_CONVERSATION = "conversation"
 
-        fun start(context: android.content.Context, conversation: String? = null) {
+        fun start(context: android.content.Context, key: ConvKey? = null) {
             context.startActivity(
                 android.content.Intent(context, ReminderListActivity::class.java).apply {
-                    if (conversation != null) putExtra(EXTRA_CONVERSATION, conversation)
+                    if (key != null) {
+                        putExtra(EXTRA_PKG, key.pkg)
+                        putExtra(EXTRA_CONVERSATION, key.conversation)
+                    }
                 }
             )
         }
@@ -43,18 +47,25 @@ class ReminderListActivity : Activity() {
     private lateinit var emptyView: TextView
 
     /** 会话过滤；null = 全部会话 */
-    private var filterConversation: String? = null
+    private var filterKey: ConvKey? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_reminder_list)
 
-        filterConversation = intent.getStringExtra(EXTRA_CONVERSATION)
+        val conv = intent.getStringExtra(EXTRA_CONVERSATION)
+        filterKey = conv?.let {
+            ConvKey(
+                intent.getStringExtra(EXTRA_PKG)
+                    ?.takeIf { p -> p.isNotBlank() } ?: AppSourceRegistry.PKG_WECHAT,
+                it
+            )
+        }
 
         // 标题栏返回
         findViewById<TextView>(R.id.btnBack).setOnClickListener { finish() }
         findViewById<TextView>(R.id.tvReminderListTitle)?.let { titleView ->
-            titleView.text = filterConversation?.let { getString(R.string.reminder_list_title_conv, it) }
+            titleView.text = filterKey?.let { getString(R.string.reminder_list_title_conv, it.conversation) }
                 ?: getString(R.string.reminder_list_title)
         }
 
@@ -67,7 +78,7 @@ class ReminderListActivity : Activity() {
     /** 重读记录并刷新列表（重试/删除后状态会变化）。 */
     private fun reload() {
         var records = ReminderStore.readAll(this)
-        filterConversation?.let { f -> records = records.filter { it.conversation == f } }
+        filterKey?.let { f -> records = records.filter { it.convKey == f } }
         emptyView.visibility = if (records.isEmpty()) View.VISIBLE else View.GONE
         recycler.adapter = ReminderAdapter(
             records,

@@ -167,25 +167,12 @@ object MessageStore {
         core(context).deleteConversation(key)
 
     /**
-     * 兼容入口：裸会话名＝schema v1 口径，一律按微信处理。
-     * 只留给还没迁到复合键的调用方（如历史同步回填），新代码请用 [ConvKey] 重载。
-     */
-    @Synchronized
-    fun deleteConversation(context: Context, conversation: String): Int =
-        core(context).deleteConversation(ConvKey.legacy(conversation))
-
-    /**
      * 删除指定会话在某一日期 key 下的消息，返回实际删除条数。
      * @param dayKey yyyy-MM-dd（本机时区）或 [DAY_KEY_UNKNOWN]（未标注日期）
      */
     @Synchronized
     fun deleteDate(context: Context, key: ConvKey, dayKey: String): Int =
         core(context).deleteDate(key, dayKey)
-
-    /** 兼容入口，同 [deleteConversation] 的裸会话名重载。 */
-    @Synchronized
-    fun deleteDate(context: Context, conversation: String, dayKey: String): Int =
-        core(context).deleteDate(ConvKey.legacy(conversation), dayKey)
 
     /**
      * 「设置 → 数据 → 规范化」：把还是 schema v1（没有 pkg 字段）的行补齐后整体重写。

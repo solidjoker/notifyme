@@ -34,6 +34,7 @@ object AlarmHelper {
         dedupKey: String,
         title: String,
         summary: String,
+        pkg: String,
         conversation: String,
         eventTime: Long
     ): PendingIntent {
@@ -42,6 +43,7 @@ object AlarmHelper {
             putExtra(ReminderReceiver.EXTRA_DEDUP_KEY, dedupKey)
             putExtra(ReminderReceiver.EXTRA_TITLE, title)
             putExtra(ReminderReceiver.EXTRA_SUMMARY, summary)
+            putExtra(ReminderReceiver.EXTRA_PKG, pkg)
             putExtra(ReminderReceiver.EXTRA_CONVERSATION, conversation)
             putExtra(ReminderReceiver.EXTRA_EVENT_TIME, eventTime)
         }
@@ -59,6 +61,7 @@ object AlarmHelper {
         dedupKey: String,
         title: String,
         summary: String,
+        pkg: String,
         conversation: String,
         eventTime: Long,
         leadMinutes: Long
@@ -67,7 +70,7 @@ object AlarmHelper {
             val alarmManager = context.getSystemService(AlarmManager::class.java)
             val triggerAt = triggerTime(eventTime, leadMinutes)
             val pendingIntent = buildPendingIntent(
-                context, dedupKey, title, summary, conversation, eventTime
+                context, dedupKey, title, summary, pkg, conversation, eventTime
             )
             alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent)
             Log.i(TAG, "App 内提醒已设置: key=$dedupKey triggerAt=$triggerAt title=$title")
@@ -82,7 +85,7 @@ object AlarmHelper {
     fun cancelReminder(context: Context, dedupKey: String) {
         try {
             val alarmManager = context.getSystemService(AlarmManager::class.java)
-            val pendingIntent = buildPendingIntent(context, dedupKey, "", "", "", 0L)
+            val pendingIntent = buildPendingIntent(context, dedupKey, "", "", "", "", 0L)
             alarmManager.cancel(pendingIntent)
             pendingIntent.cancel()
         } catch (e: Exception) {

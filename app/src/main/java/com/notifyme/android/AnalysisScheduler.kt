@@ -43,28 +43,29 @@ object AnalysisScheduler {
 
     /**
      * 立即分析一次（不等周期到点），结果同样写回 AnalysisConfig。
-     * @param forceConversation 非空时只分析该会话并跳过窗口去重
+     * @param forceKey 非空时只分析该会话并跳过窗口去重
      *   （会话详情页「立即分析本会话」用）；null 走常规去重流程。
      */
-    fun enqueueAnalysisNow(context: Context, forceConversation: String? = null) {
+    fun enqueueAnalysisNow(context: Context, forceKey: ConvKey? = null) {
         val builder = OneTimeWorkRequestBuilder<AnalysisWorker>()
             .setConstraints(networkConstraint())
             // 通用 tag：所有立即分析；UI 可观察整体/单会话进度
             .addTag(TAG_ON_DEMAND)
-        if (!forceConversation.isNullOrBlank()) {
+        if (forceKey != null) {
             builder.setInputData(
                 androidx.work.Data.Builder()
-                    .putString(AnalysisWorker.KEY_FORCE_CONVERSATION, forceConversation)
+                    .putString(AnalysisWorker.KEY_FORCE_PKG, forceKey.pkg)
+                    .putString(AnalysisWorker.KEY_FORCE_CONVERSATION, forceKey.conversation)
                     .build()
             )
             // 单会话 tag：首页 chip / 会话详情按钮按会话观察进度
-            builder.addTag("$TAG_CONV_PREFIX$forceConversation")
+            builder.addTag(convTag(forceKey))
         }
         WorkManager.getInstance(context).enqueue(builder.build())
     }
 
-    /** 返回观察指定会话分析进度所用的 tag。 */
-    fun convTag(conversation: String): String = "$TAG_CONV_PREFIX$conversation"
+    /** 返回观察指定会话分析进度所用的 tag（pkg+会话名都入 tag，避免同名串台）。 */
+    fun convTag(key: ConvKey): String = "$TAG_CONV_PREFIX${key.id}"
 
     private const val TAG_ON_DEMAND = "analysis_on_demand"
     private const val TAG_CONV_PREFIX = "analysis_conv:"

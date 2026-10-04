@@ -61,7 +61,7 @@ object CalendarHelper {
         baseTime: Long,
         leadMinutes: Long
     ): String {
-        val title = "微信任务：${summary.ifEmpty { message.text.take(12) }}（${message.conversation}）"
+        val title = "任务：${summary.ifEmpty { message.text.take(12) }}（${message.conversation}）"
         val description = "发送者：${message.sender}\n原文：${message.text}\n会话：${message.conversation}"
 
         // 防重 1：本 App 记录里已有该指纹（成功/失败都不再重复；失败想重试走列表页「重试」）
@@ -71,7 +71,7 @@ object CalendarHelper {
 
         val eventTime = parseDueTime(dueTimeText, baseTime)
         val result = runReminderChain(
-            context, dedupKey, title, description, message.conversation,
+            context, dedupKey, title, description, message.pkg, message.conversation,
             summary, eventTime, leadMinutes
         )
         ReminderStore.append(
@@ -84,7 +84,8 @@ object CalendarHelper {
                 calendarEventId = result.eventId ?: -1L,
                 createdAt = System.currentTimeMillis(),
                 status = result.status,
-                note = result.note
+                note = result.note,
+                pkg = message.pkg
             )
         )
         return result.note
@@ -108,6 +109,7 @@ object CalendarHelper {
         dedupKey: String,
         title: String,
         description: String,
+        pkg: String,
         conversation: String,
         summary: String,
         eventTime: Long,
@@ -151,7 +153,7 @@ object CalendarHelper {
 
         // Level 3：App 内闹钟到点通知兜底
         return if (AlarmHelper.scheduleReminder(
-                context, dedupKey, title, summary, conversation, eventTime, leadMinutes
+                context, dedupKey, title, summary, pkg, conversation, eventTime, leadMinutes
             )
         ) {
             ChainResult(ReminderRecord.STATUS_ALARM, "已设App内提醒")
@@ -176,12 +178,12 @@ object CalendarHelper {
             System.currentTimeMillis() + 60L * 60_000L
         }
         val summary = record.title
-            .removePrefix("微信任务：")
+            .removePrefix("任务：")
             .substringBeforeLast("（")
         ReminderStore.remove(context, record.dedupKey)
         val result = runReminderChain(
             context, record.dedupKey, record.title, record.description,
-            record.conversation, summary, eventTime, leadMinutes
+            record.pkg, record.conversation, summary, eventTime, leadMinutes
         )
         ReminderStore.append(
             context, record.copy(

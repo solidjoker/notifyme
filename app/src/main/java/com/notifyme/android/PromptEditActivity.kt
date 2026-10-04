@@ -22,12 +22,14 @@ import android.widget.Toast
 class PromptEditActivity : Activity() {
 
     companion object {
+        const val EXTRA_PKG = "extra_pkg"
         const val EXTRA_CONVERSATION = "extra_conversation"
 
-        fun start(context: Context, conversation: String) {
+        fun start(context: Context, key: ConvKey) {
             context.startActivity(
                 Intent(context, PromptEditActivity::class.java)
-                    .putExtra(EXTRA_CONVERSATION, conversation)
+                    .putExtra(EXTRA_PKG, key.pkg)
+                    .putExtra(EXTRA_CONVERSATION, key.conversation)
             )
         }
     }
@@ -41,12 +43,15 @@ class PromptEditActivity : Activity() {
             finish()
             return
         }
+        val pkg = intent.getStringExtra(EXTRA_PKG)
+            ?.takeIf { it.isNotBlank() } ?: AppSourceRegistry.PKG_WECHAT
+        val key = ConvKey(pkg, conversation)
 
         findViewById<TextView>(R.id.btnBack).setOnClickListener { finish() }
         findViewById<TextView>(R.id.tvConversationName).text = conversation
 
         val etPrompt = findViewById<EditText>(R.id.etPrompt)
-        etPrompt.setText(PromptStore.getPrompt(this, conversation))
+        etPrompt.setText(PromptStore.getPrompt(this, key))
 
         // 三个内置模板：点击直接填入（整体替换编辑框内容）
         findViewById<Button>(R.id.btnTemplate1).setOnClickListener {
@@ -61,13 +66,13 @@ class PromptEditActivity : Activity() {
 
         findViewById<Button>(R.id.btnSavePrompt).setOnClickListener {
             // setPrompt 内部对空白文本做清除处理
-            PromptStore.setPrompt(this, conversation, etPrompt.text.toString())
+            PromptStore.setPrompt(this, key, etPrompt.text.toString())
             Toast.makeText(this, R.string.prompt_edit_saved, Toast.LENGTH_SHORT).show()
             finish()
         }
 
         findViewById<Button>(R.id.btnClearPrompt).setOnClickListener {
-            PromptStore.clearPrompt(this, conversation)
+            PromptStore.clearPrompt(this, key)
             Toast.makeText(this, R.string.prompt_edit_cleared, Toast.LENGTH_SHORT).show()
             finish()
         }

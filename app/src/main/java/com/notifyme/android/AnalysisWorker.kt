@@ -51,6 +51,7 @@ class AnalysisWorker(
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
         /** inputData 键：强制分析指定会话（跳过窗口去重） */
+        const val KEY_FORCE_PKG = "force_pkg"
         const val KEY_FORCE_CONVERSATION = "force_conversation"
 
         /** 单轮最多分析会话数 */
@@ -115,10 +116,18 @@ class AnalysisWorker(
 
         val forceConversation = inputData.getString(KEY_FORCE_CONVERSATION)
             ?.takeIf { it.isNotBlank() }
+        val forceKey = forceConversation?.let {
+            ConvKey(
+                inputData.getString(KEY_FORCE_PKG)
+                    ?.takeIf { p -> p.isNotBlank() }
+                    ?: AppSourceRegistry.PKG_WECHAT,
+                it
+            )
+        }
         // 串行化整个分析过程；后进的 Worker 拿到锁时会重新计算待分析集合，
         // 此时前者的结果已落盘，caseId 过滤自然跳过，不会重复分析。
         return ANALYSIS_MUTEX.withLock {
-            doWorkExclusive(config, slot, baseUrl, forceConversation, s2LocalSkip)
+            doWorkExclusive(config, slot, baseUrl, forceKey, s2LocalSkip)
         }
     }
 
@@ -126,7 +135,7 @@ class AnalysisWorker(
         config: AnalysisConfig,
         slot: AnalysisConfig.SlotConfig,
         baseUrl: String,
-        forceConversation: String?,
+        forceKey: ConvKey?,
         s2LocalSkip: String? = null
     ): Result {
 
@@ -139,12 +148,12 @@ class AnalysisWorker(
         val cases = byConversation
             .asSequence()
             .filter { (key, _) ->
-                forceConversation == null || key.conversation == forceConversation
+                forceKey == null || key == forceKey
             }
             .filter { (key, _) -> WatchlistStore.isWatched(applicationContext, key) }
             .mapNotNull { (key, list) -> AnalysisCase.fromMessages(key.pkg, key.conversation, list) }
             // 强制模式跳过去重（用户显式要求重分析）；否则窗口没变就跳过
-            .filter { forceConversation != null || it.caseId !in analyzedIds }
+            .filter { forceKey == null || it.caseId !in analyzedIds }
             .sortedBy { it.windowEnd } // 先旧后新
             .take(MAX_CONVERSATIONS_PER_ROUND)
             .toList()
@@ -152,7 +161,7 @@ class AnalysisWorker(
         if (cases.isEmpty()) {
             recordResult(
                 config,
-                if (forceConversation != null) "成功：本会话无新消息可分析"
+                if (forceKey != null) "成功：本会话无新消息可分析"
                 else "成功：无待分析会话"
             )
             return Result.success()
@@ -288,7 +297,9 @@ class AnalysisWorker(
     ): AnalysisCaseRecord {
         val forks = mutableListOf(prefilterFork)
         // 会话级自定义提示词（PromptStore，空=全局默认）：S1 state/S1 prompt/S2 prompt 三处注入
-        val background = PromptStore.getPrompt(applicationContext, kase.conversation)
+        val background = PromptStore.getPrompt(
+            applicationContext, ConvKey(kase.pkg, kase.conversation)
+        )
         val s1Local = config.s1Type == AnalysisConfig.S1_TYPE_LOCAL_MODEL
 
         // ---- fork 2：S1 判定 ----

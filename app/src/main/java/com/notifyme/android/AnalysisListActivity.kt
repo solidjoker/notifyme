@@ -26,20 +26,24 @@ class AnalysisListActivity : Activity() {
 
     companion object {
         /** 可选：只展示该会话的分析结果；不传 = 全部会话 */
+        private const val EXTRA_PKG = "pkg"
         private const val EXTRA_CONVERSATION = "conversation"
 
-        fun start(context: android.content.Context, conversation: String? = null) {
+        fun start(context: android.content.Context, key: ConvKey? = null) {
             context.startActivity(
                 android.content.Intent(context, AnalysisListActivity::class.java)
                     .apply {
-                        if (conversation != null) putExtra(EXTRA_CONVERSATION, conversation)
+                        if (key != null) {
+                            putExtra(EXTRA_PKG, key.pkg)
+                            putExtra(EXTRA_CONVERSATION, key.conversation)
+                        }
                     }
             )
         }
     }
 
     /** 会话过滤；null = 全部会话 */
-    private var filterConversation: String? = null
+    private var filterKey: ConvKey? = null
 
     private lateinit var switchOnlyTodo: Switch
     private lateinit var tvEmpty: TextView
@@ -54,7 +58,14 @@ class AnalysisListActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_analysis_list)
 
-        filterConversation = intent.getStringExtra(EXTRA_CONVERSATION)
+        val conv = intent.getStringExtra(EXTRA_CONVERSATION)
+        filterKey = conv?.let {
+            ConvKey(
+                intent.getStringExtra(EXTRA_PKG)
+                    ?.takeIf { p -> p.isNotBlank() } ?: AppSourceRegistry.PKG_WECHAT,
+                it
+            )
+        }
 
         findViewById<TextView>(R.id.btnBack).setOnClickListener { finish() }
         switchOnlyTodo = findViewById(R.id.switchOnlyTodo)
@@ -62,7 +73,7 @@ class AnalysisListActivity : Activity() {
 
         // 从首页会话头进入时标题显示会话名
         findViewById<TextView>(R.id.tvAnalysisTitle).text =
-            filterConversation?.let { getString(R.string.analysis_list_title_conv, it) }
+            filterKey?.let { getString(R.string.analysis_list_title_conv, it.conversation) }
                 ?: getString(R.string.analysis_list_title)
 
         val recycler = findViewById<RecyclerView>(R.id.recyclerAnalysis)
@@ -79,7 +90,7 @@ class AnalysisListActivity : Activity() {
 
     private fun refreshList() {
         var all = AnalysisStore.readRecent(this, 200)
-        filterConversation?.let { f -> all = all.filter { it.conversation == f } }
+        filterKey?.let { f -> all = all.filter { it.convKey == f } }
         val shown = if (switchOnlyTodo.isChecked) all.filter { it.s1NeedAction } else all
         adapter.submit(shown)
         tvEmpty.visibility = if (shown.isEmpty()) View.VISIBLE else View.GONE

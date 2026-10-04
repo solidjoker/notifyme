@@ -38,6 +38,7 @@ import java.util.Locale
 class ConversationActivity : Activity() {
 
     companion object {
+        private const val EXTRA_PKG = "extra_pkg"
         private const val EXTRA_CONVERSATION = "extra_conversation"
 
         /** 相邻两条消息超过该间隔就插入时间分隔（5 分钟，对齐微信习惯） */
@@ -50,18 +51,20 @@ class ConversationActivity : Activity() {
         /** ActionMode 多选删除菜单项 id */
         private const val MENU_MSG_DELETE = 1002
 
-        fun start(context: Context, conversation: String) {
-            context.startActivity(createIntent(context, conversation))
+        fun start(context: Context, key: ConvKey) {
+            context.startActivity(createIntent(context, key))
         }
 
         /** 构造详情页 intent（通知点击跳转等需要 PendingIntent 的场景用）。 */
-        fun createIntent(context: Context, conversation: String): Intent {
+        fun createIntent(context: Context, key: ConvKey): Intent {
             return Intent(context, ConversationActivity::class.java)
-                .putExtra(EXTRA_CONVERSATION, conversation)
+                .putExtra(EXTRA_PKG, key.pkg)
+                .putExtra(EXTRA_CONVERSATION, key.conversation)
         }
     }
 
-    private lateinit var conversation: String
+    private lateinit var key: ConvKey
+    private val conversation: String get() = key.conversation
     private lateinit var scrollChat: NestedScrollView
     private lateinit var chatContainer: LinearLayout
     private lateinit var chipsScroll: View
@@ -96,7 +99,7 @@ class ConversationActivity : Activity() {
     /** 分析后轮询刷新任务：有新 case 记录落库就重渲染并停止 */
     private val pollRefresh = object : Runnable {
         override fun run() {
-            val record = AnalysisStore.latestByConversation(this@ConversationActivity)[conversation]
+            val record = AnalysisStore.latestByConvKey(this@ConversationActivity)[key]
             if (record != null && record.analyzedAt > shownAnalyzedAt) {
                 renderContent()
                 return // 拿到新结果，停止轮询
@@ -112,11 +115,14 @@ class ConversationActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_conversation)
 
-        conversation = intent.getStringExtra(EXTRA_CONVERSATION).orEmpty()
-        if (conversation.isEmpty()) {
+        val conv = intent.getStringExtra(EXTRA_CONVERSATION).orEmpty()
+        if (conv.isEmpty()) {
             finish()
             return
         }
+        val pkg = intent.getStringExtra(EXTRA_PKG)
+            ?.takeIf { it.isNotBlank() } ?: AppSourceRegistry.PKG_WECHAT
+        key = ConvKey(pkg, conv)
 
         scrollChat = findViewById(R.id.scrollChat)
         chatContainer = findViewById(R.id.chatContainer)
@@ -136,7 +142,7 @@ class ConversationActivity : Activity() {
         findViewById<TextView>(R.id.tvTitle).text = conversation
 
         btnAnalyzeThis.setOnClickListener {
-            AnalysisScheduler.enqueueAnalysisNow(this, conversation)
+            AnalysisScheduler.enqueueAnalysisNow(this, key)
             Toast.makeText(this, R.string.analysis_enqueued_conv, Toast.LENGTH_SHORT).show()
             // 轮询等待新结果落库后自动刷新面板
             pollCount = 0
@@ -164,11 +170,11 @@ class ConversationActivity : Activity() {
     /** 全量渲染：对话气泡 + 分析面板（数据量小，直接重建视图足够）。 */
     private fun renderContent() {
         val messages = MessageStore.readRecent(this, 500)
-            .filter { it.conversation == conversation }
+            .filter { it.convKey == key }
             .sortedBy { it.timestamp }
         renderHeader(messages.lastOrNull()?.isGroup ?: false)
         renderChat(messages)
-        val record = AnalysisStore.latestByConversation(this)[conversation]
+        val record = AnalysisStore.latestByConvKey(this)[key]
         renderAnalysisPanel(record)
         shownAnalyzedAt = record?.analyzedAt ?: 0L
 
@@ -312,7 +318,7 @@ class ConversationActivity : Activity() {
     private fun renderAnalysisPanel(record: AnalysisCaseRecord?) {
         // 会话级自定义提示词小标：有无 case 记录都要体现（留空=全局默认则隐藏）
         tvPromptBadge.visibility =
-            if (PromptStore.hasPrompt(this, conversation)) View.VISIBLE else View.GONE
+            if (PromptStore.hasPrompt(this, key)) View.VISIBLE else View.GONE
         chipContainer.removeAllViews()
         if (record == null) {
             tvAnalysisNone.visibility = View.VISIBLE

@@ -35,6 +35,17 @@
             android:paddingBottom="2dp"
             android:textSize="11sp" />
 
+        <!-- 来源 App 名：非微信时由 Adapter 显示，防止不同 App 的同名会话混淆 -->
+        <TextView
+            android:id="@+id/tvApp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:singleLine="true"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp"
+            android:visibility="gone" />
+
         <TextView
             android:id="@+id/tvConversation"
             android:layout_width="0dp"
