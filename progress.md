@@ -185,6 +185,50 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - `gh repo edit --description --add-topic` → 同样 403 ⇒ About / Topics 仍为空
 
 两者都需要用户在 GitHub 网页上手工完成，或换一个带 administration 权限的 token。Secrets 清单与 base64 生成命令写在 `release.yml` 顶部注释里。
+**后续约定（D5）**：用户会提供一个带 `administration` 权限的新 token，写进仓库根 `.gh-token`（已加入 `.gitignore`，避免 token 进聊天记录或提交），
+由助手完成全流程：生成正式密钥库（存仓库外）→ 写 4 个 Secrets → 设 About/Topics → 打 `v0.2.0` tag → 核对 Release 产物。
+**D6 已定**：接受现有 git 历史，**不重写**（不做 `git filter-repo`、不 force push）——旧字面量只是个人域名/用户名与旧私有命名，无凭证价值，风险已记档在 ROADMAP。
+
+### 6. M1 测试与质量地基（本次会话·已完成）
+
+9.5k 行代码此前零测试，而 M2 要动用户数据 schema —— 先把会被改动的数据层与纯逻辑层罩住。
+
+**结果：142 个单元测试全绿**（`testOpenDebugUnitTest`，0 failures / 0 errors / 0 skipped，约 2s），`assembleOpenDebug assembleBetaDebug` 仍 `BUILD SUCCESSFUL`。
+
+改动的文件：
+
+- `app/src/main/java/com/notifyme/android/JsonlStore.kt`（新增，92 行）：`internal class JsonlStore(val file: File)`，
+  把「JSONL 文件怎么读怎么写」从各个 store 里抽出来 —— `exists/delete/appendLine/appendLines/readRawLines/forEachRawLine/overwrite/rewriteRaw`。
+  不加锁（锁仍留在各 store 的 `@Synchronized` 上）；`appendLines` 空列表不碰文件、自动建父目录；`overwrite` 空列表 = 删文件（绝不留 0 字节）；
+  `rewriteRaw` 在「一行都没删掉」时完全不写文件（避免无谓的 mtime 抖动与写放大）
+- `app/src/main/java/com/notifyme/android/MessageStore.kt`：抽出 `MessageStoreCore(store, onChange)`，由 `MessageStore.coreIn(dir, onChange)` 构造 —— **core 只吃 `File` 不吃 `Context`，所以 JVM 单测无需 Robolectric**。
+  顺带把 `mainHandler` 改成 `by lazy { Handler(Looper.getMainLooper()) }`（否则类一加载就抛 `getMainLooper not mocked`）；
+  新增顶层 `internal fun chatMessageFullKey(m)` —— M2 给 `ChatMessage` 加 `pkg` 时只改这一处，两个 store 的删除匹配口径自动同步
+- `app/src/main/java/com/notifyme/android/PendingQueue.kt`：同样抽出 `PendingQueueCore(store)` + `coreIn(dir)`；object 层缓存 dir→core，
+  保证 `nextId` 计数器跨调用存活（原来每次调用都从文件重算）
+- `app/src/main/java/com/notifyme/android/AnalysisParsing.kt`（新增）：把 S1/S2 的防御式解析与 JSON 抽取从 `AnalysisWorker`（CoroutineWorker，单测拉不起来）里搬出来，
+  `AnalysisWorker.kt` 由 744 行降到 667 行；`TAG` 仍是 `"AnalysisWorker"`，logcat 过滤习惯不变。
+  唯一的行为加固：S2 摘要兜底从 `messages.last().text` 改成 `lastOrNull()?.text.orEmpty()`（空窗口不再 `NoSuchElementException`）
+- `app/build.gradle.kts`：`testImplementation(junit:4.13.2)` + `testImplementation(org.json:json:20250107)`
+  （mockable android.jar 的 `org.json` 是 stub，AGP 把它排在类路径最后，真库胜出）+ `testOptions { unitTests.isReturnDefaultValues = true }`
+  （让 `android.util.Log` 返回 0 而不是抛 `not mocked`）。**`kotlinx-coroutines-test` 暂缓**：本轮没有 suspend 路径被测，等 M4 要测本地引擎协程链时再加
+- `app/src/test/java/com/notifyme/android/` 新增 6 个测试类：`JsonlStoreTest`(14) / `MessageStoreCoreTest`(29) / `PendingQueueCoreTest`(20) /
+  `AnalysisCaseTest`(33) / `AnalysisParsingTest`(27) / `ForkPrefilterTest`(19)。JUnit 4 + `TemporaryFolder`，零 Robolectric。
+  覆盖重点是**删除路径**（M2 会把会话键升级成 `(pkg, conversation)`，删错数据是最贵的 bug）：
+  每条删除都断言返回条数、剩余内容、文件是否被删、以及「无命中时不重写文件也不发通知」
+- `.gitignore`：加 `.gh-token`（token 递交文件，绝不入库）
+
+**跑测试时暴露的 6 个失败全部是测试自身写错，没有一个是生产 bug**（说明重构语义保住了）：
+
+1. `{"a":1} 和 {"b":2}` 期望解析失败返回 null，实际拿到第一个对象 —— **org.json 的 `JSONObject(String)` 解析到第一个完整对象就停、忽略尾部残留**，改断言为「只取第一个完整对象」
+2. 删除通知计数把 `append` 的通知也算进去了 → 断言前先把计数器清零
+3. 造数据时「别的天」与「这天」的时间戳只差 60 秒，`dayKeyOf` 按本地日历格式化后是同一天，两条都被删 → 改成相差一天，并加 `assertNotEquals(dayKeyOf(keep), dayKeyOf(drop))` 兜住前提
+4. `PendingQueue.readAll()` 按 **id 升序**、`MessageStore.readRecent()` 按 **时间倒序**，同样数据的期望顺序不同 → 分别按各自口径写
+
+**记录在案的行为差异**（原实现语义，M1 不动，测试显式钉住，统一到 M2 决定）：
+
+- 损坏行：`MessageStoreCore.rewrite` **原样保留**解析失败的行；`PendingQueueCore.rewrite` 按解析后对象**重新序列化**，损坏行会被丢弃
+- 未覆盖：`ForkRecord.filtered/protocol` 落库字段、`CalendarHelper` 三级降级链（不参与 schema 变更，顺延到 M2）；detekt/ktlint 基线未上
 
 ## 四、构建与运行
 
@@ -221,7 +265,8 @@ ADB/设备要点（踩过的坑）：
 
 ## 五、下一步计划（路线图，对应 README）
 
-> **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M8 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D4）。
+> **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M8 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
+> 当前状态：**M1 已完成**（142 个单测全绿，见 §三.6）；**M0 代码与 CI 侧已完成**，只剩 D5 的正式密钥库 + 4 个 Secrets（等用户提供带 `administration` 的 token）；下一步 **M2 跨应用通知管理**。
 > 下面 8 项是 README 的对外表述，保留原样；执行时以 ROADMAP 为准。
 
 1. **iOS 原生查看端 + 提醒推送**：在 iPhone 上看分析结果并收到提醒（iOS 不允许后台捕获其他 App 通知，故不含本地捕获；当前仅 PWA 查看端）

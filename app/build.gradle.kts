@@ -169,6 +169,12 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    testOptions {
+        // 单测里碰到未 mock 的 Android API（如 Log.w）返回默认值而不是抛
+        // "Method ... not mocked"，让纯逻辑测试不必为一次日志调用引入 Robolectric
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -181,4 +187,10 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     // 上报用 OkHttp；JSON 仍用平台内置 org.json，不引 Gson/Moshi
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // ---- 单元测试（M1 测试地基，只进 test classpath，不进 APK）----
+    testImplementation("junit:junit:4.13.2")
+    // JVM 单测里 android.jar 的 org.json 只是空壳（方法返回默认值 → JSONObject 恒为空），
+    // 必须放一份真实现；AGP 把 mockable android.jar 排在 classpath 最后，所以这份生效。
+    testImplementation("org.json:json:20250107")
 }

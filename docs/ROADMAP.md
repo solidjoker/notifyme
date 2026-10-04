@@ -91,23 +91,47 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
 
 ---
 
-## 3. M1 测试与质量地基
+## 3. M1 测试与质量地基 — 已完成（2026-10-04）
 
 **问题**：9.5k 行零测试，而 M2 要动用户数据 schema。先把纯逻辑层罩住。
 
 任务清单：
-1. `app/build.gradle.kts` 加 `testImplementation(junit:junit:4.13.2)` + `org.json:json`（JVM 上平台无 org.json）+ `kotlinx-coroutines-test`；接入 CI（M0 已留位）
-2. 新建 `app/src/test/java/com/notifyme/android/`，优先覆盖**纯逻辑、无 Android 依赖**的部分：
-   - `MessageStore`：append/merge 去重、`deleteConversation`/`deleteDate`/`deleteMessages`、损坏行原样保留、`DAY_KEY_UNKNOWN` 兜底
-   - `PendingQueue`：`removeByConversations`/`removeByConversationDay`/`removeByMessages`
-   - `ForkPrefilter`：预筛判定分支（就地结案 `filtered=true`、`protocol="prefilter"`）
-   - `AnalysisCase`：`parseS1Result`/`parseS2Output` 的防御式解析（字段缺失、`{"answer":{...}}` 多包一层、类型不符）
-   - `AnalysisWorker` 的 S1→S2 升级阈值判定（need_action≥0.5 / importance≥6 / 置信度<0.5）
-   - `CalendarHelper` 三级降级链的**决策逻辑**（哪级可用走哪级）——把决策从 Android API 调用里抽成可测纯函数
-3. 存储层抽出 `FileStore` 共用基类（读行/原子重写/损坏行保留），四个 store（messages/analysis/reminders/pending）复用 → 为 M2 迁移留一个统一入口
-4. 可选：detekt/ktlint 基线（只报警不阻断），`lint.xml` 收口
+1. [x] `app/build.gradle.kts` 测试依赖与选项
+   - `testImplementation("junit:junit:4.13.2")`；`testImplementation("org.json:json:20250107")` —— mockable android.jar 里的 `org.json` 是 stub（调用即抛），AGP 把它排在类路径最后，真库胜出
+   - `testOptions { unitTests.isReturnDefaultValues = true }` —— 让 `android.util.Log` 返回 0 而不是抛 `Method w in android.util.Log not mocked`，免为一个 log 调用上 Robolectric
+   - **`kotlinx-coroutines-test` 暂缓**：本轮抽出来的都是同步纯逻辑，没有任何 suspend 路径被测；等 M4 要测 `runS1Local` / `LocalLlmEngines` 协程链时再加，不留没人用的依赖
+   - CI 无需改动：M0 的 `android.yml` 已经在跑 `testOpenDebugUnitTest`，测试文件一加就自动生效
+2. [x] 新建 `app/src/test/java/com/notifyme/android/`，**142 个测试全绿**（JUnit 4 + `TemporaryFolder`，零 Robolectric，整个测试任务约 2s）
+   - `JsonlStoreTest`（14）：追加/整表重写/按谓词重写/删除的文件级契约，含「没删任何行时完全不碰文件」「空列表不建 0 字节文件」「原始行文本原样写回不重新序列化」
+   - `MessageStoreCoreTest`（29）：`readRecent` 倒序与 limit 语义（未标注日期的消息先占名额）、`deleteConversation`/`deleteDate`/`deleteMessages` 的计数与「无命中不重写不通知」、`merge` 秒级去重（含 a11y 来源忽略时间戳）、损坏行读取时跳过、重写时**原样保留**、`DAY_KEY_UNKNOWN` 兜底、`ChatMessage.toJson/fromJson` 往返与缺字段默认值
+   - `PendingQueueCoreTest`（20）：id 从 1 自增、新实例从文件恢复 id（进程重启场景）、`removeSent`/`removeByConversations`/`removeByConversationDay`/`removeByMessages`、全部删完则删文件不留 0 字节、读取跳过损坏行、与 MessageStore 共用 `chatMessageFullKey` 口径
+   - `AnalysisCaseTest`（33）：`fromMessages` 排序取末 10 与 `caseIdOf` 稳定性、`buildStateJson` 的 `chat` 结构（**不含 `conversation`**）、群聊发言人前缀、S1 题集四题与题型/档位/选项集合、S1→S2 **升级阈值判定**（need_action≥0.5 / importance≥6 / 置信度<0.5，含边界不升级）、`toInjectText` 五字段、S2 prompt 注入
+   - `AnalysisParsingTest`（27）：防御式解析全分支 —— payload 为 null、`{"answer":{...}}` 多包一层、`answer` 不是对象时回落、类型不符（概率写成"很高"）按字段兜底、越界值 coerce、空字符串枚举回落、S2 摘要缺失兜底窗口末条（压换行 + 截 20 字）、`tasks` 混入非对象元素跳过、`extractJsonPayload`/`extractJsonFromText` 的散文与 markdown 围栏与残缺括号
+   - `ForkPrefilterTest`（19）：正常窗口/长分享链接/带文字表情**必须放行**，单条窗口降到 0.3 但不 sharp，纯表情·系统提示·广告链接就地结案，混合垃圾的 breakdown 顺序，全窗口无文字压到 0.02（取小值而非二次相乘），`prob` 恒在 0-1 且 `sharp` 与阈值一致
+   - 未覆盖：`ForkRecord.filtered/protocol="prefilter"` 的落库字段（在 `AnalysisStore`，本轮只测了纯判定 `ForkPrefilter.evaluate`）、`CalendarHelper` 三级降级链（见验收最后一条）
+3. [x] 存储层抽出共用文件层 → 落地为 `JsonlStore`（92 行，`internal class JsonlStore(val file: File)`）：`exists/delete/appendLine/appendLines/readRawLines/forEachRawLine/overwrite/rewriteRaw`，不加锁（锁仍留在各 store 的 `@Synchronized` 上）
+   - `MessageStore` → `MessageStore.coreIn(dir, onChange)` 返回 `MessageStoreCore`；`PendingQueue` → `PendingQueue.coreIn(dir)` 返回 `PendingQueueCore`（object 层缓存 dir→core，`nextId` 计数器跨调用存活）
+   - **可测性关键**：core 只吃 `File`，不吃 `Context`，所以 JVM 单元测试无需 Robolectric
+   - `AnalysisStore`/`ReminderStore`/`AdvisorStore` 尚未迁到 `JsonlStore`（它们本轮没有被 M2 直接改动，留到 M2 顺手统一）
+   - 顺带修掉一处类初始化地雷：`MessageStore.mainHandler` 改成 `by lazy { Handler(Looper.getMainLooper()) }`，否则 JVM 上一加载就抛 `getMainLooper not mocked`
+4. [ ] 可选：detekt/ktlint 基线（只报警不阻断），`lint.xml` 收口 —— **未做**，M1 收益低于噪声，留到有第二个贡献者时再上
 
-验收：`.\gradlew.bat testOpenDebugUnitTest` 全绿且进 CI；存储层测试覆盖上表全部删除路径；重构后 `assembleOpenDebug assembleBetaDebug` 仍 exit 0。
+### M1 为 M2 铺好的三块垫子
+| 垫子 | M2 怎么用 |
+|---|---|
+| `chatMessageFullKey(m)`（顶层 internal 函数，含 conversation/sender/text/timestamp/isGroup/source） | M2 给 `ChatMessage` 加 `pkg` 时，**只改这一个函数**，MessageStore 与 PendingQueue 的删除匹配口径自动同步 |
+| `JsonlStore` + `*Core(dir)` 构造 | schema v2 的「读时补齐 + 设置页手动全量重写」直接复用 `rewriteRaw`/`overwrite`，且已有测试兜住「不误删损坏行」 |
+| `AnalysisParsing` 独立对象 | 多应用源之后各 parser 的解析差异可以各自测，不必再把 `AnalysisWorker`（CoroutineWorker，需要 Android 环境）拉进单元测试 |
+
+### 记录在案的行为差异（原实现语义，M1 不改，测试钉住）
+- **损坏行处理不一致**：`MessageStoreCore.rewrite` 把解析失败的行**原样保留**；`PendingQueueCore.rewrite` 按解析后的对象**重新序列化**，损坏行因此被丢弃。两边各有测试显式断言当前行为（`assertFalse` + 注释），统一到 M2 决定。
+- **读取顺序口径不同**：`readRecent` 按时间**倒序**（UI 要最新的在前），`readAll` 按 **id 升序**（发送顺序）。测试的期望值分别按各自口径写，别互相套用。
+
+验收：
+- [x] `.\gradlew.bat testOpenDebugUnitTest` 全绿（142 tests，0 failures / 0 errors / 0 skipped）且已进 CI
+- [x] 存储层测试覆盖上表全部删除路径：`deleteConversation`/`deleteDate`/`deleteMessages`（MessageStore）+ `removeSent`/`removeByConversations`/`removeByConversationDay`/`removeByMessages`（PendingQueue），每条都断言返回条数、剩余内容与文件是否被删
+- [x] 重构后 `assembleOpenDebug assembleBetaDebug` 仍 exit 0（BUILD SUCCESSFUL）
+- [ ] `CalendarHelper` 三级降级链的决策逻辑抽成可测纯函数 —— **顺延到 M2**：它不参与 schema 变更，而 M1 的预算优先给了「会被 M2 改动」的数据层
 
 ---
 
@@ -223,12 +247,14 @@ D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再
 | **D3** | M4 引擎路线 | (A) llama.cpp AAR（arm64，快）　(B) MNN NDK 自编译（含 x86_64，慢） | ✅ **先 A spike，再按需转 B** — 上层 `AnalysisWorker.runS1Local/runS2Local` 已按 `LocalLlmEngine` 接口写好，换引擎上层零改动 |
 | **D4** | iOS 定位 | (A) 原生 SwiftUI 查看端 + APNs　(B) 强化 PWA　(C) 暂缓 | ✅ **文案已改述为「iOS 原生查看端 + 提醒推送」**（README + M5），实现排在 M0–M3 之后，届时按实际使用需求决定 A/B/C |
 
-### M0 尚待用户拍板的两件事
+### D5–D6 已拍板（2026-10-04，同批决定）
 
-| ID | 待决 | 说明 |
+| ID | 决策 | 结论 |
 |---|---|---|
-| **D5** | 正式签名密钥库怎么生成与保管 | 当前 PAT 无 Actions Secrets 写权限（`gh secret list` → HTTP 403）。要么用户在 GitHub 网页上手工加 4 个 Secrets（`NOTIFYME_KEYSTORE_BASE64` / `_KEYSTORE_PASSWORD` / `_KEY_ALIAS` / `_KEY_PASSWORD`），要么换一个有 administration 权限的 token。**密钥库一旦确定就不能再换**：签名变了老用户无法原地升级，卸载会清空设备上的 JSONL 数据 |
-| **D6** | 是否重写 git 历史 | 见 §2「M0 遗留风险」。不含凭证，默认接受现状；重写需 `git filter-repo` + force push，属破坏性操作，须显式授权 |
+| **D5** | 正式签名密钥库怎么生成与保管 | ✅ **用户提供带 `administration` 权限的新 token，由助手完成全流程**：生成正式密钥库（存仓库**外**，如 `..\notifyme-secrets\`）→ `gh secret set` 写入 4 个 Secrets（`NOTIFYME_KEYSTORE_BASE64` / `_KEYSTORE_PASSWORD` / `_KEY_ALIAS` / `_KEY_PASSWORD`）→ 设 About/Topics → 打 `v0.2.0` tag → 核对 Release 产物（APK + `.sha256`）。token 通过仓库根 `.gh-token` 递交（已 gitignore），不进聊天记录。**密钥库一旦确定就不能再换**：签名变了老用户无法原地升级，卸载会清空设备上的 JSONL 数据 —— 生成后须由用户自行离线备份 |
+| **D6** | 是否重写 git 历史 | ✅ **接受现状，不重写**（不做 `git filter-repo`、不 force push）。理由：残留字面量只是个人域名/用户名与旧私有命名，无凭证价值；全仓 + 684 个历史 blob 的密钥扫描无命中。风险记档在 §2「M0 遗留风险」，CI Guard 只拦新增 |
+
+**D5 当前状态：等待用户把新 token 写入 `C:\project\notifyme\.gh-token`。**
 
 ---
 

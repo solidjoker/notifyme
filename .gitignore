@@ -9,6 +9,7 @@ local.properties
 secrets.local.properties
 secrets.local.bat
 keystore.properties
+.gh-token
 
 # ===== Kotlin =====
 *.kotlin/

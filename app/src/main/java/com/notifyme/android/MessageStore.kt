@@ -63,6 +63,9 @@ data class ChatMessage(
  *
  * 线程安全：NotificationListenerService 回调与 UI 读取可能并发，
  * 所有文件操作都在 @Synchronized 方法内完成。
+ *
+ * 分层（M1）：本 object 只负责「Context → 文件目录」与 UI 变更通知，
+ * 真正的读写/去重/删除逻辑在 [MessageStoreCore]（无 Android 依赖，可直接单测）。
  */
 object MessageStore {
 
@@ -87,7 +90,13 @@ object MessageStore {
     }
 
     private val listeners = java.util.concurrent.CopyOnWriteArrayList<OnMessagesChangedListener>()
-    private val mainHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * 惰性创建：JVM 单测里没有 Looper，一旦在类初始化时就 new Handler，
+     * 连纯逻辑测试都会被 "Method getMainLooper not mocked" 打断。
+     * 只有真的注册了观察者才会走到这里（见 [notifyChanged] 的空列表短路）。
+     */
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
     fun addOnMessagesChangedListener(l: OnMessagesChangedListener) {
         listeners.addIfAbsent(l)
@@ -107,39 +116,119 @@ object MessageStore {
     fun dayKeyOf(m: ChatMessage): String =
         if (m.timestamp > 0) dayFormat.format(Date(m.timestamp)) else DAY_KEY_UNKNOWN
 
-    private fun storeFile(context: Context): File =
-        File(context.filesDir, FILE_NAME)
+    /**
+     * 按目录构造核心逻辑（不依赖 Context）：单测与内部复用入口。
+     * @param onChange 入库变更回调；生产路径传 [notifyChanged]，测试传空实现
+     */
+    internal fun coreIn(dir: File, onChange: () -> Unit = {}): MessageStoreCore =
+        MessageStoreCore(JsonlStore(File(dir, FILE_NAME)), onChange)
+
+    private fun core(context: Context): MessageStoreCore =
+        coreIn(context.filesDir, ::notifyChanged)
 
     /** 追加一条消息（JSON Lines，一行一条）；入库后通知已注册的 UI 观察者。 */
     @Synchronized
-    fun append(context: Context, message: ChatMessage) {
-        storeFile(context).appendText(message.toJson().toString() + "\n", Charsets.UTF_8)
-        notifyChanged()
-    }
+    fun append(context: Context, message: ChatMessage) = core(context).append(message)
 
     /**
      * 读取最近 [limit] 条消息，按时间倒序（最新在前）。
      * timestamp<=0 的「未标注日期」消息不受截断影响、始终保留（先占名额），
      * 否则消息总数超 [limit] 时它们会因排序最末而永远丢失。
+     */
+    @Synchronized
+    fun readRecent(context: Context, limit: Int = 200): List<ChatMessage> =
+        core(context).readRecent(limit)
+
+    /** 清空全部记录。 */
+    @Synchronized
+    fun clear(context: Context) = core(context).clear()
+
+    /** 删除指定会话的全部消息，返回实际删除条数。 */
+    @Synchronized
+    fun deleteConversation(context: Context, conversation: String): Int =
+        core(context).deleteConversation(conversation)
+
+    /**
+     * 删除指定会话在某一日期 key 下的消息，返回实际删除条数。
+     * @param dayKey yyyy-MM-dd（本机时区）或 [DAY_KEY_UNKNOWN]（未标注日期）
+     */
+    @Synchronized
+    fun deleteDate(context: Context, conversation: String, dayKey: String): Int =
+        core(context).deleteDate(conversation, dayKey)
+
+    /**
+     * 删除指定的消息集合（会话详情页多选删除用），返回实际删除条数。
+     * 按完整字段匹配；文件里若有完全相同的重复消息，按选中条数依次删除。
+     */
+    @Synchronized
+    fun deleteMessages(context: Context, messages: Collection<ChatMessage>): Int =
+        core(context).deleteMessages(messages)
+
+    /**
+     * 合并外部来源消息（如服务端历史提取回填），返回实际新增条数。
+     *
+     * 去重键：会话|发送者|内容|秒级时间戳——通知捕获取通知发布时间、
+     * 数据库提取取消息 createTime，同一消息两种来源的毫秒值可能不同，
+     * 秒级归一与服务端跨来源去重口径一致。
+     */
+    @Synchronized
+    fun merge(context: Context, incoming: List<ChatMessage>): Int =
+        core(context).merge(incoming)
+
+    /**
+     * 与 [merge] 同逻辑，但返回实际新增的条目（无障碍直读等来源需要
+     * 把新增消息逐条挂到 PendingQueue 走上报，而不是只拿条数）。
+     */
+    @Synchronized
+    fun mergeAndCollect(context: Context, incoming: List<ChatMessage>): List<ChatMessage> =
+        core(context).mergeAndCollect(incoming)
+}
+
+/**
+ * 消息全字段匹配键（会话详情页多选删除用）：[MessageStoreCore] 与 [PendingQueueCore]
+ * 共用同一口径，M2 给 [ChatMessage] 加 `pkg` 时只需改这一处。
+ */
+internal fun chatMessageFullKey(m: ChatMessage): String =
+    "${m.conversation}|${m.sender}|${m.text}|${m.timestamp}|${m.isGroup}|${m.source}"
+
+/**
+ * [MessageStore] 的无 Android 依赖内核：只认一个 [JsonlStore]（即一个文件）
+ * 与一个变更回调，因此可以在 JVM 单测里用临时目录直接跑全部分支。
+ *
+ * 行为与原 object 内联实现逐条对齐（M1 抽出时不改语义）：
+ *  - 单行损坏不影响整体读取，且**重写时原样保留**；
+ *  - 删除类操作只在真的删掉了行时才重写文件；
+ *  - 未标注日期（timestamp≤0）的消息在 [readRecent] 里先占保留名额。
+ *
+ * 线程安全：不加锁，由调用方（[MessageStore] 的 @Synchronized）保证串行。
+ */
+internal class MessageStoreCore(
+    private val store: JsonlStore,
+    private val onChange: () -> Unit = {}
+) {
+
+    /** 追加一条消息（JSON Lines，一行一条）。 */
+    fun append(message: ChatMessage) {
+        store.appendLine(message.toJson().toString())
+        onChange()
+    }
+
+    /**
+     * 读取最近 [limit] 条消息，按时间倒序（最新在前）。
+     *
      * 文件较大时只从尾部读必要行数之外的简化实现：整体读入再截取，
      * 对个人学习规模（数千条）足够；如需更大规模再换成分页/索引。
      */
-    @Synchronized
-    fun readRecent(context: Context, limit: Int = 200): List<ChatMessage> {
-        val file = storeFile(context)
-        if (!file.exists()) return emptyList()
+    fun readRecent(limit: Int = 200): List<ChatMessage> {
+        if (!store.exists()) return emptyList()
 
-        val all = file.readLines(Charsets.UTF_8)
-            .asSequence()
-            .filter { it.isNotBlank() }
-            .mapNotNull { line ->
-                try {
-                    ChatMessage.fromJson(JSONObject(line))
-                } catch (e: Exception) {
-                    null // 单行损坏不影响整体读取
-                }
+        val all = store.readRawLines().mapNotNull { line ->
+            try {
+                ChatMessage.fromJson(JSONObject(line))
+            } catch (e: Exception) {
+                null // 单行损坏不影响整体读取
             }
-            .toList()
+        }
 
         // ts<=0（a11y 估算失败等「未标注日期」消息）若直接参与按时间倒序截断，
         // 会永远排在末尾：消息总数超过 limit 时必然丢失，UI 的未标注日期兜底
@@ -153,39 +242,32 @@ object MessageStore {
     }
 
     /** 清空全部记录。 */
-    @Synchronized
-    fun clear(context: Context) {
-        storeFile(context).delete()
-        notifyChanged()
+    fun clear() {
+        store.delete()
+        onChange()
     }
 
     /** 删除指定会话的全部消息，返回实际删除条数。 */
-    @Synchronized
-    fun deleteConversation(context: Context, conversation: String): Int =
-        rewrite(context) { it.conversation != conversation }
+    fun deleteConversation(conversation: String): Int =
+        rewrite { it.conversation != conversation }
+
+    /** 删除指定会话在某一日期 key 下的消息，返回实际删除条数。 */
+    fun deleteDate(conversation: String, dayKey: String): Int =
+        rewrite { !(it.conversation == conversation && MessageStore.dayKeyOf(it) == dayKey) }
 
     /**
-     * 删除指定会话在某一日期 key 下的消息，返回实际删除条数。
-     * @param dayKey yyyy-MM-dd（本机时区）或 [DAY_KEY_UNKNOWN]（未标注日期）
-     */
-    @Synchronized
-    fun deleteDate(context: Context, conversation: String, dayKey: String): Int =
-        rewrite(context) { !(it.conversation == conversation && dayKeyOf(it) == dayKey) }
-
-    /**
-     * 删除指定的消息集合（会话详情页多选删除用），返回实际删除条数。
+     * 删除指定的消息集合，返回实际删除条数。
      * 按完整字段匹配；文件里若有完全相同的重复消息，按选中条数依次删除。
      */
-    @Synchronized
-    fun deleteMessages(context: Context, messages: Collection<ChatMessage>): Int {
+    fun deleteMessages(messages: Collection<ChatMessage>): Int {
         if (messages.isEmpty()) return 0
         val remaining = HashMap<String, Int>()
         messages.forEach { k ->
-            val key = fullKey(k)
+            val key = chatMessageFullKey(k)
             remaining[key] = (remaining[key] ?: 0) + 1
         }
-        return rewrite(context) { m ->
-            val key = fullKey(m)
+        return rewrite { m ->
+            val key = chatMessageFullKey(m)
             val left = remaining[key] ?: 0
             if (left > 0) {
                 remaining[key] = left - 1
@@ -196,82 +278,52 @@ object MessageStore {
         }
     }
 
-    private fun fullKey(m: ChatMessage): String =
-        "${m.conversation}|${m.sender}|${m.text}|${m.timestamp}|${m.isGroup}|${m.source}"
+    /** 合并外部来源消息，返回实际新增条数。 */
+    fun merge(incoming: List<ChatMessage>): Int = mergeAndCollect(incoming).size
+
+    /** 与 [merge] 同逻辑，但返回实际新增的条目。 */
+    fun mergeAndCollect(incoming: List<ChatMessage>): List<ChatMessage> {
+        if (incoming.isEmpty()) return emptyList()
+        val existing = HashSet<String>()
+        store.forEachRawLine { line ->
+            try {
+                existing += dedupKey(ChatMessage.fromJson(JSONObject(line)))
+            } catch (e: Exception) {
+                // 单行损坏跳过，不影响合并
+            }
+        }
+        val added = mutableListOf<ChatMessage>()
+        val lines = mutableListOf<String>()
+        for (m in incoming) {
+            if (m.conversation.isBlank() || m.text.isBlank()) continue
+            if (existing.add(dedupKey(m))) {
+                lines += m.toJson().toString()
+                added += m
+            }
+        }
+        if (added.isNotEmpty()) {
+            store.appendLines(lines)
+            onChange()
+        }
+        return added
+    }
 
     /**
      * 整体读入、按 [keep] 过滤、重写文件；返回丢弃条数。
      * 损坏行无法解析，原样保留（不因重写丢数据）。
      */
-    private fun rewrite(context: Context, keep: (ChatMessage) -> Boolean): Int {
-        val file = storeFile(context)
-        if (!file.exists()) return 0
-        val keptLines = mutableListOf<String>()
-        var removed = 0
-        for (line in file.readLines(Charsets.UTF_8)) {
-            if (line.isBlank()) continue
+    private fun rewrite(keep: (ChatMessage) -> Boolean): Int {
+        val removed = store.rewriteRaw { line ->
             val msg = try {
                 ChatMessage.fromJson(JSONObject(line))
             } catch (e: Exception) {
                 null
             }
-            if (msg != null && !keep(msg)) {
-                removed++
-            } else {
-                keptLines += line
-            }
+            // 解析不出来 → 当损坏行原样保留（不因一次重写丢掉用户数据）
+            msg == null || keep(msg)
         }
-        if (removed > 0) {
-            file.writeText(keptLines.joinToString("") { "$it\n" }, Charsets.UTF_8)
-            notifyChanged()
-        }
+        if (removed > 0) onChange()
         return removed
-    }
-
-    /**
-     * 合并外部来源消息（如服务端历史提取回填），返回实际新增条数。
-     *
-     * 去重键：会话|发送者|内容|秒级时间戳——通知捕获取通知发布时间、
-     * 数据库提取取消息 createTime，同一消息两种来源的毫秒值可能不同，
-     * 秒级归一与服务端跨来源去重口径一致。
-     */
-    @Synchronized
-    fun merge(context: Context, incoming: List<ChatMessage>): Int =
-        mergeAndCollect(context, incoming).size
-
-    /**
-     * 与 [merge] 同逻辑，但返回实际新增的条目（无障碍直读等来源需要
-     * 把新增消息逐条挂到 PendingQueue 走上报，而不是只拿条数）。
-     */
-    @Synchronized
-    fun mergeAndCollect(context: Context, incoming: List<ChatMessage>): List<ChatMessage> {
-        if (incoming.isEmpty()) return emptyList()
-        val file = storeFile(context)
-        val existing = HashSet<String>()
-        if (file.exists()) {
-            file.forEachLine(Charsets.UTF_8) { line ->
-                if (line.isBlank()) return@forEachLine
-                try {
-                    existing += dedupKey(ChatMessage.fromJson(JSONObject(line)))
-                } catch (e: Exception) {
-                    // 单行损坏跳过，不影响合并
-                }
-            }
-        }
-        val added = mutableListOf<ChatMessage>()
-        val sb = StringBuilder()
-        for (m in incoming) {
-            if (m.conversation.isBlank() || m.text.isBlank()) continue
-            if (existing.add(dedupKey(m))) {
-                sb.append(m.toJson().toString()).append('\n')
-                added += m
-            }
-        }
-        if (added.isNotEmpty()) {
-            file.appendText(sb.toString(), Charsets.UTF_8)
-            notifyChanged()
-        }
-        return added
     }
 
     private fun dedupKey(m: ChatMessage): String =

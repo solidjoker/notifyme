@@ -520,7 +520,7 @@ class AnalysisWorker(
             AnalysisCase.buildS1OpenAiSystemPrompt(background),
             "会话「${kase.conversation}」最近消息：\n${kase.windowText()}"
         )
-        return raw to parseS1Result(extractJsonPayload(raw), "openai")
+        return raw to AnalysisParsing.parseS1Result(AnalysisParsing.extractJsonPayload(raw), "openai")
     }
 
     /**
@@ -538,51 +538,10 @@ class AnalysisWorker(
             "会话「${kase.conversation}」最近消息：\n${kase.windowText()}",
             1024
         )
-        return raw to parseS1Result(extractJsonFromText(raw), "local")
-    }
-
-    /** S1 判定字段读取（openai/本地共用）：字段缺失/类型不符一律兜底默认值。 */
-    private fun parseS1Result(
-        payload: JSONObject?,
-        channel: String
-    ): AnalysisCase.Companion.S1Result {
-        var prob = 0.0
-        var importance = 0.0
-        var dueWindow = "none"
-        var topic = "notice"
-        var confidence = 1.0
-        try {
-            // 模型输出形态不稳定：字段可能在顶层，也可能包一层 {"answer": {...}}，两种都接
-            val answer = payload?.optJSONObject("answer") ?: payload
-            if (answer != null) {
-                prob = answer.optDouble("need_action_prob", 0.0).coerceIn(0.0, 1.0)
-                importance = answer.optDouble("importance", 0.0).coerceIn(0.0, 9.0)
-                dueWindow = answer.optString("due_window", "none").ifEmpty { "none" }
-                topic = answer.optString("topic", "notice").ifEmpty { "notice" }
-                confidence = answer.optDouble("confidence", 1.0).coerceIn(0.0, 1.0)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "S1($channel) 响应解析失败，已保留 raw_json", e)
-        }
-        return AnalysisCase.Companion.S1Result(
-            needActionProb = prob,
-            importance = importance,
-            dueWindow = dueWindow,
-            topic = topic,
-            confidence = confidence
-        )
+        return raw to AnalysisParsing.parseS1Result(AnalysisParsing.extractJsonFromText(raw), "local")
     }
 
     // ---------------- S2：深分析（openai 槽位） ----------------
-
-    /** S2 输出（防御式解析后的归一化形态） */
-    private data class S2Output(
-        val summary: String,
-        val dueTime: String,
-        val suggestedAction: String,
-        val tasks: List<AnalysisCaseRecord.Task>,
-        val rawJson: String
-    )
 
     /**
      * S2 深分析：同一会话窗口 + S1 判定结论注入 prompt，
@@ -593,13 +552,13 @@ class AnalysisWorker(
         kase: AnalysisCase,
         s1: AnalysisCase.Companion.S1Result,
         background: String = ""
-    ): S2Output {
+    ): AnalysisParsing.S2Output {
         val raw = postChatCompletions(
             slot,
             AnalysisCase.buildS2SystemPrompt(s1, background),
             "会话「${kase.conversation}」最近消息：\n${kase.windowText()}"
         )
-        return parseS2Output(extractJsonPayload(raw), kase, raw)
+        return AnalysisParsing.parseS2Output(AnalysisParsing.extractJsonPayload(raw), kase, raw)
     }
 
     /**
@@ -610,50 +569,14 @@ class AnalysisWorker(
         kase: AnalysisCase,
         s1: AnalysisCase.Companion.S1Result,
         background: String = ""
-    ): S2Output {
+    ): AnalysisParsing.S2Output {
         val engine = LocalLlmEngines.forModel(applicationContext, LocalModelStore.MODEL_S2)
         val raw = engine.chat(
             AnalysisCase.buildS2SystemPrompt(s1, background),
             "会话「${kase.conversation}」最近消息：\n${kase.windowText()}",
             1024
         )
-        return parseS2Output(extractJsonFromText(raw), kase, raw)
-    }
-
-    /** S2 输出字段读取（openai/本地共用）；摘要缺失时兜底窗口末条原文。 */
-    private fun parseS2Output(
-        payload: JSONObject?,
-        kase: AnalysisCase,
-        raw: String
-    ): S2Output {
-        var summary = ""
-        var dueTime = ""
-        var suggestedAction = ""
-        val tasks = mutableListOf<AnalysisCaseRecord.Task>()
-        try {
-            // 与 S1 同款防御：字段可能包一层 {"answer": {...}}
-            val answer = payload?.optJSONObject("answer") ?: payload
-            if (answer != null) {
-                summary = answer.optString("summary", "").trim()
-                dueTime = answer.optString("due_time", "").trim()
-                suggestedAction = answer.optString("suggested_action", "").trim()
-                answer.optJSONArray("tasks")?.let { arr ->
-                    for (i in 0 until arr.length()) {
-                        arr.optJSONObject(i)?.let {
-                            tasks.add(AnalysisCaseRecord.Task.fromJson(it))
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "S2 响应解析失败，已保留 raw_json", e)
-        }
-        // 摘要兜底：模型没给时本地截取窗口末条原文
-        if (summary.isEmpty()) {
-            summary = kase.messages.last().text.replace("\n", " ").take(20)
-        }
-
-        return S2Output(summary, dueTime, suggestedAction, tasks, raw)
+        return AnalysisParsing.parseS2Output(AnalysisParsing.extractJsonFromText(raw), kase, raw)
     }
 
     // ---------------- 公共 HTTP / 解析工具 ----------------
@@ -701,39 +624,6 @@ class AnalysisWorker(
                 response.code, response.body?.string().orEmpty()
             )
             response.body?.string().orEmpty()
-        }
-    }
-
-    /**
-     * 从 chat/completions 响应里取 choices[0].message.content，
-     * 再走 [extractJsonFromText]；任何一步失败返回 null。
-     */
-    private fun extractJsonPayload(raw: String): JSONObject? {
-        return try {
-            val content = JSONObject(raw)
-                .optJSONArray("choices")
-                ?.optJSONObject(0)
-                ?.optJSONObject("message")
-                ?.optString("content").orEmpty()
-            extractJsonFromText(content)
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    /**
-     * 从纯文本里截取第一个 { 到最后一个 } 解析成 JSON 对象；
-     * 本地引擎输出（无 choices 包装）与云端 content 共用。失败返回 null。
-     */
-    private fun extractJsonFromText(content: String): JSONObject? {
-        return try {
-            val start = content.indexOf('{')
-            val end = content.lastIndexOf('}')
-            if (start >= 0 && end > start) {
-                JSONObject(content.substring(start, end + 1))
-            } else null
-        } catch (e: Exception) {
-            null
         }
     }
 
