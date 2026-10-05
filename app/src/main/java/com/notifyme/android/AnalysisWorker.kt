@@ -245,12 +245,12 @@ class AnalysisWorker(
                     }
                 }
             } catch (e: IOException) {
-                recordResult(config, "失败：网络错误 ${e.message ?: "未知"}（已完成 $done 个会话）")
+                val msg = recordRetryFailure(config, "网络错误 ${e.message ?: "未知"}", done)
                 Log.w(TAG, "分析失败: 网络错误", e)
                 return Result.retry()
             } catch (e: HttpException) {
                 val detail = if (e.body.isBlank()) "" else " ${e.body.take(120)}"
-                recordResult(config, "失败：HTTP ${e.code}$detail（已完成 $done 个会话）")
+                val msg = recordRetryFailure(config, "HTTP ${e.code}$detail", done)
                 Log.w(TAG, "分析失败: HTTP ${e.code}$detail")
                 return Result.retry()
             } catch (e: LocalEngineException) {
@@ -434,6 +434,14 @@ class AnalysisWorker(
             }
         }
 
+        // ---- M10 advisor：落库前 review（before-done 挂点） ----
+        // 云端第二模型；仅端侧模式整体跳过；内容用脱敏后的 sendCase 口径；
+        // advisor 失败绝不拖垮 case——错误以 ForkRecord(advisor_error) 记录。
+        val advisorSlotCfg = if (privacy.cloudBlocked) null else config.advisorSlot()
+        if (advisorSlotCfg != null) {
+            forks += advisorFork(advisorSlotCfg, s1, s2Summary, s2Tasks, sendCase)
+        }
+
         return AnalysisCaseRecord(
             caseId = kase.caseId,
             conversation = kase.conversation,
@@ -459,6 +467,54 @@ class AnalysisWorker(
             redactionRules = redaction?.rules ?: emptyList(),
             redactionHits = redaction?.hitCount ?: 0
         )
+    }
+
+    /**
+     * M10 advisor fork：调第二模型评审 S1(+S2) 结论，返回 ForkRecord。
+     * 成功 verdict="advice"（note=评审意见，截 400 字）；失败 verdict="advisor_error"。
+     * 失败绝不拖垮 case；无 response_format 约束（输出是短文本不是 JSON）。
+     */
+    private fun advisorFork(
+        advisorSlot: AnalysisConfig.SlotConfig,
+        s1: AnalysisCase.Companion.S1Result,
+        s2Summary: String,
+        s2Tasks: List<AnalysisCaseRecord.Task>,
+        sendCase: AnalysisCase
+    ): AnalysisCaseRecord.ForkRecord {
+        val tasksDigest = s2Tasks.joinToString("；") {
+            it.what + (it.`when`.takeIf { w -> w.isNotBlank() }?.let { w -> "@$w" } ?: "")
+        }
+        val windowDigest = sendCase.windowText().take(300)
+        return try {
+            val advice = postChatCompletions(
+                advisorSlot,
+                AnalysisCase.buildAdvisorSystemPrompt(),
+                AnalysisCase.buildAdvisorUserContent(
+                    s1Digest = s1.toInjectText(),
+                    s2Summary = s2Summary,
+                    s2Tasks = tasksDigest,
+                    windowDigest = windowDigest
+                )
+            )
+            val content = AnalysisParsing.extractJsonPayload(advice)
+                ?.toString() ?: advice
+            val clean = content.trim().take(400)
+            Log.i(TAG_FORK, "fork advisor advice | " + sendCase.conversation + " | " + clean)
+            AnalysisCaseRecord.ForkRecord(
+                fork = "advisor",
+                prob = s1.confidence,
+                verdict = "advice",
+                note = clean
+            )
+        } catch (e: Exception) {
+            Log.w(TAG_FORK, "fork advisor 失败（不拖垮 case）: " + (e.message ?: "unknown"))
+            AnalysisCaseRecord.ForkRecord(
+                fork = "advisor",
+                prob = 0.0,
+                verdict = "advisor_error",
+                note = (e.message ?: "advisor 调用失败").take(200)
+            )
+        }
     }
 
     // ---------------- S1：systemone 协议（laya / JEV） ----------------
@@ -691,5 +747,35 @@ class AnalysisWorker(
     private fun recordResult(config: AnalysisConfig, result: String) {
         config.lastAnalysisTime = System.currentTimeMillis()
         config.lastAnalysisResult = result
+        // M10 error-repeats：成功一轮即清零连续失败计数
+        if (result.startsWith("成功")) config.consecFailures = 0
+    }
+
+    /**
+     * M10 error-repeats 挂点：可重试失败时递增连续失败计数；达到 2 轮且 advisor
+     * 已配置时，把错误摘要发给 advisor 求诊断（只发错误文本，不发任何会话内容，
+     * 也不受 cloudBlocked 限制——错误信息不含用户数据）。诊断文本追加进状态行，
+     * advisor 未配置或调用失败则静默返回原文本（诊断失败不改变重试语义）。
+     */
+    private fun recordRetryFailure(config: AnalysisConfig, errorDigest: String, done: Int): String {
+        val fails = config.consecFailures + 1
+        config.consecFailures = fails
+        val base = "失败：$errorDigest（已完成 $done 个会话）"
+        if (fails < 2) return base
+        val slot = config.advisorSlot() ?: return base
+        val advice = try {
+            postChatCompletions(
+                slot,
+                AnalysisCase.buildAdvisorSystemPrompt(),
+                AnalysisCase.buildAdvisorErrorContent(errorDigest.take(300))
+            )
+        } catch (e: Exception) {
+            Log.w(TAG_FORK, "advisor 错误诊断失败（静默）: ${e.message}")
+            return base
+        }
+        val content = (AnalysisParsing.extractJsonPayload(advice)?.toString() ?: advice)
+            .trim().take(160)
+        Log.i(TAG_FORK, "advisor error-repeats 诊断: $content")
+        return "$base\nadvisor 诊断：$content"
     }
 }

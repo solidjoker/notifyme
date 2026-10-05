@@ -290,5 +290,34 @@ data class AnalysisCase(
                 "\"suggested_action\": \"给用户的建议动作，≤20字\", " +
                 "\"tasks\": [{\"who\": \"责任人\", \"what\": \"要做的事\", \"when\": \"时间要求，无则空字符串\"}]}"
         }
+
+        /**
+         * M10 advisor 系统提示词：评审者角色——只给建议，不重写结论，不改结构。
+         * 对应拓扑图里 advisor「never writes itself，只 advise」的定位。
+         */
+        fun buildAdvisorSystemPrompt(): String =
+            "你是通知分析结果的评审顾问（advisor）。你只做评审，不重写结论：" +
+                "指出误判风险、遗漏的待办、时间理解错误，或确认结论可靠。" +
+                "窗口里「我:」开头是用户自己发出的消息，不产生待办。" +
+                "输出不超过 80 字的中文评审意见；结论可靠时只回答「结论可靠」。"
+
+        /**
+         * M10 advisor 用户内容（落库前 review 挂点）：S1 结论 + S2 结果摘要。
+         * 文本均已脱敏（调用方传 sendCase 口径），会话名不传——advisor 不需要身份。
+         */
+        fun buildAdvisorUserContent(
+            s1Digest: String,
+            s2Summary: String,
+            s2Tasks: String,
+            windowDigest: String
+        ): String =
+            "S1 判定：$s1Digest\n" +
+                "S2 摘要：${s2Summary.ifBlank { "（未升级，无 S2）" }}\n" +
+                "S2 任务：${s2Tasks.ifBlank { "无" }}\n" +
+                "会话窗口：$windowDigest"
+
+        /** advisor 连续失败诊断（error-repeats 挂点）：只发错误信息，不发任何会话内容 */
+        fun buildAdvisorErrorContent(errorDigest: String): String =
+            "分析流水线连续失败，错误摘要：$errorDigest。请给出最可能的原因（配置/网络/模型服务）与一条修复建议，不超过 60 字。"
     }
 }

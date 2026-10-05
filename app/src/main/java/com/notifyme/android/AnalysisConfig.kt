@@ -44,6 +44,10 @@ class AnalysisConfig(context: Context) {
         private const val KEY_S2_ENABLED = "s2_enabled"
         private const val KEY_S2_PROVIDER = "s2_provider"
 
+        // M10 advisor（第二模型评审，openai 协议；v5 起）
+        private const val KEY_ADVISOR_ENABLED = "advisor_enabled"
+        private const val KEY_CONSEC_FAILURES = "consec_failures"
+
         // 旧版字段（仅迁移用）
         private const val KEY_LEGACY_BASE_URL = "base_url"
         private const val KEY_LEGACY_MODEL = "model"
@@ -54,6 +58,9 @@ class AnalysisConfig(context: Context) {
 
         /** S2 的 JEV 服务商独立槽位（伪预设，仅作 slot_ 前缀，不出现在 S1 预设列表） */
         const val PRESET_S2_JEV = "s2jev"
+
+        /** M10 advisor 独立槽位（伪预设，仅作 slot_ 前缀；固定 openai 协议） */
+        const val PRESET_ADVISOR = "advisor"
 
         const val PROTOCOL_LAYA = "laya"
         const val PROTOCOL_OPENAI = "openai"
@@ -281,6 +288,27 @@ class AnalysisConfig(context: Context) {
     /** S2 服务商对应的槽位：JEV 有独立槽位，GLM/自定义/本地共用 glm 槽位 */
     fun s2SlotPreset(provider: String): String =
         if (provider == S2_PROVIDER_JEV) PRESET_S2_JEV else PRESET_GLM
+
+    // ---------- M10 advisor（第二模型评审） ----------
+
+    /** advisor 开关：关闭时 worker 完全跳过 advisor 调用（含 error-repeat 诊断） */
+    var advisorEnabled: Boolean
+        get() = prefs.getBoolean(KEY_ADVISOR_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(KEY_ADVISOR_ENABLED, value).apply()
+
+    /**
+     * advisor 槽位（固定 openai 协议）：开关关闭或地址为空视为未配置，返回 null。
+     * 与 S2 同款口径：调用方拿到 null 即跳过，不报错。
+     */
+    fun advisorSlot(): SlotConfig? {
+        if (!advisorEnabled) return null
+        return loadSlot(PRESET_ADVISOR).takeIf { it.url.isNotBlank() }
+    }
+
+    /** 连续失败轮数（error-repeats：advisor 介入诊断的触发条件之一），成功一轮即清零 */
+    var consecFailures: Int
+        get() = prefs.getInt(KEY_CONSEC_FAILURES, 0)
+        set(value) = prefs.edit().putInt(KEY_CONSEC_FAILURES, value).apply()
 
     // ---------- System 1 / System 2 分组配置 ----------
 

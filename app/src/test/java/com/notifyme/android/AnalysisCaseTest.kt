@@ -471,4 +471,30 @@ class AnalysisCaseTest {
         val prompt = AnalysisCase.buildS2SystemPrompt(s1(), "对方是甲方项目经理")
         assertTrue(prompt.contains("背景信息（分析该会话时必须纳入考量）：对方是甲方项目经理"))
     }
+
+    // ---------- M10 advisor ----------
+
+    @Test
+    fun `buildAdvisorSystemPrompt 强调只评审不重写`() {
+        val prompt = AnalysisCase.buildAdvisorSystemPrompt()
+        assertTrue(prompt.contains("只做评审"))
+        assertTrue(prompt.contains("结论可靠"))
+    }
+
+    @Test
+    fun `buildAdvisorUserContent 空S2显式标注未升级`() {
+        val noS2 = AnalysisCase.buildAdvisorUserContent("p=0.9", "", "", "窗口摘要")
+        assertTrue(noS2.contains("（未升级，无 S2）"))
+        assertTrue(noS2.contains("p=0.9"))
+        val withS2 = AnalysisCase.buildAdvisorUserContent("p=0.9", "明天交方案", "我:交方案@明天", "窗口摘要")
+        assertFalse(withS2.contains("未升级"))
+        assertTrue(withS2.contains("明天交方案"))
+    }
+
+    @Test
+    fun `buildAdvisorErrorContent 只含错误摘要不含会话内容`() {
+        val content = AnalysisCase.buildAdvisorErrorContent("HTTP 429")
+        assertTrue(content.contains("HTTP 429"))
+        assertTrue(content.contains("原因"))
+    }
 }

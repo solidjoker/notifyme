@@ -254,6 +254,13 @@
     <string name="s2_model_hint">System 2 模型名，如 glm-5.3-flash</string>
     <string name="btn_test_s2_connection">测试 System 2 连接</string>
 
+    <!-- M10 advisor -->
+    <string name="ai_review_section_title">AI 评审 · 第二模型复核（可选）</string>
+    <string name="ai_review_section_desc">分析落库前请第二模型复核 S1/S2 结论；连续失败时请它诊断原因。只给建议，不改结论。</string>
+    <string name="ai_review_enabled_switch">启用 AI 评审</string>
+    <string name="ai_review_model_hint">评审模型名（可与主模型不同）</string>
+    <string name="btn_test_ai_review_connection">测试 AI 评审连接</string>
+
     <!-- 本地模型管理 -->
     <string name="model_manage_entry">本地模型管理</string>
     <string name="model_page_title">本地模型</string>

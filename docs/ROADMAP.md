@@ -315,7 +315,32 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
 
 ---
 
-## 10. 决策门汇总
+## 10. M10 多模型分析拓扑（Advisor 层，2026-10-05 立项·用户确认）
+
+对齐「主会话 + fork 层 + subagents + advisor」多模型拓扑：
+
+- **主会话 = S2 深分析**（已有）：唯一结论写入者；端侧 GGUF 或云端 OpenAI 兼容均可。
+- **JEV fork 层 = S1 快筛**（已有，M10.2 显式化）：`ForkPrefilter`（fork1，sharp 就地结案）
+  → S1 判定（fork2）→ `shouldEscalate` 升级判定（fork3，sharp/split）。
+- **advisor = 第二模型评审**（M10.1/M10.3 新增）：`AnalysisConfig.PRESET_ADVISOR` 独立槽位
+  （固定 openai 协议，开关默认关，零预置不变）；两个挂点——
+  ① 落库前 review（`analyzeOneCase` 尾部，`ForkRecord(fork="advisor", verdict="advice")`，
+  失败记 `advisor_error` 不拖垮 case；仅端侧模式整体跳过；内容走脱敏口径，会话名不外发）；
+  ② error-repeats（连续失败 ≥2 轮时把**错误摘要**发给 advisor 求诊断，成功即清零计数）。
+- **评测记录**（M10.4，顺带 M4.6）：fork 各级 sharp/split 比例 + advisor 命中情况落 `docs/`。
+
+任务清单：
+1. [x] `AnalysisConfig`：`PRESET_ADVISOR` 槽位 + `advisorEnabled` + `advisorSlot()` + `consecFailures`
+2. [x] `AnalysisCase`：`buildAdvisorSystemPrompt` / `buildAdvisorUserContent` / `buildAdvisorErrorContent` 纯函数
+3. [x] `AnalysisWorker`：before-done review（`advisorFork`）+ error-repeats（`recordRetryFailure`，成功清零）
+4. [x] 控制台 UI：advisor 分组（开关/地址/密钥/模型/测试连接，随开关置灰）+ strings
+5. [x] 单测：advisor 提示词纯函数 3 个（AnalysisCaseTest）
+6. [x] 构建验证：246 单测全绿（243+3 advisor 提示词），双 flavor assemble 通过（2026-10-05）
+7. [ ] 真机：advisor 配置后端到端跑一轮，评测定稿进 `docs/`（M10.4 + M4.6）
+
+---
+
+## 11. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：
 
@@ -337,7 +362,7 @@ D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再
 
 ---
 
-## 11. 非目标（明确不做）
+## 12. 非目标（明确不做）
 
 - 不做云端多用户 / 账号体系（服务端始终是单用户自托管）
 - 不引入 Room / Compose / DI 框架做大重构（`MessageStore.kt:57-66` 的取舍仍然成立，除非 M6 评测推翻）

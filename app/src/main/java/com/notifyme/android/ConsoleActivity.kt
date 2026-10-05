@@ -91,6 +91,11 @@ class ConsoleActivity : Activity() {
     private lateinit var etS2ApiKey: EditText
     private lateinit var etS2Model: EditText
     private lateinit var btnTestS2Connection: Button
+    private lateinit var switchAdvisorEnabled: Switch
+    private lateinit var etAdvisorBaseUrl: EditText
+    private lateinit var etAdvisorApiKey: EditText
+    private lateinit var etAdvisorModel: EditText
+    private lateinit var btnTestAdvisorConnection: Button
     private lateinit var spinnerAnalysisInterval: Spinner
     private lateinit var tvAnalysisStatus: TextView
     private lateinit var tvAnalysisStats: TextView
@@ -215,6 +220,11 @@ class ConsoleActivity : Activity() {
         etS2ApiKey = findViewById(R.id.etS2ApiKey)
         etS2Model = findViewById(R.id.etS2Model)
         btnTestS2Connection = findViewById(R.id.btnTestS2Connection)
+        switchAdvisorEnabled = findViewById(R.id.switchAdvisorEnabled)
+        etAdvisorBaseUrl = findViewById(R.id.etAdvisorBaseUrl)
+        etAdvisorApiKey = findViewById(R.id.etAdvisorApiKey)
+        etAdvisorModel = findViewById(R.id.etAdvisorModel)
+        btnTestAdvisorConnection = findViewById(R.id.btnTestAdvisorConnection)
         btnTestConnection = findViewById(R.id.btnTestConnection)
         spinnerAnalysisInterval = findViewById(R.id.spinnerAnalysisInterval)
         tvAnalysisStatus = findViewById(R.id.tvAnalysisStatus)
@@ -772,6 +782,16 @@ class ConsoleActivity : Activity() {
                     model = etS2Model.text.toString().trim()
                 )
             )
+            // M10 advisor 槽位（固定 advisor 槽位，openai 协议）
+            analysisConfig.advisorEnabled = switchAdvisorEnabled.isChecked
+            analysisConfig.saveSlot(
+                AnalysisConfig.PRESET_ADVISOR,
+                AnalysisConfig.SlotConfig(
+                    url = etAdvisorBaseUrl.text.toString().trim(),
+                    key = etAdvisorApiKey.text.toString().trim(),
+                    model = etAdvisorModel.text.toString().trim()
+                )
+            )
             analysisConfig.intervalMinutes =
                 AnalysisConfig.INTERVAL_OPTIONS[spinnerAnalysisInterval.selectedItemPosition]
 
@@ -791,6 +811,21 @@ class ConsoleActivity : Activity() {
         // S1 固定 laya 协议；S2 固定 openai 协议，各自独立测试
         btnTestConnection.setOnClickListener { testConnectionLaya() }
         btnTestS2Connection.setOnClickListener { testConnectionOpenAi() }
+
+        // M10 advisor：开关即时生效 + 槽位回填 + 独立连接测试（固定 openai 协议）
+        switchAdvisorEnabled.isChecked = analysisConfig.advisorEnabled
+        val advisorSlot = analysisConfig.loadSlot(AnalysisConfig.PRESET_ADVISOR)
+        etAdvisorBaseUrl.setText(advisorSlot.url)
+        etAdvisorApiKey.setText(advisorSlot.key)
+        etAdvisorModel.setText(advisorSlot.model)
+        applyAdvisorFieldsEnabled(analysisConfig.advisorEnabled)
+        switchAdvisorEnabled.setOnCheckedChangeListener { _, isChecked ->
+            analysisConfig.advisorEnabled = isChecked
+            applyAdvisorFieldsEnabled(isChecked)
+        }
+        btnTestAdvisorConnection.setOnClickListener {
+            testConnectionOpenAi(etAdvisorBaseUrl, etAdvisorApiKey, etAdvisorModel)
+        }
 
         findViewById<Button>(R.id.btnAnalysisNow).setOnClickListener {
             AnalysisScheduler.enqueueAnalysisNow(this)
@@ -833,6 +868,14 @@ class ConsoleActivity : Activity() {
         etS2ApiKey.isEnabled = enabled && !localProvider
         etS2Model.isEnabled = enabled && !localProvider
         btnTestS2Connection.isEnabled = enabled && !localProvider
+    }
+
+    /** M10：advisor 连接字段随开关整组置灰（值保留） */
+    private fun applyAdvisorFieldsEnabled(enabled: Boolean) {
+        etAdvisorBaseUrl.isEnabled = enabled
+        etAdvisorApiKey.isEnabled = enabled
+        etAdvisorModel.isEnabled = enabled
+        btnTestAdvisorConnection.isEnabled = enabled
     }
 
     /** laya 协议：GET {baseUrl}/v1/models，展示可用模型或错误。 */
@@ -893,16 +936,20 @@ class ConsoleActivity : Activity() {
         }
     }
 
-    /** S2 测试连接：POST {base}/chat/completions 最小调用（max_tokens=1）验证连通与密钥。 */
-    private fun testConnectionOpenAi() {
-        val base = etS2BaseUrl.text.toString().trim().trimEnd('/')
+    /** S2 / Advisor 测试连接：POST {base}/chat/completions 最小调用（max_tokens=1）验证连通与密钥。 */
+    private fun testConnectionOpenAi(
+        baseField: EditText = etS2BaseUrl,
+        keyField: EditText = etS2ApiKey,
+        modelField: EditText = etS2Model
+    ) {
+        val base = baseField.text.toString().trim().trimEnd('/')
         if (base.isEmpty()) {
             tvAnalysisStatus.text = getString(R.string.s2_baseurl_hint)
             return
         }
         val url = if (base.endsWith("/chat/completions")) base else "$base/chat/completions"
-        val apiKey = etS2ApiKey.text.toString().trim()
-        val model = etS2Model.text.toString().trim()
+        val apiKey = keyField.text.toString().trim()
+        val model = modelField.text.toString().trim()
         tvAnalysisStatus.text = getString(R.string.analysis_testing)
 
         thread {
