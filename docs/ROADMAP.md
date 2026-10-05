@@ -214,7 +214,7 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
    （上层已有降级文案）；未知/MNN/未下载模型均优雅降级为不可用引擎
 3. [x] 准入判定：`ActivityManager.memoryInfo` + `Build.SUPPORTED_ABIS` → S2（2.47 GB）仅在 8 GB+ RAM 且 arm64 时开放，否则引擎工厂返回带理由的不可用引擎（`LocalDeviceCapabilities`）
 4. [x] `LocalLlmEngines.releaseAll()` 接 `MainApplication.onTrimMemory`（≥MODERATE）/`onLowMemory`
-5. [ ] `ModelDownloadWorker`/`ModelListActivity`：断点续传校验（`LocalModelStore.kt:116` 已按 size 校验）、下载失败重试文案
+5. [x] `ModelDownloadWorker`/`ModelListActivity`：断点续传校验、下载失败重试文案 —— 复核（2026-10-05）确认已全部落地：`.part` + `Range` 续传且 206/200 兜底（`ModelDownloadWorker.kt` `downloadFile`）、按预期字节数最终校验（`doWork` 尾部 `bad` 过滤）、`runAttemptCount<1` 退避重试；UI 侧 `ModelListActivity.onResume` 杀进程自动续传检测、`model_status_error_resume`/`model_status_partial`/`model_btn_retry`/`model_no_space` 文案齐备（`strings.xml:266-279`）。`testOpenDebugUnitTest --rerun-tasks` 绕缓存真实执行 243 全绿，双 flavor assemble 通过
 6. [ ] 分析质量对比：同一批会话，云端 vs 端侧 S1 判定一致率、S2 摘要可用性，写进 `docs/` 评测记录
 
 验收：飞行模式下 S1 分析全流程走通并出 ⚡ 标记；引擎不可用时降级文案正确、不崩；评测记录有真实数字。

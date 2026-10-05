@@ -1,5 +1,8 @@
 # Gradle / Android
 .gradle/
+# 沙箱重定向的 GRADLE_USER_HOME（本机专用缓存副本，gitignore 不支持行内注释故单列）
+.gradle-home/
+build-verify.log
 build/
 app/.cxx/
 local.properties

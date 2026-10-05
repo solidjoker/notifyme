@@ -1,5 +1,7 @@
 # notifyme · 微信通知本地智能分析助手
 
+简体中文 | [English](README_EN.md)
+
 [![build](https://github.com/solidjoker/notifyme/actions/workflows/android.yml/badge.svg)](https://github.com/solidjoker/notifyme/actions/workflows/android.yml)
 [![release](https://img.shields.io/github/v/release/solidjoker/notifyme?label=release)](https://github.com/solidjoker/notifyme/releases/latest)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
