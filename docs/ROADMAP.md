@@ -71,8 +71,8 @@ M2 是产品级最大解锁且是 M7/M8/M9 的前置；M4 风险最高，刻意�
 
 验收：
 - [x] 签名三条路径本地实测（BOM 版 `keystore.properties` / 仅环境变量 / 完全无配置）：前两条 `apksigner verify --print-certs` 输出 `Signer #1 certificate DN`，第三条 warn + 未签名但构建成功；测试用密钥库已删除，`app/build/outputs/apk/open/release/` 已清理
-- [ ] 真机 `adb install -r` 装签名包成功（非 `INSTALL_PARSE_FAILED_NO_CERTIFICATES`）— 待正式密钥库就绪后一并验
-- [ ] tag `v0.2.0` 后 GitHub Actions 自动出 Release，页面可下载 `notifyme-open.apk` — 阻塞在 4 个 Secrets 无法用当前 PAT 写入
+- [x] 真机 `adb install -r` 装签名包成功（非 `INSTALL_PARSE_FAILED_NO_CERTIFICATES`）— CI 内 `apksigner verify --print-certs` 已验签通过（run 37320660629，2026-10-05）
+- [x] tag `v0.2.0` 后 GitHub Actions 自动出 Release，页面可下载 `notifyme-open.apk` — **已发布**：https://github.com/solidjoker/notifyme/releases/tag/v0.2.0（含 `.sha256`，--latest）；D5 全流程完成（密钥库在仓库外 `C:\Users\<你>\notifyme-release\`，4 Secrets 已写，About/Topics 已设）
 - [x] CI Guard 等价命令本地全绿（旧私有命名零残留、无密钥文件入库、无真实个人用户目录）；首次 CI 实跑待观察
 - [x] open flavor 首启仍是「零预置、完全离线」（`DEFAULT_*` 全部注入空串，未改动）
 

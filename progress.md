@@ -330,6 +330,21 @@ Git 提交身份（本仓库局部配置，未改全局）：
 
 ### 11. 复核与收尾（本次会话，2026-10-05）
 
+- **D5/M0 发布闭环已完成（同日追加）**：用户提供 administration token（`.gh-token`）→
+  密钥库生成于仓库外 `C:\Users\<你>\notifyme-release\notifyme-release.jks`
+  （PKCS12/RSA2048/alias=notifyme，口令只在同目录 keystore-info.txt，绝不入库不入聊天）→
+  4 个 Actions Secrets 写入 → About 描述 + 9 个 Topics 设置 → 推 main + tag `v0.2.0` →
+  release.yml 全绿，**Release 已发布**：https://github.com/solidjoker/notifyme/releases/tag/v0.2.0
+  （签名 `notifyme-open.apk` + `.sha256`，CI 内 apksigner verify 通过）。
+  踩坑记录：① release.yml 最初漏了「Fetch llama.cpp v0.5.0」步骤（android.yml 有）→
+  configureCMakeRelease 因 third_party 缺源失败，已补齐对齐（d5358f0）；
+  ② PKCS12 密钥库 keypass 与 storepass 必须一致（keytool 会忽略独立 keypass），
+  NOTIFYME_KEY_PASSWORD 已改为同 storePassword；③ fine-grained PAT 无 `actions:write`，
+  `gh run rerun` 403 → 删 tag 重打触发新 run 即可；④ `gh run watch` 阻塞超过工具超时会转后台 job。
+- **W1 真机回归进行中（同日追加）**：MuMu 微信已登录；beta 最新包装机 + 通知监听/无障碍/悬浮窗
+  三权限就绪（踩坑：adb settings put enabled_notification_listeners 会被系统重写，必须走设置 UI）；
+  引导 3 步走完，主界面/前台服务/监听连接正常；悬浮验证 ✅（debug 测试卡截图 overlay_card.png：
+  卡片 + ⚡悬浮球同屏渲染正确）。待：真实微信消息验证捕获链、分析接口配置（用户选型中）。
 - **M4.5 复核**：`ModelDownloadWorker`/`ModelListActivity` 的断点续传、按字节校验、退避重试、
   杀进程自动续传与全部文案（`strings.xml:266-279`）经代码复核确认早已落地，`docs/ROADMAP.md` M4 任务 5 已勾选并附证据。
   M4.6（云端 vs 端侧质量对比）仍待真机跑批。
