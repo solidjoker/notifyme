@@ -72,6 +72,13 @@ jobs:
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/notifyme-release.jks"
           echo "NOTIFYME_KEYSTORE_FILE=$RUNNER_TEMP/notifyme-release.jks" >> "$GITHUB_ENV"
 
+      - name: Fetch llama.cpp v0.5.0 (M4 native source, not committed)
+        # 与 android.yml 同一步：third_party/ gitignore 不入库，release 构建同样要先拉源码
+        run: |
+          git clone --depth 1 --branch v0.5.0 \
+            https://github.com/ggml-org/llama.cpp third_party/llama.cpp
+          git -C third_party/llama.cpp describe --tags
+
       - name: Assemble signed open release
         env:
           NOTIFYME_KEYSTORE_PASSWORD: ${{ secrets.NOTIFYME_KEYSTORE_PASSWORD }}
