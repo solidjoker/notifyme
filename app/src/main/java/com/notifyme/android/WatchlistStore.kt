@@ -26,6 +26,10 @@ object WatchlistStore {
     private const val PREFS_NAME = "watchlist"
     private const val KEY_WATCHED = "watched_conversations"
 
+    // M11：显式不关注（黑名单）——名单里的会话在主列表隐藏、分析跳过。
+
+    private const val KEY_UNWATCHED = "unwatched_conversations"
+
     /** 哨兵：表达「全部取消关注」，不可能与真实会话撞车 */
     const val SENTINEL_NONE = "__watch_none__"
 
@@ -59,10 +63,35 @@ object WatchlistStore {
         prefs(context).edit().putString(KEY_WATCHED, array.toString()).apply()
     }
 
-    /** 该会话（复合键）是否应被分析：空名单=全部关注；非空名单按包含判断（哨兵天然不匹配）。 */
+    /** 该会话（复合键）是否应被分析：显式不关注恒否；空名单=全部关注；非空名单按包含判断（哨兵天然不匹配）。 */
     fun isWatched(context: Context, key: ConvKey): Boolean {
+        if (getUnwatched(context).contains(key.id)) return false
         val watched = getWatched(context)
         return watched.isEmpty() || watched.contains(key.id)
+    }
+
+    /** 读取显式不关注集合（已归一为 [ConvKey.id]）。 */
+    @Synchronized
+    fun getUnwatched(context: Context): Set<String> {
+        val raw = prefs(context).getString(KEY_UNWATCHED, "[]").orEmpty()
+        val result = mutableSetOf<String>()
+        try {
+            val array = JSONArray(raw)
+            for (i in 0 until array.length()) {
+                result.add(normalize(array.optString(i)))
+            }
+        } catch (e: Exception) {
+            // 损坏按空集合
+        }
+        return result
+    }
+
+    /** 整体写回显式不关注集合（元素应为 [ConvKey.id] 或哨兵）。 */
+    @Synchronized
+    fun setUnwatched(context: Context, unwatched: Set<String>) {
+        val array = JSONArray()
+        unwatched.forEach { array.put(it) }
+        prefs(context).edit().putString(KEY_UNWATCHED, array.toString()).apply()
     }
 
     /** 名单里的真实会话键（已剔除哨兵）；空名单返回空集合，语义仍是「全部关注」。 */

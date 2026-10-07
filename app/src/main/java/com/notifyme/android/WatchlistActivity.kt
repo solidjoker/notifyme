@@ -60,8 +60,9 @@ class WatchlistActivity : Activity() {
         refreshList()
 
         findViewById<Button>(R.id.btnWatchAll).setOnClickListener {
-            // 空名单 = 全部关注
+            // 空名单 = 全部关注（M11：同时清空显式不关注黑名单）
             WatchlistStore.setWatched(this, emptySet())
+            WatchlistStore.setUnwatched(this, emptySet())
             refreshList()
         }
 

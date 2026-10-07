@@ -488,6 +488,10 @@ class MainActivity : Activity() {
             }
         }
 
+        // M11：显式不关注的会话直接隐藏（不进主列表，分析也已跳过）
+        val unwatchedIds = WatchlistStore.getUnwatched(this)
+        val visibleGroups = groups.filter { it.first.id !in unwatchedIds }
+
         // 汇总分区：名单（去掉「全不关注」哨兵）非空时才分区
         val watched = WatchlistStore.getWatched(this)
         watched.remove(WatchlistStore.SENTINEL_NONE)
@@ -495,10 +499,10 @@ class MainActivity : Activity() {
         val sections =
             mutableListOf<Pair<String?, List<Pair<ConvKey, List<ChatMessage>>>>>()
         if (watchedKeys.isEmpty()) {
-            sections.add(null to groups)
+            sections.add(null to visibleGroups)
         } else {
-            val star = groups.filter { it.first in watchedKeys }
-            val others = groups.filter { it.first !in watchedKeys }
+            val star = visibleGroups.filter { it.first in watchedKeys }
+            val others = visibleGroups.filter { it.first !in watchedKeys }
             if (star.isNotEmpty()) {
                 sections.add(getString(R.string.section_watchlist, star.size) to star)
             }
@@ -595,22 +599,28 @@ class MainActivity : Activity() {
 
     /**
      * 首页会话头「关注」chip：切换某会话的重点关注状态。
-     * 语义与 WatchlistActivity.setConversationWatched 一致：
-     *  - 空名单=全部关注（默认）；在此态下取消某会话，先把名单物化为「当前全量 - 该项」；
-     *  - 全不关注态（哨兵）下关注某会话，去掉哨兵只留该项；
-     *  - 取消后名单变空需补哨兵，否则语义会反弹回全部关注。
+     * M11 语义：显式不关注的会话进 unwatched 黑名单——主列表隐藏、分析跳过。
+     *  - 关注它 = 从黑名单移除（旧白名单物化数据兼容保留）；
+     *  - 取消关注 = 加入黑名单（主列表隐藏 + 分析跳过）。
      */
     private fun toggleWatch(key: ConvKey) {
-        val watched = WatchlistStore.getWatched(this)
-        val isWatchedNow = watched.isEmpty() || watched.contains(key.id)
-        watched.remove(WatchlistStore.SENTINEL_NONE)
-        if (watched.isEmpty() && isWatchedNow) {
-            // 全部关注态 -> 取消该项：物化为当前已知全量会话再移除
-            MessageStore.readRecent(this, 1000).forEach { watched.add(it.convKey.id) }
+        val unwatched = WatchlistStore.getUnwatched(this).toMutableSet()
+        val isWatchedNow = WatchlistStore.isWatched(this, key)
+        if (isWatchedNow) {
+            unwatched.add(key.id)
+        } else {
+            unwatched.remove(key.id)
         }
-        if (isWatchedNow) watched.remove(key.id) else watched.add(key.id)
-        if (watched.isEmpty()) watched.add(WatchlistStore.SENTINEL_NONE)
-        WatchlistStore.setWatched(this, watched)
+        WatchlistStore.setUnwatched(this, unwatched)
+
+        // 兼容旧白名单物化数据：名单非空且不含哨兵时，维持原有增删
+        val watched = WatchlistStore.getWatched(this)
+        watched.remove(WatchlistStore.SENTINEL_NONE)
+        if (watched.isNotEmpty()) {
+            if (isWatchedNow) watched.remove(key.id) else watched.add(key.id)
+            if (watched.isEmpty()) watched.add(WatchlistStore.SENTINEL_NONE)
+            WatchlistStore.setWatched(this, watched)
+        }
 
         Toast.makeText(
             this,
