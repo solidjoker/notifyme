@@ -25,6 +25,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationManagerCompat
@@ -126,6 +127,9 @@ class MainActivity : Activity() {
         tvEmpty = findViewById(R.id.tvEmpty)
         recyclerMessages = findViewById(R.id.recyclerMessages)
 
+        // M11 标题栏 ☰ 菜单：控制台 / 刷新 / 清除记录（主界面纯对话化）
+        setupMainMenu()
+
         recyclerMessages.layoutManager = LinearLayoutManager(this)
         recyclerMessages.adapter = adapter
 
@@ -136,21 +140,6 @@ class MainActivity : Activity() {
         // 属于特殊权限，无法通过运行时权限弹窗申请，只能引导用户手动开启）
         findViewById<Button>(R.id.btnOpenSettings).setOnClickListener {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-        }
-
-        findViewById<Button>(R.id.btnRefresh).setOnClickListener { refreshMessages() }
-
-        findViewById<Button>(R.id.btnClear).setOnClickListener {
-            MessageStore.clear(this)
-            // 待上报队列一并清理，避免历史清空后旧消息仍被上报
-            PendingQueue.clear(this)
-            refreshMessages()
-            Toast.makeText(this, R.string.clear_done, Toast.LENGTH_SHORT).show()
-        }
-
-        // 控制台入口（上报/分析/提醒等配置都在控制台）
-        findViewById<Button>(R.id.btnConsole).setOnClickListener {
-            startActivity(Intent(this, ConsoleActivity::class.java))
         }
 
         // 搜索框：实时过滤会话名/发送者/消息文本，命中自动展开并高亮；清空即恢复完整列表
@@ -182,41 +171,6 @@ class MainActivity : Activity() {
             startActivity(Intent(this, OnboardingActivity::class.java))
         }
 
-        setupKeepAliveSection()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // 从系统设置页返回时刷新权限状态与列表
-        refreshPermissionStatus()
-        refreshMessages()
-        // 监听权限已授予则拉起前台保活服务（用户打开过 App 即常驻）
-        if (isListenerEnabled()) startKeepAliveService()
-        refreshKeepAliveStatus()
-        // 前台期间新消息入库即时刷新列表
-        MessageStore.addOnMessagesChangedListener(storeListener)
-    }
-
-    override fun onPause() {
-        MessageStore.removeOnMessagesChangedListener(storeListener)
-        super.onPause()
-    }
-
-    /** 保活区初始化：电池优化白名单按钮 + 通知运行时权限请求。 */
-    private fun setupKeepAliveSection() {
-        btnBatteryWhitelist = findViewById(R.id.btnBatteryWhitelist)
-        tvKeepAliveStatus = findViewById(R.id.tvKeepAliveStatus)
-
-        btnBatteryWhitelist.setOnClickListener {
-            // 跳系统弹窗请求把本 App 加入电池优化白名单
-            startActivity(
-                Intent(
-                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                    Uri.parse("package:$packageName")
-                )
-            )
-        }
-
         // Android 13+ 前台服务通知需要运行时权限，否则常驻通知不显示
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
@@ -229,6 +183,54 @@ class MainActivity : Activity() {
         }
     }
 
+    /** M11 标题栏 ☰ 菜单：控制台 / 刷新列表 / 清除记录。 */
+    private fun setupMainMenu() {
+        findViewById<TextView>(R.id.btnMenu).setOnClickListener { anchor ->
+            val popup = PopupMenu(this, anchor)
+            popup.menu.add(getString(R.string.menu_console))
+            popup.menu.add(getString(R.string.menu_refresh))
+            popup.menu.add(getString(R.string.menu_clear))
+            popup.setOnMenuItemClickListener { item ->
+                when (item.title) {
+                    getString(R.string.menu_console) -> {
+                        startActivity(Intent(this, ConsoleActivity::class.java))
+                        true
+                    }
+                    getString(R.string.menu_refresh) -> {
+                        refreshMessages()
+                        true
+                    }
+                    getString(R.string.menu_clear) -> {
+                        MessageStore.clear(this)
+                        // 待上报队列一并清理，避免历史清空后旧消息仍被上报
+                        PendingQueue.clear(this)
+                        refreshMessages()
+                        Toast.makeText(this, R.string.clear_done, Toast.LENGTH_SHORT).show()
+                        true
+                    }
+                    else -> false
+                }
+            }
+            popup.show()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 从系统设置页返回时刷新权限状态与列表
+        refreshPermissionStatus()
+        refreshMessages()
+        // 监听权限已授予则拉起前台保活服务（用户打开过 App 即常驻）
+        if (isListenerEnabled()) startKeepAliveService()
+        // 前台期间新消息入库即时刷新列表
+        MessageStore.addOnMessagesChangedListener(storeListener)
+    }
+
+    override fun onPause() {
+        MessageStore.removeOnMessagesChangedListener(storeListener)
+        super.onPause()
+    }
+
     /** 拉起前台保活服务（幂等：已运行时系统只走 onStartCommand）。 */
     private fun startKeepAliveService() {
         try {
@@ -239,40 +241,6 @@ class MainActivity : Activity() {
         }
     }
 
-    /** 刷新保活状态显示：前台服务是否运行 + 电池优化是否已忽略。
-     *  运行判定读 SharedPreferences 心跳（KeepAliveService.isAlive），
-     *  不依赖进程内存标志——进程被系统重启后服务仍在时也能正确显示。 */
-    private fun refreshKeepAliveStatus() {
-        val pm = getSystemService(PowerManager::class.java)
-        val ignoringBattery = pm.isIgnoringBatteryOptimizations(packageName)
-
-        tvKeepAliveStatus.text = getString(
-            if (KeepAliveService.isAlive(this)) R.string.keepalive_running
-            else R.string.keepalive_stopped
-        ) + "\n" + getString(
-            if (ignoringBattery) R.string.battery_whitelisted
-            else R.string.battery_not_whitelisted
-        )
-
-        btnBatteryWhitelist.isEnabled = !ignoringBattery
-        btnBatteryWhitelist.text = getString(
-            if (ignoringBattery) R.string.btn_battery_whitelisted
-            else R.string.btn_battery_whitelist
-        )
-
-        // startForegroundService 是异步的，服务写心跳有 1-2s 延迟，
-        // 延迟再刷一次避免刚拉起时闪一下「未运行」
-        tvKeepAliveStatus.removeCallbacks(refreshKeepAliveOnce)
-        tvKeepAliveStatus.postDelayed(refreshKeepAliveOnce, 2000)
-    }
-
-    private val refreshKeepAliveOnce = Runnable {
-        tvKeepAliveStatus.text = getString(
-            if (KeepAliveService.isAlive(this)) R.string.keepalive_running
-            else R.string.keepalive_stopped
-        ) + "\n" + tvKeepAliveStatus.text.toString().substringAfter("\n", "")
-    }
-
     /** 检查本 app 的通知监听服务是否已被用户授权。 */
     private fun isListenerEnabled(): Boolean {
         val enabledPackages = NotificationManagerCompat.getEnabledListenerPackages(this)
@@ -281,6 +249,9 @@ class MainActivity : Activity() {
 
     private fun refreshPermissionStatus() {
         val granted = isListenerEnabled()
+        // M11：主界面纯对话化——已授权时整条告警隐藏，未授权才显示
+        findViewById<View>(R.id.barPermission).visibility =
+            if (granted) View.GONE else View.VISIBLE
         tvPermissionStatus.text = getString(
             if (granted) R.string.permission_granted
             else R.string.permission_missing

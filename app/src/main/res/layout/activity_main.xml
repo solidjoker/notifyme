@@ -43,6 +43,17 @@
             android:text="@string/btn_expand_all"
             android:textColor="@color/brand_green"
             android:textSize="13sp" />
+
+        <!-- M11 标题栏菜单：控制台 / 刷新 / 清除记录（主界面纯对话化后集中到这里） -->
+        <TextView
+            android:id="@+id/btnMenu"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:contentDescription="@string/menu_desc"
+            android:padding="8dp"
+            android:text="@string/menu_icon"
+            android:textColor="@color/text_primary"
+            android:textSize="18sp" />
     </LinearLayout>
 
     <View
@@ -94,13 +105,15 @@
             android:orientation="vertical"
             android:padding="16dp">
 
-            <!-- 权限状态 + 常用操作卡片 -->
+            <!-- M11 权限告警条：仅未授权时显示（点击去开启），授权后主界面纯对话 -->
             <LinearLayout
+                android:id="@+id/barPermission"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:background="@drawable/bg_card"
                 android:orientation="vertical"
-                android:padding="16dp">
+                android:padding="16dp"
+                android:visibility="gone">
 
                 <TextView
                     android:id="@+id/tvPermissionStatus"
@@ -108,118 +121,14 @@
                     android:layout_height="wrap_content"
                     android:textSize="14sp" />
 
-                <!-- baselineAligned=false：autoSize 后「打开通知监听设置」字号小于同级按钮，
-                     默认基线对齐会把该按钮整体下移（顶部短一截），关闭基线对齐后三按钮顶部对齐 -->
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:baselineAligned="false"
-                    android:orientation="horizontal">
-
-                    <Button
-                        android:id="@+id/btnOpenSettings"
-                        android:layout_width="0dp"
-                        android:layout_height="46dp"
-                        android:layout_weight="1"
-                        android:autoSizeMaxTextSize="13sp"
-                        android:autoSizeMinTextSize="10sp"
-                        android:autoSizeStepGranularity="1sp"
-                        android:autoSizeTextType="uniform"
-                        android:background="@drawable/btn_secondary"
-                        android:maxLines="1"
-                        android:minHeight="0dp"
-                        android:paddingStart="4dp"
-                        android:paddingEnd="4dp"
-                        android:text="@string/btn_open_settings"
-                        android:textColor="@color/text_primary"
-                        android:textSize="13sp" />
-
-                    <Button
-                        android:id="@+id/btnRefresh"
-                        android:layout_width="0dp"
-                        android:layout_height="46dp"
-                        android:layout_marginStart="8dp"
-                        android:layout_weight="1"
-                        android:autoSizeMaxTextSize="13sp"
-                        android:autoSizeMinTextSize="10sp"
-                        android:autoSizeStepGranularity="1sp"
-                        android:autoSizeTextType="uniform"
-                        android:background="@drawable/btn_secondary"
-                        android:maxLines="1"
-                        android:minHeight="0dp"
-                        android:paddingStart="4dp"
-                        android:paddingEnd="4dp"
-                        android:text="@string/btn_refresh"
-                        android:textColor="@color/text_primary"
-                        android:textSize="13sp" />
-
-                    <Button
-                        android:id="@+id/btnClear"
-                        android:layout_width="0dp"
-                        android:layout_height="46dp"
-                        android:layout_marginStart="8dp"
-                        android:layout_weight="1"
-                        android:autoSizeMaxTextSize="13sp"
-                        android:autoSizeMinTextSize="10sp"
-                        android:autoSizeStepGranularity="1sp"
-                        android:autoSizeTextType="uniform"
-                        android:background="@drawable/btn_danger"
-                        android:maxLines="1"
-                        android:minHeight="0dp"
-                        android:paddingStart="4dp"
-                        android:paddingEnd="4dp"
-                        android:text="@string/btn_clear"
-                        android:textColor="@color/card_bg"
-                        android:textSize="13sp" />
-                </LinearLayout>
-
                 <Button
-                    android:id="@+id/btnConsole"
-                    android:layout_width="match_parent"
-                    android:layout_height="46dp"
-                    android:layout_marginTop="12dp"
-                    android:background="@drawable/btn_primary"
-                    android:minHeight="0dp"
-                    android:text="@string/btn_console"
-                    android:textColor="@color/card_bg"
-                    android:textSize="14sp" />
-            </LinearLayout>
-
-            <!-- 保活状态卡片 -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:background="@drawable/bg_card"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <TextView
-                    android:id="@+id/tvKeepAliveSectionTitle"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/keepalive_section_title"
-                    android:textColor="@color/text_primary"
-                    android:textSize="15sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/tvKeepAliveStatus"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="13sp" />
-
-                <Button
-                    android:id="@+id/btnBatteryWhitelist"
+                    android:id="@+id/btnOpenSettings"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="12dp"
                     android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
-                    android:text="@string/btn_battery_whitelist"
+                    android:text="@string/btn_open_settings"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
             </LinearLayout>

@@ -291,6 +291,13 @@
     <string name="analysis_pass_hint">Basic 密码（可空）</string>
     <string name="analysis_model_hint">模型名，默认 laya-multilingual</string>
     <string name="btn_save_analysis">保存分析配置</string>
+
+    <!-- M11 主界面菜单 -->
+    <string name="menu_icon">☰</string>
+    <string name="menu_desc">更多</string>
+    <string name="menu_console">控制台</string>
+    <string name="menu_refresh">刷新列表</string>
+    <string name="menu_clear">清除记录…</string>
     <string name="btn_test_connection">测试连接</string>
     <string name="btn_analysis_now">立即分析一次</string>
     <string name="analysis_status_none">尚未分析</string>
