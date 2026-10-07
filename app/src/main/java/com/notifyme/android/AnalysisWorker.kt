@@ -158,10 +158,12 @@ class AnalysisWorker(
             .filter { (key, _) ->
                 forceKey == null || key == forceKey
             }
-            .filter { (key, _) -> WatchlistStore.isWatched(applicationContext, key) }
+            // 强制模式同样跳过关注名单过滤——用户在会话详情页点「立即分析本会话」
+            // 是显式指定目标，不该被名单悄悄拦下（W1 真机实测发现）
+            .filter { (key, _) -> forceKey != null || WatchlistStore.isWatched(applicationContext, key) }
             .mapNotNull { (key, list) -> AnalysisCase.fromMessages(key.pkg, key.conversation, list) }
             // 强制模式跳过去重（用户显式要求重分析）；否则窗口没变就跳过
-            .filter { forceKey == null || it.caseId !in analyzedIds }
+            .filter { forceKey != null || it.caseId !in analyzedIds }
             .sortedBy { it.windowEnd } // 先旧后新
             .take(MAX_CONVERSATIONS_PER_ROUND)
             .toList()
