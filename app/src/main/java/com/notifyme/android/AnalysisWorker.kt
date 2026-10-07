@@ -53,6 +53,8 @@ class AnalysisWorker(
         /** inputData 键：强制分析指定会话（跳过窗口去重） */
         const val KEY_FORCE_PKG = "force_pkg"
         const val KEY_FORCE_CONVERSATION = "force_conversation"
+        /** M11.4 会话级定时任务静默标记：true 时成功类结果不覆写全局分析状态 */
+        const val KEY_QUIET = "quiet"
 
         /** 单轮最多分析会话数 */
         private const val MAX_CONVERSATIONS_PER_ROUND = 10
@@ -134,8 +136,10 @@ class AnalysisWorker(
         }
         // 串行化整个分析过程；后进的 Worker 拿到锁时会重新计算待分析集合，
         // 此时前者的结果已落盘，caseId 过滤自然跳过，不会重复分析。
+        // M11.4 会话级定时任务静默标记：成功/空结果不覆写全局分析状态文案
+        val quiet = inputData.getBoolean(KEY_QUIET, false)
         return ANALYSIS_MUTEX.withLock {
-            doWorkExclusive(config, slot, baseUrl, forceKey, s2LocalSkip)
+            doWorkExclusive(config, slot, baseUrl, forceKey, s2LocalSkip, quiet)
         }
     }
 
@@ -144,7 +148,8 @@ class AnalysisWorker(
         slot: AnalysisConfig.SlotConfig,
         baseUrl: String,
         forceKey: ConvKey?,
-        s2LocalSkip: String? = null
+        s2LocalSkip: String? = null,
+        quiet: Boolean = false
     ): Result {
 
         // 按 (pkg, 会话名) 分组 -> 组 case -> 过滤重点关注 -> caseId 去重。
@@ -169,7 +174,8 @@ class AnalysisWorker(
             .toList()
 
         if (cases.isEmpty()) {
-            recordResult(
+            recordResultQuiet(
+                quiet,
                 config,
                 if (forceKey != null) "成功：本会话无新消息可分析"
                 else "成功：无待分析会话"
@@ -257,7 +263,7 @@ class AnalysisWorker(
                 return Result.retry()
             } catch (e: LocalEngineException) {
                 // 本地引擎层失败（未编译/加载失败/内存不足）：用户态，不重试
-                recordResult(config, "失败：${e.message}（已完成 $done 个会话）")
+                recordResultQuiet(quiet, config, "失败：${e.message}（已完成 $done 个会话）")
                 Log.w(TAG, "分析失败: 本地引擎", e)
                 return Result.success()
             }
@@ -266,7 +272,8 @@ class AnalysisWorker(
             if (index < cases.size - 1) delay(REQUEST_INTERVAL_MS)
         }
 
-        recordResult(
+        recordResultQuiet(
+            quiet,
             config,
             "成功：分析 $done 个会话" +
                 if (escalatedCount > 0) "（升级深分析 $escalatedCount 个）" else "" +
@@ -751,6 +758,16 @@ class AnalysisWorker(
         config.lastAnalysisResult = result
         // M10 error-repeats：成功一轮即清零连续失败计数
         if (result.startsWith("成功")) config.consecFailures = 0
+    }
+
+    /**
+     * M11.4 会话级定时任务静默记录：成功类结果不覆写全局分析状态文案
+     * （避免每会话周期任务把控制台状态行刷成「无待分析」），失败仍然记录——
+     * 静默任务的失败用户也应能看到（否则定时坏了无感知）。
+     */
+    private fun recordResultQuiet(quiet: Boolean, config: AnalysisConfig, result: String) {
+        if (quiet && result.startsWith("成功")) return
+        recordResult(config, result)
     }
 
     /**

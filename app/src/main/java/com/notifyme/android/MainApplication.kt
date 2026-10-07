@@ -24,6 +24,8 @@ class MainApplication : Application() {
         ReminderReceiver.ensureChannel(this)
         // 冷启动自动提取一次已有聊天记录（开关/冷却/降级逻辑在 HistorySync 内）
         HistorySync.maybeRunOnStartup(this)
+        // M11.4 清理会话级定时分析的孤儿任务（会话被取消关注后排期失效）
+        AnalysisScheduler.syncAll(this)
 
         // DEBUG 包自检通道：adb 广播触发无障碍直读的「开始提取」，
         // 配合服务的 DEBUG 本 App 监听，可在没有微信会话时验证采集引擎端到端链路

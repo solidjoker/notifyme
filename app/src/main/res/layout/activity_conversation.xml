@@ -229,6 +229,52 @@
                     android:layout_marginTop="8dp"
                     android:indeterminate="true"
                     android:visibility="gone" />
+
+                <!-- M11.4 定时分析：已关注会话可设置独立分析周期 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/tvConvScheduleLabel"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/conv_schedule_label"
+                        android:textColor="@color/text_primary"
+                        android:textSize="13sp" />
+
+                    <Switch
+                        android:id="@+id/switchConvSchedule"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/llConvSchedule"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:paddingEnd="8dp"
+                        android:text="@string/conv_schedule_interval"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+
+                    <Spinner
+                        android:id="@+id/spinnerConvInterval"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1" />
+                </LinearLayout>
             </LinearLayout>
         </LinearLayout>
     </androidx.core.widget.NestedScrollView>

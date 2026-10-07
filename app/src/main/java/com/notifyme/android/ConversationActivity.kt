@@ -14,8 +14,12 @@ import android.view.LayoutInflater
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.Spinner
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.widget.NestedScrollView
@@ -175,6 +179,50 @@ class ConversationActivity : Activity() {
                     if (active) View.VISIBLE else View.GONE
                 btnAnalyzeThis.isEnabled = !active
             }
+
+        // M11.4 定时分析本会话：开关 + 周期（改动即时生效，持久化在 ConvAnalysisScheduleStore）
+        setupConvSchedule()
+    }
+
+    /** 会话级定时分析：开关 + 周期选择（取消关注时由 AnalysisScheduler.syncAll 清孤儿任务）。 */
+    private fun setupConvSchedule() {
+        val scheduleSwitch = findViewById<Switch>(R.id.switchConvSchedule)
+        val intervalSpinner = findViewById<Spinner>(R.id.spinnerConvInterval)
+        val intervalLabels = resources.getStringArray(R.array.sync_interval_labels)
+        intervalSpinner.adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_dropdown_item, intervalLabels
+        )
+
+        val saved = ConvAnalysisScheduleStore.intervalMinutes(this, key)
+        scheduleSwitch.isChecked = saved > 0
+        val idx = AnalysisConfig.INTERVAL_OPTIONS.indexOf(saved).coerceAtLeast(0)
+        intervalSpinner.setSelection(idx)
+
+        scheduleSwitch.setOnCheckedChangeListener { _, checked ->
+            if (checked) {
+                val minutes = AnalysisConfig.INTERVAL_OPTIONS[
+                    intervalSpinner.selectedItemPosition.coerceAtLeast(0)
+                ]
+                ConvAnalysisScheduleStore.setInterval(this, key, minutes)
+                AnalysisScheduler.scheduleForConv(this, key, minutes)
+                Toast.makeText(this, R.string.conv_schedule_on, Toast.LENGTH_SHORT).show()
+            } else {
+                ConvAnalysisScheduleStore.setInterval(this, key, 0)
+                AnalysisScheduler.cancelForConv(this, key)
+                Toast.makeText(this, R.string.conv_schedule_off, Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        intervalSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (!scheduleSwitch.isChecked) return
+                val minutes = AnalysisConfig.INTERVAL_OPTIONS[position]
+                ConvAnalysisScheduleStore.setInterval(this@ConversationActivity, key, minutes)
+                AnalysisScheduler.scheduleForConv(this@ConversationActivity, key, minutes)
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
     }
 
     override fun onResume() {

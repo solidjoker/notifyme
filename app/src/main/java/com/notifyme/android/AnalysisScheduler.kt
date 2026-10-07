@@ -41,6 +41,52 @@ object AnalysisScheduler {
         WorkManager.getInstance(context).cancelUniqueWork(UNIQUE_WORK_NAME)
     }
 
+    // ---------------- M11.4 会话级定时分析 ----------------
+
+    private const val UNIQUE_CONV_PREFIX = "conv_analysis_"
+
+    /**
+     * 为单个已关注会话设置独立分析周期（每会话一个 unique periodic 任务，UPDATE 策略）。
+     * 任务带 forceKey 输入（跳过关注名单过滤，排期本身就代表显式指定）+ quiet 标记
+     * （窗口未变化时静默跳过，不覆写全局分析状态文案）。
+     */
+    fun scheduleForConv(context: Context, key: ConvKey, intervalMinutes: Long) {
+        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            UNIQUE_CONV_PREFIX + key.id,
+            ExistingPeriodicWorkPolicy.UPDATE,
+            PeriodicWorkRequestBuilder<AnalysisWorker>(intervalMinutes, TimeUnit.MINUTES)
+                .setInputData(
+                    androidx.work.Data.Builder()
+                        .putString(AnalysisWorker.KEY_FORCE_PKG, key.pkg)
+                        .putString(AnalysisWorker.KEY_FORCE_CONVERSATION, key.conversation)
+                        .putBoolean(AnalysisWorker.KEY_QUIET, true)
+                        .build()
+                )
+                .build()
+        )
+        // 兜底：设置周期后立刻先跑一轮，用户马上能看到分析结果
+        enqueueAnalysisNow(context, key)
+    }
+
+    /** 取消单个会话的定时分析。 */
+    fun cancelForConv(context: Context, key: ConvKey) {
+        WorkManager.getInstance(context).cancelUniqueWork(UNIQUE_CONV_PREFIX + key.id)
+    }
+
+    /**
+     * 同步全部会话级排期：App 启动/设置变化后调用。
+     * 会话被取消关注（不在名单）或总开关关闭时，对应 unique 任务被取消（清孤儿）。
+     */
+    fun syncAll(context: Context) {
+        val wm = WorkManager.getInstance(context)
+        ConvAnalysisScheduleStore.all(context).forEach { (id, minutes) ->
+            val key = ConvKey.parse(id)
+            if (minutes <= 0 || !WatchlistStore.isWatched(context, key)) {
+                wm.cancelUniqueWork(UNIQUE_CONV_PREFIX + id)
+            }
+        }
+    }
+
     /**
      * 立即分析一次（不等周期到点），结果同样写回 AnalysisConfig。
      * @param forceKey 非空时只分析该会话并跳过窗口去重

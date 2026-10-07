@@ -316,6 +316,13 @@
     <string name="menu_refresh">刷新列表</string>
     <string name="menu_clear">清除记录…</string>
 
+    <!-- M11.4 会话级定时分析 -->
+    <string name="conv_schedule_label">定时分析本会话</string>
+    <string name="conv_schedule_interval">分析周期</string>
+    <string name="conv_schedule_on">已开启定时分析</string>
+    <string name="conv_schedule_off">已关闭定时分析</string>
+    <string name="conv_schedule_hint">开启后按周期自动分析本会话（窗口有变化时）；取消关注会话会自动停用。</string>
+
     <!-- M11 通知来源白名单 -->
     <string name="sources_whitelist_mode">只监控勾选的应用（白名单）</string>
     <string name="sources_add_apps">＋ 添加应用</string>
