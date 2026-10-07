@@ -150,6 +150,12 @@ Java_com_notifyme_android_LlamaJni_nativeComplete(
     sparams.temp = temperature;
     common_sampler * sampler = common_sampler_init(st->model, sparams);
 
+    // Independent completions must not inherit KV cache positions from the
+    // previous one: the cache still holds old prompt+generated positions, and
+    // decoding a fresh prompt from position 0 on top of it fails (prefill
+    // decode error on the second and later calls). Clear it every time.
+    llama_memory_clear(llama_get_memory(st->ctx), /*data=*/true);
+
     // Prefill: decode prompt tokens, request logits only on the last one.
     common_batch_clear(st->batch);
     for (size_t i = 0; i < prompt_tokens.size(); ++i) {
