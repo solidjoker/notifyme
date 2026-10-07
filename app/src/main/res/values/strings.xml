@@ -248,7 +248,7 @@
     <!-- 后端分析 -->
     <string name="analysis_section_title">🧠 后端分析</string>
     <string name="analysis_enabled_switch">启用后端分析</string>
-    <string name="s1_section_title">System 1 · 轻量判定（laya 协议）</string>
+    <string name="s1_section_title">System 1 · Laya 模型（轻量判定）</string>
     <string name="s1_type_label">类型</string>
     <!-- 与 AnalysisConfig.S1_TYPE_LOCAL / S1_TYPE_REMOTE / S1_TYPE_LOCAL_MODEL 一一对应 -->
     <string-array name="s1_type_labels">
@@ -306,7 +306,7 @@
     <string name="analysis_baseurl_hint">分析服务地址，如 http://127.0.0.1:8124</string>
     <string name="analysis_user_hint">Basic 账号（公网入口用，可空）</string>
     <string name="analysis_pass_hint">Basic 密码（可空）</string>
-    <string name="analysis_model_hint">模型名，默认 laya-multilingual</string>
+    <string name="analysis_model_hint">Laya 模型名，默认 laya-multilingual</string>
     <string name="btn_save_analysis">保存分析配置</string>
 
     <!-- M11 主界面菜单 -->
@@ -329,15 +329,15 @@
     <string name="analysis_enqueued">已加入分析队列，稍后刷新查看状态</string>
     <string name="analysis_preset_labels_hint">切换预设会回填该预设上次保存的值</string>
     <string name="analysis_protocol_label">协议</string>
-    <string name="analysis_apikey_hint">API 密钥（Bearer；laya 直连 JEV 时用，可空）</string>
+    <string name="analysis_apikey_hint">API 密钥（Bearer；Laya 直连 JEV 时用，可空）</string>
     <string-array name="analysis_preset_labels">
-        <item>systemone（laya 决策）</item>
+        <item>systemone（Laya 决策模型）</item>
         <item>glm（OpenAI 兼容）</item>
         <item>custom</item>
     </string-array>
     <!-- 与 AnalysisConfig.PROTOCOL_VALUES 一一对应 -->
     <string-array name="analysis_protocol_labels">
-        <item>laya（System One 决策）</item>
+        <item>laya（System One 决策模型）</item>
         <item>openai（OpenAI 兼容对话）</item>
     </string-array>
 

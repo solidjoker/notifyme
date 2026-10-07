@@ -1,4 +1,4 @@
-﻿%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true}}}%%
 flowchart TB
     classDef start fill:#e8f5e9,stroke:#2e7d32,stroke-width:1.5px,color:#1b5e20
     classDef fork  fill:#fff8e1,stroke:#f9a825,stroke-width:2px,color:#f57f17
@@ -31,7 +31,7 @@ flowchart TB
 
     subgraph FORK2["fork 2 · s1 — System 1 轻量判定"]
         F2{"AnalysisConfig.s1Type ?"}:::fork
-        F2A["runS1SystemOne()<br/>laya 协议 · POST {baseUrl}/v1/systemone<br/>state.chat{relationship:wechat_work,<br/>conversation, messages:[[from,text]], latest_from}<br/>+ state.background ← PromptStore 会话级提示词<br/>题集一次批量 fan-out"]:::llmcall
+        F2A["runS1SystemOne()<br/>Laya 决策模型 · POST {baseUrl}/v1/systemone<br/>state.chat{relationship:wechat_work,<br/>conversation, messages:[[from,text]], latest_from}<br/>+ state.background ← PromptStore 会话级提示词<br/>题集一次批量 fan-out"]:::llmcall
         F2B["runS1Local()<br/>端侧 MiniCPM4-0.5B-MNN<br/>复用 openai 风格 prompt + 防御式解析"]:::llmcall
         F2 -->|"remote / systemone 预设"| F2A
         F2 -->|"local_model"| F2B
