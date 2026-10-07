@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 单条消息卡片：白底圆角卡片；首行 标签badge + 会话名 + 右对齐时间，下方发送者与内容 -->
+<!-- 单条消息卡片：白底圆角卡片；首行 标签badge + 会话名 + 右对齐时间，下方发送者与内容。
+     M11：marginStart 缩进——消息卡片在会话头下方靠右错层，体现从属层级。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
+    android:layout_marginStart="40dp"
     android:layout_marginBottom="12dp"
     android:background="@drawable/bg_card"
     android:orientation="vertical"
