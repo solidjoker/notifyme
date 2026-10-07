@@ -48,7 +48,14 @@ class SourcesActivity : Activity() {
         tvEmpty = findViewById(R.id.tvSourcesEmpty)
 
         adapter = SourceAdapter { pkg, enabled ->
-            AppSourceStore.setEnabled(this, pkg, enabled)
+            // M11 白名单模式下勾选=增删白名单成员；全部监控模式下勾选=增删 disabled
+            if (AppSourceStore.mode(this) == AppSourceStore.MODE_WHITELIST) {
+                val wl = AppSourceStore.whitelist(this).toMutableSet()
+                if (enabled) wl.add(pkg) else wl.remove(pkg)
+                AppSourceStore.setWhitelist(this, wl)
+            } else {
+                AppSourceStore.setEnabled(this, pkg, enabled)
+            }
             reload()
         }
 
@@ -139,7 +146,7 @@ class SourcesActivity : Activity() {
                     rows += Row(
                         pkg = pkg,
                         label = pkg,
-                        enabled = true,
+                        enabled = AppSourceStore.isEnabled(this, pkg),
                         canA11y = AppSourceRegistry.a11yConfigFor(pkg) != null
                     )
                 }
