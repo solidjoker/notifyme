@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">微信分析助手</string>
+    <string name="app_name">notifyme</string>
     <string name="listener_service_label">微信通知监听器</string>
 
     <string name="permission_granted">通知监听权限已授予</string>
@@ -26,9 +26,26 @@
     <string name="analysis_list_empty">暂无分析结果</string>
     <string name="group_tag">群聊</string>
     <string name="private_tag">私聊</string>
-    <string name="home_title">微信分析助手</string>
+    <string name="home_title">notifyme</string>
     <string name="nav_back">←</string>
     <string name="console_title">控制台</string>
+
+    <!-- 控制台拆分：子页标题与入口卡 -->
+    <string name="capture_page_title">采集</string>
+    <string name="analysis_page_title">分析</string>
+    <string name="reminder_page_title">日历提醒</string>
+    <string name="privacy_page_title">隐私脱敏</string>
+    <string name="overlay_page_title">悬浮通知</string>
+    <string name="console_entry_capture">📥 采集</string>
+    <string name="console_entry_capture_desc">微信对接 / 定时上报 / 历史回填 / 无障碍直读</string>
+    <string name="console_entry_analysis">🧠 分析</string>
+    <string name="console_entry_analysis_desc">后端分析 / AI 评审 / 顾问复盘</string>
+    <string name="console_entry_reminder">📅 日历提醒</string>
+    <string name="console_entry_reminder_desc">任务消息自动创建日历事件与提前量</string>
+    <string name="console_entry_privacy">🎭 隐私脱敏</string>
+    <string name="console_entry_privacy_desc">三模式脱敏 / 规则开关 / 白名单 / 预览</string>
+    <string name="console_entry_overlay">🪟 悬浮通知</string>
+    <string name="console_entry_overlay_desc">悬浮卡片 / 悬浮球 / 悬浮窗权限</string>
     <string name="watchlist_title">重点关注会话</string>
     <string name="reminder_list_title">已创建的提醒</string>
 
@@ -56,7 +73,7 @@
     <string name="keepalive_section_title">🛡 保活状态</string>
     <string name="keepalive_running">前台服务：运行中</string>
     <string name="keepalive_stopped">前台服务：未运行</string>
-    <string name="keepalive_notification_title">微信分析助手运行中</string>
+    <string name="keepalive_notification_title">notifyme 运行中</string>
     <string name="battery_whitelisted">电池优化：已忽略（白名单内）</string>
     <string name="battery_not_whitelisted">电池优化：未忽略（建议加入白名单）</string>
     <string name="btn_battery_whitelist">加入电池优化白名单</string>
@@ -66,7 +83,7 @@
     <string name="btn_console">控制台</string>
 
     <!-- 初次使用向导 -->
-    <string name="onboarding_welcome_title">欢迎使用微信分析助手</string>
+    <string name="onboarding_welcome_title">欢迎使用 notifyme</string>
     <string name="onboarding_welcome_text">本 App 通过系统官方「通知监听」能力读取微信通知消息，不注入微信、不破解协议。捕获的消息可以定时上报到你自己的服务器，也可以交给后端模型分析重点任务并自动创建日历提醒。</string>
     <string name="onboarding_step2_title">第 2 步：对接微信</string>
     <string name="onboarding_step2_text">请点击下方按钮跳转系统设置，在列表中找到「微信消息获取」并打开通知访问开关。授权后返回本页即可继续。</string>
@@ -264,9 +281,9 @@
     <!-- 本地模型管理 -->
     <string name="model_manage_entry">本地模型管理</string>
     <string name="model_page_title">本地模型</string>
-    <string name="model_page_desc">端侧推理模型下载到本机后无需联网即可分析。文件较大，建议在 Wi-Fi 下下载；下载支持断点续传，杀进程后回到本页自动继续。模型来源：ModelScope（OpenBMB / MNN 官方仓）。</string>
-    <string name="model_s1_name">MiniCPM4-0.5B（MNN 4bit）</string>
-    <string name="model_s1_role">System 1 轻量判定 · 端侧快筛 · 311 MB</string>
+    <string name="model_page_desc">端侧推理模型下载到本机后无需联网即可分析。文件较大，建议在 Wi-Fi 下下载；下载支持断点续传，杀进程后回到本页自动继续。模型来源：ModelScope（Qwen / OpenBMB 官方仓）。</string>
+    <string name="model_s1_name">Qwen2.5-0.5B-Instruct（GGUF Q4_K_M）</string>
+    <string name="model_s1_role">System 1 轻量判定 · 端侧快筛 · 469 MB</string>
     <string name="model_s2_name">MiniCPM3-4B（GGUF Q4_K_M）</string>
     <string name="model_s2_role">System 2 深度分析 · 端侧生成 · 2.47 GB（需 8GB+ 内存机型，推理较慢）</string>
     <string name="model_status_none">未下载 · %1$s</string>
@@ -298,6 +315,12 @@
     <string name="menu_console">控制台</string>
     <string name="menu_refresh">刷新列表</string>
     <string name="menu_clear">清除记录…</string>
+
+    <!-- M11 通知来源白名单 -->
+    <string name="sources_whitelist_mode">只监控勾选的应用（白名单）</string>
+    <string name="sources_add_apps">＋ 添加应用</string>
+    <string name="sources_pick_title">选择要监控的应用</string>
+    <string name="sources_whitelist_hint">白名单模式：只入库勾选 App 的通知，未勾选的一律忽略。</string>
     <string name="btn_test_connection">测试连接</string>
     <string name="btn_analysis_now">立即分析一次</string>
     <string name="analysis_status_none">尚未分析</string>

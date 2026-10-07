@@ -37,6 +37,12 @@ object AppSourceStore {
     private const val KEY_OBSERVED = "observed"
     private const val KEY_DISABLED = "disabled"
 
+    // M11 监控模式：all=全部监控（可单独关闭）；whitelist=只监控白名单内的 App
+    const val MODE_ALL = "all"
+    const val MODE_WHITELIST = "whitelist"
+    private const val KEY_MODE = "mode"
+    private const val KEY_WHITELIST = "whitelist"
+
     /** 记录一次「有消息成功入库」：返回新增/更新的来源；黑名单/空包名返回 null。 */
     @Synchronized
     fun recordSeen(context: Context, pkg: String, label: String): ObservedSource? =
@@ -53,6 +59,19 @@ object AppSourceStore {
     @Synchronized
     fun setEnabled(context: Context, pkg: String, enabled: Boolean) =
         core(context).setEnabled(pkg, enabled)
+
+    // ---------- M11 监控模式与白名单 ----------
+
+    fun mode(context: Context): String = core(context).mode()
+
+    @Synchronized
+    fun setMode(context: Context, mode: String) = core(context).setMode(mode)
+
+    fun whitelist(context: Context): Set<String> = core(context).whitelist()
+
+    @Synchronized
+    fun setWhitelist(context: Context, pkgs: Set<String>) =
+        core(context).setWhitelist(pkgs)
 
     private fun prefs(context: Context) = context.applicationContext
         .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -113,8 +132,42 @@ internal class AppSourceStateCore(private val kv: Kv) {
 
     fun observed(): List<ObservedSource> = readObserved()
 
+    // ---------------- M11 监控模式与白名单 ----------------
+
+    fun mode(): String = kv.getString("mode", "all")
+
+    fun setMode(mode: String) {
+        kv.putString("mode", if (mode == "whitelist") "whitelist" else "all")
+    }
+
+    fun whitelist(): Set<String> = readWhitelist()
+
+    fun setWhitelist(pkgs: Set<String>) {
+        val arr = JSONArray()
+        pkgs.forEach { arr.put(it) }
+        kv.putString("whitelist", arr.toString())
+    }
+
+    private fun readWhitelist(): Set<String> {
+        val raw = kv.getString("whitelist", "[]")
+        val result = mutableSetOf<String>()
+        try {
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val pkg = arr.optString(i)
+                if (pkg.isNotEmpty()) result.add(pkg)
+            }
+        } catch (e: Exception) {
+            // 损坏按空白名单（= 白名单模式下什么都不收，宁可保守）
+        }
+        return result
+    }
+
+    private fun readMode(): String = kv.getString("mode", "all")
+
     fun isEnabled(pkg: String): Boolean {
         if (AppSourceRegistry.isBlocked(pkg)) return false
+        if (readMode() == "whitelist") return pkg in readWhitelist()
         return pkg !in readDisabled()
     }
 

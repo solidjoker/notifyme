@@ -116,7 +116,7 @@ android {
             // 与主包同名同图标时用户极易点错（已实际发生：装了 open 包却以为在用测试版，
             // 表现为「无预置模型、无历史回填」——open 包零预置是设计使然）。
             // 测试版桌面名加后缀，两个图标一眼可辨。
-            resValue("string", "app_name", "微信分析助手·测试")
+            resValue("string", "app_name", "notifyme·测试")
             buildConfigField("String", "DEFAULT_ANALYSIS_PROTOCOL", bcString("openai"))
             buildConfigField("String", "DEFAULT_ANALYSIS_URL", bcString(secret("GLM_BASE_URL")))
             buildConfigField("String", "DEFAULT_ANALYSIS_KEY", bcString(secret("GLM_API_KEY")))

@@ -5,11 +5,13 @@ package com.notifyme.android
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckedTextView
+import android.widget.Switch
 import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -53,7 +55,55 @@ class SourcesActivity : Activity() {
         val recycler = findViewById<RecyclerView>(R.id.recyclerSources)
         recycler.layoutManager = LinearLayoutManager(this)
         recycler.adapter = adapter
+
+        // M11 监控模式：白名单开关 + 添加应用选择器
+        val modeSwitch = findViewById<Switch>(R.id.switchWhitelistMode)
+        val btnAddApps = findViewById<TextView>(R.id.btnAddApps)
+        modeSwitch.isChecked = AppSourceStore.mode(this) == AppSourceStore.MODE_WHITELIST
+        btnAddApps.visibility =
+            if (modeSwitch.isChecked) View.VISIBLE else View.GONE
+        modeSwitch.setOnCheckedChangeListener { _, checked ->
+            AppSourceStore.setMode(
+                this,
+                if (checked) AppSourceStore.MODE_WHITELIST else AppSourceStore.MODE_ALL
+            )
+            btnAddApps.visibility = if (checked) View.VISIBLE else View.GONE
+            reload()
+        }
+        btnAddApps.setOnClickListener { showAppPicker() }
+
         reload()
+    }
+
+    /** M11 白名单模式的应用选择器：列出所有有桌面入口的已安装应用，多选。 */
+    private fun showAppPicker() {
+        val pm = packageManager
+        val launchables = pm.queryIntentActivities(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0
+        )
+        data class AppInfo(val pkg: String, val label: String)
+        val apps = launchables.mapNotNull { ri ->
+            val pkg = ri.activityInfo.packageName
+            if (pkg == packageName || AppSourceRegistry.isBlocked(pkg)) return@mapNotNull null
+            AppInfo(pkg, ri.loadLabel(pm).toString().ifBlank { pkg })
+        }.distinctBy { it.pkg }.sortedBy { it.label }
+
+        val current = AppSourceStore.whitelist(this)
+        val preselected = apps.map { it.pkg in current }.toBooleanArray()
+        val labels = apps.map { it.label }.toTypedArray()
+
+        android.app.AlertDialog.Builder(this)
+            .setTitle(R.string.sources_pick_title)
+            .setMultiChoiceItems(labels, preselected) { _, which, isChecked ->
+                preselected[which] = isChecked
+            }
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val picked = apps.filterIndexed { idx, _ -> preselected[idx] }.map { it.pkg }.toSet()
+                AppSourceStore.setWhitelist(this, picked)
+                reload()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     /** 重新合并数据源并刷新（启停切换后状态立即回读，不依赖内存）。 */
@@ -80,6 +130,19 @@ class SourcesActivity : Activity() {
                 enabled = AppSourceStore.isEnabled(this, pkg),
                 canA11y = AppSourceRegistry.a11yConfigFor(pkg) != null
             )
+        }
+        // M11 白名单模式：白名单里的 App 即使还没收到过通知也要出现在列表里（可勾选）
+        val whitelistMode = AppSourceStore.mode(this) == AppSourceStore.MODE_WHITELIST
+        if (whitelistMode) {
+            AppSourceStore.whitelist(this).filter { it !in seen && it !in observed.keys }
+                .forEach { pkg ->
+                    rows += Row(
+                        pkg = pkg,
+                        label = pkg,
+                        enabled = true,
+                        canA11y = AppSourceRegistry.a11yConfigFor(pkg) != null
+                    )
+                }
         }
         adapter.submit(rows)
         tvEmpty.visibility = if (rows.isEmpty()) View.VISIBLE else View.GONE

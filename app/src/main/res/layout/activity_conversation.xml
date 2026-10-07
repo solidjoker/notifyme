@@ -49,6 +49,20 @@
             android:textSize="17sp"
             android:textStyle="bold" />
 
+        <!-- M11 来源 App 标记：这条会话的通知来自哪个应用 -->
+        <TextView
+            android:id="@+id/tvAppBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/bg_tag_private"
+            android:paddingStart="6dp"
+            android:paddingTop="2dp"
+            android:paddingEnd="6dp"
+            android:paddingBottom="2dp"
+            android:textSize="11sp"
+            android:visibility="gone" />
+
         <Button
             android:id="@+id/btnOpenApp"
             android:layout_width="wrap_content"
@@ -205,6 +219,16 @@
                     android:text="@string/btn_analyze_this"
                     android:textColor="@color/card_bg"
                     android:textSize="14sp" />
+
+                <!-- 分析进行中进度条：观察本会话 WorkManager tag，排队/运行时显示 -->
+                <ProgressBar
+                    android:id="@+id/progressAnalyzeThis"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:indeterminate="true"
+                    android:visibility="gone" />
             </LinearLayout>
         </LinearLayout>
     </androidx.core.widget.NestedScrollView>

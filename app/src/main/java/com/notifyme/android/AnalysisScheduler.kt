@@ -48,7 +48,15 @@ object AnalysisScheduler {
      */
     fun enqueueAnalysisNow(context: Context, forceKey: ConvKey? = null) {
         val builder = OneTimeWorkRequestBuilder<AnalysisWorker>()
-            .setConstraints(networkConstraint())
+        // M11：纯端侧配置不需要网络——加 CONNECTED 约束会让离线端侧分析
+        // 永远卡在 ENQUEUED（进度条不出现/一直转）。只有可能走云端的配置才要求网络。
+        val cfg = AnalysisConfig(context)
+        val fullyLocal = cfg.s1Type == AnalysisConfig.S1_TYPE_LOCAL_MODEL &&
+            (!cfg.s2Enabled || cfg.s2Provider == AnalysisConfig.S2_PROVIDER_LOCAL)
+        if (!fullyLocal) {
+            builder.setConstraints(networkConstraint())
+        }
+        builder
             // 通用 tag：所有立即分析；UI 可观察整体/单会话进度
             .addTag(TAG_ON_DEMAND)
         if (forceKey != null) {

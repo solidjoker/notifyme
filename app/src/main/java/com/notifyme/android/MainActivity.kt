@@ -742,14 +742,9 @@ class MainActivity : Activity() {
             holder.tvPreview.text = header.preview
             holder.tvArrow.text = if (header.collapsed) "▶" else "▼"
 
-            // 来源 App 标记：微信不显示（主场景），其它 App 显示名字防止同名会话混淆
-            val appName = key.displayLabel(header.appLabel)
-            if (key.pkg == AppSourceRegistry.PKG_WECHAT) {
-                holder.tvApp.visibility = View.GONE
-            } else {
-                holder.tvApp.visibility = View.VISIBLE
-                holder.tvApp.text = appName
-            }
+            // 来源 App 标记（M11：所有 App 都显示，含微信——多来源场景下来源必须可见）
+            holder.tvApp.visibility = View.VISIBLE
+            holder.tvApp.text = key.displayLabel(header.appLabel)
 
             // 批量选择视觉：勾选符 + 会话名着色
             val selected = selectionActive && key in selectedConversations

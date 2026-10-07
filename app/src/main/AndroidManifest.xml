@@ -54,6 +54,11 @@
 
         <!-- 控制台与各功能页：仅本 App 内部跳转 -->
         <activity android:name=".ConsoleActivity" android:exported="false" />
+        <activity android:name=".CaptureActivity" android:exported="false" />
+        <activity android:name=".AnalysisSettingsActivity" android:exported="false" />
+        <activity android:name=".ReminderSettingsActivity" android:exported="false" />
+        <activity android:name=".PrivacySettingsActivity" android:exported="false" />
+        <activity android:name=".OverlaySettingsActivity" android:exported="false" />
         <activity android:name=".OnboardingActivity" android:exported="false" />
         <activity android:name=".WatchlistActivity" android:exported="false" />
         <activity android:name=".SourcesActivity" android:exported="false" />

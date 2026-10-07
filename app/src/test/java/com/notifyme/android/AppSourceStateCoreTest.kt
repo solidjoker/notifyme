@@ -104,6 +104,51 @@ class AppSourceStateCoreTest {
 
     // ---------------- 持久化与损坏容错 ----------------
 
+    // ---------------- M11 监控模式与白名单 ----------------
+
+    @Test
+    fun `默认模式 all 未配置包默认启用`() {
+        assertEquals("all", core.mode())
+        assertTrue(core.isEnabled("com.example.app"))
+    }
+
+    @Test
+    fun `whitelist 模式只启用名单内的包`() {
+        core.setMode("whitelist")
+        core.setWhitelist(setOf("com.example.app"))
+        assertTrue(core.isEnabled("com.example.app"))
+        assertFalse(core.isEnabled("com.other.app"))
+    }
+
+    @Test
+    fun `whitelist 模式黑名单仍然恒不启用`() {
+        core.setMode("whitelist")
+        core.setWhitelist(setOf("android"))
+        assertFalse(core.isEnabled("android"))
+    }
+
+    @Test
+    fun `切回 all 模式 恢复 disabled 语义`() {
+        core.setWhitelist(setOf("com.example.app"))
+        core.setEnabled("com.other.app", false)
+        core.setMode("whitelist")
+        assertFalse(core.isEnabled("com.other.app"))
+        core.setMode("all")
+        assertFalse(core.isEnabled("com.other.app"))
+        assertTrue(core.isEnabled("com.example.app"))
+    }
+
+    @Test
+    fun `mode 与 whitelist 在同一 KV 上持久`() {
+        val kv = AppSourceStateCore.memoryKv()
+        val first = AppSourceStateCore(kv)
+        first.setMode("whitelist")
+        first.setWhitelist(setOf("com.a", "com.b"))
+        val reopened = AppSourceStateCore(kv)
+        assertEquals("whitelist", reopened.mode())
+        assertEquals(setOf("com.a", "com.b"), reopened.whitelist())
+    }
+
     @Test
     fun `状态在同一 KV 上持久 新建 core 实例仍读得到`() {
         val kv = AppSourceStateCore.memoryKv()

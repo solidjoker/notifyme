@@ -78,6 +78,7 @@ class ConversationActivity : Activity() {
     private lateinit var tvPromptBadge: TextView
     private lateinit var tvLastAnalysisTime: TextView
     private lateinit var btnAnalyzeThis: Button
+    private lateinit var progressAnalyzeThis: android.widget.ProgressBar
     private lateinit var llQuickReply: View
 
     private val timeFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
@@ -138,6 +139,7 @@ class ConversationActivity : Activity() {
         tvPromptBadge = findViewById(R.id.tvPromptBadge)
         tvLastAnalysisTime = findViewById(R.id.tvLastAnalysisTime)
         btnAnalyzeThis = findViewById(R.id.btnAnalyzeThis)
+        progressAnalyzeThis = findViewById(R.id.progressAnalyzeThis)
         llQuickReply = findViewById(R.id.llQuickReply)
 
         findViewById<TextView>(R.id.btnBack).setOnClickListener { finish() }
@@ -163,6 +165,16 @@ class ConversationActivity : Activity() {
             handler.removeCallbacks(pollRefresh)
             handler.postDelayed(pollRefresh, POLL_INTERVAL_MS)
         }
+
+        // M11 分析进度条：观察本会话 WorkManager tag，排队/运行时显示、结束消失
+        androidx.work.WorkManager.getInstance(this)
+            .getWorkInfosByTagLiveData(AnalysisScheduler.convTag(key))
+            .observeForever { infos ->
+                val active = infos?.any { !it.state.isFinished } == true
+                progressAnalyzeThis.visibility =
+                    if (active) View.VISIBLE else View.GONE
+                btnAnalyzeThis.isEnabled = !active
+            }
     }
 
     override fun onResume() {
