@@ -8,9 +8,6 @@ import android.os.Handler
 import android.os.Looper
 import org.json.JSONObject
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * 一条捕获到的聊天消息。
@@ -98,7 +95,9 @@ object MessageStore {
     /** 日期分组兜底 key：timestamp ≤0（如 a11y 直读估算失败）的消息归「未标注日期」组 */
     const val DAY_KEY_UNKNOWN = "__unknown__"
 
-    private val dayFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+    // 日期分组用 java.time（API 26+ 可用）：原来的静态 SimpleDateFormat 在
+    // UI / Worker / prefs 剔除等多线程路径共用，同一实例被并发 format 会产出错日期
+    private val dayZone: java.time.ZoneId = java.time.ZoneId.systemDefault()
 
     /**
      * 进程内变更观察者：新消息入库后通知 UI 立即刷新，解决「App 停在前台时
@@ -138,7 +137,9 @@ object MessageStore {
 
     /** 消息所属日期 key：yyyy-MM-dd（本机时区）；timestamp≤0 返回 [DAY_KEY_UNKNOWN]。 */
     fun dayKeyOf(m: ChatMessage): String =
-        if (m.timestamp > 0) dayFormat.format(Date(m.timestamp)) else DAY_KEY_UNKNOWN
+        if (m.timestamp > 0) {
+            java.time.Instant.ofEpochMilli(m.timestamp).atZone(dayZone).toLocalDate().toString()
+        } else DAY_KEY_UNKNOWN
 
     /**
      * 按目录构造核心逻辑（不依赖 Context）：单测与内部复用入口。
@@ -152,7 +153,12 @@ object MessageStore {
 
     /** 追加一条消息（JSON Lines，一行一条）；入库后通知已注册的 UI 观察者。 */
     @Synchronized
-    fun append(context: Context, message: ChatMessage) = core(context).append(message)
+    fun append(context: Context, message: ChatMessage) {
+        // 自身/系统源永不入库（统一收口）：监听器入口已挡一次，
+        // 这里兜住 a11y 直读等其他写入路径，杜绝「采集自己的状态通知」噪声
+        if (AppSourceRegistry.isBlocked(message.pkg)) return
+        core(context).append(message)
+    }
 
     /**
      * 读取最近 [limit] 条消息，按时间倒序（最新在前）。
@@ -162,6 +168,28 @@ object MessageStore {
     @Synchronized
     fun readRecent(context: Context, limit: Int = 200): List<ChatMessage> =
         core(context).readRecent(limit)
+
+    /**
+     * 删除 [cutoffMs]（毫秒时间戳）之前的消息（数据保留策略：本地只留 7 天）。
+     * timestamp ≤0 与损坏行保守保留。返回实际删除条数。
+     */
+    @Synchronized
+    fun pruneOlderThan(context: Context, cutoffMs: Long): Int {
+        val store = JsonlStore(java.io.File(context.filesDir, FILE_NAME))
+        if (!store.exists()) return 0
+        val result = RetentionCore.prune(store.readRawLines(), cutoffMs) { line ->
+            try {
+                org.json.JSONObject(line).optLong("timestamp", 0L).takeIf { it > 0 }
+            } catch (e: Exception) {
+                null // 损坏行保留
+            }
+        }
+        if (result.removed > 0) {
+            store.overwrite(result.kept)
+            notifyChanged()
+        }
+        return result.removed
+    }
 
     /** 清空全部记录。 */
     @Synchronized
@@ -189,7 +217,9 @@ object MessageStore {
 
     /**
      * 存储层诊断（W4）：原始行数 / 可解析行数 / 损坏行数 / 文件字节数。
+     * 加锁：追加写与全量读并发时可能读到写了一半的行，被误计为「损坏行」。
      */
+    @Synchronized
     fun storageStats(context: Context): StorageStats = core(context).storageStats()
 
     /**
@@ -259,6 +289,16 @@ internal class MessageStoreCore(
     private val onChange: () -> Unit = {}
 ) {
 
+    companion object {
+        /**
+         * 「最近消息」的尾部读取窗口（原始行数）。
+         *
+         * 窗口越大，[readRecent] 的结果越接近全量读取（也越能让 ts<=0 的
+         * 「未标注日期」消息落进窗口），内存占用只与窗口成正比、与文件总大小无关。
+         */
+        const val TAIL_LINES = 5_000
+    }
+
     /** 追加一条消息（JSON Lines，一行一条）。 */
     fun append(message: ChatMessage) {
         store.appendLine(message.toJson().toString())
@@ -289,13 +329,15 @@ internal class MessageStoreCore(
     /**
      * 读取最近 [limit] 条消息，按时间倒序（最新在前）。
      *
-     * 文件较大时只从尾部读必要行数之外的简化实现：整体读入再截取，
-     * 对个人学习规模（数千条）足够；如需更大规模再换成分页/索引。
+     * 只从文件尾部读 [TAIL_LINES] 行以内的窗口（见 [JsonlStore.readTailLines]）：
+     * append 语义下文件顺序≈时间顺序，尾部即最近，因此对正常规模的历史结果与
+     * 全量读取一致；超出窗口的极老消息不参与排序（换取 O(窗口) 而非 O(文件) 的内存）。
+     * 调用方都在后台线程（UI 侧另加代次校验），故不做缓存。
      */
     fun readRecent(limit: Int = 200): List<ChatMessage> {
         if (!store.exists()) return emptyList()
 
-        val all = store.readRawLines().mapNotNull { line ->
+        val all = store.readTailLines(TAIL_LINES).mapNotNull { line ->
             try {
                 ChatMessage.fromJson(JSONObject(line))
             } catch (e: Exception) {
@@ -357,8 +399,13 @@ internal class MessageStoreCore(
                 out += line // 损坏行原样保留
                 continue
             }
-            if (obj.optString("pkg").isEmpty()) fixed += 1
-            out += ChatMessage.fromJson(obj).toJson().toString()
+            if (obj.optString("pkg").isEmpty()) {
+                // 只补缺失的 pkg，**不重建**整个对象：fromJson().toJson() 会把本版本
+                // 不认识的字段直接丢掉（更新版客户端写进来的新字段就是静默数据损失）。
+                obj.put("pkg", AppSourceRegistry.PKG_WECHAT)
+                fixed += 1
+            }
+            out += obj.toString()
         }
         if (fixed == 0) return 0
         store.overwrite(out)
@@ -446,8 +493,14 @@ internal class MessageStoreCore(
         if (m.source == "a11y-extract") {
             // 无障碍直读的时间戳是估算值（每次运行都变），不参与去重，
             // 否则同一会话重复提取会反复插入重复消息
-            "${m.pkg}|${m.conversation}${m.sender}|${m.text}|a11y"
+            "${keyPart(m.pkg)}|${keyPart(m.conversation)}|${keyPart(m.sender)}|${keyPart(m.text)}|a11y"
         } else {
-            "${m.pkg}|${m.conversation}${m.sender}|${m.text}|${m.timestamp / 1000}"
+            "${keyPart(m.pkg)}|${keyPart(m.conversation)}|${keyPart(m.sender)}|${keyPart(m.text)}|${m.timestamp / 1000}"
         }
+
+    /**
+     * 去重键字段：长度前缀 + 冒号，避免「会话A + 发送者B」与「会话AB + 空发送者」
+     * 拼出同一个键（原实现直接相邻拼接，长会话名会吞掉相邻字段）导致消息被误判重复丢弃。
+     */
+    private fun keyPart(value: String): String = value.length.toString() + ":" + value
 }

@@ -11,6 +11,7 @@
 
 #include <jni.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <unistd.h>
@@ -71,13 +72,20 @@ Java_com_notifyme_android_LlamaJni_nativeCreate(
         JNIEnv * env, jclass, jstring jmodel_path, jint jn_ctx) {
 
     const char * model_path = env->GetStringUTFChars(jmodel_path, nullptr);
+    if (!model_path) {
+        throw_rt(env, "模型路径不可用（内存不足）");
+        return 0;
+    }
+    // 先拷成 std::string 再释放：ReleaseStringUTFChars 之后原指针即失效，
+    // 旧实现在错误信息里继续用它（use-after-free）。
+    const std::string model_path_str(model_path);
 
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = 0;
-    llama_model * model = llama_model_load_from_file(model_path, mparams);
+    llama_model * model = llama_model_load_from_file(model_path_str.c_str(), mparams);
     env->ReleaseStringUTFChars(jmodel_path, model_path);
     if (!model) {
-        throw_rt(env, std::string("无法加载模型: ") + model_path);
+        throw_rt(env, "无法加载模型: " + model_path_str);
         return 0;
     }
 
@@ -156,17 +164,24 @@ Java_com_notifyme_android_LlamaJni_nativeComplete(
     // decode error on the second and later calls). Clear it every time.
     llama_memory_clear(llama_get_memory(st->ctx), /*data=*/true);
 
-    // Prefill: decode prompt tokens, request logits only on the last one.
-    common_batch_clear(st->batch);
-    for (size_t i = 0; i < prompt_tokens.size(); ++i) {
-        const bool want_logit = (i == prompt_tokens.size() - 1);
-        common_batch_add(st->batch, prompt_tokens[i],
-                         static_cast<llama_pos>(i), {0}, want_logit);
-    }
-    if (llama_decode(st->ctx, st->batch) != 0) {
-        common_sampler_free(sampler);
-        throw_rt(env, "prefill 解码失败");
-        return nullptr;
+    // Prefill: decode the prompt in DEFAULT_BATCH-sized chunks, requesting logits
+    // only on the very last token. The batch buffer holds DEFAULT_BATCH tokens;
+    // the previous version added every prompt token in one batch, so any prompt
+    // longer than that wrote past the end of the buffer (heap corruption).
+    for (size_t start = 0; start < prompt_tokens.size(); start += DEFAULT_BATCH) {
+        const size_t end = std::min(
+            prompt_tokens.size(), start + static_cast<size_t>(DEFAULT_BATCH));
+        common_batch_clear(st->batch);
+        for (size_t i = start; i < end; ++i) {
+            const bool want_logit = (i + 1 == prompt_tokens.size());
+            common_batch_add(st->batch, prompt_tokens[i],
+                             static_cast<llama_pos>(i), {0}, want_logit);
+        }
+        if (llama_decode(st->ctx, st->batch) != 0) {
+            common_sampler_free(sampler);
+            throw_rt(env, "prefill 解码失败");
+            return nullptr;
+        }
     }
 
     llama_pos position = static_cast<llama_pos>(prompt_tokens.size());

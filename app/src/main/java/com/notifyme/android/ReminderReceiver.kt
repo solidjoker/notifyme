@@ -69,12 +69,17 @@ class ReminderReceiver : BroadcastReceiver() {
         val eventTime = intent.getLongExtra(EXTRA_EVENT_TIME, 0L)
         Log.i("ReminderReceiver", "到点提醒触发: key=$dedupKey title=$title")
 
-        // Android 13+ 通知运行时权限：未授予时只能放弃本次提醒（主界面有引导）
+        // Android 13+ 通知运行时权限：未授予时这次提醒发不出去，但必须如实回写状态——
+        // 原先直接 return，提醒记录仍显示「已设App内提醒」，用户以为提醒在，实则静默丢失。
         if (Build.VERSION.SDK_INT >= 33 &&
             context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
         ) {
             Log.w("ReminderReceiver", "无通知权限，提醒无法弹出: $dedupKey")
+            ReminderStore.markStatus(
+                context, dedupKey, ReminderRecord.STATUS_FAILED,
+                "失败：无通知权限，提醒未弹出（请在系统设置里允许通知）"
+            )
             return
         }
 
@@ -106,6 +111,8 @@ class ReminderReceiver : BroadcastReceiver() {
             .setStyle(NotificationCompat.BigTextStyle().bigText(content))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            // 锁屏不显示提醒正文（PRIVATE 只显示"内容已隐藏"）
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setAutoCancel(true)
             .setContentIntent(tapPendingIntent)
             .build()

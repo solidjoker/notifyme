@@ -28,6 +28,16 @@ object SyncScheduler {
 
     private const val UNIQUE_WORK_NAME = "wechat_sync"
 
+    /**
+     * 周期任务标记：Worker 用它区分「周期上报」与「立即同步一次」。
+     * 周期任务一旦返回 Result.failure() 会被 WorkManager 永久取消
+     * （一次 401 就等于定时上报彻底停摆），因此 401 在周期路径下必须降级为 success。
+     */
+    internal const val TAG_PERIODIC = "sync_periodic"
+
+    /** 一次性「立即同步」标记。 */
+    internal const val TAG_ON_DEMAND = "sync_on_demand"
+
     private fun networkConstraint(): Constraints = Constraints.Builder()
         .setRequiredNetworkType(NetworkType.CONNECTED)
         .build()
@@ -36,6 +46,7 @@ object SyncScheduler {
     fun schedule(context: Context, intervalMinutes: Long) {
         val request = PeriodicWorkRequestBuilder<SyncWorker>(intervalMinutes, TimeUnit.MINUTES)
             .setConstraints(networkConstraint())
+            .addTag(TAG_PERIODIC)
             .build()
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             UNIQUE_WORK_NAME,
@@ -53,6 +64,7 @@ object SyncScheduler {
     fun enqueueSyncNow(context: Context): java.util.UUID {
         val request = OneTimeWorkRequestBuilder<SyncWorker>()
             .setConstraints(networkConstraint())
+            .addTag(TAG_ON_DEMAND)
             .build()
         WorkManager.getInstance(context).enqueue(request)
         return request.id

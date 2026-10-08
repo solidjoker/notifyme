@@ -90,6 +90,9 @@ class ConversationActivity : Activity() {
 
     /** 已展示的分析记录时间：轮询时只有拿到新结果才重渲染面板 */
     private var shownAnalyzedAt = 0L
+
+    /** 渲染代次：后台装载完成时若已有更新的渲染请求，丢弃过期结果 */
+    private var renderToken = 0
     private var pollCount = 0
 
     /** 消息多选删除：ActionMode 与选中消息集合（ChatMessage 是 data class，按值去重） */
@@ -102,18 +105,27 @@ class ConversationActivity : Activity() {
      */
     private val storeListener = MessageStore.OnMessagesChangedListener { renderContent() }
 
-    /** 分析后轮询刷新任务：有新 case 记录落库就重渲染并停止 */
+    /**
+     * 分析后轮询刷新任务：有新 case 记录落库就重渲染并停止。
+     * 读 analysis.jsonl 是整文件解析，不能放主线程（每秒一次必然掉帧）。
+     */
     private val pollRefresh = object : Runnable {
         override fun run() {
-            val record = AnalysisStore.latestByConvKey(this@ConversationActivity)[key]
-            if (record != null && record.analyzedAt > shownAnalyzedAt) {
-                renderContent()
-                return // 拿到新结果，停止轮询
-            }
-            pollCount++
-            if (pollCount < POLL_MAX_COUNT) {
-                handler.postDelayed(this, POLL_INTERVAL_MS)
-            }
+            Thread {
+                val record = AnalysisStore.latestByConvKey(this@ConversationActivity)[key]
+                val fresh = record != null && record.analyzedAt > shownAnalyzedAt
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    if (fresh) {
+                        renderContent() // 拿到新结果，停止轮询
+                        return@runOnUiThread
+                    }
+                    pollCount++
+                    if (pollCount < POLL_MAX_COUNT) {
+                        handler.postDelayed(this, POLL_INTERVAL_MS)
+                    }
+                }
+            }.start()
         }
     }
 
@@ -241,20 +253,31 @@ class ConversationActivity : Activity() {
         super.onDestroy()
     }
 
-    /** 全量渲染：对话气泡 + 分析面板（数据量小，直接重建视图足够）。 */
+    /**
+     * 全量渲染：对话气泡 + 分析面板。
+     * 读盘（messages.jsonl + analysis.jsonl 全量解析）放后台线程，视图更新回主线程；
+     * [renderToken] 保证过期的装载结果不会覆盖更新的一次渲染。
+     */
     private fun renderContent() {
-        val messages = MessageStore.readRecent(this, 500)
-            .filter { it.convKey == key }
-            .sortedBy { it.timestamp }
-        renderHeader(messages.lastOrNull()?.isGroup ?: false)
-        renderChat(messages)
-        refreshQuickReply()
-        val record = AnalysisStore.latestByConvKey(this)[key]
-        renderAnalysisPanel(record)
-        shownAnalyzedAt = record?.analyzedAt ?: 0L
+        val token = ++renderToken
+        val convKey = key
+        Thread {
+            val messages = MessageStore.readRecent(this, 500)
+                .filter { it.convKey == convKey }
+                .sortedBy { it.timestamp }
+            val record = AnalysisStore.latestByConvKey(this)[convKey]
+            runOnUiThread {
+                if (token != renderToken || isFinishing || isDestroyed) return@runOnUiThread
+                renderHeader(messages.lastOrNull()?.isGroup ?: false)
+                renderChat(messages)
+                refreshQuickReply()
+                renderAnalysisPanel(record)
+                shownAnalyzedAt = record?.analyzedAt ?: 0L
 
-        // 滚动到底部：最后一条消息与分析面板入镜（分析结果在对话后面显示）
-        scrollChat.post { scrollChat.fullScroll(View.FOCUS_DOWN) }
+                // 滚动到底部：最后一条消息与分析面板入镜（分析结果在对话后面显示）
+                scrollChat.post { scrollChat.fullScroll(View.FOCUS_DOWN) }
+            }
+        }.start()
     }
 
     /** 顶部群/私 badge（与首页同款视觉：绿底白字=群聊，灰底灰字=私聊）。 */

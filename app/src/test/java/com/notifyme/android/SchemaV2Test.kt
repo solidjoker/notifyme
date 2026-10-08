@@ -169,4 +169,21 @@ class SchemaV2Test {
         assertEquals(1, core.normalizeSchema())
         assertEquals(0, core.normalizeSchema())
     }
+
+    @Test
+    fun `normalizeSchema 保留本版本不认识的字段`() {
+        // 更新版客户端可能写入新字段：规范化只补缺失的 pkg，
+        // 不能靠 fromJson().toJson() 重建整行把不认识的字段洗掉（静默数据损失）
+        writeRaw(
+            """{"sender":"张三","text":"你好","timestamp":1000,"conversation":"张三","isGroup":false,"future":"x","nested":{"a":1}}"""
+        )
+
+        val fixed = core.normalizeSchema()
+
+        assertEquals(1, fixed)
+        val obj = JSONObject(dataFile.readText().trim())
+        assertEquals(wx, obj.optString("pkg"))
+        assertEquals("x", obj.optString("future"))
+        assertEquals(1, obj.optJSONObject("nested")?.optInt("a"))
+    }
 }

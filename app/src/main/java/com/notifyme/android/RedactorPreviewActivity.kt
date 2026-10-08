@@ -63,7 +63,7 @@ class RedactorPreviewActivity : Activity() {
                 }
             }
             val appTag = if (msg.pkg == AppSourceRegistry.PKG_WECHAT) "" else
-                pkgLabelLocal(msg.pkg) + " · "
+                AppSourceRegistry.displayLabel(msg.pkg) + " · "
             Row(
                 meta = "$appTag${msg.conversation} · ${msg.sender}",
                 original = full,
@@ -79,12 +79,6 @@ class RedactorPreviewActivity : Activity() {
         recycler.adapter = PreviewAdapter(rows)
     }
 
-    private fun pkgLabelLocal(pkg: String): String =
-        mapOf(
-            AppSourceRegistry.PKG_WECHAT to "微信",
-            AppSourceRegistry.PKG_FEISHU to "飞书",
-            AppSourceRegistry.PKG_DINGTALK to "钉钉"
-        )[pkg] ?: pkg
 
     private class PreviewAdapter(rows: List<Row>) :
         RecyclerView.Adapter<PreviewAdapter.VH>() {

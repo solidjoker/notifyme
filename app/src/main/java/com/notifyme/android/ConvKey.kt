@@ -22,7 +22,7 @@ data class ConvKey(val pkg: String, val conversation: String) {
 
     /** UI 展示用的应用名：注册表内置名 → 消息里带的 label → 包名兜底。 */
     fun displayLabel(appLabel: String = ""): String =
-        AppSourceRegistry.labelFor(pkg) ?: appLabel.ifBlank { null } ?: pkg
+        AppSourceRegistry.labelFor(pkg) ?: appLabel.ifBlank { null } ?: AppSourceRegistry.displayLabel(pkg)
 
     companion object {
         const val SEPARATOR = "|"

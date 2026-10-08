@@ -62,14 +62,21 @@ STATE_PATH = os.path.join(PC_DIR, "state.json")       # 增量状态
 MAIN_DB = os.path.join(DATA_DIR, "messages.db")       # 监测主库
 
 SOURCE_TAG = "pc-db"  # 本来源标记
+PKG = "com.tencent.mm"  # PC 微信包名（与安卓侧同口径，用于跨来源去重维度）
 
 # PC 微信 4.x 解密工具链：目录由环境变量 WX_TOOLCHAIN_DIR 指定
 # （工具链不随本仓库分发；未设置时在导入阶段给出可读报错）
 WX_TOOLCHAIN = os.environ.get("WX_TOOLCHAIN_DIR", "")
 if WX_TOOLCHAIN:
     WX_TOOLCHAIN = os.path.normpath(WX_TOOLCHAIN)
+    if not os.path.isdir(WX_TOOLCHAIN):
+        # 早失败：目录写错时给出可读报错，而不是后面 import 时才莫名 ImportError
+        raise RuntimeError(f"WX_TOOLCHAIN_DIR 不是有效目录: {WX_TOOLCHAIN}")
+    # 追加到 sys.path 末尾，而不是插到 sys.path[0]：
+    # sys.path[0] 的模块会优先于标准库与本仓库被 import，环境变量指向的第三方
+    # 目录不应该有这种覆盖能力。
     if WX_TOOLCHAIN not in sys.path:
-        sys.path.insert(0, WX_TOOLCHAIN)
+        sys.path.append(WX_TOOLCHAIN)
 
 MSG_DB_REL = os.path.join("message", "message_0.db")
 CONTACT_DB_REL = os.path.join("contact", "contact.db")
@@ -289,11 +296,12 @@ def extract_account(account, state_acct, existing, dst, toolchain):
                         """
                         INSERT INTO messages
                             (sender, text, timestamp, conversation, is_group,
-                             received_at, source)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                             received_at, source, pkg)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (m["sender"], m["text"], m["timestamp"],
-                         m["conversation"], m["is_group"], now_ms, SOURCE_TAG))
+                         m["conversation"], m["is_group"], now_ms, SOURCE_TAG,
+                         PKG))
                     stats["inserted"] += 1
                 except sqlite3.IntegrityError:
                     # 兜底：命中毫秒级唯一索引
@@ -316,13 +324,18 @@ def extract_account(account, state_acct, existing, dst, toolchain):
 # ------------------------------------------------------------------
 
 def _ensure_main_schema(dst):
-    """确保监测主库有 source 列（与 app.py 的迁移逻辑一致，幂等）。"""
+    """确保监测主库有 source / pkg 列（与 app.py 的迁移逻辑一致，幂等）。"""
     cols = [r[1] for r in dst.execute("PRAGMA table_info(messages)")]
     if "source" not in cols:
         dst.execute(
             "ALTER TABLE messages ADD COLUMN source TEXT "
             "NOT NULL DEFAULT 'android-notification'")
-        dst.commit()
+    if "pkg" not in cols:
+        # 老库（M2 之前）没有 pkg；历史数据都是微信，回填微信包名
+        dst.execute(
+            "ALTER TABLE messages ADD COLUMN pkg TEXT "
+            f"NOT NULL DEFAULT '{PKG}'")
+    dst.commit()
 
 
 def run_extract(full=False, account=None):
@@ -345,9 +358,12 @@ def run_extract(full=False, account=None):
     state = _load_state(full=full)
     stats = {"full": bool(full), "accounts": {}, "errors": {}}
 
-    dst = sqlite3.connect(MAIN_DB)
+    # 与服务端 app.py 同口径：主库可能正被上报/控制台写入，
+    # 不给 busy_timeout 时会直接抛 "database is locked"
+    dst = sqlite3.connect(MAIN_DB, timeout=10)
+    dst.execute("PRAGMA busy_timeout = 5000")
     try:
-        _ensure_main_schema(dst)  # 独立运行时主库可能还没迁移 source 列
+        _ensure_main_schema(dst)  # 独立运行时主库可能还没迁移 source / pkg 列
         # 建归一去重键集合：主库现有全部消息（键 = 会话+发送者+秒级时间戳+正文）
         existing = set()
         for conv, sender, ts, text in dst.execute(

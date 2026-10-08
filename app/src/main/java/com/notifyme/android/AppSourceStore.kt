@@ -115,19 +115,20 @@ internal class AppSourceStateCore(private val kv: Kv) {
 
         val list = readObserved().toMutableList()
         val idx = list.indexOfFirst { it.pkg == pkg }
-        val result = if (idx >= 0) {
+        if (idx >= 0) {
             val old = list[idx]
-            // 空 label 不覆盖旧名字；新名字非空才更新
-            val updated = old.copy(label = label.ifEmpty { old.label })
+            // 空 label 不覆盖旧名字；名字没变就别写盘——
+            // 每条通知都会调到这里，整表 JSON 序列化 + prefs 写入是采集热路径上的 O(n) 放大。
+            if (label.isEmpty() || label == old.label) return old
+            val updated = old.copy(label = label)
             list[idx] = updated
-            updated
-        } else {
-            val created = ObservedSource(pkg, label, now)
-            list += created
-            created
+            writeObserved(list)
+            return updated
         }
+        val created = ObservedSource(pkg, label, now)
+        list += created
         writeObserved(list)
-        return result
+        return created
     }
 
     fun observed(): List<ObservedSource> = readObserved()

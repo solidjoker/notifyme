@@ -307,4 +307,12 @@ object AppSourceRegistry {
 
     /** 注册表内置的展示名；未收录返回 null，调用方再向 PackageManager 查或回落包名。 */
     fun labelFor(pkg: String): String? = sourceFor(pkg)?.label
+
+    /**
+     * 展示用 App 标签：注册表内置名优先，未收录回落包名本身。
+     *
+     * 悬浮卡文字、降级通知、脱敏预览都走这里。此前这几处各自写了一份
+     * `when (pkg) { 微信 -> "微信" ... }` 映射，加一个应用源就得改多处、且容易与注册表分叉。
+     */
+    fun displayLabel(pkg: String): String = labelFor(pkg) ?: pkg
 }

@@ -32,16 +32,16 @@
         <package android:name="com.alibaba.android.rimet" />
     </queries>
 
-    <!-- android:usesCleartextTraffic="true"：允许明文 HTTP，局域网自建接收服务常见用法；
-         生产环境应改用 HTTPS 并移除此属性 -->
+    <!-- 网络安全：默认仅 HTTPS（见 res/xml/network_security_config.xml）；
+         明文 HTTP 只对本机回环/模拟器宿主放行，debug 构建整体放行便于局域网联调 -->
     <application
         android:name=".MainApplication"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar"
-        android:usesCleartextTraffic="true">
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
         <activity
             android:name=".MainActivity"

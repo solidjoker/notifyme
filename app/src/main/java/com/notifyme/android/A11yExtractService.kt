@@ -82,13 +82,22 @@ class A11yExtractService : AccessibilityService() {
             startRequested = false
         }
 
-        /** 本服务是否已在系统无障碍设置中启用（按包名子串判断，覆盖双 flavor 包名） */
+        /**
+         * 本服务是否已在系统无障碍设置中启用。
+         *
+         * 按组件名精确匹配：设置里存的是 `包名/类名`（冒号分隔多项）。原先用
+         * `enabled.contains(packageName)` 子串判断，只要装了带同名前缀的包（beta flavor 的
+         * `.test` 后缀、或别的 App 包名恰好包含本包名）就会误判为「已启用」。
+         */
         fun isEnabled(context: Context): Boolean {
             val enabled = Settings.Secure.getString(
                 context.contentResolver,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
             ).orEmpty()
-            return enabled.contains(context.packageName)
+            val cls = A11yExtractService::class.java
+            val full = "${context.packageName}/${cls.name}"
+            val short = "${context.packageName}/.${cls.simpleName}"
+            return enabled.split(':').any { it.equals(full, ignoreCase = true) || it.equals(short, ignoreCase = true) }
         }
     }
 
@@ -124,6 +133,9 @@ class A11yExtractService : AccessibilityService() {
                 )
             } finally {
                 running = false
+                // 提取期间到达的「开始」请求视为已消费：否则提取结束后，
+                // 任意一个迟到的窗口事件都会凭 startRequested 凭空再发起一次提取
+                startRequested = false
             }
         }
     }
@@ -157,9 +169,12 @@ class A11yExtractService : AccessibilityService() {
             return
         }
         val convKey = ConvKey(pkg, conversation)
-        // 群/私聊标记参考本地已有记录；界面本身拿不到可靠群标记
-        val isGroup = MessageStore.readRecent(this, 500)
-            .firstOrNull { it.convKey == convKey }?.isGroup ?: false
+        // 群/私聊标记优先沿用本地已有记录（界面本身拿不到可靠的群标记）；
+        // 首次提取的会话先按私聊解析，采集结束后再按「是否存在他人昵称」回推，
+        // 否则首次提取的群聊会被整段写死成私聊。
+        val knownIsGroup = MessageStore.readRecent(this, 500)
+            .firstOrNull { it.convKey == convKey }?.isGroup
+        val isGroup = knownIsGroup ?: false
 
         // 起始屏必须能找到消息列表，否则说明不在聊天页（如登录页/通讯录），直接中止。
         // 防碎裂的「整屏文本行兜底」只在提取中途结构漂移时启用，不在起始屏启用。
@@ -216,8 +231,15 @@ class A11yExtractService : AccessibilityService() {
         // 界面拿不到精确时间戳：以当前时间为锚，按采集顺序（新→旧）每秒递减估算，
         // 保证列表排序自然正确；source 标记避免与真实时间戳来源混淆
         val now = System.currentTimeMillis()
+        // 群聊回推：群聊里对方消息上方带昵称（sender 既不是自己也不是会话名），私聊没有。
+        val resolvedIsGroup = knownIsGroup ?: ordered.any {
+            it.sender.isNotEmpty() && it.sender != conversation && it.sender != ChatMessage.SENDER_SELF
+        }
+        if (knownIsGroup == null && resolvedIsGroup) {
+            Log.i(TAG, "会话「$conversation」无历史记录，按消息昵称回推为群聊")
+        }
         val messages = ordered.mapIndexed { idx, m ->
-            m.copy(timestamp = now - idx * 1000L, source = SOURCE_TAG)
+            m.copy(timestamp = now - idx * 1000L, source = SOURCE_TAG, isGroup = resolvedIsGroup)
         }
         val added = MessageStore.mergeAndCollect(this, messages)
         added.forEach { PendingQueue.append(this, it) }
@@ -474,7 +496,7 @@ class A11yExtractService : AccessibilityService() {
     ) {
         val screenH = resources.displayMetrics.heightPixels
         val texts = mutableListOf<Pair<String, Rect>>()
-        collectTexts(root, texts)
+        collectTexts(root, texts, skipInteractive = true)
         // 自下而上（屏幕下方更新），与主路径同序
         texts.sortedByDescending { it.second.top }.forEach { (t, b) ->
             val text = t.trim()
@@ -522,10 +544,21 @@ class A11yExtractService : AccessibilityService() {
 
     // ---------------- 节点工具 ----------------
 
-    /** DFS 收集节点树内全部文本（text 优先，空则 contentDescription）及屏幕坐标 */
-    private fun collectTexts(node: AccessibilityNodeInfo, out: MutableList<Pair<String, Rect>>) {
+    /**
+     * DFS 收集节点树内全部文本（text 优先，空则 contentDescription）及屏幕坐标。
+     *
+     * [skipInteractive] 为 true 时跳过按钮/输入框等交互控件自身的文案：整屏文本兜底路径
+     * 用它把「发送」「按住 说话」「+」这类界面骨架挡在库外（控件内的子节点仍会继续遍历）。
+     */
+    private fun collectTexts(
+        node: AccessibilityNodeInfo,
+        out: MutableList<Pair<String, Rect>>,
+        skipInteractive: Boolean = false
+    ) {
         val cls = node.className?.toString().orEmpty()
-        if (cls.contains("TextView") || cls.contains("Button")) {
+        val interactive = skipInteractive &&
+            (cls.contains("EditText") || cls.contains("Button") || node.isEditable)
+        if ((cls.contains("TextView") || cls.contains("Button")) && !interactive) {
             val t = node.text?.toString().orEmpty()
                 .ifBlank { node.contentDescription?.toString().orEmpty() }
             if (t.isNotBlank()) {
@@ -535,7 +568,7 @@ class A11yExtractService : AccessibilityService() {
             }
         }
         for (i in 0 until node.childCount) {
-            node.getChild(i)?.let { collectTexts(it, out) }
+            node.getChild(i)?.let { collectTexts(it, out, skipInteractive) }
         }
     }
 

@@ -163,6 +163,12 @@ class AnalysisWorker(
             .filter { (key, _) ->
                 forceKey == null || key == forceKey
             }
+            // 与主页口径一致：自身/系统源永不分析；未开启采集的 App
+            // 其历史会话也不进分析候选（force 显式指定除外）
+            .filter { (key, _) ->
+                !AppSourceRegistry.isBlocked(key.pkg) &&
+                    (forceKey != null || AppSourceStore.isEnabled(applicationContext, key.pkg))
+            }
             // 强制模式同样跳过关注名单过滤——用户在会话详情页点「立即分析本会话」
             // 是显式指定目标，不该被名单悄悄拦下（W1 真机实测发现）
             .filter { (key, _) -> forceKey != null || WatchlistStore.isWatched(applicationContext, key) }
@@ -172,6 +178,11 @@ class AnalysisWorker(
             .sortedBy { it.windowEnd } // 先旧后新
             .take(MAX_CONVERSATIONS_PER_ROUND)
             .toList()
+        Log.i(
+            TAG,
+            "本轮分析开始: 入选 " + cases.size + " 个会话 (候选 " +
+                byConversation.size + " 个, force=" + forceKey?.conversation
+        )
 
         if (cases.isEmpty()) {
             recordResultQuiet(

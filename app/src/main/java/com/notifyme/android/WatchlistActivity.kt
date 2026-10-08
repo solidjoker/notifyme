@@ -45,12 +45,21 @@ class WatchlistActivity : Activity() {
         tvEmpty = findViewById(R.id.tvWatchlistEmpty)
         etAdd = findViewById(R.id.etAddConversation)
 
-        // 从消息库收集会话键：readRecent 已按时间倒序，首个出现即最近活跃
-        MessageStore.readRecent(this, 1000).forEach { msg ->
-            if (msg.conversation.isNotEmpty() && msg.convKey !in allKeys) {
-                allKeys.add(msg.convKey)
+        // 从消息库收集会话键：readRecent 已按时间倒序，首个出现即最近活跃。
+        // 整文件解析放后台线程，避免历史大时进页面就卡住。
+        Thread {
+            val keys = mutableListOf<ConvKey>()
+            MessageStore.readRecent(this, 1000).forEach { msg ->
+                if (msg.conversation.isNotEmpty() && msg.convKey !in keys) {
+                    keys.add(msg.convKey)
+                }
             }
-        }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                keys.forEach { if (it !in allKeys) allKeys.add(it) }
+                refreshList()
+            }
+        }.start()
 
         val recycler = findViewById<RecyclerView>(R.id.recyclerWatchlist)
         recycler.layoutManager = LinearLayoutManager(this)

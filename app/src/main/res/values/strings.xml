@@ -10,6 +10,7 @@
     <string name="btn_clear">清除记录</string>
     <string name="empty_hint">暂无捕获到的微信消息</string>
     <string name="clear_done">已清除全部记录</string>
+    <string name="confirm_clear_all">将清空全部消息记录与待上报队列，且无法恢复。确定继续？</string>
     <string name="btn_collapse_all">全部折叠</string>
     <string name="btn_expand_all">全部展开</string>
     <string name="msg_count">%1$d 条</string>
@@ -60,6 +61,7 @@
     <string name="sync_saved">已保存并启用定时上报</string>
     <string name="sync_disabled">未配置服务器地址，定时上报已停用</string>
     <string name="sync_url_empty">请先填写服务器地址</string>
+    <string name="sync_url_https_required">默认仅允许 HTTPS 连接；如需明文 HTTP 请使用本机回环地址（localhost/127.0.0.1）或调试版</string>
     <string name="sync_enqueued">已加入同步队列，稍后刷新查看状态</string>
     <!-- 与 SyncConfig.INTERVAL_OPTIONS 一一对应 -->
     <string-array name="sync_interval_labels">
@@ -195,6 +197,8 @@
     <string name="diag_valid_lines">有效行数</string>
     <string name="diag_corrupt_lines">损坏行数</string>
     <string name="diag_no_data">还没有任何已存储的消息</string>
+    <string name="diag_alltime_loading">正在后台统计全部历史…</string>
+    <string name="diag_alltime_capped">仅统计最近 %1$d 条（存储共 %2$d 行）</string>
     <string name="diag_conversations">会话总数</string>
     <string name="diag_self_messages">自己发出的消息</string>
     <string name="diag_pkg_total">累计消息</string>

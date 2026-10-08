@@ -323,7 +323,8 @@ object AnalysisStore {
             }
         }
         if (removed > 0) {
-            file.writeText(keptLines.joinToString("") { "$it\n" }, Charsets.UTF_8)
+            // 原子重写：writeText 会先截断原文件，重写中途被杀会丢掉整份分析历史
+            JsonlStore.atomicWrite(file, keptLines)
         }
         return removed
     }

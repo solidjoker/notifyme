@@ -64,8 +64,8 @@ object CalendarHelper {
         val title = "任务：${summary.ifEmpty { message.text.take(12) }}（${message.conversation}）"
         val description = "发送者：${message.sender}\n原文：${message.text}\n会话：${message.conversation}"
 
-        // 防重 1：本 App 记录里已有该指纹（成功/失败都不再重复；失败想重试走列表页「重试」）
-        if (ReminderStore.contains(context, dedupKey)) {
+        // 防重 1：只对「生效中」的记录去重（failed 不算，否则一次失败会永久挡掉后续提醒）
+        if (ReminderStore.containsActive(context, dedupKey)) {
             return "跳过：已创建过（去重）"
         }
 
@@ -74,6 +74,13 @@ object CalendarHelper {
             context, dedupKey, title, description, message.pkg, message.conversation,
             summary, eventTime, leadMinutes
         )
+        // 写库策略：成功级别先清掉同指纹的旧记录（多为上一轮失败记录），保证一条消息只有一条生效记录；
+        // 失败时若已有记录就不再追加，避免每轮分析都堆一条 failed（重试走列表页「重试」）。
+        if (result.status != ReminderRecord.STATUS_FAILED) {
+            ReminderStore.remove(context, dedupKey)
+        } else if (ReminderStore.contains(context, dedupKey)) {
+            return result.note
+        }
         ReminderStore.append(
             context, ReminderRecord(
                 dedupKey = dedupKey,
@@ -145,11 +152,15 @@ object CalendarHelper {
         }
 
         // Level 2：唤起系统日历 App（预填，用户手动保存）
-        if (openCalendarInsert(context, title, description, eventTime)) {
+        // 仅在 App 有可见界面时尝试：后台（Worker / 通知回调）里 startActivity 会被
+        // Android 10+ 的「后台启动 Activity」限制静默拦截，却让链路误记为已提醒成功。
+        if (MainApplication.isInForeground &&
+            openCalendarInsert(context, title, description, eventTime)
+        ) {
             Log.i(TAG, "L2 已唤起日历 App: title=$title")
             return ChainResult(ReminderRecord.STATUS_INTENT, "已唤起日历，待手动保存")
         }
-        Log.i(TAG, "L2 跳过：系统无日历 App，降级 L3")
+        Log.i(TAG, "L2 跳过：App 不在前台或无日历 App，降级 L3")
 
         // Level 3：App 内闹钟到点通知兜底
         return if (AlarmHelper.scheduleReminder(
@@ -325,7 +336,7 @@ object CalendarHelper {
      *  - 「yyyy-MM-dd HH:mm」（也兼容 yyyy/M/d、yyyy年M月d日）
      *  - 「M月d日[H点|HH:mm]」（缺年份取本年，已过去则取明年）
      *  - 「今天/明天/后天 HH:mm」（无时间默认 9:00）
-     *  - 「周X/星期X HH:mm」（取未来最近一次）
+     *  - 「周X/星期X HH:mm」（当天时刻未到取当天，已过才取下周）
      *  - 时间部分支持「下午/晚上」加 12 小时
      */
     fun parseDueTime(text: String, baseTime: Long): Long {
@@ -405,7 +416,14 @@ object CalendarHelper {
                 val c = Calendar.getInstance()
                 c.timeInMillis = baseTime
                 var diff = (target - c.get(Calendar.DAY_OF_WEEK) + 7) % 7
-                if (diff == 0) diff = 7 // 当天已过该时刻语义上取下周，统一取下周更安全
+                if (diff == 0) {
+                    // 就是今天：时刻还没到就用今天，已过才顺延到下周。
+                    // 原先一律顺延，会把「今天 16:30」的通知算成一周后。
+                    val todayAt = buildTime(
+                        c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)
+                    )
+                    if (todayAt <= baseTime) diff = 7
+                }
                 c.add(Calendar.DAY_OF_YEAR, diff)
                 return buildTime(c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH))
             }

@@ -86,6 +86,25 @@ object PendingQueue {
     @Synchronized
     fun removeSent(context: Context, sentIds: Set<Long>) = core(context).removeSent(sentIds)
 
+    /**
+     * 删除 [cutoffMs] 之前的待上报条目（数据保留策略：本地只留 7 天）。
+     * 损坏行按本 store 既有口径（重写时丢弃）处理。返回实际删除条数。
+     */
+    @Synchronized
+    fun pruneOlderThan(context: Context, cutoffMs: Long): Int {
+        val store = JsonlStore(File(context.filesDir, FILE_NAME))
+        if (!store.exists()) return 0
+        val result = RetentionCore.prune(store.readRawLines(), cutoffMs) { line ->
+            try {
+                JSONObject(line).optLong("timestamp", 0L).takeIf { it > 0 }
+            } catch (e: Exception) {
+                null
+            }
+        }
+        if (result.removed > 0) store.overwrite(result.kept)
+        return result.removed
+    }
+
     /** 清空队列（随主界面「清除记录」一起清理）。 */
     @Synchronized
     fun clear(context: Context) = core(context).clear()

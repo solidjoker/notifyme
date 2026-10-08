@@ -29,7 +29,10 @@ import java.util.concurrent.TimeUnit
  *  - 消息 body 为 JSON 数组，字段用蛇形命名（is_group）与 PC 端 Python 习惯对齐；
  *    分析 body 同为 JSON 数组（case_id 等 snake_case，s1/s2 嵌套对象，不带 raw_json）；
  *    JSON 拼接用平台内置 org.json（自带转义），不引 Gson/Moshi；
- *  - 消息 2xx -> 剔除已发条目 -> success；401 -> 鉴权失败 Result.failure() 终止；
+ *  - 消息 2xx -> 剔除已发条目 -> success；207（部分条目被服务端拒绝）->
+ *    只剔除被接受的条目 -> retry，被拒条目留在队列；401 -> 鉴权失败，
+ *    周期任务降级为 success（failure 会被 WorkManager 永久取消周期注册），
+ *    一次性「立即同步」才返回 Result.failure()；
  *    其它非 2xx 或 IOException -> Result.retry() 交给 WorkManager 退避重试；
  *  - 分析 2xx -> 推进已同步水位；404（旧服务端无端点）-> 静默跳过；
  *    其它失败 -> 只记文案，水位不动、不触发 Worker 重试，下轮自然补报；
@@ -54,10 +57,22 @@ class SyncWorker(
             .build()
     }
 
+    /** 本次是否由周期任务触发：周期路径下不允许失败（见 [SyncScheduler.TAG_PERIODIC]）。 */
+    private fun isPeriodic(): Boolean = tags.contains(SyncScheduler.TAG_PERIODIC)
+
     override suspend fun doWork(): Result {
+        // 数据保留策略：本地只留 7 天（用户拍板），每天最多执行一次全量清理
+        Retention.pruneIfDue(applicationContext)
+
         val config = SyncConfig(applicationContext)
         val url = config.serverUrl
         if (url.isBlank()) return Result.success()
+
+        // 安全策略：release 默认仅 HTTPS（NSC 在平台层拦截 + 这里显式跳过并记录原因）
+        if (NetworkPolicy.isBlocked(url, BuildConfig.DEBUG)) {
+            recordResult(config, "已跳过：明文 HTTP 被安全策略拦截（默认仅 HTTPS，本机回环除外）")
+            return Result.success()
+        }
 
         // 推送总开关关闭：消息与分析两个通道都不消耗，记录跳过状态让控制台可见。
         // pending.jsonl / 分析未同步水位继续保持，等用户重新开启后下个周期一并上报。
@@ -98,6 +113,25 @@ class SyncWorker(
         recordResult(config, if (parts.isEmpty()) "成功：无新数据" else parts.joinToString("；"))
 
         return msgResult
+    }
+
+    /**
+     * 解析服务端 207（部分条目被拒）响应里的 rejected 下标数组。
+     * 返回 null 表示响应无法解析——调用方必须保守处理：一条都不删、整体重试，
+     * 否则被服务端拒绝的消息会被误当成功永久丢弃。
+     */
+    private fun parseRejected(bodyText: String?): Set<Int>? {
+        if (bodyText.isNullOrBlank()) return null
+        return try {
+            val arr = JSONObject(bodyText).optJSONArray("rejected") ?: return null
+            (0 until arr.length()).mapNotNull { i ->
+                val v = arr.optInt(i, -1)
+                if (v >= 0) v else null
+            }.toSet()
+        } catch (e: Exception) {
+            Log.w(TAG, "207 响应解析失败: ${e.message ?: "未知"}")
+            null
+        }
     }
 
     /**
@@ -151,11 +185,32 @@ class SyncWorker(
                         Log.i(TAG, "上报成功: ${pending.size} 条 -> $url (HTTP ${response.code})")
                         Result.success()
                     }
+                    response.code == 207 -> {
+                        // 服务端部分条目被拒（ok=false + rejected 下标）：只剔除被接受/重复的，
+                        // 被拒条目留在队列里下轮重试，绝不整体当成功删掉。
+                        val rejected = parseRejected(response.body?.string())
+                        if (rejected == null) {
+                            extraParts += "消息部分被拒(207)：响应无法解析，保留队列重试"
+                            Result.retry()
+                        } else {
+                            val acceptedIds = pending
+                                .filterIndexed { idx, _ -> idx !in rejected }
+                                .map { it.id }
+                                .toSet()
+                            PendingQueue.removeSent(applicationContext, acceptedIds)
+                            extraParts +=
+                                "消息部分被拒(207)：接受 ${acceptedIds.size}/${pending.size}，其余重试"
+                            Log.w(TAG, "上报部分成功: HTTP 207，被拒下标 $rejected")
+                            Result.retry()
+                        }
+                    }
                     response.code == 401 -> {
-                        // 鉴权失败属配置错误，重试无用，直接失败终止本次
+                        // 鉴权失败属配置错误，重试无用。
+                        // 但周期任务绝不能返回 failure：WorkManager 会把周期注册永久取消，
+                        // 用户改好令牌后定时上报也不会再恢复（一次 401 = 永久停摆）。
                         extraParts += "消息鉴权失败(401)，请检查令牌"
                         Log.w(TAG, "上报失败: 401 鉴权失败")
-                        Result.failure()
+                        if (isPeriodic()) Result.success() else Result.failure()
                     }
                     else -> {
                         extraParts += "消息失败：HTTP ${response.code}"

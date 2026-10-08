@@ -14,6 +14,8 @@ import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.text.Editable
@@ -30,6 +32,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Observer
+import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -62,6 +65,9 @@ class MainActivity : Activity() {
 
         /** ActionMode 批量删除菜单项 id */
         private const val MENU_BATCH_DELETE = 1001
+
+        /** 搜索防抖窗口：输入停顿这么久后才真正刷新列表 */
+        private const val SEARCH_DEBOUNCE_MS = 300L
     }
 
     private lateinit var tvPermissionStatus: TextView
@@ -71,6 +77,13 @@ class MainActivity : Activity() {
 
     /** 当前搜索关键词（空串 = 不过滤）；由搜索框 TextWatcher 维护 */
     private var searchQuery = ""
+
+    /** 刷新代次：后台装载完成时若已有更新的刷新，丢弃过期结果（旧查询不覆盖新列表） */
+    private var refreshToken = 0
+
+    /** 搜索防抖：输入停顿 [SEARCH_DEBOUNCE_MS] 后刷新一次，避免每个按键都全量读盘 */
+    private val searchHandler by lazy { Handler(Looper.getMainLooper()) }
+    private val searchRefresh = Runnable { refreshMessages() }
 
     private val adapter: FeedAdapter = FeedAdapter(
         onToggle = { key ->
@@ -149,16 +162,24 @@ class MainActivity : Activity() {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
                 searchQuery = s?.toString().orEmpty()
-                refreshMessages()
+                // 防抖 300ms：每敲一个键都全量重读列表既费 IO 又会让列表抖动，
+                // 输入停顿后再刷新一次
+                searchHandler.removeCallbacks(searchRefresh)
+                searchHandler.postDelayed(searchRefresh, SEARCH_DEBOUNCE_MS)
             }
         })
 
         // 标题栏快捷操作：全部折叠 / 全部展开（状态持久化；全部展开同时清掉日期组折叠态）
         findViewById<TextView>(R.id.btnCollapseAll).setOnClickListener {
-            val keys = MessageStore.readRecent(this, 500)
-                .map { it.convKey }.toSet()
-            CollapseStore.setAll(this, keys, true)
-            refreshMessages()
+            // 读盘放后台：历史大时主线程 readRecent 会卡住点击响应
+            Thread {
+                val keys = MessageStore.readRecent(this, 500).map { it.convKey }.toSet()
+                CollapseStore.setAll(this, keys, true)
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    refreshMessages()
+                }
+            }.start()
         }
         findViewById<TextView>(R.id.btnExpandAll).setOnClickListener {
             CollapseStore.setAll(this, emptySet(), false)
@@ -201,11 +222,7 @@ class MainActivity : Activity() {
                         true
                     }
                     getString(R.string.menu_clear) -> {
-                        MessageStore.clear(this)
-                        // 待上报队列一并清理，避免历史清空后旧消息仍被上报
-                        PendingQueue.clear(this)
-                        refreshMessages()
-                        Toast.makeText(this, R.string.clear_done, Toast.LENGTH_SHORT).show()
+                        confirmClearAll()
                         true
                     }
                     else -> false
@@ -213,6 +230,25 @@ class MainActivity : Activity() {
             }
             popup.show()
         }
+    }
+
+    /**
+     * 「清除记录」二次确认（P0-6）：一次性清空 messages.jsonl 与待上报队列，
+     * 没有撤销入口，误触即永久丢失全部历史，必须先确认再执行。
+     */
+    private fun confirmClearAll() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.menu_clear)
+            .setMessage(R.string.confirm_clear_all)
+            .setNegativeButton(R.string.common_cancel, null)
+            .setPositiveButton(R.string.common_delete) { _, _ ->
+                MessageStore.clear(this)
+                // 待上报队列一并清理，避免历史清空后旧消息仍被上报
+                PendingQueue.clear(this)
+                refreshMessages()
+                Toast.makeText(this, R.string.clear_done, Toast.LENGTH_SHORT).show()
+            }
+            .show()
     }
 
     override fun onResume() {
@@ -319,10 +355,11 @@ class MainActivity : Activity() {
             .setMessage(getString(R.string.confirm_delete_conversations, keys.size))
             .setNegativeButton(R.string.common_cancel, null)
             .setPositiveButton(R.string.common_delete) { _, _ ->
-                val n = deleteConversationsFully(keys)
-                batchActionMode?.finish()
-                refreshMessages()
-                Toast.makeText(this, getString(R.string.delete_done, n), Toast.LENGTH_SHORT).show()
+                deleteConversationsFully(keys) { n ->
+                    batchActionMode?.finish()
+                    refreshMessages()
+                    Toast.makeText(this, getString(R.string.delete_done, n), Toast.LENGTH_SHORT).show()
+                }
             }
             .show()
     }
@@ -333,19 +370,26 @@ class MainActivity : Activity() {
      * 彻底删除若干会话：消息 + 分析记录 + 待上报队列 + 提醒（闹钟/日历事件/记录）。
      * 返回删除的消息总条数。
      */
-    private fun deleteConversationsFully(keys: Collection<ConvKey>): Int {
+    private fun deleteConversationsFully(keys: Collection<ConvKey>, onDone: (Int) -> Unit) {
         val set = keys.toSet()
-        // 提醒：取消闹钟 → 删除已落库日历事件 → 移除提醒记录
-        ReminderStore.readAll(this).filter { it.convKey in set }.forEach { r ->
-            AlarmHelper.cancelReminder(this, r.dedupKey)
-            if (r.calendarEventId > 0L) CalendarHelper.deleteEvent(this, r.calendarEventId)
-            ReminderStore.remove(this, r.dedupKey)
-        }
-        PendingQueue.removeByConversations(this, set)
-        keys.forEach { AnalysisStore.deleteByConversation(this, it) }
-        var total = 0
-        keys.forEach { total += MessageStore.deleteConversation(this, it) }
-        return total
+        // 这里要动六类存储（提醒/闹钟/日历/待上报/分析/消息），全放后台线程：
+        // 主线程做这些磁盘与 ContentResolver IO，历史一大会直接 ANR。
+        Thread {
+            // 提醒：取消闹钟 → 删除已落库日历事件 → 移除提醒记录
+            ReminderStore.readAll(this).filter { it.convKey in set }.forEach { r ->
+                AlarmHelper.cancelReminder(this, r.dedupKey)
+                if (r.calendarEventId > 0L) CalendarHelper.deleteEvent(this, r.calendarEventId)
+                ReminderStore.remove(this, r.dedupKey)
+            }
+            PendingQueue.removeByConversations(this, set)
+            keys.forEach { AnalysisStore.deleteByConversation(this, it) }
+            var total = 0
+            keys.forEach { total += MessageStore.deleteConversation(this, it) }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                onDone(total)
+            }
+        }.start()
     }
 
     /** 左滑会话头：确认后删除整个会话；取消则把行还原。 */
@@ -356,9 +400,10 @@ class MainActivity : Activity() {
                 adapter.notifyItemChanged(position)
             }
             .setPositiveButton(R.string.common_delete) { _, _ ->
-                val n = deleteConversationsFully(listOf(key))
-                refreshMessages()
-                Toast.makeText(this, getString(R.string.delete_done, n), Toast.LENGTH_SHORT).show()
+                deleteConversationsFully(listOf(key)) { n ->
+                    refreshMessages()
+                    Toast.makeText(this, getString(R.string.delete_done, n), Toast.LENGTH_SHORT).show()
+                }
             }
             .setOnCancelListener { adapter.notifyItemChanged(position) }
             .show()
@@ -383,10 +428,15 @@ class MainActivity : Activity() {
                 adapter.notifyItemChanged(position)
             }
             .setPositiveButton(R.string.common_delete) { _, _ ->
-                PendingQueue.removeByConversationDay(this, key, dayKey)
-                val n = MessageStore.deleteDate(this, key, dayKey)
-                refreshMessages()
-                Toast.makeText(this, getString(R.string.delete_done, n), Toast.LENGTH_SHORT).show()
+                Thread {
+                    PendingQueue.removeByConversationDay(this, key, dayKey)
+                    val n = MessageStore.deleteDate(this, key, dayKey)
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        refreshMessages()
+                        Toast.makeText(this, getString(R.string.delete_done, n), Toast.LENGTH_SHORT).show()
+                    }
+                }.start()
             }
             .setOnCancelListener { adapter.notifyItemChanged(position) }
             .show()
@@ -459,7 +509,30 @@ class MainActivity : Activity() {
      * 命中会话强制展开，含命中消息的日期组强制展开（其余日期组尊重折叠态），
      * 命中消息卡片橙框高亮；无匹配时提示「没有匹配的会话或消息」。
      */
+    /**
+     * 刷新消息列表（后台装载 → 主线程渲染）。
+     *
+     * 读盘与列表组装放后台线程：原来每次按键 / 每次入库都在主线程全量读
+     * messages.jsonl + analysis.jsonl + reminders.jsonl，历史一大就卡顿甚至 ANR。
+     * 刷新代次 [refreshToken] 保证过期结果不会覆盖更新的列表。
+     */
     private fun refreshMessages() {
+        val token = ++refreshToken
+        val query = searchQuery.trim().lowercase()
+        Thread {
+            val result = buildFeed(query)
+            runOnUiThread {
+                if (token != refreshToken || isFinishing || isDestroyed) return@runOnUiThread
+                applyFeed(result, query)
+            }
+        }.start()
+    }
+
+    /** 后台装载结果：列表项 + 是否为空态。 */
+    private class FeedResult(val items: List<FeedItem>, val empty: Boolean)
+
+    /** 后台线程执行：读存储 + 过滤 + 组装 [FeedItem]（不碰视图）。 */
+    private fun buildFeed(query: String): FeedResult {
         val messages = MessageStore.readRecent(this, 500)
         val collapsed = CollapseStore.load(this)
         val collapsedDates = CollapseStore.loadDates(this)
@@ -467,7 +540,6 @@ class MainActivity : Activity() {
         // 有提醒的会话集合：首页会话头显示 📅
         val reminderKeys = ReminderStore.readAll(this)
             .map { it.convKey }.toSet()
-        val query = searchQuery.trim().lowercase()
 
         val dayKeyFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
         val currentYear = SimpleDateFormat("yyyy", Locale.getDefault()).format(Date())
@@ -490,7 +562,13 @@ class MainActivity : Activity() {
 
         // M11：显式不关注的会话直接隐藏（不进主列表，分析也已跳过）
         val unwatchedIds = WatchlistStore.getUnwatched(this)
+        // 按采集开关过滤：黑名单勾选 / 白名单外的 App，其会话不进主页；
+        // 自身与系统源（如 a11y 自抓噪声）同样不展示
         val visibleGroups = groups.filter { it.first.id !in unwatchedIds }
+            .filter {
+                !AppSourceRegistry.isBlocked(it.first.pkg) &&
+                    AppSourceStore.isEnabled(this, it.first.pkg)
+            }
 
         // 汇总分区：名单（去掉「全不关注」哨兵）非空时才分区
         val watched = WatchlistStore.getWatched(this)
@@ -585,9 +663,13 @@ class MainActivity : Activity() {
                 }
             }
         }
-        adapter.submit(items)
+        return FeedResult(items, visibleGroups.isEmpty())
+    }
 
-        if (groups.isEmpty()) {
+    /** 主线程渲染：提交列表数据 + 空态提示。 */
+    private fun applyFeed(result: FeedResult, query: String) {
+        adapter.submit(result.items)
+        if (result.empty) {
             tvEmpty.text = getString(
                 if (query.isNotEmpty()) R.string.search_no_result else R.string.empty_hint
             )
@@ -681,7 +763,8 @@ class MainActivity : Activity() {
             const val TYPE_DATE = 3
         }
 
-        private val items = mutableListOf<FeedItem>()
+        /** 当前数据集：submit() 整体替换，不再原地清空/追加。 */
+        private var items: List<FeedItem> = emptyList()
         private val timeFormat = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
 
         /** 批量选择态：由 MainActivity 在 ActionMode 开关时同步 */
@@ -691,10 +774,37 @@ class MainActivity : Activity() {
         /** 供 SwipeDeleteCallback 按位置取原始 item。 */
         fun feedItemAt(position: Int): FeedItem = items[position]
 
+        /**
+         * 提交新数据集：用 DiffUtil 只重绘真正变化的行。
+         * 原来每次都 notifyDataSetChanged()，500 条消息的列表会被整体重建，
+         * 搜索/折叠/新消息到达时都会明显掉帧。
+         */
         fun submit(newItems: List<FeedItem>) {
-            items.clear()
-            items.addAll(newItems)
-            notifyDataSetChanged()
+            val old = items
+            items = newItems
+            val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
+                override fun getOldListSize(): Int = old.size
+
+                override fun getNewListSize(): Int = newItems.size
+
+                override fun areItemsTheSame(oldPos: Int, newPos: Int): Boolean =
+                    identityOf(old[oldPos]) == identityOf(newItems[newPos])
+
+                override fun areContentsTheSame(oldPos: Int, newPos: Int): Boolean =
+                    old[oldPos] == newItems[newPos]
+            })
+            diff.dispatchUpdatesTo(this)
+        }
+
+        /**
+         * 数据项身份：身份相同才复用同一个 ViewHolder。
+         * 各子类的「内容」字段（折叠态、分析角标、搜索高亮）刻意不参与身份判定。
+         */
+        private fun identityOf(item: FeedItem): Any = when (item) {
+            is FeedItem.Section -> item.title
+            is FeedItem.Header -> item.key
+            is FeedItem.DateHeader -> item.key to item.dayKey
+            is FeedItem.Msg -> item.message
         }
 
         override fun getItemViewType(position: Int): Int = when (items[position]) {

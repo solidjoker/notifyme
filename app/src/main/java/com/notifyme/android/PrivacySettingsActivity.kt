@@ -93,29 +93,36 @@ class PrivacySettingsActivity : Activity() {
 
         // 白名单多选：候选 = 消息库里出现过的会话（readRecent 倒序，按首次出现保留）
         btnBypass.setOnClickListener {
-            val keys = mutableListOf<ConvKey>()
-            MessageStore.readRecent(this, 1000).forEach { m ->
-                if (m.conversation.isNotEmpty() && m.convKey !in keys) keys.add(m.convKey)
-            }
-            if (keys.isEmpty()) {
-                Toast.makeText(this, R.string.privacy_bypass_empty, Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            val labels = keys.map { it.conversation }.toTypedArray()
-            val checked = keys.map { it.id in state.bypassConvIds }.toBooleanArray()
-            android.app.AlertDialog.Builder(this)
-                .setTitle(R.string.privacy_bypass_dialog_title)
-                .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
-                    checked[which] = isChecked
+            // readRecent 是整文件解析，1000 条也要读整个 messages.jsonl：
+            // 放后台线程，避免历史一大点击就卡住
+            Thread {
+                val keys = mutableListOf<ConvKey>()
+                MessageStore.readRecent(this, 1000).forEach { m ->
+                    if (m.conversation.isNotEmpty() && m.convKey !in keys) keys.add(m.convKey)
                 }
-                .setNegativeButton(R.string.common_cancel, null)
-                .setPositiveButton(R.string.common_save) { _, _ ->
-                    val bypass = keys.filterIndexed { i, _ -> checked[i] }
-                        .map { it.id }.toSet()
-                    PrivacyConfig.set(this, state.copy(bypassConvIds = bypass))
-                    refresh()
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    if (keys.isEmpty()) {
+                        Toast.makeText(this, R.string.privacy_bypass_empty, Toast.LENGTH_SHORT).show()
+                        return@runOnUiThread
+                    }
+                    val labels = keys.map { it.conversation }.toTypedArray()
+                    val checked = keys.map { it.id in state.bypassConvIds }.toBooleanArray()
+                    android.app.AlertDialog.Builder(this)
+                        .setTitle(R.string.privacy_bypass_dialog_title)
+                        .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                            checked[which] = isChecked
+                        }
+                        .setNegativeButton(R.string.common_cancel, null)
+                        .setPositiveButton(R.string.common_save) { _, _ ->
+                            val bypass = keys.filterIndexed { i, _ -> checked[i] }
+                                .map { it.id }.toSet()
+                            PrivacyConfig.set(this, state.copy(bypassConvIds = bypass))
+                            refresh()
+                        }
+                        .show()
                 }
-                .show()
+            }.start()
         }
 
         btnPreview.setOnClickListener {

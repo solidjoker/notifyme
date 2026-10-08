@@ -49,6 +49,9 @@ class OverlayService : Service() {
         private const val NOTIF_ID = 0xF10A
         private const val CLICK_SLOP_DP = 8
         private const val BALL_SIZE_DP = 48
+
+        /** 悬浮卡同时最多几张：autoDismissSeconds ≤ 0（不自动消失）时防止无限堆叠盖满屏幕 */
+        private const val MAX_CARDS = 3
     }
 
     private lateinit var wm: WindowManager
@@ -103,10 +106,19 @@ class OverlayService : Service() {
         val appLabel = intent.getStringExtra(EXTRA_APP_LABEL).orEmpty()
         val caseId = intent.getStringExtra(EXTRA_CASE_ID).orEmpty()
 
+        // 超过上限先摘掉最旧的一张（这里刻意不调 removeCard：它会触发 maybeStopSelf，
+        // 可能在"马上要加新卡"的当口把服务停掉）
+        while (activeCards.size >= MAX_CARDS) {
+            val oldest = activeCards.removeAt(0)
+            oldest.autoRemove?.let { handler.removeCallbacks(it) }
+            runCatching { wm.removeView(oldest.view) }
+        }
+        relayoutCards()
+
         val view = LayoutInflater.from(this)
             .inflate(R.layout.view_overlay_card, null)
 
-        val appTag = appLabel.ifEmpty { pkgLabel(pkg) }
+        val appTag = appLabel.ifEmpty { AppSourceRegistry.displayLabel(pkg) }
         view.findViewById<TextView>(R.id.tvCardTitle).text =
             "$appTag · $conversation"
         val contentView = view.findViewById<TextView>(R.id.tvCardContent)
@@ -148,12 +160,16 @@ class OverlayService : Service() {
         entry.autoRemove?.let { handler.removeCallbacks(it) }
         runCatching { wm.removeView(view) }
         activeCards.remove(entry)
-        // 重排剩余卡片的纵向位置
+        relayoutCards()
+        maybeStopSelf()
+    }
+
+    /** 重排卡片纵向位置：第 i 张卡片固定在第 i 行，摘卡/deck 变化后调用。 */
+    private fun relayoutCards() {
         activeCards.forEachIndexed { i, c ->
             c.params.y = statusBarHeight() + dp(10) + i * dp(96)
             runCatching { wm.updateViewLayout(c.view, c.params) }
         }
-        maybeStopSelf()
     }
 
     /** 球未启用、卡片清空后服务没有继续存在的理由。 */
@@ -196,6 +212,8 @@ class OverlayService : Service() {
         } else if (enabled && ballView == null) {
             ensureBall()
         }
+        // 球关掉且本来就没挂（或既无球又无卡）时服务没有存在理由，统一收口
+        maybeStopSelf()
     }
 
     private fun bindBallTouch(view: View, params: WindowManager.LayoutParams) {
@@ -318,12 +336,6 @@ class OverlayService : Service() {
         )
     }
 
-    private fun pkgLabel(pkg: String): String = when (pkg) {
-        AppSourceRegistry.PKG_WECHAT -> "微信"
-        AppSourceRegistry.PKG_FEISHU -> "飞书"
-        AppSourceRegistry.PKG_DINGTALK -> "钉钉"
-        else -> pkg
-    }
 
     private fun baseOverlayParams(width: Int, height: Int): WindowManager.LayoutParams {
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)

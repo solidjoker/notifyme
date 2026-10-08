@@ -102,7 +102,7 @@ object ReminderStore {
         storeFile(context).appendText(record.toJson().toString() + "\n", Charsets.UTF_8)
     }
 
-    /** 该消息指纹是否已有提醒记录（无论当时成功还是失败，都不重复创建）。 */
+    /** 该消息指纹是否已有提醒记录（不区分状态，用于「这条消息到底提醒过没有」）。 */
     @Synchronized
     fun contains(context: Context, dedupKey: String): Boolean {
         val file = storeFile(context)
@@ -120,6 +120,46 @@ object ReminderStore {
             }
     }
 
+    /**
+     * 该指纹是否已有**生效中**的提醒（去重只认这个）。
+     *
+     * `failed` 记录不算数：否则一次链路失败（无日历账户 / 无通知权限 / 闹钟异常）会把这条
+     * 消息的提醒永久钉死——后续每轮分析都会被「已创建过」挡回去，用户再也收不到提醒。
+     */
+    @Synchronized
+    fun containsActive(context: Context, dedupKey: String): Boolean {
+        return readAll(context).any {
+            it.dedupKey == dedupKey && it.status != ReminderRecord.STATUS_FAILED
+        }
+    }
+
+    /**
+     * 就地改某指纹记录的状态与备注（到点却发不出通知等运行期失败回写用）。
+     *
+     * 只改匹配行；损坏行原样保留（与其他 JSONL store 同一口径：不借修改之名丢数据）。
+     * 返回是否命中了记录。
+     */
+    @Synchronized
+    fun markStatus(context: Context, dedupKey: String, status: String, note: String): Boolean {
+        val file = storeFile(context)
+        if (!file.exists()) return false
+
+        var touched = false
+        val kept = file.readLines(Charsets.UTF_8).mapNotNull { line ->
+            if (line.isBlank()) return@mapNotNull null
+            val obj = try {
+                JSONObject(line)
+            } catch (e: Exception) {
+                return@mapNotNull line // 损坏行保留
+            }
+            if (obj.optString("dedup_key") != dedupKey) return@mapNotNull line
+            touched = true
+            ReminderRecord.fromJson(obj).copy(status = status, note = note).toJson().toString()
+        }
+        if (touched) JsonlStore.atomicWrite(file, kept)
+        return touched
+    }
+
     /** 删除指定指纹的全部记录（重试前清理失败/旧级别记录用）。 */
     @Synchronized
     fun remove(context: Context, dedupKey: String) {
@@ -135,11 +175,8 @@ object ReminderStore {
                     true // 损坏行保留，不借重试之名丢数据
                 }
             }
-        if (kept.isEmpty()) {
-            file.delete()
-        } else {
-            file.writeText(kept.joinToString("\n") + "\n", Charsets.UTF_8)
-        }
+        // 空则删文件，否则原子重写（与其余 JSONL store 同一落盘口径）
+        JsonlStore.atomicWrite(file, kept)
     }
 
     /** 读取全部提醒记录，按创建时间倒序（最新在前），供列表页展示。 */

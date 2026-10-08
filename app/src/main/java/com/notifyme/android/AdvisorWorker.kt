@@ -79,6 +79,16 @@ class AdvisorWorker(
 
     override suspend fun doWork(): Result {
         val config = AnalysisConfig(applicationContext)
+
+        // 隐私模式（M3）：本地模式禁止任何数据出端，顾问复盘走云端，整条链路直接跳过。
+        // 必须放在最前——否则未配置 S2 时会先报「未配置」，掩盖真实原因。
+        val privacy = PrivacyConfig.get(applicationContext)
+        if (privacy.localOnly) {
+            AdvisorStore.recordResult(applicationContext, "跳过：当前为本地模式，顾问复盘不出端")
+            Log.i(TAG, "顾问复盘跳过：隐私模式=本地")
+            return Result.success()
+        }
+
         // 顾问复用当前 S2 服务商（GLM/JEV，OpenAI 兼容通道）；
         // S2 开关关闭或槽位未配置时无法复盘——用户态，不重试
         val slot = config.s2Slot()
@@ -99,7 +109,7 @@ class AdvisorWorker(
         }
 
         return try {
-            val raw = postChatCompletions(slot, buildDigest(cases))
+            val raw = postChatCompletions(slot, buildDigest(cases, privacy))
             val report = parseReport(raw, cases.size, slot.model)
             AdvisorStore.append(applicationContext, report)
             AdvisorStore.recordResult(
@@ -128,21 +138,28 @@ class AdvisorWorker(
      * 组装 case 摘要（输入防爆 token）：
      * 最新 50 个 case，每行一条——会话名、S1 判定、是否升级/被预筛、S2 摘要与任务数。
      */
-    private fun buildDigest(cases: List<AnalysisCaseRecord>): String {
+    private fun buildDigest(cases: List<AnalysisCaseRecord>, privacy: PrivacyModeState): String {
         val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
         val sb = StringBuilder("最近 $PERIOD_DAYS 天共 ${cases.size} 个分析 case：\n")
+        // 出设备脱敏（M3）：云端可见的会话名/主题/摘要先过脱敏器；本地模式已在上游拦截。
+        // caseId 与时间戳不含正文，保留原样以便与服务端分析记录对应。
+        val core = if (privacy.cloudRedact) RedactorCore(privacy.enabledRules) else null
         cases.takeLast(MAX_CASES_IN_PROMPT).forEach { rec ->
-            sb.append("- 「").append(rec.conversation.take(20)).append("」")
+            val conversation = core?.redact(rec.conversation)?.text ?: rec.conversation
+            val topic = core?.redact(rec.s1Topic)?.text ?: rec.s1Topic
+            val summary = core?.redact(rec.s2Summary.replace("\n", " "))?.text
+                ?: rec.s2Summary.replace("\n", " ")
+            sb.append("- 「").append(conversation.take(20)).append("」")
                 .append(" ").append(fmt.format(Date(rec.analyzedAt)))
             if (rec.filtered) {
                 sb.append(" 预筛过滤(prob=%.2f)".format(rec.s1NeedActionProb))
             } else {
                 sb.append(" need_action=%.2f".format(rec.s1NeedActionProb))
                     .append(" importance=%.1f".format(rec.s1Importance))
-                    .append(" topic=").append(rec.s1Topic)
+                    .append(" topic=").append(topic)
                 if (rec.escalated) {
                     sb.append(" 已深分析 摘要=")
-                        .append(rec.s2Summary.replace("\n", " ").take(SUMMARY_TRUNCATE))
+                        .append(summary.take(SUMMARY_TRUNCATE))
                         .append(" 任务数=").append(rec.s2Tasks.size)
                 }
             }

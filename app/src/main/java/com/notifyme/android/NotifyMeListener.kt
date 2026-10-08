@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import java.util.concurrent.Executors
 
 /**
  * 通知监听器（M2 起由微信专用的 WeChatNotificationListener 改名而来）——
@@ -43,6 +44,15 @@ class NotifyMeListener : NotificationListenerService() {
         @Volatile
         var connected: Boolean = false
             private set
+
+        /**
+         * 落盘线程：通知回调可能落在主线程 / binder 线程上，直接在里面做磁盘写、
+         * prefs 全量重写与 PackageManager IPC 会拖慢通知处理（系统会丢通知，甚至 ANR）。
+         * 回调只做内存判断与入队，真正的落盘交给这条单线程队列，顺序与回调一致。
+         */
+        private val writer = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "notifyme-capture")
+        }
     }
 
     /**
@@ -103,8 +113,16 @@ class NotifyMeListener : NotificationListenerService() {
             return
         }
 
-        // 6) 去重：同 key 且内容指纹一致 -> 视为同一条的刷新，跳过
-        val fingerprint = "${raw.title}|${raw.text}|${raw.bigText}"
+        // 6) 去重：同 key 且内容指纹一致 -> 视为同一条的刷新，跳过。
+        //    指纹必须包含 MessagingStyle 明细：同一 key 下连续两条正文相同的消息
+        //    （「好的」「收到」）如果只看 title|text|bigText 会被当成刷新丢掉。
+        val fingerprint = buildString {
+            append(raw.title).append('|').append(raw.text).append('|').append(raw.bigText)
+            append('|').append(raw.styleMessages.size)
+            raw.styleMessages.lastOrNull()?.let {
+                append('|').append(it.sender).append('|').append(it.timestamp)
+            }
+        }
         if (recentKeys[sbn.key] == fingerprint) {
             CaptureStats.onDuplicate()
             return
@@ -116,15 +134,29 @@ class NotifyMeListener : NotificationListenerService() {
             CaptureStats.onParseFailed()
             return
         }
-        MessageStore.append(applicationContext, message)
-        CaptureStats.onStored(pkg)
-        // 同步进入待上报队列（核心过滤逻辑不变，仅追加一行）
-        PendingQueue.append(applicationContext, message)
-        // 缓存原始通知供「快速回复」使用（无回复 action 时内部不占缓存）
+        // 缓存原始通知供「快速回复」使用（无回复 action 时内部不占缓存，纯内存）
         ReplyActionStore.put(message.convKey, sbn)
-        // 成功入库后才算「观察到该来源」，避免空内容通知污染来源列表
-        AppSourceStore.recordSeen(applicationContext, pkg, raw.appLabel)
-        Log.i(TAG, "捕获消息[$pkg]: $message")
+        // 落盘统一交给单线程队列，回调本身尽快返回
+        val context = applicationContext
+        val appLabel = raw.appLabel
+        writer.execute {
+            try {
+                MessageStore.append(context, message)
+                CaptureStats.onStored(pkg)
+                // 紧接着进入待上报队列（核心过滤逻辑不变，仅追加一行）
+                PendingQueue.append(context, message)
+                // 成功入库后才算「观察到该来源」，避免空内容通知污染来源列表
+                AppSourceStore.recordSeen(context, pkg, appLabel)
+            } catch (e: Exception) {
+                Log.w(TAG, "消息落盘失败：$pkg", e)
+            }
+        }
+        // release 只打长度，避免把消息正文写进 logcat
+        if (BuildConfig.DEBUG) {
+            Log.i(TAG, "捕获消息[$pkg]: $message")
+        } else {
+            Log.i(TAG, "捕获消息[$pkg]: ${message.text.length} 字")
+        }
 
         // 8) M9 悬浮卡（即时路径）：只对「用户显式加入重点名单」的会话弹卡——
         //    空名单语义是「全部关注」，此时每条都弹会打扰，改由分析完成路径出卡

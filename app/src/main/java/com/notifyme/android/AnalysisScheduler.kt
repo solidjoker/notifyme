@@ -93,6 +93,9 @@ object AnalysisScheduler {
      *   （会话详情页「立即分析本会话」用）；null 走常规去重流程。
      */
     fun enqueueAnalysisNow(context: Context, forceKey: ConvKey? = null) {
+        // 用户显式要求分析：若排程已被系统丢弃，抢先重注册救活整个队列，
+        // 否则新排队的一次性任务同样不会被调度（W2 真机实测「点了没反应」）
+        ScheduleSelfHeal.repairIfNeeded(context, "立即分析请求")
         val builder = OneTimeWorkRequestBuilder<AnalysisWorker>()
         // M11：纯端侧配置不需要网络——加 CONNECTED 约束会让离线端侧分析
         // 永远卡在 ENQUEUED（进度条不出现/一直转）。只有可能走云端的配置才要求网络。

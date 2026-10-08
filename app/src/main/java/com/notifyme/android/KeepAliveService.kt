@@ -95,6 +95,9 @@ class KeepAliveService : Service() {
                     Log.w(TAG, "requestRebind 调用失败", e)
                 }
             }
+            // 分析排程失联自愈：国产 ROM 会静默丢弃 WorkManager 的 job 注册，
+            // 进程活着但定时/立即分析永不触发（W2 真机实测夜间停摆 10 小时）
+            ScheduleSelfHeal.repairIfNeeded(this@KeepAliveService, "看门狗巡检")
             handler.postDelayed(this, WATCHDOG_INTERVAL_MS)
         }
     }
@@ -128,6 +131,9 @@ class KeepAliveService : Service() {
         // 前台服务类型 dataSync 在 Manifest 中声明（消息同步用途）
         startForeground(NOTIFICATION_ID, notification)
 
+        // 先摘掉旧链再挂新链：onStartCommand 可能被多次调用，
+        // 只 postDelayed 不 removeCallbacks 会留下多条并行看门狗（重复巡检/重复 requestRebind）
+        handler.removeCallbacks(watchdog)
         handler.postDelayed(watchdog, WATCHDOG_INTERVAL_MS)
         Log.i(TAG, "前台保活服务已启动")
         return START_STICKY

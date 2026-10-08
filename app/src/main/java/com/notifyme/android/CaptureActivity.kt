@@ -205,6 +205,12 @@ class CaptureActivity : Activity() {
 
         findViewById<Button>(R.id.btnSaveSync).setOnClickListener {
             val url = etServerUrl.text.toString().trim()
+            // 安全策略：默认仅 HTTPS（明文只放行本机回环；debug 构建放行），
+            // 拦截时给出明确提示，而不是等上报时抛一个莫名的 IOException
+            if (NetworkPolicy.isBlocked(url, BuildConfig.DEBUG)) {
+                Toast.makeText(this, R.string.sync_url_https_required, Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
             syncConfig.serverUrl = url
             syncConfig.authToken = etAuthToken.text.toString().trim()
             syncConfig.intervalMinutes =

@@ -4,6 +4,7 @@
 package com.notifyme.android
 
 import android.content.Context
+import java.io.Closeable
 
 /**
  * 端侧推理引擎抽象：对上层（AnalysisWorker）只暴露「system+user -> text」。
@@ -53,6 +54,54 @@ class UnavailableLocalLlmEngine : LocalLlmEngine {
 }
 
 /**
+ * 在飞请求计数包装：releaseAll()（onTrimMemory / 删除模型）会与 Worker 里正在
+ * 执行的 chat() 并发，直接 close 就在 native 推理中途释放了句柄——use-after-free
+ * 直接崩进程。这里把释放请求推迟到最后一个在飞请求结束，期间新请求直接拒绝。
+ */
+private class GuardedLocalLlmEngine(
+    private val delegate: LocalLlmEngine
+) : LocalLlmEngine, Closeable {
+
+    private val lock = Any()
+    private var inFlight = 0
+    private var releaseRequested = false
+    private var closed = false
+
+    override val isReady: Boolean get() = delegate.isReady
+    override val unavailableReason: String get() = delegate.unavailableReason
+
+    override suspend fun chat(system: String, user: String, maxTokens: Int): String {
+        synchronized(lock) {
+            if (releaseRequested || closed) throw LocalEngineException("本地引擎已释放")
+            inFlight += 1
+        }
+        try {
+            return delegate.chat(system, user, maxTokens)
+        } finally {
+            synchronized(lock) { inFlight -= 1 }
+            closeIfIdle()
+        }
+    }
+
+    override fun close() {
+        val immediate = synchronized(lock) {
+            releaseRequested = true
+            inFlight == 0 && !closed
+        }
+        if (immediate) closeIfIdle()
+    }
+
+    private fun closeIfIdle() {
+        val doClose = synchronized(lock) {
+            if (!releaseRequested || inFlight > 0 || closed) return
+            closed = true
+            true
+        }
+        if (doClose) (delegate as? Closeable)?.close()
+    }
+}
+
+/**
  * 引擎工厂：按模型 id 返回对应引擎实例（全局单例，避免重复加载常驻内存）。
  * JNI 实现落地后在这里换为真实引擎（并按机型 RAM 做 4B 模型准入）。
  */
@@ -69,7 +118,14 @@ object LocalLlmEngines {
     fun forModel(context: Context, modelId: String): LocalLlmEngine {
         instances[modelId]?.let { return it }
         val engine = createEngine(context.applicationContext, modelId)
-        instances = instances + (modelId to engine)
+        // 只缓存可用的引擎。unavailable 只是"当前不可用"的快照（模型没下载完、
+        // 内存不足、文件缺失），把它永久缓存会让条件恢复后仍一直报不可用，只能重启。
+        if (engine.isReady) {
+            // 缓存的是带引用计数的包装：releaseAll 与在飞推理并发时不会中途释放句柄
+            val guarded = GuardedLocalLlmEngine(engine)
+            instances = instances + (modelId to guarded)
+            return guarded
+        }
         return engine
     }
 
@@ -110,7 +166,10 @@ object LocalLlmEngines {
         }
     }
 
-    /** 释放全部已加载引擎（内存压力大或模型被删除时调用）。 */
+    /**
+     * 释放全部已加载引擎（内存压力大或模型被删除时调用）。
+     * 实际关闭可能被推迟到在飞推理结束——见 [GuardedLocalLlmEngine]。
+     */
     @Synchronized
     fun releaseAll() {
         instances.values.forEach { (it as? java.io.Closeable)?.close() }

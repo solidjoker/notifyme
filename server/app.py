@@ -30,6 +30,7 @@
     并放在 caddy / nginx 等反向代理后面启用 HTTPS，不要裸奔！
 """
 
+import hmac
 import json
 import os
 import sqlite3
@@ -41,6 +42,10 @@ from flask import Flask, request, jsonify, Response, send_from_directory
 
 app = Flask(__name__)
 
+# 单次请求体上限：上报接口只收 JSON 数组，8 MiB 足够几十万条消息，
+# 但没有上限时一个超大 body 就能把进程内存打满。
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
+
 # ------------------------------------------------------------------
 # 配置
 # ------------------------------------------------------------------
@@ -48,6 +53,11 @@ app = Flask(__name__)
 # 鉴权令牌：环境变量 WEIXIN_TOKEN 非空时，所有请求必须带匹配的 X-Token 头。
 # 未设置则不鉴权（仅限局域网自用；公网部署务必设置！）
 TOKEN = os.environ.get("WEIXIN_TOKEN", "").strip()
+
+# 未设置 TOKEN 时是否仍允许绑定 0.0.0.0。
+# 默认禁止：无鉴权 + 全网监听等于把全部消息（含明文正文）对局域网/公网开放。
+# 确实要在家用局域网裸跑时显式设 WEIXIN_ALLOW_INSECURE_BIND=1 承担风险。
+ALLOW_INSECURE_BIND = os.environ.get("WEIXIN_ALLOW_INSECURE_BIND", "").strip() == "1"
 
 # 监听端口：从环境变量 PORT 读取，默认 8000
 PORT = int(os.environ.get("PORT", "8000"))
@@ -76,6 +86,20 @@ def pkg_label(pkg):
 # 写入锁：保护 jsonl 文件和 SQLite 的并发写入
 _write_lock = threading.Lock()
 
+
+def _connect():
+    """统一的 SQLite 连接：WAL + busy_timeout。
+
+    默认的 rollback journal 下，读写会互相阻塞；Flask 是多线程的
+    （threaded=True），控制台查询与 App 上报一并发就会出现
+    "database is locked"。WAL 让读不阻塞写，busy_timeout 让偶发争用重试而不是直接报错。
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    return conn
+
 # 消息必备字段及期望类型（用于逐条校验）
 REQUIRED_FIELDS = {
     "sender": str,
@@ -93,7 +117,7 @@ REQUIRED_FIELDS = {
 def init_db():
     """初始化数据目录和 SQLite 表结构（含去重用的唯一索引）。"""
     os.makedirs(DATA_DIR, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     try:
         conn.execute(
             """
@@ -173,6 +197,16 @@ def init_db():
             conn.execute(
                 "ALTER TABLE analyses ADD COLUMN pkg TEXT "
                 f"NOT NULL DEFAULT '{DEFAULT_PKG}'")
+        # 查询索引：/messages 与控制台都按时间倒序翻页并按会话/来源过滤，
+        # 没有索引时每次查询都是全表扫描 + 排序（历史越大越慢）。
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages (timestamp)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_conv_ts "
+            "ON messages (conversation, timestamp)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_analyses_window_end "
+            "ON analyses (window_end)")
         conn.commit()
     finally:
         conn.close()
@@ -192,12 +226,23 @@ def check_token():
          fetch 自动改用 X-Token 头）
     """
     if not TOKEN:
-        return None  # 未配置 token，不鉴权
-    if request.headers.get("X-Token", "") == TOKEN:
+        return None  # 未配置 token，不鉴权（危险：公网部署必须设置 WEIXIN_TOKEN）
+    if _token_match(request.headers.get("X-Token", "")):
         return None
-    if request.args.get("token", "") == TOKEN:
+    if _token_match(request.args.get("token", "")):
         return None
     return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+
+def _token_match(candidate):
+    """恒定时间比较令牌。
+
+    原来用 == 逐字符比较，比较耗时随相同前缀长度变化，理论上可被用来
+    逐字节猜出令牌（时序侧信道）。
+    """
+    if not candidate:
+        return False
+    return hmac.compare_digest(candidate.encode("utf-8"), TOKEN.encode("utf-8"))
 
 
 # ------------------------------------------------------------------
@@ -228,21 +273,24 @@ def receive_weixin():
     received = 0    # 新入库条数
     duplicated = 0  # 重复跳过条数
     invalid = 0     # 校验失败条数
+    rejected = []   # 校验失败的原始下标，供客户端精确剔除/重试
 
     now_ms = int(time.time() * 1000)  # 服务端接收时间（毫秒）
 
     with _write_lock:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _connect()
+        # 存档文件只开一次并复用：原来在循环里逐条 open/close，批量上报开销明显
+        archive = open(JSONL_PATH, "a", encoding="utf-8")
         try:
-            for item in payload:
+            for idx, item in enumerate(payload):
                 # 每条必须是对象且字段齐全、类型正确
                 if not isinstance(item, dict) or not _validate_item(item):
                     invalid += 1
+                    rejected.append(idx)
                     continue
 
                 # 1) 追加写入 jsonl 原文存档（与安卓端格式一致的原始字段）
-                with open(JSONL_PATH, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
+                archive.write(json.dumps(item, ensure_ascii=False) + "\n")
 
                 # 2) 写入 SQLite；唯一索引冲突说明是重复消息
                 # source 尊重客户端标记（a11y-extract / pc-db 等），
@@ -277,16 +325,72 @@ def receive_weixin():
                 except sqlite3.IntegrityError:
                     # 命中唯一索引：手机端重试造成的重复上报
                     duplicated += 1
+            archive.flush()
             conn.commit()
         finally:
+            archive.close()
             conn.close()
 
+    # 有校验失败就回 207：客户端据此只剔除被接受/重复的条目。
+    # 原来无论 invalid 多少都恒返回 200，客户端会把被拒的消息也当成功删掉（永久丢失）。
+    if invalid:
+        return jsonify({
+            "ok": False,
+            "received": received,
+            "duplicated": duplicated,
+            "invalid": invalid,
+            "rejected": rejected,
+            "error": "some items were rejected",
+        }), 207
     return jsonify({
         "ok": True,
         "received": received,
         "duplicated": duplicated,
-        "invalid": invalid,
+        "invalid": 0,
     })
+
+
+def _importance_label(value):
+    """把 S1 重要度统一成 high/mid/low 标签。
+
+    端上实际发的是 0-9 数值（>=6 high / >=3 mid / 其余 low），而旧文档与
+    控制台 JS 只认 high/mid/low 字符串；两种都要归一，否则数值重要度会在
+    控制台里被当成未知值退化为最低优先级。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        num = float(value)
+    else:
+        text = str(value).strip().lower()
+        if not text:
+            return None
+        try:
+            num = float(text)
+        except ValueError:
+            return text
+    if num >= 6:
+        return "high"
+    if num >= 3:
+        return "mid"
+    return "low"
+
+
+def _analyzed_at_text(value):
+    """analyzed_at 列是 TEXT，但 App 上报的是毫秒整数。
+
+    原实现只接受 str，数值上报会永远写成 NULL（控制台"分析于"始终为空）。
+    数值统一转成本地时间字符串，字符串原样保留。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        ms = int(value)
+        if ms > 100_000_000_000:  # >10^11 视为毫秒（10^11 ≈ 1973 年）
+            return datetime.fromtimestamp(ms / 1000.0).strftime("%Y-%m-%d %H:%M:%S")
+        return str(ms)
+    text = str(value).strip()
+    return text or None
 
 
 def _validate_item(item):
@@ -320,7 +424,10 @@ def query_messages():
         conversation  会话名（模糊匹配）
         date          YYYY-MM-DD，按消息 timestamp 过滤当天
         limit         返回条数，默认 100，上限 1000
-    返回：{"ok": true, "count": n, "messages": [...]}
+        before        游标分页：上一页返回的 next_before 原样回传
+                      （形如 <毫秒>_<rowid>，也可只给毫秒）
+    返回：{"ok": true, "count": n, "messages": [...], "next_before": ms|null}
+        next_before 为下一页游标，本页未取满（没有更多）时为 null。
     """
     auth_err = check_token()
     if auth_err:
@@ -329,6 +436,7 @@ def query_messages():
     pkg = request.args.get("pkg", "").strip()
     conversation = request.args.get("conversation", "").strip()
     date_str = request.args.get("date", "").strip()
+    before_str = request.args.get("before", "").strip()
     try:
         limit = min(int(request.args.get("limit", "100")), 1000)
         if limit <= 0:
@@ -337,7 +445,7 @@ def query_messages():
         limit = 100
 
     sql = ("SELECT sender, text, timestamp, conversation, is_group, "
-           "received_at, source, pkg FROM messages")
+           "received_at, source, pkg, rowid FROM messages")
     conditions = []
     params = []
 
@@ -361,12 +469,34 @@ def query_messages():
         except ValueError:
             return jsonify({"ok": False, "error": "date must be YYYY-MM-DD"}), 400
 
+    # 游标分页：按 (timestamp, rowid) 往前翻，避免 LIMIT/OFFSET 深翻页全表扫描。
+    # 只按 timestamp 比较会漏掉「同一毫秒但排序靠后」的多条消息，
+    # 所以 next_before 带上 rowid，写成 <毫秒>_<rowid>（老客户端只发毫秒也兼容）。
+    if before_str:
+        parts = before_str.split("_")
+        try:
+            before_ms = int(parts[0])
+            before_rid = int(parts[1]) if len(parts) > 1 else None
+        except (ValueError, IndexError):
+            return jsonify({
+                "ok": False,
+                "error": "before must be <ms> or <ms>_<rowid>",
+            }), 400
+        if before_rid is None:
+            conditions.append("timestamp < ?")
+            params.append(before_ms)
+        else:
+            conditions.append("(timestamp < ? OR (timestamp = ? AND rowid < ?))")
+            params.extend([before_ms, before_ms, before_rid])
+
     if conditions:
         sql += " WHERE " + " AND ".join(conditions)
-    sql += " ORDER BY timestamp DESC LIMIT ?"
+    # rowid 兜底：同一毫秒的多条消息在只按 timestamp 排序时顺序不稳定，
+    # 会导致翻页丢条目或重复。
+    sql += " ORDER BY timestamp DESC, rowid DESC LIMIT ?"
     params.append(limit)
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     try:
         rows = conn.execute(sql, params).fetchall()
     finally:
@@ -385,7 +515,15 @@ def query_messages():
         }
         for r in rows
     ]
-    return jsonify({"ok": True, "count": len(messages), "messages": messages})
+    next_before = None
+    if len(messages) == limit:
+        next_before = f"{rows[-1][2]}_{rows[-1][8]}"
+    return jsonify({
+        "ok": True,
+        "count": len(messages),
+        "messages": messages,
+        "next_before": next_before,
+    })
 
 
 # ------------------------------------------------------------------
@@ -418,17 +556,21 @@ def receive_analysis():
         return jsonify({"ok": False, "error": "body must be a JSON array"}), 400
 
     received = duplicated = invalid = 0
+    rejected = []   # 校验失败的原始下标，供客户端精确剔除/重试
     now_ms = int(time.time() * 1000)
 
     with _write_lock:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _connect()
         try:
-            for item in payload:
-                # 最小校验：必须是对象且带 case_id / conversation
+            for idx, item in enumerate(payload):
+                # 最小校验：必须是对象且带非空 case_id / conversation
                 if (not isinstance(item, dict)
                         or not isinstance(item.get("case_id"), str)
-                        or not isinstance(item.get("conversation"), str)):
+                        or not item["case_id"].strip()
+                        or not isinstance(item.get("conversation"), str)
+                        or not item["conversation"].strip()):
                     invalid += 1
+                    rejected.append(idx)
                     continue
                 s1 = item.get("s1") if isinstance(item.get("s1"), dict) else None
                 s2 = item.get("s2") if isinstance(item.get("s2"), dict) else None
@@ -439,8 +581,7 @@ def receive_analysis():
                     na = s1.get("need_action")
                     if isinstance(na, dict) and na.get("value") is True:
                         need_action = 1
-                    if isinstance(s1.get("importance"), str):
-                        importance = s1["importance"]
+                    importance = _importance_label(s1.get("importance"))
                 forks = item.get("forks") if isinstance(
                     item.get("forks"), list) else None
                 # pkg：与消息表口径一致，老上报缺省按微信回填
@@ -467,8 +608,7 @@ def receive_analysis():
                             1 if item.get("escalated") else 0,
                             json.dumps(s1, ensure_ascii=False) if s1 else None,
                             json.dumps(s2, ensure_ascii=False) if s2 else None,
-                            item.get("analyzed_at") if isinstance(
-                                item.get("analyzed_at"), str) else None,
+                            _analyzed_at_text(item.get("analyzed_at")),
                             item.get("protocol") if isinstance(
                                 item.get("protocol"), str) else None,
                             now_ms,
@@ -485,8 +625,13 @@ def receive_analysis():
         finally:
             conn.close()
 
+    if invalid:
+        return jsonify({"ok": False, "received": received,
+                        "duplicated": duplicated, "invalid": invalid,
+                        "rejected": rejected,
+                        "error": "some items were rejected"}), 207
     return jsonify({"ok": True, "received": received,
-                    "duplicated": duplicated, "invalid": invalid})
+                    "duplicated": duplicated, "invalid": 0})
 
 
 @app.route("/analysis", methods=["GET"])
@@ -531,7 +676,7 @@ def query_analysis():
     sql += " ORDER BY received_at DESC LIMIT ?"
     params.append(limit)
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     try:
         rows = conn.execute(sql, params).fetchall()
     finally:
@@ -1210,6 +1355,17 @@ function toggleNode(i) {
 }
 
 // 分析结果块：S1 chips + S2 区（对齐 App 会话详情的结构）
+function impLabel(v) {
+  // S1 重要度可能是 0-9 数值（端上）或 high/mid/low（旧格式），统一成标签。
+  // 不归一的话数值重要度会被 impRank 当成未知值，永远排在待办列表最后。
+  if (v === null || v === undefined || v === '') return '';
+  var n = (typeof v === 'number') ? v :
+    (/^[0-9]+$/.test(String(v).trim()) ? parseInt(String(v).trim(), 10) : NaN);
+  if (!isNaN(n)) return n >= 6 ? 'high' : (n >= 3 ? 'mid' : 'low');
+  var s = String(v).trim().toLowerCase();
+  return (s === 'high' || s === 'mid' || s === 'low') ? s : s;
+}
+
 function renderAnalysisBlock(a) {
   var html = '<div style="margin:8px 0;">';
   if (a.s1) {
@@ -1217,8 +1373,8 @@ function renderAnalysisBlock(a) {
     if (s1.need_action) chips += '<span class="chip warn">⚡待办 ' +
       Math.round((s1.need_action.prob || 0) * 100) + '%</span>';
     if (s1.importance) {
-      var imp = esc(s1.importance);
-      chips += '<span class="chip' + (imp === 'high' ? ' warn' : '') + '">重要度 ' + imp + '</span>';
+      var imp = impLabel(s1.importance);
+      chips += '<span class="chip' + (imp === 'high' ? ' warn' : '') + '">重要度 ' + esc(s1.importance) + '</span>';
     }
     if (s1.due_window) chips += '<span class="chip">截止 ' + esc(s1.due_window) + '</span>';
     if (s1.topic) chips += '<span class="chip">' + esc(s1.topic) + '</span>';
@@ -1250,15 +1406,17 @@ function renderTodos() {
   // 重要度 high 优先，同级按上报时间倒序（最新在前）
   var impRank = { high: 0, mid: 1, low: 2 };
   todos.sort(function (a, b) {
-    var ra = a.s1 && impRank[a.s1.importance] != null ? impRank[a.s1.importance] : 3;
-    var rb = b.s1 && impRank[b.s1.importance] != null ? impRank[b.s1.importance] : 3;
+    var ra = impRank[impLabel(a.s1 && a.s1.importance)];
+    var rb = impRank[impLabel(b.s1 && b.s1.importance)];
+    if (ra == null) ra = 3;
+    if (rb == null) rb = 3;
     if (ra !== rb) return ra - rb;
     return (b.received_at || 0) - (a.received_at || 0);
   });
   if (!todos.length) return '<div class="empty">🎉 暂无待办</div>';
   var html = '';
   todos.forEach(function (a) {
-    var impCls = (a.s1 && a.s1.importance === 'high') ? 'imp-high' : '';
+    var impCls = (impLabel(a.s1 && a.s1.importance) === 'high') ? 'imp-high' : '';
     var appBadge = normPkg(a.pkg) === PKG_WX ? '' :
       '<span class="badge b-app">' + esc(pkgLabel(a.pkg)) + '</span>';
     html += '<div class="card">' +
@@ -1499,7 +1657,7 @@ def index():
     if auth_err:
         return auth_err
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     try:
         rows = conn.execute(
             """
@@ -1606,6 +1764,11 @@ if __name__ == "__main__":
     else:
         print(f"[警告] 未设置 WEIXIN_TOKEN，接口无鉴权！公网部署务必设置。")
     print(f"[信息] 数据目录: {DATA_DIR}")
-    print(f"[信息] 服务监听: http://0.0.0.0:{PORT}")
+    # 无鉴权时默认只听本机：局域网/公网可直接读到全部消息正文，必须先有令牌。
+    host = "0.0.0.0" if (TOKEN or ALLOW_INSECURE_BIND) else "127.0.0.1"
+    if host == "0.0.0.0" and not TOKEN:
+        print("[警告] 无鉴权且显式允许绑定 0.0.0.0（WEIXIN_ALLOW_INSECURE_BIND=1），"
+              "同网段任何人都能读取你的消息！")
+    print(f"[信息] 服务监听: http://{host}:{PORT}")
     # 局域网自用场景，直接 Flask 内置服务器即可；生产环境建议 waitress/gunicorn
-    app.run(host="0.0.0.0", port=PORT, threaded=True)
+    app.run(host=host, port=PORT, threaded=True)

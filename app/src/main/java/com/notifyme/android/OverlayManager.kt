@@ -11,6 +11,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
@@ -27,6 +28,8 @@ object OverlayManager {
 
     /** 悬浮层前台服务常驻渠道（静默） */
     const val CHANNEL_SERVICE = "overlay_service"
+
+    private const val TAG = "OverlayManager"
 
     /** 悬浮卡数据（全部走 extras，无 Parcelable 依赖） */
     data class Card(
@@ -56,7 +59,15 @@ object OverlayManager {
             putExtra(OverlayService.EXTRA_APP_LABEL, card.appLabel)
             putExtra(OverlayService.EXTRA_CASE_ID, card.caseId)
         }
-        ContextCompat.startForegroundService(context, intent)
+        try {
+            ContextCompat.startForegroundService(context, intent)
+        } catch (e: RuntimeException) {
+            // Android 12+ 在后台启动前台服务会抛 ForegroundServiceStartNotAllowedException；
+            // 调用点（通知回调 / Worker）都没有接住它，异常会一路冒到 onNotificationPosted
+            // 让监听进程崩溃并丢消息。悬浮卡只是可选展示通道，失败就降级成通知兜底。
+            Log.w(TAG, "悬浮卡前台服务启动失败，降级为 heads-up 通知", e)
+            showFallbackNotification(context, card)
+        }
     }
 
     /** 悬浮窗权限设置页 intent（控制台引导用）。 */
@@ -90,7 +101,7 @@ object OverlayManager {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val appTag = card.appLabel.ifEmpty { pkgLabel(card.pkg) }
+        val appTag = card.appLabel.ifEmpty { AppSourceRegistry.displayLabel(card.pkg) }
         val title = "$appTag · ${card.conversation}"
         val content = if (card.sender.isNotEmpty()) "${card.sender}: ${card.text}" else card.text
 
@@ -101,6 +112,9 @@ object OverlayManager {
             .setStyle(NotificationCompat.BigTextStyle().bigText(content))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            // 锁屏上不直接显示消息正文（PRIVATE 只显示"内容已隐藏"），
+            // 避免锁屏/通知栏泄露会话内容。
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setAutoCancel(true)
             .setContentIntent(tapPending)
             .addAction(0, "标记已处理", dismissPending)
@@ -110,12 +124,6 @@ object OverlayManager {
             .notify(notifId, notification)
     }
 
-    private fun pkgLabel(pkg: String): String = when (pkg) {
-        AppSourceRegistry.PKG_WECHAT -> "微信"
-        AppSourceRegistry.PKG_FEISHU -> "飞书"
-        AppSourceRegistry.PKG_DINGTALK -> "钉钉"
-        else -> pkg
-    }
 
     /** 通知 id：有 caseId 用它，保证同 case 不堆多条；否则按内容哈希。 */
     private fun notificationId(card: Card): Int =

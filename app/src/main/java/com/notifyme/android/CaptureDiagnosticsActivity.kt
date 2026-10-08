@@ -29,8 +29,19 @@ import java.util.Locale
  */
 class CaptureDiagnosticsActivity : Activity() {
 
+    private companion object {
+        /**
+         * 全量统计的扫描上限：历史无限增长时不能一次性读爆内存；
+         * 超出部分只影响统计口径（页面上会明确提示），不影响任何数据。
+         */
+        const val ALLTIME_SCAN_LIMIT = 200_000
+    }
+
     private lateinit var container: LinearLayout
     private val timeFormat = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
+
+    /** 异步统计的世代号：刷新后旧线程的结果直接丢弃，避免重复渲染。 */
+    private var allTimeToken = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,8 +63,9 @@ class CaptureDiagnosticsActivity : Activity() {
         renderServiceStatus()
         renderSessionFunnel()
         renderStorage()
-        renderAllTimeByApp()
         renderHints()
+        // 全量统计在后台线程算完再填充，放在最后：同步渲染完再追加，顺序稳定且不阻塞主线程
+        renderAllTimeByApp()
     }
 
     // ---------------- 1) 服务与权限 ----------------
@@ -117,34 +129,96 @@ class CaptureDiagnosticsActivity : Activity() {
 
     // ---------------- 4) 各 App 累计 ----------------
 
+    /**
+     * 全部历史按 App 统计。解析整个 JSONL 可能上万行，**必须离开主线程**：
+     * 旧实现在主线程同步 readRecent(1_000_000)，历史变大后会直接 ANR。
+     */
     private fun renderAllTimeByApp() {
         section(getString(R.string.diag_section_alltime))
-        // 个人学习规模下全量读入足够（与 MessageStore 既定口径一致）
-        val all = MessageStore.readRecent(this, 1_000_000)
-        if (all.isEmpty()) {
+        val loading = hint(getString(R.string.diag_alltime_loading))
+        val token = ++allTimeToken
+        Thread {
+            val totalLines = MessageStore.storageStats(this).totalLines
+            val all = MessageStore.readRecent(this, ALLTIME_SCAN_LIMIT)
+            val summary = AllTimeSummary.of(all)
+            runOnUiThread {
+                if (token != allTimeToken || isFinishing || isDestroyed) return@runOnUiThread
+                container.removeView(loading)
+                renderAllTimeSummary(summary, totalLines)
+            }
+        }.start()
+    }
+
+    /** 单遍聚合结果：避免对同一批消息反复 map/distinct 产生多份临时集合。 */
+    private class AllTimeSummary(
+        val total: Int,
+        val conversations: Int,
+        val selfMessages: Int,
+        val byPkg: List<PkgStat>
+    ) {
+        class PkgStat(
+            val pkg: String,
+            val messages: Int,
+            val conversations: Int,
+            val groups: Int,
+            val latest: Long
+        )
+
+        companion object {
+            fun of(messages: List<ChatMessage>): AllTimeSummary {
+                val allConvs = HashSet<ConvKey>()
+                val countByPkg = HashMap<String, Int>()
+                val convsByPkg = HashMap<String, HashSet<ConvKey>>()
+                val groupConvsByPkg = HashMap<String, HashSet<ConvKey>>()
+                val latestByPkg = HashMap<String, Long>()
+                var selfMessages = 0
+                messages.forEach { msg ->
+                    allConvs.add(msg.convKey)
+                    if (msg.isSelf) selfMessages += 1
+                    countByPkg[msg.pkg] = (countByPkg[msg.pkg] ?: 0) + 1
+                    convsByPkg.getOrPut(msg.pkg) { HashSet() }.add(msg.convKey)
+                    if (msg.isGroup) {
+                        groupConvsByPkg.getOrPut(msg.pkg) { HashSet() }.add(msg.convKey)
+                    }
+                    val cur = latestByPkg[msg.pkg] ?: 0L
+                    if (msg.timestamp > cur) latestByPkg[msg.pkg] = msg.timestamp
+                }
+                val stats = countByPkg.keys.sorted().map { pkg ->
+                    PkgStat(
+                        pkg = pkg,
+                        messages = countByPkg.getValue(pkg),
+                        conversations = convsByPkg[pkg]?.size ?: 0,
+                        groups = groupConvsByPkg[pkg]?.size ?: 0,
+                        latest = latestByPkg[pkg] ?: 0L
+                    )
+                }
+                return AllTimeSummary(messages.size, allConvs.size, selfMessages, stats)
+            }
+        }
+    }
+
+    private fun renderAllTimeSummary(s: AllTimeSummary, totalLines: Int) {
+        if (s.total == 0) {
             hint(getString(R.string.diag_no_data))
             return
         }
-        val byPkg = all.groupBy { it.pkg }
-        valueRow(getString(R.string.diag_conversations),
-            all.map { it.convKey }.distinct().size.toString())
-        valueRow(getString(R.string.diag_self_messages), all.count { it.isSelf }.toString())
-
-        byPkg.forEach { (pkg, msgs) ->
-            section(appLabelOf(pkg))
-            valueRow(getString(R.string.diag_pkg_total), msgs.size.toString())
-            valueRow(
-                getString(R.string.diag_pkg_conversations),
-                msgs.map { it.convKey }.distinct().size.toString()
-            )
-            valueRow(
-                getString(R.string.diag_pkg_groups),
-                msgs.mapNotNull { if (it.isGroup) it.convKey else null }.distinct().size.toString()
-            )
-            val latest = msgs.maxOfOrNull { it.timestamp } ?: 0L
+        valueRow(getString(R.string.diag_conversations), s.conversations.toString())
+        valueRow(getString(R.string.diag_self_messages), s.selfMessages.toString())
+        if (totalLines > s.total) {
+            hint(getString(R.string.diag_alltime_capped, ALLTIME_SCAN_LIMIT, totalLines))
+        }
+        s.byPkg.forEach { st ->
+            section(appLabelOf(st.pkg))
+            valueRow(getString(R.string.diag_pkg_total), st.messages.toString())
+            valueRow(getString(R.string.diag_pkg_conversations), st.conversations.toString())
+            valueRow(getString(R.string.diag_pkg_groups), st.groups.toString())
             valueRow(
                 getString(R.string.diag_pkg_latest),
-                if (latest > 0) timeFormat.format(Date(latest)) else getString(R.string.diag_value_na)
+                if (st.latest > 0) {
+                    timeFormat.format(Date(st.latest))
+                } else {
+                    getString(R.string.diag_value_na)
+                }
             )
         }
     }
@@ -177,7 +251,8 @@ class CaptureDiagnosticsActivity : Activity() {
     }
 
     private fun statusRow(label: String, ok: Boolean) {
-        val dot = if (ok) "● " else "● "
+        // 两态必须是不同字符：旧实现两个分支都返回 "● "，状态点完全没有区分度
+        val dot = if (ok) "● " else "○ "
         valueRow(label, if (ok) getString(R.string.diag_status_on) else getString(R.string.diag_status_off),
             dotPrefix = dot, ok = ok)
     }
@@ -225,7 +300,8 @@ class CaptureDiagnosticsActivity : Activity() {
         container.addView(row)
     }
 
-    private fun hint(text: String) {
+    /** 提示行；返回视图本身，便于异步填充完成后移除占位文案。 */
+    private fun hint(text: String): TextView {
         val tv = TextView(this).apply {
             this.text = "· $text"
             textSize = 12f
@@ -239,6 +315,7 @@ class CaptureDiagnosticsActivity : Activity() {
             layoutParams = lp
         }
         container.addView(tv)
+        return tv
     }
 
     private fun appLabelOf(pkg: String): String {

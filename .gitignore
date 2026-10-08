@@ -36,6 +36,15 @@ Thumbs.db
 
 # 临时与产物
 captures/
+# 本地调试临时文件（uiautomator dump / 探针 / 抓包截图等，根目录点前缀文件）
+/.u*.xml
+/.w.xml
+/.h*.xml
+/.check.jsonl
+/.msgs_clean.jsonl
+/.probe.txt
+/.screen_now.png
+/.m*.jsonl
 *.apk
 *.aab
 

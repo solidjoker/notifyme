@@ -78,6 +78,9 @@ STATE_PATH = os.path.join(ANDROID_DIR, "state.json")   # 增量状态
 MAIN_DB = os.path.join(DATA_DIR, "messages.db")        # 监测主库
 
 SOURCE_TAG = "android-db"  # 本来源标记
+# messages.pkg 口径：本脚本只导微信 Android 库，固定包名
+# （与 server/app.py 的 DEFAULT_PKG 保持一致，控制台按来源 App 过滤要用）
+PKG = "com.tencent.mm"
 
 # WCDB2/SQLCipher 页加密参数（APK 逆向实证，见 .tmp_android_db/cipherspec.txt）
 PAGE_SIZE = 1024
@@ -190,15 +193,23 @@ def get_uin():
 
 
 def _read_varint(buf, pos):
-    """读 protobuf varint，返回 (值, 新位置)。"""
+    """读 protobuf varint，返回 (值, 新位置)。
+
+    数据被截断/损坏时原来的 buf[pos] 会直接抛 IndexError 崩掉整个提取流程；
+    这里统一抛 ExtractError，让调用方按"这条消息解析失败"处理。
+    """
     result, shift = 0, 0
     while True:
+        if pos >= len(buf):
+            raise ExtractError("varint 越界：数据被截断或损坏")
         b = buf[pos]
         pos += 1
         result |= (b & 0x7F) << shift
         shift += 7
         if not (b & 0x80):
             return result, pos
+        if shift > 63:
+            raise ExtractError("varint 超过 64 位：数据损坏")
 
 
 def get_imei_candidates():
@@ -378,13 +389,18 @@ def _parse_row(row, contact_name, chatroom_name):
 
 
 def _ensure_main_schema(dst):
-    """确保监测主库有 source 列（与 app.py 的迁移逻辑一致，幂等）。"""
+    """确保监测主库有 source / pkg 列（与 app.py 的迁移逻辑一致，幂等）。"""
     cols = [r[1] for r in dst.execute("PRAGMA table_info(messages)")]
     if "source" not in cols:
         dst.execute(
             "ALTER TABLE messages ADD COLUMN source TEXT "
             "NOT NULL DEFAULT 'android-notification'")
-        dst.commit()
+    if "pkg" not in cols:
+        # 老库（M2 之前）没有 pkg；历史数据都是微信，回填微信包名
+        dst.execute(
+            "ALTER TABLE messages ADD COLUMN pkg TEXT "
+            f"NOT NULL DEFAULT '{PKG}'")
+    dst.commit()
 
 
 def merge_messages(full=False):
@@ -413,9 +429,12 @@ def merge_messages(full=False):
     inserted = duplicated = skipped = 0
     max_id = last_id
 
-    dst = sqlite3.connect(MAIN_DB)
+    # 与服务端 app.py 同口径：主库可能正被上报/控制台写入，
+    # 不给 busy_timeout 时会直接抛 "database is locked"
+    dst = sqlite3.connect(MAIN_DB, timeout=10)
+    dst.execute("PRAGMA busy_timeout = 5000")
     try:
-        _ensure_main_schema(dst)  # 独立运行时主库可能还没迁移 source 列
+        _ensure_main_schema(dst)  # 独立运行时主库可能还没迁移 source / pkg 列
         # 建归一去重键集合：现有全部消息 + 本次批次
         # 键 = (conversation, sender, 秒级时间戳, text)
         # 秒级归一是因为通知来源与数据库来源对同一条消息的毫秒时间戳可能不同
@@ -442,11 +461,11 @@ def merge_messages(full=False):
                     """
                     INSERT INTO messages
                         (sender, text, timestamp, conversation, is_group,
-                         received_at, source)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                         received_at, source, pkg)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (m["sender"], m["text"], m["timestamp"], m["conversation"],
-                     m["is_group"], now_ms, SOURCE_TAG))
+                     m["is_group"], now_ms, SOURCE_TAG, PKG))
                 inserted += 1
             except sqlite3.IntegrityError:
                 # 兜底：命中毫秒级唯一索引（两来源毫秒恰好相同的极端情况）
@@ -494,18 +513,20 @@ def run_extract(full=False, keep_files=False):
     # 4. 拉取加密库
     stats["steps"]["db_bytes"] = pull_db(stats["steps"]["account_dir"])
 
-    # 5. 解密
-    imei_used, uin_form = decrypt_db(uin, imeis)
-    stats["steps"]["decrypt"] = "ok"
-    stats["steps"]["imei_source"] = (
-        "fallback" if imei_used == FALLBACK_IMEI else "device")
+    try:
+        # 5. 解密
+        imei_used, uin_form = decrypt_db(uin, imeis)
+        stats["steps"]["decrypt"] = "ok"
+        stats["steps"]["imei_source"] = (
+            "fallback" if imei_used == FALLBACK_IMEI else "device")
 
-    # 6. 合并
-    stats.update(merge_messages(full=full))
-
-    # 7. 清理本地临时文件（解密库含明文聊天，默认删除；加密库保留便于排查）
-    if not keep_files and os.path.exists(DECRYPTED_DB):
-        os.remove(DECRYPTED_DB)
+        # 6. 合并
+        stats.update(merge_messages(full=full))
+    finally:
+        # 7. 清理本地临时文件（解密库含明文聊天，默认删除；加密库保留便于排查）。
+        # 放在 finally：解密写了一半或合并中途报错也不能把明文库留在磁盘上。
+        if not keep_files and os.path.exists(DECRYPTED_DB):
+            os.remove(DECRYPTED_DB)
 
     stats["elapsed_sec"] = round(time.time() - t0, 2)
     stats["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

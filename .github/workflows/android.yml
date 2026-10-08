@@ -80,7 +80,7 @@ jobs:
             exit 1
           fi
           # 个人用户目录（占位符 C:\Users\<你> 除外）
-          if git grep -In 'C:\\Users\\' -- . | grep -v 'C:\\Users\\<' > /dev/null; then
+          if git grep -InF 'C:\Users\' -- . | grep -v 'C:\Users\<' > /dev/null; then
             echo "::error::发现真实个人用户目录路径，请改为占位符 C:\\Users\\<你>"
             exit 1
           fi

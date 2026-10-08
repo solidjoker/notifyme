@@ -113,10 +113,8 @@ object AdvisorStore {
     fun append(context: Context, report: AdvisorReport) {
         val all = readAll(context) + report
         val kept = all.sortedBy { it.createdAt }.takeLast(MAX_REPORTS)
-        storeFile(context).writeText(
-            kept.joinToString("") { it.toJson().toString() + "\n" },
-            Charsets.UTF_8
-        )
+        // 原子重写（临时文件 + fsync + rename）：直接 writeText 截断后被杀会丢全部报告
+        JsonlStore.atomicWrite(storeFile(context), kept.map { it.toJson().toString() })
     }
 
     private fun readAll(context: Context): List<AdvisorReport> {
