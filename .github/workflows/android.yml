@@ -63,11 +63,19 @@ jobs:
             https://github.com/ggml-org/llama.cpp third_party/llama.cpp
           git -C third_party/llama.cpp describe --tags
 
+      - name: Lint (Android Lint + ktlint)
+        run: ./gradlew --offline --console=plain lintOpenDebug 2>&1 | tail -20
+
       - name: Unit tests + assemble (open & beta)
         run: ./gradlew --stacktrace testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug
 
       - name: Python syntax check (server)
         run: python3 -m py_compile server/app.py server/android_db_extract.py server/pc_db_extract.py server/gen_icons.py
+
+      - name: Server tests (pytest)
+        run: |
+          python3 -m pip install flask pytest --quiet
+          python3 -m pytest server/test_weixin.py -v --tb=short
 
       - name: Guard - no private naming or local secrets in repo
         run: |
