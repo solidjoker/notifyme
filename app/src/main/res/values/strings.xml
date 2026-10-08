@@ -10,6 +10,7 @@
     <string name="btn_clear">清除记录</string>
     <string name="empty_hint">暂无捕获到的微信消息</string>
     <string name="clear_done">已清除全部记录</string>
+    <string name="chat_truncated">仅显示最近 %1$d 条（共 %2$d 条）</string>
     <string name="confirm_clear_all">将清空全部消息记录与待上报队列，且无法恢复。确定继续？</string>
     <string name="btn_collapse_all">全部折叠</string>
     <string name="btn_expand_all">全部展开</string>

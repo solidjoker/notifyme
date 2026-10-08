@@ -1770,5 +1770,10 @@ if __name__ == "__main__":
         print("[警告] 无鉴权且显式允许绑定 0.0.0.0（WEIXIN_ALLOW_INSECURE_BIND=1），"
               "同网段任何人都能读取你的消息！")
     print(f"[信息] 服务监听: http://{host}:{PORT}")
-    # 局域网自用场景，直接 Flask 内置服务器即可；生产环境建议 waitress/gunicorn
-    app.run(host=host, port=PORT, threaded=True)
+    # 优先用 waitress（生产级 WSGI，支持 Windows）；不可用时降级 Flask 内置服务器
+    try:
+        from waitress import serve
+        serve(app, host=host, port=PORT, threads=4)
+    except ImportError:
+        print("[提示] waitress 未安装，降级为 Flask 内置服务器（仅限开发/自用）")
+        app.run(host=host, port=PORT, threaded=True)

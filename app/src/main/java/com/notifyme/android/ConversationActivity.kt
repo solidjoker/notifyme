@@ -55,6 +55,9 @@ class ConversationActivity : Activity() {
         /** ActionMode 多选删除菜单项 id */
         private const val MENU_MSG_DELETE = 1002
 
+        /** 单次渲染的消息上限 */
+        private const val MAX_CHAT_RENDER = 200
+
         fun start(context: Context, key: ConvKey) {
             context.startActivity(createIntent(context, key))
         }
@@ -294,13 +297,34 @@ class ConversationActivity : Activity() {
         }
     }
 
+    /** 已渲染的消息签名：列表未变 + 多选态未变时跳过重渲染，避免每秒轮询都重建整棵视图树。 */
+    private var lastChatSignature: String = ""
+
     /** 渲染对话流：逐条 inflate 气泡；>5 分钟跨段插入时间分隔；多选态附加勾选交互。 */
     private fun renderChat(messages: List<ChatMessage>) {
+        // 防重渲染：消息集合 + 多选状态都没变时跳过（轮询场景每秒调一次）
+        val signature = messages.hashCode().toString() + "|" + (selectActionMode != null) + "|" +
+            selectedMessages.hashCode()
+        if (signature == lastChatSignature && chatContainer.childCount > 0) return
+        lastChatSignature = signature
+
         chatContainer.removeAllViews()
+        // 上限控制：只渲染最近 MAX_CHAT_RENDER 条，避免历史大时 OOM
+        val renderList = if (messages.size > MAX_CHAT_RENDER) {
+            val hint = TextView(this).apply {
+                text = getString(R.string.chat_truncated, MAX_CHAT_RENDER, messages.size)
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 12f
+                val density = resources.displayMetrics.density
+                setPadding((8 * density).toInt(), (4 * density).toInt(), (8 * density).toInt(), (4 * density).toInt())
+            }
+            chatContainer.addView(hint)
+            messages.takeLast(MAX_CHAT_RENDER)
+        } else messages
         val inflater = LayoutInflater.from(this)
         var lastTimestamp = 0L
         val selecting = selectActionMode != null
-        messages.forEach { msg ->
+        renderList.forEach { msg ->
             val item = inflater.inflate(R.layout.item_chat_message, chatContainer, false)
 
             // 时间分隔：首条或跨段时显示。ts<=0 兜底不插时间

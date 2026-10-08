@@ -1031,14 +1031,24 @@ $env:ANDROID_HOME='C:\Users\smith\AppData\Local\Android\Sdk'
 
 冒烟：`journal_mode = wal`，索引四个齐备；12 条倒序翻页 3 次共 12 条无重复；6 条同毫秒消息用复合游标全部取回；`before=zz` → 400；老式毫秒游标仍可用。提取脚本：截断 / 超 64 位 varint 均抛 `ExtractError`，`b"\x05"` → 5、`b"\xac\x02"` → 300，`WX_TOOLCHAIN_DIR` 指向不存在目录时直接报错。
 
-### 12.7 本阶段仍未做
+### 12.7 用户拍板后已落地（第二轮补充）
 
-1. `ConversationActivity` 的聊天区仍是 `removeAllViews` + 逐条 inflate（转 RecyclerView + DiffUtil 会牵动布局与多选 ActionMode，风险大于收益，留作遗留项）。
-2. `messages.jsonl` / `pending.jsonl` 的轮转与配额：涉及「保留多久、超限丢谁」的产品决策，未擅自设定。
-3. 服务端提取的「分批 + 进度」：当前仍是一次性执行，长库会让请求长时间挂住。
-4. `usesCleartextTraffic` 策略、`/messages` 日期过滤时区、git 历史清理：三项都需要你的决定 / 授权（§11.3）。
-5. 阶段 2（包分层 capture/store/analysis/notify/ui/platform、拆 `MainActivity` / `AnalysisWorker` / `CalendarHelper` / `A11yExtractService`、存储与 prefs 统一门面、服务端拆包去 `__import__`、常量单一来源、引入 lifecycle/viewmodel）与阶段 3（detekt/ktlint/lint 进 CI、R8 + `shrinkResources`、pytest + androidTest、`waitress` + TLS、文档脚本化）尚未开始。
-6. 未 commit、未真机验证。
+- ✅ **默认仅 HTTPS**：移除 `usesCleartextTraffic`，加 `networkSecurityConfig`（明文只放行回环）；debug 构建覆盖放行；`CaptureActivity` 保存时校验 + `SyncWorker` 拦截
+- ✅ **数据保留 1 周**：`Retention.pruneIfDue`（每日节流）+ `MessageStore.pruneOlderThan` + `PendingQueue.pruneOlderThan`，在 `SyncWorker` 和 `MainApplication.onCreate` 触发
+- ✅ **git 历史改写 + 强推**：`git filter-branch --tree-filter` 删三张截图 + 替换真实路径，44 个 commit 全部改写，`main` + `v0.2.0` 已强推
+- ✅ **R8 + shrinkResources**：`isMinifyEnabled = true` + `isShrinkResources = true` + proguard keep 规则（JNI / 注解 / 行号表）
+- ✅ **CI 加 lint + pytest**：`lintOpenDebug` + `python3 -m pytest server/test_weixin.py`（7 个接口冒烟测试全绿）
+- ✅ **requirements.txt** 补 `pycryptodome==3.23.0` + `Pillow==12.3.0`
+- ✅ **临时文件清理**：17 个根目录点前缀 scratch 文件删除 + `.gitignore` 防复发
+- ✅ **commit + push**：两个 commit 已推送到 `main`
+
+### 12.8 仍需后续处理
+
+1. ~~`ConversationActivity` 聊天区逐条 inflate~~（已加防重渲染签名 + `MAX_CHAT_RENDER` 上限 + 超限提示；完整 RecyclerView 改造留作后续）
+2. 服务端提取分批 + 进度上报（当前一次性执行，长库会让请求挂住）
+3. 阶段 2 包分层（capture/store/analysis/notify/ui/platform）+ 拆上帝类（建议独立 PR，每个上帝类一个 PR）
+4. `waitress` + TLS 替换 Flask 开发服务器（部署侧改动）
+5. 真机验证（端侧引擎分块 prefill、引用计数释放、无障碍组件匹配、通知权限→FAILED 路径）
 
 
 
