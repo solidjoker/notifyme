@@ -284,9 +284,21 @@ class OverlayService : Service() {
             verticalMargin = 0.2f
         }
 
-        val todos = AnalysisStore.readRecent(this, 500)
-            .filter { it.s1NeedAction }
-            .take(8)
+        // 数据联动：按主页可见口径过滤——会话已删/不采集/不关注的待办不再显示，
+        // 同会话只认最新窗口结论（latestByConvKey），新分析的待办即时出现。
+        val unwatchedIds = WatchlistStore.getUnwatched(this)
+        val visibleKeys = MessageStore.readRecent(this, 500).asSequence()
+            .map { it.convKey }
+            .distinct()
+            .filter {
+                it.id !in unwatchedIds &&
+                    !AppSourceRegistry.isBlocked(it.pkg) &&
+                    AppSourceStore.isEnabled(this, it.pkg)
+            }
+            .toSet()
+        val todos = TodoPanelCore.selectTodos(
+            AnalysisStore.latestByConvKey(this), visibleKeys
+        )
         val container = view.findViewById<LinearLayout>(R.id.llPanelTodos)
         if (todos.isEmpty()) {
             container.addView(buildPanelRow(getString(R.string.overlay_panel_empty), null))

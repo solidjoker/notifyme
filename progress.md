@@ -1,6 +1,6 @@
 # Progress — notifyme
 
-> 最后更新：2026-10-05
+> 最后更新：2026-10-09
 > 正式工作目录：`C:\project\notifyme`
 > 远程仓库：`git@github.com:solidjoker/notifyme.git`（public，MIT）
 > 口号：**TodayToTomorrow for little mermaid**
@@ -23,7 +23,7 @@
 - 采集通道：`NotificationListenerService`（通知监听）+ 无障碍服务直读微信界面
 - 配套（可选）：`server/` Flask 服务端，消息接收/查询 + 网页控制台（PWA）
 
-当前版本：**versionName 0.1.3 / versionCode 4**（五项需求完成后未再升版本号）
+当前版本：**versionName 0.2.0 / versionCode 5**（beta 包 versionName=0.2.0-test）
 
 ## 二、仓库来源与目录关系（重要，避免搞混）
 
@@ -371,6 +371,85 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - 真机测试发现并修复：llama KV cache（557f640）、强制分析去重写反+名单未豁免（81cc283）、S1 模型名错误（jev-latest）。
 - 白名单测试案例：注入「限时5分钟」「昨天未跟进」两条合成消息实测，Laya 判定 need_action 0.98/importance 7.99/due today 全部符合预期（测试数据已清理）。
 
+> ⚠️ 10-08 勘误：本节两处结论已被推翻——
+> ① **S1 的正确形态是 PC 上的 laya-local 服务**（FastAPI，`127.0.0.1:8124`，手机经 `adb reverse tcp:8124` 访问，
+>    模型 laya-multilingual）；api.typesafe.ai + jev-latest 是**可选云端**备用（用户概念纠正 m01777）。
+> ② **GLM 密钥有效**（slot_glm_key 截断 bug 是取 key 时 Substring(11) 多了 `=`，正确 Substring(12)），
+>    S2=glm-5.3-flash 已真机跑通（见 §三.13）。
+
+### 13. 真机持续验证 + 夜间分析停摆根因 + 三项修复（2026-10-08 会话，当前暂停）
+
+**全链路真机验证 ✅**（ebb079b5 + laya-local + GLM）：
+- liquidjoker「今天下午1点要完成周报的检查」：prefilter p=1.00 → S1 laya（need_action_prob=0.11，
+  importance=4.5，due_window=later，topic=notice）→ escalate p=0.50 → S2 GLM → SUCCESS → 主页 ⚡1；
+  此前 §三.12 的班级群案例（S1 0.78 → GLM S2 升级 + 悬浮卡实拍 card_real.png）同样成立。
+- 用户在手机上自行完成了采集配置（设备数据事实，勿当测试噪声）：
+  `app_sources.xml` **mode=whitelist，白名单=[com.tencent.mm 微信, com.alibaba.android.rimet 钉钉, com.ss.android.lark 飞书]**，
+  黑名单勾了 10 个（剪映/招商银行/京东/小宇宙/抖音 dreamina/短信 mms 等）。
+
+**问题与根因（用户报告 m00168）**：
+1. 「消息能收到，但点分析没有反应」→ **根因 = MIUI/HyperOS 夜间静默丢弃 WorkManager 的 JobScheduler 注册**：
+   进程因前台服务存活、WorkManager 永远干等（analysis.jsonl 卡在前夜 21:21 后再无记录 ≈10 小时；
+   重启进程后同一次点击立刻全链跑通；debuggerd/线程转储被 MIUI 屏蔽，dumpsys androidx.work 返回空）。
+2. 「不采集指定 App，其会话就不要显示在主页」→ 主页此前显示所有历史会话，与采集开关脱节。
+3. 附加发现：重装/更新后 HyperOS 不会自动重绑 NotificationListenerService（settings 有记录≠已绑定），
+   需 `cmd notification disallow_listener` + `allow_listener` 强制重绑；已用 `cmd notification post` 做端到端探针验证。
+4. a11y 直读把自己进度通知抓成 51 条「采集」噪声入库（source=a11y-extract，pkg=自身）。
+
+**已完成的修复（代码全部落盘，258 单测全绿，APK 已构建）**：
+- **ScheduleSelfHeal（新文件 `app/src/main/java/com/notifyme/android/ScheduleSelfHeal.kt`）**：
+  `ScheduleSelfHealCore.shouldRepair` 纯决策（阈值=max(3×周期, 30min)、冷却 15min、anchor=max(lastAnalysisTime, 进程出生时间)）
+  + 执行侧 `repairIfNeeded` 用 UPDATE 重新 `enqueueUniquePeriodicWork` 向系统重新注册 job。
+  接入点：`KeepAliveService` 看门狗 60s 巡检 + `AnalysisScheduler.enqueueAnalysisNow` 开头（用户点按抢先救活）。
+  新增 `ScheduleSelfHealCoreTest` 7 用例。
+- **主页按采集状态过滤**（`MainActivity.refreshMessages`）：visibleGroups 增加
+  `!AppSourceRegistry.isBlocked(pkg) && AppSourceStore.isEnabled(ctx, pkg)`；`tvEmpty` 判空改用 visibleGroups。
+- **分析侧同口径**（`AnalysisWorker.doWorkExclusive` 候选链）：isBlocked 恒不分析；非 force 时未启用 App 不进候选。
+- **自采集噪声根除**（`MessageStore.append` 统一收口）：自身/系统包永不入库（监听器之外写路径兜底）。
+- **可诊断性**：`AnalysisWorker` 每轮开始打日志「本轮分析开始: 入选 N 个会话 (候选 M 个, force=…)」。
+- 设备数据清理：messages.jsonl 133→79 条（删自身「采集」噪声 + Shell 测试会话；用户真实微信消息未动）。
+
+**flavor 误装事故（教训）**：`assembleOpenDebug` 产物 `notifyme-open.apk` 的 applicationId 是**干净的
+`com.notifyme.android`**（`.test` 后缀属于 **beta** flavor）；把它 install -r 到用户手机上会**新装一个平行包**，
+`Success` 但已装的 `com.notifyme.android.test` 纹丝不动（lastUpdateTime 不变即此征兆）。误装的 open 包已卸载。
+真机验证一律用 `assembleBetaDebug` → `app\build\outputs\apk\beta\debug\notifyme-test.apk`。
+
+**暂停点（用户 m00447「先暂停」）**：
+- beta 新包（含上述全部修复）`app\build\outputs\apk\beta\debug\notifyme-test.apk` 已构建成功；
+- 设备 `com.notifyme.android.test` 仍是 10-07 20:20 旧包，**尚未完成新包装机与验证**；
+- 期间 HyperOS 拦装机 `INSTALL_FAILED_USER_RESTRICTED`，用户已手动开启「USB 安装」，
+  但那次 Success 是 open 包（见上），beta 包尚未确认落机。
+
+**恢复后的待办（按序）**：
+1. `adb -s ebb079b5 install -r app\build\outputs\apk\beta\debug\notifyme-test.apk` →
+   核对 `lastUpdateTime` 变化 + `pm path`；重绑监听（disallow/allow）+ `adb reverse tcp:8124 tcp:8124` + 确认 PC laya-local 在跑。
+2. 真机验证：主页只剩微信/钉钉/飞书会话（即梦/短信/叮咚买菜等应消失——旧包实测还显示着）；
+   点 🔍 出现「本轮分析开始」日志；⚡ 角标与悬浮卡回归；观察 60s 看门狗无崩溃。
+3. 自我修复路径回归：等 lastAnalysisTime 新鲜时 watchdog 不打日志（不误触发）即可（逻辑由单测覆盖）。
+4. M12 分析范围筛选实现（周期 近1月/近7天/今天/自定义 + 多会话选择 + 显式范围跳过去重/名单，设计见 ROADMAP §十一）。
+5. 评测文档补充：GLM S2 成功样本、laya-local vs JEV 敏感度对比、M11.4/M11.5 记录。
+6. 低优先：端侧 0.5B few-shot prompt 调优。
+7. 本会话修复代码**未提交**——真机验证通过后提交+推送（用户惯例）。
+
+### 14. 悬浮面板「最近待办」与主页联动修复 + 三项修复真机验证全部通过（2026-10-09）
+
+- 用户报（m00484）：悬浮球面板「最近待办」与主页数据不联动。根因：旧 `OverlayService.togglePanel` 直接
+  `AnalysisStore.readRecent(500).filter{s1NeedAction}.take(8)`，完全不看主页可见性口径——已删/停止采集/不关注会话的
+  陈旧待办照常显示，且同会话多条历史记录挤占前 8。
+- 修复：新增 `TodoPanelCore.selectTodos(latestByConvKey, homepageVisibleKeys, limit=8)`（纯函数+7 单测）；面板改为与
+  MainActivity 同口径：有消息 && 非不关注 && 非黑名单 && App 在采集，同会话只认最新一次结论，按 analyzedAt 倒序。
+- 真机验证（ebb079b5，beta 0.2.0-test，lastUpdateTime=2026-10-09 15:00:44）：
+  1. 主页采集过滤 ✅（只剩微信白名单会话，短信/叮咚/即梦/采集噪声消失）。
+  2. 「立即分析」✅：`AnalysisWorker: 本轮分析开始: 入选 1 个会话 (候选 27 个, force=liquidjoker` → S1 laya 打分
+     `confidence=0.17<0.5` → S2 GLM 升级 → 本轮分析完成 → WM-WorkerWrapper SUCCESS（§三.13 待办 2 闭环）。
+  3. 面板联动 ✅：数据端 join（analysis.jsonl 76 条 × 可见 26 会话）新口径应仅 1 条「Ashley钰涵」，旧代码会显示
+     李志恒/班级群 2 条已不在主页的会话；实机点球→面板单行窗 `[0,1644][1220,2089]`（几何预估 445px 吻合）→点行
+     打开会话页=Ashley钰涵（⚡需要行动 73%、最近分析 10-07 12:52，与主页 ⚡1 一致）→面板自动收起 ✅。行点击 E2E 通。
+  4. KeepAlive 前台（id=1001）运行、logcat 无 FATAL、看门狗不误报 ✅（§三.13 待办 1/3 闭环）。
+- HyperOS 新坑：force-stop 后 OverlayService 不会自动拉起（悬浮球消失）——控制台→悬浮通知→「常驻悬浮球」关→开重开；
+  uiautomator 只 dump 焦点窗，overlay 面板不可见，验证要用 `dumpsys input` 的 InputWindow frame；球窗 mAttrs 与实际触摸
+  frame 相差 150px（INSET_PARENT_FRAME_BY_IME），点球坐标必须以 input frame 为准（本例中心 (1123,1046)）。
+- 测试：OpenDebug 单测全绿（含 TodoPanelCoreTest 7 例），assembleOpenDebug+assembleBetaDebug exit 0。
 ## 四、构建与运行
 
 ```powershell
@@ -407,7 +486,7 @@ ADB/设备要点（踩过的坑）：
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
-> 当前状态：**M4 spike 已完成并在 MuMu 实测通过**（c1480b7/9d3d766，243 单测全绿，见 §三.10；S1 MNN 格式待换 GGUF）；**M9 代码已完成**（§三.9，模拟器实测；真机待验）；**W1 真机回归阻塞**（等用户登录微信或连真机 ebb079b5）；**M0 代码与 CI 侧已完成**，只剩 D5 正式密钥库 + 4 个 Secrets（等 `administration` 权限 token）；下一步按微信优先先做 W1 真机端到端（含 S2 4B 真机取证），随后补 M4 S1 GGUF 与准入判定。
+> 当前状态（2026-10-09 更新）：**W1 真机端到端已打通**（S1=PC laya-local + S2=GLM，全链 ⚡ 实测 ✅，见 §三.13）；**M9 真机已验**（悬浮卡实拍 card_real.png）；**M10/M11/M11.4 已交付**；排程失联自愈 + 主页采集过滤 + 自采集噪声根除 + 悬浮面板「最近待办」与主页联动修复**全部真机验证通过（见 §三.14，§三.13 待办 1-3 已闭环）**；M12 分析范围筛选设计完成待实现；评测文档待补充；0.5B few-shot 低优先；本会话修复已随验证通过提交并推送；M0 代码与 CI 侧已完成，只剩 D5 正式密钥库 + 4 个 Secrets（等 `administration` 权限 token）。剩余待办：M12 分析范围筛选、评测文档补充、0.5B few-shot（低优先）；执行时以 docs/ROADMAP.md 为准。
 > 下面 8 项是 README 的对外表述，保留原样；执行时以 ROADMAP 为准。
 
 1. **iOS 原生查看端 + 提醒推送**：在 iPhone 上看分析结果并收到提醒（iOS 不允许后台捕获其他 App 通知，故不含本地捕获；当前仅 PWA 查看端）
