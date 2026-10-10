@@ -33,7 +33,9 @@ object LayaTfliteEngine {
 
     // TFLite Interpreter 缓存：模型文件 644MB，每次 runQuestion 重新加载耗时且浪费内存
     // 按 modelDir 路径缓存，releaseAll() 时释放
+    @Volatile
     private var cachedInterpreter: Interpreter? = null
+    @Volatile
     private var cachedDir: String? = null
 
     private fun getInterpreter(dir: File): Interpreter {
