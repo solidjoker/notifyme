@@ -80,9 +80,9 @@ object LocalModelStore {
             files = listOf(
                 ModelFile("laya_ml_s256_wfp16.tflite", "$HF_LAYA/laya_ml_s256_wfp16.tflite", 644_077_360L),
                 ModelFile("laya_ml_act_head_fp32.tflite", "$HF_LAYA/laya_ml_act_head_fp32.tflite", 795_816L),
-                ModelFile("tokenizer.json", "$HF_LAYA/multilingual/tokenizer.json", 0L),
-                ModelFile("tokenizer_config.json", "$HF_LAYA/multilingual/tokenizer_config.json", 0L),
-                ModelFile("calibration.json", "$HF_LAYA/multilingual/calibration.json", 0L)
+                ModelFile("tokenizer.json", "$HF_LAYA/multilingual/tokenizer.json", -1L),
+                ModelFile("tokenizer_config.json", "$HF_LAYA/multilingual/tokenizer_config.json", -1L),
+                ModelFile("calibration.json", "$HF_LAYA/multilingual/calibration.json", -1L)
             )
         )
     )
@@ -128,7 +128,7 @@ object LocalModelStore {
         val dir = modelDir(context, id)
         return m.files.all { f ->
             val file = File(dir, f.name)
-            file.exists() && file.length() == f.size
+            file.exists() && (f.size <= 0 || file.length() == f.size)
         }
     }
 
