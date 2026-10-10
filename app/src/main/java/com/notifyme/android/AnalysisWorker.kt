@@ -362,6 +362,8 @@ class AnalysisWorker(
         // ---- fork 2：S1 判定 ----
         val result = if (s1Local) {
             runS1Local(kase, background)
+                } else if (config.s1Type == AnalysisConfig.S1_TYPE_LAYA_ONDEVICE) {
+            runS1LayaTflite(kase, background)
         } else {
             runS1SystemOne(config, slot, baseUrl, sendCase, cloudBackground)
         }
@@ -677,6 +679,49 @@ class AnalysisWorker(
             2048
         )
         return raw to AnalysisParsing.parseS1Result(AnalysisParsing.extractJsonFromText(raw), "local")
+    }
+
+    /**
+     * S1 判定（laya 端侧 TFLite）：LayaTfliteEngine 对四类判定题逐题推理。
+     */
+    private fun runS1LayaTflite(
+        kase: AnalysisCase,
+        background: String
+    ): Pair<String, AnalysisCase.Companion.S1Result> {
+        if (!LayaTfliteEngine.isReady(applicationContext)) {
+            throw LocalEngineException("laya TFLite 模型未下载（模型管理→Laya-Multilingual→下载）")
+        }
+        val stateText = kase.windowText()
+        val questions = AnalysisCase.buildS1QuestionsJson()
+        val qNames = listOf("need_action", "importance", "due_window", "topic")
+        val qTypes = listOf("noul", "score", "choice", "choice")
+        val answers = JSONObject()
+        for (i in qNames.indices) {
+            val qName = qNames[i]
+            val q = questions.getJSONObject(qName)
+            val qType = qTypes[i]
+            val instructions = q.optString("instructions", "")
+            val criteria = q.optJSONObject("criteria") ?: JSONObject()
+            val options = if (qType == "choice") {
+                val keys = criteria.keys()
+                val list = mutableListOf<String>()
+                while (keys.hasNext()) list.add(keys.next())
+                list
+            } else if (qType == "score") {
+                (0..9).map { it.toString() }
+            } else {
+                listOf("true", "false")
+            }
+            val answer = LayaTfliteEngine.runQuestion(
+                applicationContext, qType, instructions, options, stateText
+            )
+            val best = answer.labels.getOrNull(answer.bestIdx) ?: ""
+            val prob = answer.probs.getOrNull(answer.bestIdx) ?: 0.0
+            val answerObj = JSONObject().put("choice", best).put("value", best).put("prob", prob)
+            answers.put(qName, answerObj)
+        }
+        val raw = answers.toString()
+        return raw to AnalysisParsing.parseS1Result(JSONObject(raw), "local")
     }
 
     // ---------------- S2：深分析（openai 槽位） ----------------

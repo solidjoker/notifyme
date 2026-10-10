@@ -87,7 +87,8 @@ class AnalysisSettingsActivity : Activity() {
     private val s1TypeValues = arrayOf(
         AnalysisConfig.S1_TYPE_LOCAL,
         AnalysisConfig.S1_TYPE_REMOTE,
-        AnalysisConfig.S1_TYPE_LOCAL_MODEL
+        AnalysisConfig.S1_TYPE_LOCAL_MODEL,
+        AnalysisConfig.S1_TYPE_LAYA_ONDEVICE
     )
 
     /** S2 服务商 spinner 顺序值：与 strings.xml 的 s2_provider_labels 一一对应 */

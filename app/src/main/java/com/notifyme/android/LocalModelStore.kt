@@ -14,6 +14,7 @@ import java.io.File
  *    （id 沿用 minicpm4_0_5b 历史值；Laya 本体是 ModernBERT 判别式架构，
  *    llama.cpp 上游支持 PR #29363 尚未合并，端侧暂以生成式小模型代行快筛）；
  *  - MODEL_S2：MiniCPM5-2B-GGUF Q4_K_M（约 1.5 GB），S2 深分析用（替代 MiniCPM3-4B）。
+ *  - MODEL_LAYA：laya-multilingual LiteRT TFLite（~0.68 GB），S1 laya 判定用（端侧 TFLite 推理）。
  *
  * 下载源：ModelScope 直链（国内 CDN，已实测支持 Range 断点续传）。
  * 各文件预期大小已用 Range 0-0 探针实测（2026-10-03），下载完成后按字节数校验。
@@ -25,6 +26,7 @@ object LocalModelStore {
 
     const val MODEL_S1 = "minicpm4_0_5b"
     const val MODEL_S2 = "minicpm5_2b"
+    const val MODEL_LAYA = "laya_ml"
 
     private const val PREFS_NAME = "local_model_store"
 
@@ -48,6 +50,7 @@ object LocalModelStore {
 
     private const val MS_S1 = "https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/master"
     private const val MS_S2 = "https://www.modelscope.cn/models/OpenBMB/MiniCPM5-2B-GGUF/resolve/master"
+    private const val HF_LAYA = "https://huggingface.co/litert-community/Laya-Multilingual-LiteRT/resolve/main"
 
     val MODELS: List<LocalModel> = listOf(
         LocalModel(
@@ -67,6 +70,19 @@ object LocalModelStore {
             sizeLabel = "~1.5 GB",
             files = listOf(
                 ModelFile("MiniCPM5-2B-Q4_K_M.gguf", "$MS_S2/MiniCPM5-2B-Q4_K_M.gguf", 1_561_318_368L)
+            )
+        ),
+        LocalModel(
+            id = MODEL_LAYA,
+            displayName = "Laya-Multilingual（LiteRT TFLite）",
+            roleLabel = "System 1 Laya 判定 · 端侧 TFLite 推理（mmBERT 多语言 · 51ms/问）",
+            sizeLabel = "~0.68 GB",
+            files = listOf(
+                ModelFile("laya_ml_s256_wfp16.tflite", "$HF_LAYA/laya_ml_s256_wfp16.tflite", 644_077_360L),
+                ModelFile("laya_ml_act_head_fp32.tflite", "$HF_LAYA/laya_ml_act_head_fp32.tflite", 795_816L),
+                ModelFile("tokenizer.json", "$HF_LAYA/multilingual/tokenizer.json", 0L),
+                ModelFile("tokenizer_config.json", "$HF_LAYA/multilingual/tokenizer_config.json", 0L),
+                ModelFile("calibration.json", "$HF_LAYA/multilingual/calibration.json", 0L)
             )
         )
     )

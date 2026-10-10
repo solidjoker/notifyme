@@ -75,7 +75,10 @@ class AnalysisConfig(context: Context) {
         /** System 1 类型（追加）：本地 MiniCPM4-0.5B 端侧快筛（LocalLlmEngine） */
         const val S1_TYPE_LOCAL_MODEL = "local_model"
 
-        /** System 2 服务商：默认 local（端侧 MiniCPM3-4B）；JEV / GLM coding plan / 自定义 OpenAI 兼容为可选云端 */
+    /** System 1 类型（追加）：laya-multilingual LiteRT TFLite 端侧判定。 */
+    const val S1_TYPE_LAYA_ONDEVICE = "laya_ondevice"
+
+    /** System 1 类型（追加）：laya-multilingual LiteRT TFLite 端侧判定（PR #29363 已合并到 v0.5.0+）。 */
         const val S2_PROVIDER_JEV = "jev"
         const val S2_PROVIDER_GLM = "glm"
         const val S2_PROVIDER_CUSTOM = "custom"

@@ -207,6 +207,10 @@ dependencies {
     // 上报用 OkHttp；JSON 仍用平台内置 org.json，不引 Gson/Moshi
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // TensorFlow Lite — laya 端侧判别式决策模型推理（LiteRT 2.2.0 兼容 .tflite）
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-select-tf-ops:2.14.0")
+
     // ---- 单元测试（M1 测试地基，只进 test classpath，不进 APK）----
     testImplementation("junit:junit:4.13.2")
     // JVM 单测里 android.jar 的 org.json 只是空壳（方法返回默认值 → JSONObject 恒为空），

@@ -12,9 +12,7 @@
     <string name="clear_done">已清除全部记录</string>
     <string name="chat_truncated">仅显示最近 %1$d 条（共 %2$d 条）</string>
     <string name="confirm_clear_all">将清空全部消息记录与待上报队列，且无法恢复。确定继续？</string>
-    <string name="btn_collapse_all">全部折叠</string>
-    <string name="btn_expand_all">全部展开</string>
-    <string name="msg_count">%1$d 条</string>
+            <string name="msg_count">%1$d 条</string>
     <string name="date_unknown_label">未标注日期</string>
 
     <!-- 分析结果联动与列表页 -->
@@ -108,7 +106,12 @@
     <string name="listener_disconnected">监听服务：未连接（保活看门狗会自动重绑）</string>
     <string name="btn_go_grant">去授权</string>
     <string name="btn_reopen_onboarding">重新打开使用向导</string>
-    <string name="console_section_watchlist">⭐ 重点关注会话</string>
+    <string name="console_guide_title">操作说明</string>
+<string name="console_guide_body">主页列表可左滑删除、长按批量删除；点会话名进详情页分析；点右侧箭头折叠/展开。⚠️ 角标 = 有待办任务；📅 = 已设日历提醒。下方按钮控制主页全部折叠/展开，以及返回主页。</string>
+<string name="btn_collapse_all">全部折叠</string>
+<string name="btn_expand_all">全部展开</string>
+<string name="btn_go_home">回到主页</string>
+<string name="console_section_watchlist">⭐ 重点关注会话</string>
     <string name="btn_open_watchlist">管理重点关注会话</string>
     <string name="btn_open_sources">管理通知来源（微信 / 飞书 / 钉钉…）</string>
     <string name="sources_title">通知来源</string>
@@ -260,6 +263,7 @@
         <item>Laya 服务（电脑 127.0.0.1:8124 · 依赖电脑）</item>
         <item>自建服务地址</item>
         <item>本地端侧模型（快筛 · 默认，模型管理可下载）</item>
+                                                    <item>Laya 端侧（TFLite · 多语言判定）</item>
     </string-array>
     <string name="s2_section_title">System 2 · 深度分析（OpenAI 兼容）</string>
     <string name="s2_enabled_switch">启用 System 2 深分析（S1 命中升级条件时调用）</string>

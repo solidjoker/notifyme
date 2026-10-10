@@ -58,6 +58,12 @@ class ConsoleActivity : Activity() {
         }
 
         setupKeepAliveSection()
+
+        // 快捷按钮：回到主页（全部折叠/展开已在主页标题栏，此处仅提供导航入口）
+        findViewById<Button>(R.id.btnGoHome).setOnClickListener {
+            finish()
+        }
+
     }
 
     override fun onResume() {
