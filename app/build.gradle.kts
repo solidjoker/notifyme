@@ -70,8 +70,8 @@ android {
         applicationId = "com.notifyme.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "0.2.0"
+        versionCode = 6
+        versionName = "0.3.0"
 
         ndk {
             // 真机 arm64 + MuMu 模拟器 x86_64；不含 32 位与其它 ABI
