@@ -1,6 +1,6 @@
 # Progress — notifyme
 
-> 最后更新：2026-10-09
+> 最后更新：2026-10-10
 > 正式工作目录：`C:\project\notifyme`
 > 远程仓库：`git@github.com:solidjoker/notifyme.git`（public，MIT）
 > 口号：**TodayToTomorrow for little mermaid**
@@ -450,6 +450,32 @@ Git 提交身份（本仓库局部配置，未改全局）：
   uiautomator 只 dump 焦点窗，overlay 面板不可见，验证要用 `dumpsys input` 的 InputWindow frame；球窗 mAttrs 与实际触摸
   frame 相差 150px（INSET_PARENT_FRAME_BY_IME），点球坐标必须以 input frame 为准（本例中心 (1123,1046)）。
 - 测试：OpenDebug 单测全绿（含 TodoPanelCoreTest 7 例），assembleOpenDebug+assembleBetaDebug exit 0。
+
+### 15. 分析改走手机内模型 + 0.5B few-shot 生效 + S2 推理预算修复（2026-10-10）
+
+- 用户改口径（m01048）：「分析 是要通过手机里配置的模型分析，改正」「不是电脑」→ 真机 S1 配置从
+  `local`（PC laya-local，经 adb reverse，依赖电脑）切为 **`local_model`（端侧 Qwen2.5-0.5B）**，
+  S2 仍走手机里配置的 GLM 云。切换法：改 `shared_prefs/analysis_config.xml` 的 s1_type（/data/local/tmp 中转 cp）。
+- 端侧 S1 原缺陷：0.5B 把 system prompt 里的 schema 占位符原样复读（raw=`0.0-1.0` 等）→ 解析不出 JSON →
+  旧兜底给 confidence=1.0「高置信无需行动」→ 永不升级，分析名义通、实际恒空转。
+- 修复三件（`AnalysisCase.kt` / `AnalysisParsing.kt` / `AnalysisWorker.kt`）：
+  1. 新增 `S1_LOCAL_SYSTEM_PROMPT` + `buildS1LocalSystemPrompt()`：中文指令 + **两个 few-shot 样例**
+     （工作消息→need 0.9/imp 7.0/today；闲聊→0.05/1.0/none/smalltalk），并明令「不要把占位文字抄进答案」；
+     `runS1Local` 换用该 prompt（原与云端共用 schema 指令版）。
+  2. `parseS1Result(payload=null)` 置信度 **1.0 → 0.0**：解析失败绝不能定案，必须走升级闸
+     （`confidence < 0.5`）交给 S2 重判；同步改 `AnalysisParsingTest`（原断言 1.0/不升级）。
+  3. S2 HTTP `max_tokens` 1024 → **4096**（glm-5.3 推理模型的 reasoning_tokens 也占额度，1024 被思考段
+     吃满 → content 空串 finish_reason=length，真机复现；与 AdvisorWorker 同口径）。
+- 新增 `AnalysisCaseTest` 2 例（few-shot 样例存在性、背景段追加）；OpenDebug 全量单测 exit 0。
+- 真机验证（ebb079b5，beta 0.2.0-test，lastUpdateTime=2026-10-10 10:42:58，s1_type=local_model）：
+  1. 第一次 chip（姜倩）：端侧加载模型 `model loaded n_ctx=2048 threads=6`，S1 输出
+     `topic=smalltalk` 真实枚举值（非占位复读）；confidence=0.0 → 升级闸触发 → S2 GLM → SUCCESS。
+  2. 提 max_tokens 后第二次 chip（同会话）：**S1 端侧输出 `need_action_prob=0.9, importance=7.0,
+     due_window=today, confidence=0.9` 完整真值 JSON** → 升级 → S2 产出真实摘要
+     「姜倩改约周二晚8点，另商议加隔板」+ due_time「周二晚上8点」+ 2 条 tasks → WM SUCCESS。
+  3. 全程无 adb reverse、无 PC 参与——分析链路已在手机内闭环（S1 端侧 + S2 手机内配置的 GLM）。
+- 遗留观察：0.5B 的 need/conf 数值仍不稳（同会话两次分别 conf 0.0 与 0.9），靠升级闸兜住质量下限；
+  进一步调优（few-shot 迭代/更大端侧模型）仍是低优先 ROADMAP 项。
 ## 四、构建与运行
 
 ```powershell
@@ -486,7 +512,7 @@ ADB/设备要点（踩过的坑）：
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
-> 当前状态（2026-10-09 更新）：**W1 真机端到端已打通**（S1=PC laya-local + S2=GLM，全链 ⚡ 实测 ✅，见 §三.13）；**M9 真机已验**（悬浮卡实拍 card_real.png）；**M10/M11/M11.4 已交付**；排程失联自愈 + 主页采集过滤 + 自采集噪声根除 + 悬浮面板「最近待办」与主页联动修复**全部真机验证通过（见 §三.14，§三.13 待办 1-3 已闭环）**；M12 分析范围筛选设计完成待实现；评测文档待补充；0.5B few-shot 低优先；本会话修复已随验证通过提交并推送；M0 代码与 CI 侧已完成，只剩 D5 正式密钥库 + 4 个 Secrets（等 `administration` 权限 token）。剩余待办：M12 分析范围筛选、评测文档补充、0.5B few-shot（低优先）；执行时以 docs/ROADMAP.md 为准。
+> 当前状态（2026-10-10 更新）：**W1 真机端到端已打通**，并按用户口径改为**全程手机内分析**（S1=端侧 Qwen2.5-0.5B + few-shot，S2=手机内配置的 GLM；不再依赖电脑 laya-local，见 §三.15 真机实测 ✅）；**M9 真机已验**（悬浮卡实拍 card_real.png）；**M10/M11/M11.4 已交付**；排程失联自愈 + 主页采集过滤 + 自采集噪声根除 + 悬浮面板「最近待办」与主页联动修复**全部真机验证通过（见 §三.14，§三.13 待办 1-3 已闭环）**；M12 分析范围筛选设计完成待实现；评测文档待补充；**0.5B few-shot 已完成并真机验证（§三.15，端侧 S1 已产出真实判定 JSON）**；本会话修复已随验证通过提交并推送；M0 代码与 CI 侧已完成，只剩 D5 正式密钥库 + 4 个 Secrets（等 `administration` 权限 token）。剩余待办：M12 分析范围筛选、评测文档补充、0.5B few-shot（低优先）；执行时以 docs/ROADMAP.md 为准。
 > 下面 8 项是 README 的对外表述，保留原样；执行时以 ROADMAP 为准。
 
 1. **iOS 原生查看端 + 提醒推送**：在 iPhone 上看分析结果并收到提醒（iOS 不允许后台捕获其他 App 通知，故不含本地捕获；当前仅 PWA 查看端）

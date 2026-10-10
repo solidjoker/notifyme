@@ -438,6 +438,29 @@ class AnalysisCaseTest {
     }
 
     @Test
+    fun `端侧 S1 prompt 含两个 few-shot 样例与真实数值`() {
+        // 0.5B 端侧模型会复读占位符，few-shot 样例是它的输出形态锚点：
+        // 样例缺失或不含具体数值，回归为「恒兜底」故障。
+        val p = AnalysisCase.S1_LOCAL_SYSTEM_PROMPT
+        listOf("need_action_prob", "importance", "due_window", "topic", "confidence").forEach {
+            assertTrue("端侧 prompt 里应当声明字段 $it", p.contains(it))
+        }
+        assertTrue("应有示例一", p.contains("示例一"))
+        assertTrue("应有示例二", p.contains("示例二"))
+        assertTrue("示例一应含真实概率数值", p.contains("\"need_action_prob\": 0.9"))
+        assertTrue("示例二应为无需行动样例", p.contains("\"need_action_prob\": 0.05"))
+        assertTrue("应明令禁止复读占位符", p.contains("不要把上面说明里的占位文字抄进答案"))
+    }
+
+    @Test
+    fun `buildS1LocalSystemPrompt 有背景时追加背景段`() {
+        val prompt = AnalysisCase.buildS1LocalSystemPrompt("张三是我的直属上级")
+
+        assertTrue(prompt.startsWith(AnalysisCase.S1_LOCAL_SYSTEM_PROMPT))
+        assertTrue(prompt.contains("背景信息（判定该会话时必须纳入考量）：张三是我的直属上级"))
+    }
+
+    @Test
     fun `S1 system prompt 要求只输出 JSON 且列出五个字段`() {
         val p = AnalysisCase.S1_OPENAI_SYSTEM_PROMPT
         assertTrue(p.contains("output ONLY a JSON object"))

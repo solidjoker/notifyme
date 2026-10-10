@@ -43,6 +43,17 @@ internal object AnalysisParsing {
         payload: JSONObject?,
         channel: String
     ): AnalysisCase.Companion.S1Result {
+        // 整体解析不出 JSON：不能兜底成「高置信度无需行动」把垃圾输出定案。
+        // 置信度置 0.0，让升级闸（confidence < 0.5）把它交给 S2 深分析端或云端重判。
+        if (payload == null) {
+            return AnalysisCase.Companion.S1Result(
+                needActionProb = 0.0,
+                importance = 0.0,
+                dueWindow = "none",
+                topic = "notice",
+                confidence = 0.0
+            )
+        }
         var prob = 0.0
         var importance = 0.0
         var dueWindow = "none"

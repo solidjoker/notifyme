@@ -42,15 +42,17 @@ class AnalysisParsingTest {
     // ---------------- parseS1Result ----------------
 
     @Test
-    fun `payload 为 null 时返回安全默认值`() {
+    fun `payload 为 null 时判为低置信并触发升级`() {
+        // 端侧 0.5B 会整段复读提示词占位符（raw 不可解析 JSON），此时绝不能
+        // 兜底成「高置信度无需行动」定案，必须 confidence=0 触发升级交给 S2 重判。
         val r = AnalysisParsing.parseS1Result(null, "openai")
 
         assertEquals(0.0, r.needActionProb, delta)
         assertEquals(0.0, r.importance, delta)
         assertEquals("none", r.dueWindow)
         assertEquals("notice", r.topic)
-        assertEquals(1.0, r.confidence, delta)
-        assertFalse("默认值不该触发升级", r.shouldEscalate())
+        assertEquals(0.0, r.confidence, delta)
+        assertTrue("解析失败必须触发升级", r.shouldEscalate())
     }
 
     @Test

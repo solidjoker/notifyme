@@ -661,7 +661,8 @@ class AnalysisWorker(
     }
 
     /**
-     * S1 判定（本地端侧引擎）：同一套 system prompt 与解析，仅把
+     * S1 判定（本地端侧引擎）：端侧专属 few-shot prompt（见
+     * [AnalysisCase.S1_LOCAL_SYSTEM_PROMPT]——0.5B 会复读纯 schema 的占位符），
      * HTTP chat/completions 换成 LocalLlmEngine.chat（引擎直接返回文本，
      * 无需剥 choices 包装）。引擎未就绪抛 LocalEngineException 由上层接住。
      */
@@ -671,7 +672,7 @@ class AnalysisWorker(
     ): Pair<String, AnalysisCase.Companion.S1Result> {
         val engine = LocalLlmEngines.forModel(applicationContext, LocalModelStore.MODEL_S1)
         val raw = engine.chat(
-            AnalysisCase.buildS1OpenAiSystemPrompt(background),
+            AnalysisCase.buildS1LocalSystemPrompt(background),
             "会话「${kase.conversation}」最近消息：\n${kase.windowText()}",
             1024
         )
@@ -742,7 +743,10 @@ class AnalysisWorker(
             })
             // GLM 支持 json_object 约束；不支持的服务端会忽略或报错（失败走 retry 记录）
             put("response_format", JSONObject().put("type", "json_object"))
-            put("max_tokens", 1024)
+            // glm-5.3 等推理模型的 reasoning_tokens 也占 max_tokens 额度，
+            // 1024 会被思考段吃满导致 content 空串（真机实测 finish_reason=length），
+            // 与 AdvisorWorker 同口径放宽到 4096。
+            put("max_tokens", 4096)
             put("stream", false)
         }
 

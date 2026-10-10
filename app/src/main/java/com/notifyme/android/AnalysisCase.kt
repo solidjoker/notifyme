@@ -241,6 +241,30 @@ data class AnalysisCase(
             else S1_OPENAI_SYSTEM_PROMPT +
                 "\n背景信息（判定该会话时必须纳入考量）：$background"
 
+        /**
+         * S1 端侧小模型（Qwen2.5-0.5B）few-shot system prompt（M11.5）。
+         *
+         * 为什么单独一套：0.5B 对纯 schema 指令会整段复读占位符（真机实测
+         * raw = 提示词里的 `0.0-1.0` / `none|today|...` 原样回显），判定恒为
+         * 兜底默认值。两个中文 few-shot 样例把「输出形态」从指令变成可模仿
+         * 的模式，实测能稳定产出真实数值；其余口径与云端 S1 完全一致。
+         */
+        const val S1_LOCAL_SYSTEM_PROMPT =
+            "你是微信工作消息的严格判定引擎。用户给出一个会话窗口（最近的中文消息）。\n" +
+                "以「我: 」开头的行是用户自己发出的消息；其它行是对方的。\n" +
+                "只统计用户还欠对方的事项（用户自己说过的话不构成待办）。\n" +
+                "看整个会话窗口，只输出一个 JSON 对象，禁止任何其它文字：\n" +
+                "{\"need_action_prob\": 数字0.0到1.0, \"importance\": 数字0到9, \"due_window\": \"none|today|tomorrow|this_week|later 五选一\", \"topic\": \"work_task|schedule|notice|smalltalk|risk 五选一\", \"confidence\": 数字0.0到1.0}\n" +
+                "必须填真实判断出来的数值，不要把上面说明里的占位文字抄进答案。\n" +
+                "示例一：\n用户消息：\n会话「老板」最近消息：\n老板: 明天上午十点开会，材料你准备一下\n我的输出：\n{\"need_action_prob\": 0.9, \"importance\": 7.0, \"due_window\": \"tomorrow\", \"topic\": \"work_task\", \"confidence\": 0.9}\n" +
+                "示例二：\n用户消息：\n会话「朋友」最近消息：\n朋友: 哈哈哈昨天那个视频太搞笑了\n我的输出：\n{\"need_action_prob\": 0.05, \"importance\": 1.0, \"due_window\": \"none\", \"topic\": \"smalltalk\", \"confidence\": 0.85}"
+
+        /** S1（端侧小模型）system prompt：有自定义提示词时追加「背景信息」段。 */
+        fun buildS1LocalSystemPrompt(background: String = ""): String =
+            if (background.isBlank()) S1_LOCAL_SYSTEM_PROMPT
+            else S1_LOCAL_SYSTEM_PROMPT +
+                "\n背景信息（判定该会话时必须纳入考量）：$background"
+
         /** S1 判定结果（两种协议归一化后的统一形态） */
         data class S1Result(
             val needActionProb: Double,   // 0.0-1.0
