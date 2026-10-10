@@ -30,6 +30,23 @@ import java.nio.channels.FileChannel
 object LayaTfliteEngine {
 
     private const val TAG = "LayaTfliteEngine"
+
+    // TFLite Interpreter 缓存：模型文件 644MB，每次 runQuestion 重新加载耗时且浪费内存
+    // 按 modelDir 路径缓存，releaseAll() 时释放
+    private var cachedInterpreter: Interpreter? = null
+    private var cachedDir: String? = null
+
+    private fun getInterpreter(dir: File): Interpreter {
+        val path = dir.absolutePath
+        if (cachedInterpreter != null && cachedDir == path) return cachedInterpreter!!
+        cachedInterpreter?.close()
+        val buffer = loadModelFile(dir.resolve("laya_ml_s256_wfp16.tflite"))
+        val options = Interpreter.Options().apply { setNumThreads(4) }
+        val interpreter = Interpreter(buffer, options)
+        cachedInterpreter = interpreter
+        cachedDir = path
+        return interpreter
+    }
     private const val WINDOW = 256
 
     // ---------- SentencePiece 贪心分词器 ----------
@@ -161,10 +178,7 @@ object LayaTfliteEngine {
         }
 
         // 加载模型并推理
-        val modelFile = File(dir, "laya_ml_s256_wfp16.tflite")
-        val buffer = loadModelFile(modelFile)
-        val interpreter = Interpreter(buffer, Interpreter.Options().apply { setNumThreads(4) })
-        try {
+        val interpreter = getInterpreter(dir)
             val inputIdsBuf = arrayOf(inputIds)
             val maskBuf = arrayOf(attentionMask)
             val qtypeBuf = arrayOf(qtypeOnehot)
@@ -205,11 +219,14 @@ object LayaTfliteEngine {
 
             val bestIdx = finalProbs.indices.maxByOrNull { finalProbs[it] } ?: 0
             return LayAnswer(options, finalProbs, bestIdx)
-        } finally {
-            interpreter.close()
-        }
     }
 
+    /** 释放缓存的 TFLite Interpreter（内存压力大或模型被删除时调用）。 */
+    fun releaseAll() {
+        cachedInterpreter?.close()
+        cachedInterpreter = null
+        cachedDir = null
+    }
     private fun loadModelFile(file: File): MappedByteBuffer {
         val fc = java.io.RandomAccessFile(file, "r").channel
         return fc.map(FileChannel.MapMode.READ_ONLY, 0, fc.size())
