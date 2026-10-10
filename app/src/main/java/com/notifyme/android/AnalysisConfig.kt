@@ -75,7 +75,7 @@ class AnalysisConfig(context: Context) {
         /** System 1 类型（追加）：本地 MiniCPM4-0.5B 端侧快筛（LocalLlmEngine） */
         const val S1_TYPE_LOCAL_MODEL = "local_model"
 
-        /** System 2 服务商：JEV / GLM coding plan / 自定义 OpenAI 兼容 */
+        /** System 2 服务商：默认 local（端侧 MiniCPM3-4B）；JEV / GLM coding plan / 自定义 OpenAI 兼容为可选云端 */
         const val S2_PROVIDER_JEV = "jev"
         const val S2_PROVIDER_GLM = "glm"
         const val S2_PROVIDER_CUSTOM = "custom"
@@ -175,8 +175,9 @@ class AnalysisConfig(context: Context) {
      * v3 播种（S1/S2 分组改造）：对新老安装各跑一次。
      *  - S1 类型：按现有 systemone 槽位地址推断（空或本机默认地址 -> 本地启发式）；
      *  - S2 槽位（复用 glm 槽位键）：已有用户配置优先，否则用 BuildConfig 预置
-     *   （test 包 GLM），open 包为空 -> S2 默认关闭；
-     *  - S2 服务商按地址域名推断，仅作 UI 回填，不影响协议（S2 固定 openai）。
+     *   （test 包 GLM 密钥保留可切换），但**默认服务商 = local（端侧 MiniCPM3-4B）、
+     *   默认启用**——开箱不依赖电脑/云端密钥（用户口径 2026-10-10）；
+     *  - S2 固定 openai 协议；云端槽位值保留，用户可在设置页随时切回。
      */
     private fun seedS1S2Once() {
         if (prefs.getBoolean(KEY_SEEDED_V3, false)) return
@@ -186,7 +187,7 @@ class AnalysisConfig(context: Context) {
             prefs.edit().putString(
                 KEY_S1_TYPE,
                 if (s1Url.isBlank() || s1Url == DEFAULT_URL_SYSTEMONE)
-                    S1_TYPE_LOCAL else S1_TYPE_REMOTE
+                    S1_TYPE_LOCAL_MODEL else S1_TYPE_REMOTE
             ).apply()
         }
 

@@ -257,9 +257,9 @@
     <string name="s1_type_label">类型</string>
     <!-- 与 AnalysisConfig.S1_TYPE_LOCAL / S1_TYPE_REMOTE / S1_TYPE_LOCAL_MODEL 一一对应 -->
     <string-array name="s1_type_labels">
-        <item>本地启发式（本机 127.0.0.1:8124）</item>
+        <item>Laya 服务（电脑 127.0.0.1:8124 · 依赖电脑）</item>
         <item>自建服务地址</item>
-        <item>本地 MiniCPM4-0.5B（端侧快筛）</item>
+        <item>本地端侧模型（快筛 · 默认，模型管理可下载）</item>
     </string-array>
     <string name="s2_section_title">System 2 · 深度分析（OpenAI 兼容）</string>
     <string name="s2_enabled_switch">启用 System 2 深分析（S1 命中升级条件时调用）</string>

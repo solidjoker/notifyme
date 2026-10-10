@@ -10,7 +10,9 @@ import java.io.File
  * 端侧本地模型清单与状态管理（SharedPreferences 文件名 local_model_store）。
  *
  * 模型清单内置两个（调研报告 docs/端侧本地模型接入调研报告.md §2.2/§2.3）：
- *  - MODEL_S1：MiniCPM4-0.5B-MNN（MNN 4bit，311 MB），S1 快筛用；
+ *  - MODEL_S1：Qwen2.5-0.5B-Instruct GGUF Q4_K_M（469 MB，llama.cpp），S1 快筛用
+ *    （id 沿用 minicpm4_0_5b 历史值；Laya 本体是 ModernBERT 判别式架构，
+ *    llama.cpp 上游支持 PR #29363 尚未合并，端侧暂以生成式小模型代行快筛）；
  *  - MODEL_S2：MiniCPM3-4B-GGUF Q4_K_M（2.47 GB），S2 深分析用（需 8GB+ 内存机型）。
  *
  * 下载源：ModelScope 直链（国内 CDN，已实测支持 Range 断点续传）。
