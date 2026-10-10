@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>notifyme - 微信通知本地智能分析助手</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif; background:#0d1117; color:#e6edf3; line-height:1.6; }
+.hero { text-align:center; padding:80px 20px 50px; background:linear-gradient(180deg,#0d1117,#161b22); }
+.hero h1 { font-size:2.8rem; margin-bottom:8px; }
+.hero h1 span { color:#3fb950; }
+.hero p.tagline { font-size:1.2rem; color:#8b949e; margin-bottom:20px; }
+.hero p.desc { max-width:680px; margin:0 auto 30px; color:#c9d1d9; font-size:1.05rem; }
+.badges span { display:inline-block; background:#21262d; border:1px solid #30363d; border-radius:12px; padding:4px 12px; margin:0 4px; font-size:.85rem; color:#8b949e; }
+.cta { display:inline-block; background:#238636; color:#fff; padding:12px 28px; border-radius:8px; text-decoration:none; font-weight:600; font-size:1.05rem; margin:0 8px; }
+.cta.secondary { background:#21262d; border:1px solid #30363d; }
+.container { max-width:1100px; margin:0 auto; padding:20px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:20px; margin:40px 0; }
+.card { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:28px; }
+.card h3 { color:#58a6ff; margin-bottom:12px; font-size:1.15rem; }
+.card ul { list-style:none; }
+.card li { padding:6px 0 6px 20px; position:relative; color:#c9d1d9; }
+.card li::before { content:'\2726'; position:absolute; left:0; color:#3fb950; }
+.sec-title { text-align:center; font-size:1.8rem; margin:60px 0 10px; color:#e6edf3; }
+.sec-sub { text-align:center; color:#8b949e; margin-bottom:30px; }
+.flow { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:30px; margin:40px 0; overflow-x:auto; }
+.flow pre { font-family:Consolas,monospace; font-size:.85rem; color:#7ee787; line-height:1.7; }
+.models { display:flex; gap:16px; flex-wrap:wrap; margin:20px 0; }
+.mc { flex:1; min-width:240px; background:#0d1117; border:1px solid #30363d; border-radius:10px; padding:20px; text-align:center; }
+.mc h4 { color:#f0883e; margin-bottom:8px; }
+.mc p { color:#8b949e; font-size:.9rem; }
+.mc .tg { display:inline-block; background:#238636; color:#fff; border-radius:10px; padding:2px 10px; font-size:.75rem; margin-top:8px; }
+.footer { text-align:center; padding:50px 20px 40px; color:#8b949e; border-top:1px solid #21262d; margin-top:60px; }
+.footer a { color:#58a6ff; }
+@media(max-width:768px) { .hero h1 { font-size:2rem; } .grid { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="hero">
+<h1>notify<span>me</span></h1>
+<p class="tagline">TodayToTomorrow for little mermaid</p>
+<p class="desc">一个本地优先的微信通知捕获、会话管理与 AI 分析工具。通知原文留在你自己的设备上，分析用你自己指定的模型，需要行动的消息自动生成日历 / 闹钟提醒。</p>
+<div class="badges"><span>Android</span><span>MIT License</span><span>v0.3.0</span><span>本地优先 · 离线可用</span></div>
+<br>
+<a class="cta" href="https://github.com/solidjoker/notifyme/releases/tag/v0.3.0">下载 APK</a>
+<a class="cta secondary" href="https://github.com/solidjoker/notifyme">GitHub</a>
+</div>
+<div class="container">
+<h2 class="sec-title">核心功能</h2>
+<p class="sec-sub">通知原文不出设备 · 分析模型自选 · 提醒自动触达</p>
+<div class="grid">
+<div class="card"><h3>多应用通知捕获</h3><ul><li>通知监听 + 无障碍直读双通道</li><li>支持微信 / 飞书 / 钉钉等多应用</li><li>来源白名单，精确控制采集范围</li><li>按「会话-日期」两级分组折叠</li><li>左滑删除 / 长按批量删除</li></ul></div>
+<div class="card"><h3>两阶段 AI 分析</h3><ul><li>System 1 轻量快筛：是否需要行动</li><li>System 2 深度分析：拆解任务/截止/建议</li><li>⚡ 角标标记待行动结果</li><li>每会话独立自定义提示词</li><li>支持端侧模型推理（离线可用）</li></ul></div>
+<div class="card"><h3>三级降级提醒</h3><ul><li>系统日历事件直写（含提前提醒）</li><li>日历 App 预填唤起</li><li>App 内闹钟通知兜底</li><li>日历角标 + 提醒管理页</li><li>按 caseId 智能去重</li></ul></div>
+<div class="card"><h3>隐私保护</h3><ul><li>通知原文不出设备</li><li>三级脱敏（规则/白名单/预览）</li><li>云端分析自动脱敏后发送</li><li>数据仅存 App 私有目录</li></ul></div>
+<div class="card"><h3>悬浮通知 + 待办面板</h3><ul><li>悬浮球常驻，一键展开待办面板</li><li>重要消息悬浮卡（标记已处理/详情）</li><li>⚡ 角标 + 任务计数</li><li>与主页数据实时联动</li></ul></div>
+<div class="card"><h3>可选服务端同步</h3><ul><li>自托管 Flask 服务端</li><li>跨设备 PWA 查看端</li><li>历史回填（安卓/PC 微信数据库）</li><li>WorkManager 可靠调度</li></ul></div>
+</div>
+<h2 class="sec-title">内置端侧模型</h2>
+<p class="sec-sub">默认可下载到手机本地运行，无需联网、无需电脑</p>
+<div class="models">
+<div class="mc"><h4>System 1 快筛</h4><p>Qwen2.5-0.5B-Instruct</p><p>GGUF Q4_K_M · 469 MB</p><p>轻量判定是否需要行动</p><span class="tg">已就绪</span></div>
+<div class="mc"><h4>System 2 深度分析</h4><p>MiniCPM5-2B</p><p>GGUF Q4_K_M · ~1.5 GB</p><p>128K 上下文 · Function Call · 任务拆解</p><span class="tg">端侧智能体</span></div>
+<div class="mc"><h4>自定义模型</h4><p>OpenAI 兼容接口</p><p>JEV / GLM / 任意自建服务</p><p>灵活切换，配置独立保存</p><span class="tg" style="background:#388bfd">可选云端</span></div>
+</div>
+<h2 class="sec-title">分析流水线</h2>
+<div class="flow"><pre>微信通知 ──► 通知监听 ─────────────┐
+微信界面 ──► 无障碍直读 ───────────┤
+                                    ▼
+                        MessageStore（本地 JSONL）
+                                    │
+          ┌────────────────────────┼──────────────┐
+          ▼                        ▼              ▼
+    首页分组/折叠          AI 分析 Worker      同步 Worker
+                          │
+                ┌─────────┴─────────┐
+                ▼                   ▼
+          System 1 快筛        System 2 深分析
+       （端侧/云端可选）   （端侧/云端可选）
+                │                   │
+                └────► ⚡ 待行动 ◄──┘
+                          │
+                ┌─────────┴─────────┐
+                ▼                   ▼
+          日历事件直写          App 内闹钟兜底
+        （15min 提前提醒）</pre></div>
+</div>
+<div class="footer">
+<p><strong>notifyme</strong> · MIT License · <a href="https://github.com/solidjoker/notifyme">GitHub</a> · <a href="https://github.com/solidjoker/notifyme/releases/tag/v0.3.0">下载 v0.3.0</a></p>
+<p style="margin-top:8px">TodayToTomorrow for little mermaid</p>
+</div>
+</body>
+</html>
