@@ -14,6 +14,7 @@ import android.provider.Settings
 import android.view.View
 import android.widget.Button
 import android.widget.TextView
+import android.widget.Toast
 
 /**
  * 移动端控制台首页（原巨型配置中心拆分后的入口页）：
@@ -59,6 +60,17 @@ class ConsoleActivity : Activity() {
 
         setupKeepAliveSection()
 
+        // 快捷按钮：全部折叠 / 全部展开（与主页 ☰ 菜单同功能，方便从控制台一键操作）
+        findViewById<Button>(R.id.btnCollapseAll).setOnClickListener {
+            val keys = MessageStore.readRecent(this, 500).map { it.convKey }.toSet()
+            CollapseStore.setAll(this, keys, true)
+            Toast.makeText(this, R.string.quick_collapse_done, Toast.LENGTH_SHORT).show()
+        }
+        findViewById<Button>(R.id.btnExpandAll).setOnClickListener {
+            CollapseStore.setAll(this, emptySet(), false)
+            CollapseStore.clearDates(this)
+            Toast.makeText(this, R.string.quick_expand_done, Toast.LENGTH_SHORT).show()
+        }
         // 快捷按钮：回到主页（全部折叠/展开已在主页标题栏，此处仅提供导航入口）
         findViewById<Button>(R.id.btnGoHome).setOnClickListener {
             finish()

@@ -106,7 +106,9 @@
     <string name="listener_disconnected">监听服务：未连接（保活看门狗会自动重绑）</string>
     <string name="btn_go_grant">去授权</string>
     <string name="btn_reopen_onboarding">重新打开使用向导</string>
-    <string name="console_guide_title">操作说明</string>
+    <string name="quick_collapse_done">已全部折叠</string>
+<string name="quick_expand_done">已全部展开</string>
+<string name="console_guide_title">操作说明</string>
 <string name="console_guide_body">主页列表可左滑删除、长按批量删除；点会话名进详情页分析；点右侧箭头折叠/展开。⚠️ 角标 = 有待办任务；📅 = 已设日历提醒。下方按钮控制主页全部折叠/展开，以及返回主页。</string>
 <string name="btn_collapse_all">全部折叠</string>
 <string name="btn_expand_all">全部展开</string>
