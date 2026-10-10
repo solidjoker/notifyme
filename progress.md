@@ -491,6 +491,15 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - **复原教训（HyperOS）**：run-as 写回 shared_prefs 的正确序列 = push /data/local/tmp → force-stop → **立即** cp → monkey；force-stop 后留 sleep 会被 KeepAlive 拉起旧进程用内存 prefs apply 覆盖回磁盘（UI 恒旧值）。测试副作用已全部复原：watched 9 项 / unwatched 3 项，与测试前逐字一致；tmp/ 内含会话名的 dump 已删。
 - 注意：UI 点「关注」再点「取消关注」会让中性会话进黑名单（toggleWatch 语义不对称），无法纯 UI 回中性——批量测试后用 prefs 写回复原；WatchlistActivity 补双清未做（低优先）。
 
+
+### 17. 日历自动创建功能真机验证通过（2026-10-10）
+
+- 触发条件：S1 判定 need_action=true && reminderEnabled=true → CalendarHelper.createReminder（dedupKey=caseId）。
+- 真机验证（ebb079b5，HyperOS）：pm grant READ/WRITE_CALENDAR → 小米 Calendar 账户（access_level=700）→ **L1 直接写入系统日历**：
+  - 事件 `_id=1860`，title=「任务：会话讨论规则改后时间从晚上改为凌晨…（姜倩）」，dtstart=周二晚 8 点（S2 判定）。
+  - CalendarContract.Reminders 行：`event_id=1860, minutes=15, method=1`（15 分钟提前弹窗提醒）。
+  - reminders.jsonl 落库：`status=calendar, note=成功：已写入系统日历`。
+- 设置页 [ON] 开关与 prefs `reminder_enabled` 一致；force-stop 后权限需重新 pm grant（HyperOS 行为）。
 ## 四、构建与运行
 
 ```powershell
