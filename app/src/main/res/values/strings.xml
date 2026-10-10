@@ -269,7 +269,7 @@
         <item>JEV</item>
         <item>GLM coding plan</item>
         <item>自定义 OpenAI 兼容</item>
-        <item>本地 MiniCPM3-4B（端侧）</item>
+        <item>本地 MiniCPM5-2B（端侧）</item>
     </string-array>
     <string name="s2_baseurl_hint">System 2 服务地址，如 https://open.bigmodel.cn/api/coding/paas/v4</string>
     <string name="s2_apikey_hint">System 2 API 密钥（Bearer）</string>

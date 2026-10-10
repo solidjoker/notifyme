@@ -59,6 +59,7 @@ class AnalysisSettingsActivity : Activity() {
     private lateinit var spinnerS1Type: Spinner
     private lateinit var etBaseUrl: EditText
     private lateinit var etBasicUser: EditText
+    private lateinit var rowBasicAuth: android.view.ViewGroup
     private lateinit var etBasicPass: EditText
     private lateinit var etModel: EditText
     private lateinit var etApiKey: EditText
@@ -125,6 +126,7 @@ class AnalysisSettingsActivity : Activity() {
         spinnerS1Type = findViewById(R.id.spinnerS1Type)
         etBaseUrl = findViewById(R.id.etBaseUrl)
         etBasicUser = findViewById(R.id.etBasicUser)
+        rowBasicAuth = findViewById(R.id.rowBasicAuth)
         etBasicPass = findViewById(R.id.etBasicPass)
         etModel = findViewById(R.id.etModel)
         etApiKey = findViewById(R.id.etApiKey)
@@ -349,12 +351,19 @@ class AnalysisSettingsActivity : Activity() {
      */
     private fun applyS1TypeEditable(type: String) {
         val localModel = type == AnalysisConfig.S1_TYPE_LOCAL_MODEL
-        etBaseUrl.isEnabled = type == AnalysisConfig.S1_TYPE_REMOTE
-        etBasicUser.isEnabled = !localModel
-        etBasicPass.isEnabled = !localModel
-        etModel.isEnabled = !localModel
-        etApiKey.isEnabled = !localModel
-        btnTestConnection.isEnabled = !localModel
+        val remote = type == AnalysisConfig.S1_TYPE_REMOTE
+        val vis = if (localModel) View.GONE else View.VISIBLE
+        etBaseUrl.visibility = vis
+        rowBasicAuth.visibility = vis
+        etModel.visibility = vis
+        etApiKey.visibility = vis
+        btnTestConnection.visibility = vis
+        etBaseUrl.isEnabled = remote
+        etBasicUser.isEnabled = remote
+        etBasicPass.isEnabled = remote
+        etModel.isEnabled = remote
+        etApiKey.isEnabled = remote
+        btnTestConnection.isEnabled = remote
     }
 
     /**
@@ -366,6 +375,11 @@ class AnalysisSettingsActivity : Activity() {
         val localProvider = position >= 0 &&
             s2ProviderValues[position] == AnalysisConfig.S2_PROVIDER_LOCAL
         spinnerS2Provider.isEnabled = enabled
+        val connVis = if (enabled && !localProvider) View.VISIBLE else View.GONE
+        etS2BaseUrl.visibility = connVis
+        etS2ApiKey.visibility = connVis
+        etS2Model.visibility = connVis
+        btnTestS2Connection.visibility = connVis
         etS2BaseUrl.isEnabled = enabled && !localProvider
         etS2ApiKey.isEnabled = enabled && !localProvider
         etS2Model.isEnabled = enabled && !localProvider
