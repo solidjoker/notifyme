@@ -34,7 +34,7 @@ object LayaTfliteEngine {
 
     // ---------- SentencePiece 贪心分词器 ----------
 
-    internal class SpTokenizer private constructor(
+    class SpTokenizer(
         private val pieceToId: Map<String, Int>
     ) {
         companion object {
@@ -76,7 +76,7 @@ object LayaTfliteEngine {
 
     // ---------- 温度校准 ----------
 
-    private data class Calibration(val choice: Double, val score: Double, val noul: Double) {
+    data class Calibration(val choice: Double, val score: Double, val noul: Double) {
         companion object {
             fun load(f: File): Calibration {
                 val j = JSONObject(f.readText())
