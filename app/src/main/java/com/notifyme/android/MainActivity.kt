@@ -571,7 +571,8 @@ class MainActivity : Activity() {
             }
 
         // 汇总分区：名单（去掉「全不关注」哨兵）非空时才分区
-        val watched = WatchlistStore.getWatched(this)
+        val watchedRaw = WatchlistStore.getWatched(this)
+        val watched = watchedRaw.toMutableSet()
         watched.remove(WatchlistStore.SENTINEL_NONE)
         val watchedKeys = ConvKey.parseAll(watched)
         val sections =
@@ -604,7 +605,8 @@ class MainActivity : Activity() {
                     preview = "${list.last().sender}: ${list.last().text}",
                     collapsed = isCollapsed,
                     analysis = case,
-                    hasReminder = key in reminderKeys
+                    hasReminder = key in reminderKeys,
+                    watched = WatchlistStore.isWatchedId(key.id, unwatchedIds, watchedRaw)
                 )
                 if (isCollapsed) continue
 
@@ -724,7 +726,10 @@ class MainActivity : Activity() {
             val preview: String,
             val collapsed: Boolean,
             val analysis: AnalysisCaseRecord?,
-            val hasReminder: Boolean
+            val hasReminder: Boolean,
+            /** 关注态是内容字段：点「关注」后该字段翻转 → DiffUtil 判 change 重绑头部 chip。
+             *  若不加此字段，点关注只是移动位置，DiffUtil 判 move 不重绑，文案停在旧值。 */
+            val watched: Boolean
         ) : FeedItem()
 
         data class DateHeader(
@@ -913,8 +918,10 @@ class MainActivity : Activity() {
             }
             holder.tvArrow.setOnClickListener { onToggle(key) }
 
-            // 快捷入口：关注（切换，文案/颜色反映状态）。选择态屏蔽 chips 操作
-            val watchedNow = WatchlistStore.isWatched(ctx, key)
+            // 快捷入口：关注（切换，文案/颜色反映状态）。选择态屏蔽 chips 操作。
+            // 关注态取自 Header 内容字段（buildFeed 预计算）：它参与 DiffUtil 内容比较，
+            // 点「关注」后 Header 数据变 → 触发 change 重绑，chip 文案即时更新。
+            val watchedNow = header.watched
             holder.btnQuickWatch.text = ctx.getString(
                 if (watchedNow) R.string.quick_watched else R.string.quick_watch
             )

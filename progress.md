@@ -476,6 +476,21 @@ Git 提交身份（本仓库局部配置，未改全局）：
   3. 全程无 adb reverse、无 PC 参与——分析链路已在手机内闭环（S1 端侧 + S2 手机内配置的 GLM）。
 - 遗留观察：0.5B 的 need/conf 数值仍不稳（同会话两次分别 conf 0.0 与 0.9），靠升级闸兜住质量下限；
   进一步调优（few-shot 迭代/更大端侧模型）仍是低优先 ROADMAP 项。
+### 16. 主页「关注」chip 点后进 DiffUtil 盲区不刷新 → Header 携带关注态（2026-10-10）
+
+- 用户报（m01251）：「点击 关注，能让对话提前，但标记仍然是『关注』，应该是『已关注』」。
+- 根因：FeedAdapter 的 DiffUtil areContentsTheSame 比较 FeedItem.Header 数据类，而 Header 字段里**不含关注态**——点关注后该行只是分组/位置变化、数据完全相同 → DiffUtil 判 move 不判 change → RecyclerView onMove 不重绑 → chip 文案停留旧值。
+- 修复（5 处）：
+  1. WatchlistStore.kt 新增纯函数 isWatchedId(keyId, unwatched, watched)：keyId !in unwatched && (watched.isEmpty() || keyId in watched)；哨兵场景传**含 SENTINEL_NONE 的原始集**（仅哨兵→恒 false），isWatched 委托它。
+  2. MainActivity.kt FeedItem.Header 加 val watched: Boolean（注释写明 move-not-change 根因）。
+  3. buildFeed：watchedRaw = getWatched(this)（原始集），去哨兵副本仅用于分区。
+  4. Header 构造填 watched = WatchlistStore.isWatchedId(key.id, unwatchedIds, watchedRaw)。
+  5. bindHeader chip 改读 header.watched（不再 bind 时现查 prefs）。
+- 新增 WatchlistIdTest.kt 4 例（空名单=全关注/黑名单优先/包含判断/仅哨兵=全不关注）；OpenDebug 全量 **262 单测 exit 0**，assembleBetaDebug 成功。
+- 真机验证（ebb079b5，beta lastUpdateTime=2026-10-10 11:36:32）双向：米家「⭐ 关注」点击→上移且文案即时变「⭐ 已关注」；姜倩「⭐ 已关注」点击→分区 5→4 即时更新；「⭐ 关注」chip 渲染于其它会话行——move 场景重绑生效。
+- **复原教训（HyperOS）**：run-as 写回 shared_prefs 的正确序列 = push /data/local/tmp → force-stop → **立即** cp → monkey；force-stop 后留 sleep 会被 KeepAlive 拉起旧进程用内存 prefs apply 覆盖回磁盘（UI 恒旧值）。测试副作用已全部复原：watched 9 项 / unwatched 3 项，与测试前逐字一致；tmp/ 内含会话名的 dump 已删。
+- 注意：UI 点「关注」再点「取消关注」会让中性会话进黑名单（toggleWatch 语义不对称），无法纯 UI 回中性——批量测试后用 prefs 写回复原；WatchlistActivity 补双清未做（低优先）。
+
 ## 四、构建与运行
 
 ```powershell

@@ -64,11 +64,16 @@ object WatchlistStore {
     }
 
     /** 该会话（复合键）是否应被分析：显式不关注恒否；空名单=全部关注；非空名单按包含判断（哨兵天然不匹配）。 */
-    fun isWatched(context: Context, key: ConvKey): Boolean {
-        if (getUnwatched(context).contains(key.id)) return false
-        val watched = getWatched(context)
-        return watched.isEmpty() || watched.contains(key.id)
-    }
+    fun isWatched(context: Context, key: ConvKey): Boolean =
+        isWatchedId(key.id, getUnwatched(context), getWatched(context))
+
+    /**
+     * 纯函数判定（与 Context 解耦，可在构建列表时预先算好渲染字段）：
+     * 黑名单命中恒 false；关注名单为空 = 全部关注 → true；非空按包含判断——
+     * 「全不关注」哨兵值不等于任何真实 ConvKey.id，因此仅含哨兵的名单恒 false。
+     */
+    fun isWatchedId(keyId: String, unwatched: Set<String>, watched: Set<String>): Boolean =
+        keyId !in unwatched && (watched.isEmpty() || keyId in watched)
 
     /** 读取显式不关注集合（已归一为 [ConvKey.id]）。 */
     @Synchronized
