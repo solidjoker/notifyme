@@ -500,6 +500,36 @@ Git 提交身份（本仓库局部配置，未改全局）：
   - CalendarContract.Reminders 行：`event_id=1860, minutes=15, method=1`（15 分钟提前弹窗提醒）。
   - reminders.jsonl 落库：`status=calendar, note=成功：已写入系统日历`。
 - 设置页 [ON] 开关与 prefs `reminder_enabled` 一致；force-stop 后权限需重新 pm grant（HyperOS 行为）。
+
+### 18. laya TFLite 端侧判定引擎 + 控制台操作说明 + MiniCPM5-2B S2 升级（2026-10-10）
+
+- 用户口径（m01525/m02080/m02108）：S1=laya 模型（端侧）、S2=minicpm 模型（端侧），默认可下载到手机本地跑，保留自定义模型配置。
+- **S2 端侧模型升级为 MiniCPM5-2B**（替代 MiniCPM3-4B）：2.5B 参数、128K 上下文、Artificial Analysis 全球 4B 以下第一（23分）、BFCL-V4 66.6（Function Call）、Agentic Index 20（同级<10）、真实任务评测 891/1000。llama.cpp PR #24889 已合并到 v0.5.0 → 无需升级 native。ModelScope: OpenBMB/MiniCPM5-2B-GGUF → MiniCPM5-2B-Q4_K_M.gguf 1,561,318,368B。真机下载完成 state=ready ✅。
+- **laya 端侧 TFLite 引擎**：laya = ModernBERT 判别式决策模型（非生成式 LLM），llama.cpp 上游 PR #29363 尚未合并。改用 LiteRT (TensorFlow Lite) 路线：litert-community/laya-LiteRT 提供 mmBERT-base TFLite 模型（0.68 GB，51ms/question，100+ 语言，有 Android sample app）。
+  - `LayaTfliteEngine.kt`：SpTokenizer 贪心分词器（tokenizer.json vocab）+ Calibration（温度校准）+ runQuestion（TFLite 双图推理 + 跨 MASK softmax）+ Interpreter 缓存（getInterpreter/releaseAll）。
+  - `AnalysisConfig.kt`：新增 `S1_TYPE_LAYA_ONDEVICE = "laya_ondevice"`。
+  - `AnalysisWorker.kt`：S1 分支增加 `runS1LayaTflite` 路径（四题逐题推理：noul/score/choice/choice）。
+  - `LocalModelStore.kt`：MODEL_LAYA 下载条目（644MB wfp16 + act head 796KB + tokenizer.json + calibration.json，辅助文件 size=-1 不校验）。
+  - `AnalysisSettingsActivity.kt`：S1 spinner 第四选项。
+  - `isReady` 修复：`size <= 0` 跳过字节数校验（tokenizer 等辅助文件无预知大小）。
+  - 新增 `LayaTfliteCoreTest.kt` 6 例（分词器贪心匹配 + 未知字符 unk + cls/sep 追加 + 温度校准读取 + softmax 归一化）。
+- **控制台 UI 改进**（m01697/98）：
+  - 操作说明区块（引导用户使用主页的折叠/删除/分析功能）。
+  - 「回到主页」快捷按钮。
+  - `ConsoleActivity.kt` 添加 CollapseAll/ExpandAll/GoHome 按钮事件（CollapseStore.setAll 需要 Set<ConvKey>）。
+- **主页连接字段隐藏**：
+  - S1 选「本地端侧模型」→ PC laya 连接字段（URL/Basic/模型名）全部隐藏（applyS1TypeEditable visibility GONE）。
+  - S2 选「本地 MiniCPM5-2B」→ GLM 云端连接字段全部隐藏（applyS2FieldsEnabled visibility GONE）。
+  - s2_provider_labels 更新为 MiniCPM5-2B。
+- **其他修复**：
+  - `MessageStore.append` 统一收口 isBlocked（自身/系统源不入库）。
+  - `AnalysisWorker` 候选链同口径过滤（非 force 时未启用 App 不进候选）。
+  - `runS1Local` maxTokens 1024→2048、`runS2Local`/HTTP maxTokens 1024→4096（推理模型思考段占额度）。
+  - `ScheduleSelfHeal` 排程失联自愈（KeepAlive 看门狗 + enqueueAnalysisNow 抢先修复）。
+  - `MessageStore.append` 统一收口 isBlocked（自采集噪声根除）。
+  - `ConsoleActivity` 添加 Toast import。
+- HyperOS 注意：force-stop 后 READ/WRITE_CALENDAR 权限会被系统重置 → 需重新 `pm grant`（仅开发调试场景）。
+- 测试：OpenDebug 全量单测 exit 0（含 LayaTfliteCoreTest 6 例 + WatchlistIdTest 4 例 + AnalysisParsingTest 修正例）。
 ## 四、构建与运行
 
 ```powershell
