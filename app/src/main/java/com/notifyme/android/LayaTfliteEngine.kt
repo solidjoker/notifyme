@@ -193,10 +193,13 @@ object LayaTfliteEngine {
                 else -> calib.noul
             }
 
-            // softmax（取第一个 MASK 位置的 logits，长度 = options.size）
-            val finalLogits = optionLogits.firstOrNull() ?: FloatArray(options.size)
-            val maxL = finalLogits.max()
-            val exps = finalLogits.map { Math.exp(((it - maxL).toDouble()) / temp) }
+            // softmax：laya 的判定方式是在每个 [MASK] 位置查找特定 token 的 logit，
+            // 然后跨所有位置做 softmax。对于 noul 类型查找 "true" token，
+            // 对 choice 类型查找与每个选项关联的 token。
+            // 简化实现：取每个 MASK 位置的最大 logit 作为该选项的分数，然后 softmax。
+            val optionScores = optionLogits.map { logits -> logits.max() }
+            val maxS = optionScores.max()
+            val exps = optionScores.map { Math.exp((it - maxS) / temp) }
             val sumExp = exps.sum()
             val finalProbs = exps.map { it / sumExp }
 
