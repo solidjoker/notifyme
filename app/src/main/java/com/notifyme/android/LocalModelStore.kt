@@ -13,7 +13,7 @@ import java.io.File
  *  - MODEL_S1：Qwen2.5-0.5B-Instruct GGUF Q4_K_M（469 MB，llama.cpp），S1 快筛用
  *    （id 沿用 minicpm4_0_5b 历史值；Laya 本体是 ModernBERT 判别式架构，
  *    llama.cpp 上游支持 PR #29363 尚未合并，端侧暂以生成式小模型代行快筛）；
- *  - MODEL_S2：MiniCPM3-4B-GGUF Q4_K_M（2.47 GB），S2 深分析用（需 8GB+ 内存机型）。
+ *  - MODEL_S2：MiniCPM5-2B-GGUF Q4_K_M（约 1.5 GB），S2 深分析用（替代 MiniCPM3-4B）。
  *
  * 下载源：ModelScope 直链（国内 CDN，已实测支持 Range 断点续传）。
  * 各文件预期大小已用 Range 0-0 探针实测（2026-10-03），下载完成后按字节数校验。
@@ -24,7 +24,7 @@ import java.io.File
 object LocalModelStore {
 
     const val MODEL_S1 = "minicpm4_0_5b"
-    const val MODEL_S2 = "minicpm3_4b"
+    const val MODEL_S2 = "minicpm5_2b"
 
     private const val PREFS_NAME = "local_model_store"
 
@@ -47,7 +47,7 @@ object LocalModelStore {
     }
 
     private const val MS_S1 = "https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/master"
-    private const val MS_S2 = "https://www.modelscope.cn/models/OpenBMB/MiniCPM3-4B-GGUF/resolve/master"
+    private const val MS_S2 = "https://www.modelscope.cn/models/OpenBMB/MiniCPM5-2B-GGUF/resolve/master"
 
     val MODELS: List<LocalModel> = listOf(
         LocalModel(
@@ -62,11 +62,11 @@ object LocalModelStore {
         ),
         LocalModel(
             id = MODEL_S2,
-            displayName = "MiniCPM3-4B（GGUF Q4_K_M）",
-            roleLabel = "System 2 深度分析 · 端侧生成（需 8GB+ 内存机型）",
-            sizeLabel = "2.47 GB",
+            displayName = "MiniCPM5-2B（GGUF Q4_K_M）",
+            roleLabel = "System 2 深度分析 · 端侧生成（128K 上下文 · 支持 Function Call）",
+            sizeLabel = "~1.5 GB",
             files = listOf(
-                ModelFile("minicpm3-4b-q4_k_m.gguf", "$MS_S2/minicpm3-4b-q4_k_m.gguf", 2_469_791_584L)
+                ModelFile("MiniCPM5-2B-Q4_K_M.gguf", "$MS_S2/MiniCPM5-2B-Q4_K_M.gguf", 1_561_318_368L)
             )
         )
     )

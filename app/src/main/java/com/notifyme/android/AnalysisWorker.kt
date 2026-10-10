@@ -674,7 +674,7 @@ class AnalysisWorker(
         val raw = engine.chat(
             AnalysisCase.buildS1LocalSystemPrompt(background),
             "会话「${kase.conversation}」最近消息：\n${kase.windowText()}",
-            1024
+            2048
         )
         return raw to AnalysisParsing.parseS1Result(AnalysisParsing.extractJsonFromText(raw), "local")
     }
@@ -712,7 +712,7 @@ class AnalysisWorker(
         val raw = engine.chat(
             AnalysisCase.buildS2SystemPrompt(s1, background),
             "会话「${kase.conversation}」最近消息：\n${kase.windowText()}",
-            1024
+            4096
         )
         return AnalysisParsing.parseS2Output(AnalysisParsing.extractJsonFromText(raw), kase, raw)
     }

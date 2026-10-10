@@ -140,6 +140,13 @@ internal object AnalysisParsing {
      * 从纯文本里截取第一个 `{` 到最后一个 `}` 解析成 JSON 对象；
      * 本地引擎输出（无 choices 包装）与云端 content 共用。失败返回 null。
      */
+    /** 清洗推理模型（MiniCPM5 等）输出中的思考标签，避免草稿 JSON 干扰提取。 */
+    fun stripThinkTags(text: String): String {
+        val closeIdx = text.lastIndexOf("</think>")
+        if (closeIdx < 0) return text.trim()
+        return text.substring(closeIdx + 8).trim()
+    }
+
     fun extractJsonFromText(content: String): JSONObject? {
         return try {
             val start = content.indexOf('{')
