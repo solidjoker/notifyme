@@ -292,11 +292,13 @@
     <!-- 本地模型管理 -->
     <string name="model_manage_entry">本地模型管理</string>
     <string name="model_page_title">本地模型</string>
-    <string name="model_page_desc">端侧推理模型下载到本机后无需联网即可分析。文件较大，建议在 Wi-Fi 下下载；下载支持断点续传，杀进程后回到本页自动继续。模型来源：ModelScope（Qwen / OpenBMB 官方仓）。</string>
+    <string name="model_page_desc">端侧推理模型下载到本机后无需联网即可分析。文件较大，建议在 Wi-Fi 下下载；下载支持断点续传，杀进程后回到本页自动继续。模型来源：ModelScope（Qwen / OpenBMB 官方仓）、HuggingFace litert-community（Laya，失败自动切镜像）。</string>
     <string name="model_s1_name">Qwen2.5-0.5B-Instruct（GGUF Q4_K_M）</string>
     <string name="model_s1_role">System 1 轻量判定 · 端侧快筛 · 469 MB</string>
     <string name="model_s2_name">MiniCPM5-2B（GGUF Q4_K_M）</string>
     <string name="model_s2_role">System 2 深度分析 · 端侧生成 · ~1.5 GB（128K 上下文 · 支持 Function Call）</string>
+    <string name="model_laya_name">Laya-Multilingual（LiteRT TFLite）</string>
+    <string name="model_laya_role">System 1 · Laya 端侧判定 · 648 MB（7 文件 · 多语言 · CPU 4 线程）</string>
     <string name="model_status_none">未下载 · %1$s</string>
     <string name="model_status_partial">未下载完成 · 共 %1$s，已下载 %2$s（可续传）</string>
     <string name="model_status_downloading">下载中 %1$d%%（%2$s / %3$s）</string>

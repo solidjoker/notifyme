@@ -216,6 +216,15 @@ class AnalysisSettingsActivity : Activity() {
                     etBaseUrl.setText(AnalysisConfig.DEFAULT_URL_SYSTEMONE)
                 }
                 applyS1TypeEditable(type)
+                if (type == AnalysisConfig.S1_TYPE_LAYA_ONDEVICE &&
+                    !LayaTfliteEngine.isReady(this@AnalysisSettingsActivity)
+                ) {
+                    Toast.makeText(
+                        this@AnalysisSettingsActivity,
+                        "Laya 模型尚未下载：本页底部「本地模型管理」→ Laya-Multilingual → 下载（648 MB，支持断点续传）",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
             }
 
             override fun onNothingSelected(parent: AdapterView<*>?) {}
@@ -351,9 +360,11 @@ class AnalysisSettingsActivity : Activity() {
      * 本地 MiniCPM4-0.5B（端侧）连接字段整组不用，全部置灰；自建服务全开放。
      */
     private fun applyS1TypeEditable(type: String) {
-        val localModel = type == AnalysisConfig.S1_TYPE_LOCAL_MODEL
+        // 两种端侧路线（Qwen 本地模型 / laya TFLite）都不需要 PC 连接字段，整组隐藏
+        val onDevice = type == AnalysisConfig.S1_TYPE_LOCAL_MODEL ||
+            type == AnalysisConfig.S1_TYPE_LAYA_ONDEVICE
         val remote = type == AnalysisConfig.S1_TYPE_REMOTE
-        val vis = if (localModel) View.GONE else View.VISIBLE
+        val vis = if (onDevice) View.GONE else View.VISIBLE
         etBaseUrl.visibility = vis
         rowBasicAuth.visibility = vis
         etModel.visibility = vis

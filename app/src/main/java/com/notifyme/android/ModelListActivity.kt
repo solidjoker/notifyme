@@ -15,7 +15,7 @@ import android.widget.TextView
 import android.widget.Toast
 
 /**
- * 本地模型管理页：两个内置模型（S1 快筛 / S2 深分析）的下载、进度、取消、删除。
+ * 本地模型管理页：三个内置模型（S1 快筛 / S2 深分析 / laya 端侧判定）的下载、进度、取消、删除。
  *
  *  - 状态来源：LocalModelStore（SharedPreferences）+ ModelDownloadWorker（执行）；
  *    页面在前台时每 1s 轮询刷新一次（下载进度由 worker 周期写 prefs）。
@@ -50,6 +50,11 @@ class ModelListActivity : Activity() {
             LocalModelStore.MODEL_S2,
             R.id.tvModelS2Status, R.id.progressModelS2,
             R.id.btnModelS2Action, R.id.btnModelS2Delete
+        )
+        bindModel(
+            LocalModelStore.MODEL_LAYA,
+            R.id.tvModelLayaStatus, R.id.progressModelLaya,
+            R.id.btnModelLayaAction, R.id.btnModelLayaDelete
         )
         refreshAll()
     }
@@ -131,6 +136,7 @@ class ModelListActivity : Activity() {
                 ModelDownloadWorker.cancel(this, modelId)
                 LocalModelStore.delete(this, modelId)
                 LocalLlmEngines.releaseAll() // 已加载引擎随模型删除一并释放
+                LayaTfliteEngine.releaseAll()
                 refreshAll()
             }
             .setNegativeButton(android.R.string.cancel, null)
@@ -147,6 +153,11 @@ class ModelListActivity : Activity() {
             LocalModelStore.MODEL_S2,
             R.id.tvModelS2Status, R.id.progressModelS2,
             R.id.btnModelS2Action, R.id.btnModelS2Delete
+        )
+        refreshModel(
+            LocalModelStore.MODEL_LAYA,
+            R.id.tvModelLayaStatus, R.id.progressModelLaya,
+            R.id.btnModelLayaAction, R.id.btnModelLayaDelete
         )
     }
 
