@@ -36,7 +36,7 @@
 
 **必须先修的四类结构性问题**
 
-1. **隐私与合规已经破防**：公开仓库里有**真实微信截图**（card_real.png、s1.png，可读出真实群名与消息正文），且 docs/ROADMAP.md:75、progress.md:334 写着真实用户名与密钥库路径（C:\Users\smith\notifyme-release\notifyme-release.jks），后者让 CI 的 Guard 步骤**必然红灯**（本地已逐字复现）。
+1. **隐私与合规已经破防**：公开仓库里有**真实微信截图**（card_real.png、s1.png，可读出真实群名与消息正文），且 docs/ROADMAP.md:75、progress.md:334 写着真实用户名与密钥库路径（C:\Users\<你>\notifyme-release\notifyme-release.jks），后者让 CI 的 Guard 步骤**必然红灯**（本地已逐字复现）。
 2. **网络与服务端几乎不设防**：AndroidManifest.xml:44 全局 usesCleartextTraffic=true，上报走明文 HTTP；server/app.py 未设 WEIXIN_TOKEN 时**全部接口无鉴权**却默认 bind 0.0.0.0。
 3. **存储层非原子**：5 个 JSONL 各有自己的 readLines → writeText 全量重写，重写中途被杀会丢掉全量历史；SharedPreferences 16 个无统一入口，加锁口径不一致。
 4. **多处静默失败**：服务端 /weixin 即使全部条目校验失败也返回 200 ok:true 而端上只看 isSuccessful 就剔队列（消息永久丢）；周期 Worker 返回 Result.failure() 会被 WorkManager 取消（401 之后同步永久停摆）；LOCAL_ONLY 隐私模式下顾问链路仍把原文发往云端。
@@ -497,7 +497,7 @@ docs/architecture/README.md 自述「图 04–09 仍为 M2 前基线」，实测
 - 建议：删除并按需替换为合成 / 脱敏截图；用 git filter-repo 清历史后强推（**需用户明确授权**）；CI 增补「根目录图片白名单 + 敏感信息检查」。
 
 **P0-2 真实用户名与密钥库路径入库，导致 CI Guard 必然红灯**
-- 证据：docs/ROADMAP.md:75 = C:\Users\smith\notifyme-release\；progress.md:334 = C:\Users\smith\notifyme-release\notifyme-release.jks；.github/workflows/android.yml 的 Guard 步骤 ③。
+- 证据：docs/ROADMAP.md:75 = C:\Users\<你>\notifyme-release\；progress.md:334 = C:\Users\<你>\notifyme-release\notifyme-release.jks；.github/workflows/android.yml 的 Guard 步骤 ③。
 - 复现（Git Bash 逐字执行 CI 命令）：git grep -In 搜索 C:\Users\ 命中 5 行，其中 3 行是占位符 C:\Users\<你> 会被 grep -v 滤掉，**残留 2 行真实路径 → 管道退出码 0 → 触发 ::error::「发现真实个人用户目录路径」**。
 - 影响：main 分支 CI 长期红灯（掩盖真实失败）；真实用户名与密钥库绝对路径已进入公开仓库。
 - 建议：两处改为占位符；Guard 改用字面匹配（git grep -InF 配 grep -vF），避免 BRE 中反斜杠加尖括号的词界歧义；并把「存量违规」与「禁止新增」拆成两条检查。
@@ -902,7 +902,7 @@ Select-String -Path app/src/main/AndroidManifest.xml -Pattern '<activity|<servic
 
 ```powershell
 $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'; $env:PATH="$env:JAVA_HOME\bin;$env:PATH"
-$env:ANDROID_HOME='C:\Users\smith\AppData\Local\Android\Sdk'
+$env:ANDROID_HOME='C:\Users\<你>\AppData\Local\Android\Sdk'
 .\gradlew.bat --offline --console=plain testOpenDebugUnitTest assembleOpenDebug   # BUILD SUCCESSFUL
 ```
 
@@ -963,7 +963,7 @@ $env:ANDROID_HOME='C:\Users\smith\AppData\Local\Android\Sdk'
 
 ```powershell
 $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'; $env:PATH="$env:JAVA_HOME\bin;$env:PATH"
-$env:ANDROID_HOME='C:\Users\smith\AppData\Local\Android\Sdk'
+$env:ANDROID_HOME='C:\Users\<你>\AppData\Local\Android\Sdk'
 .\gradlew.bat --offline --console=plain testOpenDebugUnitTest   # BUILD SUCCESSFUL（含新增用例）
 ```
 
