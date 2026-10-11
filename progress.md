@@ -23,7 +23,7 @@
 - 采集通道：`NotificationListenerService`（通知监听）+ 无障碍服务直读微信界面
 - 配套（可选）：`server/` Flask 服务端，消息接收/查询 + 网页控制台（PWA）
 
-当前版本：**versionName 0.3.2 / versionCode 8**（beta 包 versionName=0.3.2-test）
+当前版本：**versionName 0.3.3 / versionCode 9**（beta 包 versionName=0.3.3-test）
 
 ## 二、仓库来源与目录关系（重要，避免搞混）
 
