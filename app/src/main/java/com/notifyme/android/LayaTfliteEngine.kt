@@ -4,233 +4,120 @@
 package com.notifyme.android
 
 import android.content.Context
+import com.notifyme.android.laya.LayaEngine
 import org.json.JSONArray
 import org.json.JSONObject
-import org.tensorflow.lite.Interpreter
 import java.io.File
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.nio.MappedByteBuffer
-import java.nio.channels.FileChannel
 
 /**
- * Laya 端侧 TFLite 推理引擎：加载 laya-multilingual LiteRT 双图（编码器 + 判定头），
- * 对 System One 四类判定题（choice / score / noul）逐题推理，
- * 输出与 laya_host.py 参考实现一致的概率分布。
+ * Laya 端侧推理引擎门面：封装 [LayaEngine]（官方契约移植，双图 embeds+act head）。
  *
- * 模型来源：litert-community/Laya-Multilingual-LiteRT
- * 架构：mmBERT-base 编码器 + laya 判定头（分类式，非生成式 LLM）。
- *
- * 推理流程：
- *  1. Tokenizer 分词 → token ids + attention mask
- *  2. 构建 laya prompt：[bos] <type> question [sep] [mask] opt0 [mask] opt1 … [sep] <state> [sep]
- *  3. 主图推理 → 在 [mask] 位置收集 token_logits
- *  4. 按题型温度校准 → softmax → 判定结果
+ * 与旧实现的区别（旧版按错误假设写：单图、token_ids 直入、全词表 logits 输出——
+ * 真实模型是 embeds 输入 [1,N,768] + token_logits [1,N] 标量输出，见 HOST_CONTRACT.md）：
+ *  - prompt 构建、fp16 嵌入查表、温度校准、解码全部走官方移植类（com.notifyme.android.laya）
+ *  - 引擎实例按模型目录缓存，S1 四个问题共享同一次 tokenizer/图加载
+ *  - isReady 用 LocalModelStore 清单的真实文件名+字节数判断（手动 push 的模型也能就绪）
  */
 object LayaTfliteEngine {
 
     private const val TAG = "LayaTfliteEngine"
-
-    // TFLite Interpreter 缓存：模型文件 644MB，每次 runQuestion 重新加载耗时且浪费内存
-    // 按 modelDir 路径缓存，releaseAll() 时释放
-    @Volatile
-    private var cachedInterpreter: Interpreter? = null
-    @Volatile
-    private var cachedDir: String? = null
-
-    private fun getInterpreter(dir: File): Interpreter {
-        val path = dir.absolutePath
-        if (cachedInterpreter != null && cachedDir == path) return cachedInterpreter!!
-        cachedInterpreter?.close()
-        val buffer = loadModelFile(dir.resolve("laya_ml_s256_wfp16.tflite"))
-        val options = Interpreter.Options().apply { setNumThreads(4) }
-        val interpreter = Interpreter(buffer, options)
-        cachedInterpreter = interpreter
-        cachedDir = path
-        return interpreter
-    }
     private const val WINDOW = 256
 
-    // ---------- SentencePiece 贪心分词器 ----------
+    @Volatile
+    private var cachedEngine: LayaEngine? = null
+    @Volatile
+    private var cachedDir: String? = null
+    @Volatile
+    private var initializedDir: String? = null
 
-    class SpTokenizer(
-        private val pieceToId: Map<String, Int>
-    ) {
-        companion object {
-            fun load(file: File): SpTokenizer {
-                val json = JSONObject(file.readText())
-                val vocab = json.getJSONObject("model").getJSONArray("vocab")
-                val map = HashMap<String, Int>(vocab.length())
-                for (i in 0 until vocab.length()) {
-                    val entry = vocab.getJSONArray(i)
-                    map[entry.getString(0)] = entry.getInt(1)
-                }
-                return SpTokenizer(map)
-            }
-        }
-
-        val clsId: Int get() = pieceToId["<bos>"] ?: 0
-        val sepId: Int get() = pieceToId["</s>"] ?: 1
-        val maskId: Int get() = pieceToId["<mask>"] ?: 3
-        val unkId: Int get() = pieceToId["<unk>"] ?: 0
-
-        fun encode(text: String): List<Int> {
-            val ids = mutableListOf<Int>()
-            var pos = 0
-            val chars = text.toCharArray()
-            while (pos < chars.size) {
-                var len = minOf(24, chars.size - pos)
-                var hit = false
-                while (len >= 1) {
-                    val sub = String(chars, pos, len)
-                    val id = pieceToId[sub]
-                    if (id != null) { ids.add(id); pos += len; hit = true; break }
-                    len--
-                }
-                if (!hit) { ids.add(unkId); pos += 1 }
-            }
-            return ids
-        }
-    }
-
-    // ---------- 温度校准 ----------
-
-    data class Calibration(val choice: Double, val score: Double, val noul: Double) {
-        companion object {
-            fun load(f: File): Calibration {
-                val j = JSONObject(f.readText())
-                // calibration.json 格式可能为 {type: temp} 或嵌套，这里防御式读取
-                val choice = j.optDouble("choice", j.optDouble("choice_temperature", 1.0))
-                val score = j.optDouble("score", j.optDouble("score_temperature", 1.0))
-                val noul = j.optDouble("noul", j.optDouble("noul_temperature", 1.0))
-                return Calibration(choice, score, noul)
-            }
-        }
-    }
-
-    // ---------- 推理结果 ----------
-
-    data class LayAnswer(
-        val labels: List<String>,   // 选项标签（按 criteria 顺序）
-        val probs: List<Double>,    // softmax 概率（与 labels 一一对应）
-        val bestIdx: Int            // 最大概率的下标
-    )
-
-    // ---------- 公共入口 ----------
-
+    /** 模型目录存在且全部清单文件字节匹配（不依赖 prefs 状态，手动 adb push 亦可用）。 */
     fun isReady(context: Context): Boolean {
         val dir = modelDir(context)
-        return dir.resolve("laya_ml_s256_wfp16.tflite").exists() &&
-            dir.resolve("tokenizer.json").exists()
+        val manifest = LocalModelStore.model(LocalModelStore.MODEL_LAYA)?.files ?: return false
+        return manifest.all { f ->
+            val file = File(dir, f.name)
+            file.isFile && (f.size <= 0L || file.length() == f.size)
+        }
     }
 
     private fun modelDir(context: Context): File =
-        File(context.applicationContext.filesDir, "models/${LocalModelStore.MODEL_LAYA}")
+        LocalModelStore.modelDir(context.applicationContext, LocalModelStore.MODEL_LAYA)
 
     /**
-     * 执行单题 laya 推理，返回各选项概率。
-     * 每次调用独立加载模型（上层按需缓存 Interpreter 实例可优化）。
+     * 取（并缓存）引擎。tokenizer.json 解析 + 393MB 嵌入表映射 + CPU 图编译为一次性开销，
+     * 目录不变时后续调用直接复用。仅在 [androidx.work] 的后台线程调用。
      */
-    fun runQuestion(
-        context: Context,
-        questionType: String,  // "choice" | "score" | "noul"
-        instructions: String,
-        options: List<String>, // choice 的选项列表或 score 的分档标签
-        stateText: String,
-        window: Int = WINDOW
-    ): LayAnswer {
+    @Synchronized
+    internal fun obtainEngine(context: Context): LayaEngine {
         val dir = modelDir(context)
-        val tokenizer = SpTokenizer.load(dir.resolve("tokenizer.json"))
-        val calib = if (dir.resolve("calibration.json").exists())
-            Calibration.load(dir.resolve("calibration.json")) else Calibration(1.0, 1.0, 1.0)
-
-        // 构建 laya prompt
-        val typeTag = questionType // choice / score / noul
-        // 构建 token 序列：[bos] <type> question [sep] [mask] opt0 [mask] opt1 ... [sep] <state> [sep]
-        val tokens = mutableListOf<Int>()
-        tokens.add(tokenizer.clsId)
-        // 类型标签分词
-        tokens.addAll(tokenizer.encode(typeTag))
-        // 指令分词
-        tokens.addAll(tokenizer.encode(" question: $instructions"))
-        tokens.add(tokenizer.sepId)
-
-        // 记录 [MASK] 位置
-        val maskPositions = mutableListOf<Int>()
-        for (opt in options) {
-            maskPositions.add(tokens.size)
-            tokens.add(tokenizer.maskId)
-            tokens.addAll(tokenizer.encode(" $opt"))
-        }
-        tokens.add(tokenizer.sepId)
-
-        // 状态文本分词（截断到 window - 已有 token 数 - 1）
-        val remaining = window - tokens.size - 1
-        val stateIds = tokenizer.encode(stateText).take(remaining.coerceAtLeast(0))
-        tokens.addAll(stateIds)
-        tokens.add(tokenizer.sepId)
-
-        // 填充到 window
-        val inputIds = IntArray(window) { i -> tokens.getOrElse(i) { tokenizer.clsId } }
-        val attentionMask = FloatArray(window) { i -> if (i < tokens.size) 1f else 0f }
-        val qtypeOnehot = when (questionType) {
-            "choice" -> floatArrayOf(1f, 0f, 0f)
-            "score" -> floatArrayOf(0f, 1f, 0f)
-            else -> floatArrayOf(0f, 0f, 1f)
-        }
-
-        // 加载模型并推理
-        val interpreter = getInterpreter(dir)
-            val inputIdsBuf = arrayOf(inputIds)
-            val maskBuf = arrayOf(attentionMask)
-            val qtypeBuf = arrayOf(qtypeOnehot)
-
-            // 输出：token_logits [1, window, vocab_size] + pooled_cls [1, D]
-            val vocabSize = 250002  // mmBERT 词表大小
-            val tokenLogits = Array(1) { Array(window) { FloatArray(vocabSize) } }
-            val pooledDim = 768  // mmBERT-base hidden size
-            val pooledCls = Array(1) { FloatArray(pooledDim) }
-
-            val inputs = arrayOf<Any>(inputIdsBuf as Any, maskBuf as Any, qtypeBuf as Any)
-            val outputs = java.util.HashMap<Int, Any>()
-            outputs.put(0, tokenLogits)  // 输出张量 0：token_logits
-            outputs.put(1, pooledCls)    // 输出张量 1：pooled_cls
-            interpreter.runForMultipleInputsOutputs(inputs, outputs)
-
-            // 在 [MASK] 位置收集 logits（每个 MASK 对应一个选项）
-            val optionLogits = maskPositions.map { pos ->
-                tokenLogits[0][pos.coerceIn(0, window - 1)]
-            }
-
-            // 按题型选温度
-            val temp = when (questionType) {
-                "choice" -> calib.choice
-                "score" -> calib.score
-                else -> calib.noul
-            }
-
-            // softmax：laya 的判定方式是在每个 [MASK] 位置查找特定 token 的 logit，
-            // 然后跨所有位置做 softmax。对于 noul 类型查找 "true" token，
-            // 对 choice 类型查找与每个选项关联的 token。
-            // 简化实现：取每个 MASK 位置的最大 logit 作为该选项的分数，然后 softmax。
-            val optionScores = optionLogits.map { logits -> logits.max() }
-            val maxS = optionScores.max()
-            val exps = optionScores.map { Math.exp((it - maxS) / temp) }
-            val sumExp = exps.sum()
-            val finalProbs = exps.map { it / sumExp }
-
-            val bestIdx = finalProbs.indices.maxByOrNull { finalProbs[it] } ?: 0
-            return LayAnswer(options, finalProbs, bestIdx)
+        val path = dir.absolutePath
+        val existing = cachedEngine
+        if (existing != null && cachedDir == path) return existing
+        existing?.close()
+        val engine = LayaEngine(context.applicationContext, dir)
+        cachedEngine = engine
+        cachedDir = path
+        initializedDir = null
+        return engine
     }
 
-    /** 释放缓存的 TFLite Interpreter（内存压力大或模型被删除时调用）。 */
+    /**
+     * 批量执行 S1 判定题（官方 answer schema：choice/score/noul + probabilities + confidence + action）。
+     *
+     * @param questions 有序的 (questionId, 题目 map)，题目 map 形如
+     *   {"type":"choice","instructions":"...","criteria":{"label":"desc",...}}；
+     *   score 的 criteria 为 ["c0","c1",...]，noul 可省略 criteria（false/true 兜底文案）。
+     * @return 与 questions 同序的答案 map 列表（保插入序）。
+     */
+    fun answerQuestions(
+        context: Context,
+        questions: List<Pair<String, Map<String, Any?>>>,
+        stateText: String,
+        window: Int = WINDOW,
+    ): List<Map<String, Any?>> {
+        val dir = modelDir(context).absolutePath
+        val engine = obtainEngine(context)
+        if (initializedDir != dir) {
+            engine.initialize(LayaEngine.Backend.CPU, window)
+            initializedDir = dir
+        }
+        return questions.map { (id, question) ->
+            engine.answer(stateText, question, LayaEngine.Backend.CPU, id, window).answer
+        }
+    }
+
+    /** org.json → 保插入序 Map（Android JSONObject 底层 LinkedHashMap；JSONArray 保序）。 */
+    fun toOrderedMap(obj: JSONObject): Map<String, Any?> {
+        val out = LinkedHashMap<String, Any?>()
+        for (key in obj.keys()) {
+            out[key] = unwrap(obj.get(key))
+        }
+        return out
+    }
+
+    private fun unwrap(value: Any?): Any? = when (value) {
+        is JSONObject -> toOrderedMap(value)
+        is JSONArray -> (0 until value.length()).map { unwrap(value.get(it)) }
+        JSONObject.NULL -> null
+        else -> value
+    }
+
+    /** Map（含嵌套 List/Map/标量）→ JSONObject/JSONArray，保插入序。 */
+    fun toJson(value: Any?): Any = when (value) {
+        is Map<*, *> -> JSONObject().also { o ->
+            value.forEach { (k, v) -> o.put(k.toString(), toJson(v)) }
+        }
+        is List<*> -> JSONArray().also { a -> value.forEach { a.put(toJson(it)) } }
+        null -> JSONObject.NULL
+        else -> value
+    }
+
+    /** 释放引擎（模型更新/内存压力大时调用）。 */
+    @Synchronized
     fun releaseAll() {
-        cachedInterpreter?.close()
-        cachedInterpreter = null
+        cachedEngine?.close()
+        cachedEngine = null
         cachedDir = null
-    }
-    private fun loadModelFile(file: File): MappedByteBuffer {
-        val fc = java.io.RandomAccessFile(file, "r").channel
-        return fc.map(FileChannel.MapMode.READ_ONLY, 0, fc.size())
+        initializedDir = null
     }
 }

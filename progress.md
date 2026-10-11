@@ -23,7 +23,7 @@
 - 采集通道：`NotificationListenerService`（通知监听）+ 无障碍服务直读微信界面
 - 配套（可选）：`server/` Flask 服务端，消息接收/查询 + 网页控制台（PWA）
 
-当前版本：**versionName 0.3.0 / versionCode 6**（beta 包 versionName=0.3.0-test）
+当前版本：**versionName 0.3.1 / versionCode 7**（beta 包 versionName=0.3.1-test）
 
 ## 二、仓库来源与目录关系（重要，避免搞混）
 
@@ -530,12 +530,30 @@ Git 提交身份（本仓库局部配置，未改全局）：
   - `ConsoleActivity` 添加 Toast import。
 - HyperOS 注意：force-stop 后 READ/WRITE_CALENDAR 权限会被系统重置 → 需重新 `pm grant`（仅开发调试场景）。
 - 测试：OpenDebug 全量单测 exit 0（含 LayaTfliteCoreTest 6 例 + WatchlistIdTest 4 例 + AnalysisParsingTest 修正例）。
+### 19. Laya-LiteRT 端侧模型契约移植 + 真机验证 + 端到端打通（2026-10-11）
+
+- §三.18 的旧实现基于错误假设（token_ids 输入 / 全词表 logits 输出 / sentencepiece 特殊 id / 虚构文件名），与 litert-community/Laya-Multilingual-LiteRT 真实契约完全不符 → 按官方 Android 参考实现（Apache-2.0，repo android/ 目录）整体移植重写。
+- 真实契约要点：词表 256000，特殊 token 整数 id PAD=0/SEP=1(<eos>)/CLS=2(<bos>)/UNK=3/MASK=4；主图 `laya_ml_s256_embeds_wfp16.tflite` 输入 inputs_embeds[1,N,768]fp32 + attention_mask[1,N] + qtype_onehot[1,3]，输出 **token_logits[1,N] 每位置一个标量**（非全词表分布）+ pooled_cls[1,768]；token id 先查 `token_embeddings_fp16.bin`（fp16 [256000,768]=393,216,000B）gather 成 fp32；act 图输入 pooled_cls+feats=[top1, top1-top2, 归一化熵, k/255] → act_logits[1,2]；BPE+byte fallback+Metaspace；温度校准按 temperature_by_options 桶（K≤2/≤5/≤10/11+）优先；noul 选项恒 false 在前；round(,4)=HALF_EVEN。
+- 新包 `app/src/main/java/com/notifyme/android/laya/` 7 文件：LayaTokenizer（added-token trie + merges + 双链表 BPE）、LayaEmbeddings（mmap fp16 表）、LayaPromptBuilder、LayaDecoder（numpySum/float32 softmax/confidence=1-H/logK）、LayaCalibration、LayaJson（保键序 + python repr float）、LayaEngine（LiteRT CompiledModel CPU/GPU 双后端图封装）；另有根包 `LayaTfliteEngine.kt` 门面重写（answerQuestions 4 题批量）。
+- 依赖切换：org.tensorflow:tensorflow-lite → **`com.google.ai.edge.litert:litert:2.2.0` maven 坐标**（API 类在传递的 litert-api；files(aar) 方案弃用，丢传递依赖）；根 Kotlin 2.0.20 → **2.2.21**（litert-api 元数据 2.3.0，2.0.x 读不了）。
+- LocalModelStore laya 清单改真实 7 文件（主图 250,889,040B / act head 795,816B / calibration 9,156B / tokenizer.json 34,363,188B / tokenizer_config / 嵌入表 393,216,000B / token_embeddings.json）；ModelDownloadWorker 主源 IOException → 删 .part → hf-mirror 镜像重试一次（防两源拼接坏文件）。
+- debug 门测试：移植 LayaGateRunner + LayaGateActivity（`--es backend cpu|gpu --ei window 256`），读 files/fixtures/gate_rows_s256.json 201 行逐行比对。
+- 三处云端 gating 对 laya 豁免（laya 是端侧）：AnalysisWorker localOnly 门、baseUrl.isEmpty 门、AnalysisScheduler fullyLocal 网络约束。
+- 新增 debug-only AnalysisE2EActivity（注入测试会话 + force 分析走完整生产链路），验证后测试数据已清理。
+- **真机验证（25098PN5AC / HyperOS）**：CPU 门 201/201 ids/markers/argmax 全精确、max_delta_p=0.0014478（36s）；GPU 门 201/201、0.0014491（32s）；端到端 4 题 4.3s：need_action=0.47 / importance=4.2 / due_window=tomorrow / topic=schedule。差异仅官方契约标 NOT_EVALUATED 的 round(,4) 末位。
+- 本机构建坑：AGP 8.5.2 内嵌 aapt2 在本机 app\ 子树写输出报「数据无效 (13)」→ 用 build-tools 35.0.0 aapt2 经环境变量覆盖（`-P`/ORG_GRADLE_PROJECT_ 传入，**勿写入 gradle.properties 入库**）；HyperOS 装机需手机端放行「USB 安装」；Theme.NoDisplay 的 Activity 必须在启动后台任务后立即 finish()（否则 onResume 前未 finish 崩溃）。
+- 测试：LayaTfliteCoreTest 重写为 13 例纯 JVM 契约测试（JSON 键序/pythonFloat/温度桶覆盖/softmax/confidence/round4/decode schema 期望值/noul 默认文案/PromptBuilder 常量）；OpenDebug 单测 302 全绿。
+
 ## 四、构建与运行
 
 ```powershell
 # 环境
 $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
 $env:ANDROID_HOME = "C:\Users\<你>\AppData\Local\Android\Sdk"
+# 仅本机（2026-10-11 起）：AGP 8.5.2 内嵌 aapt2 在 app\ 子树写输出报「数据无效」→ 覆盖为 build-tools 35.0.0 的 aapt2（勿入库）；
+# 且 .gradle 锁文件曾被 Windows ACL 卡死 → GRADLE_USER_HOME 指到仓库内 .gradle-home（已 gitignore）
+$env:ORG_GRADLE_PROJECT_android.aapt2FromMavenOverride = "$env:ANDROID_HOME\build-tools\35.0.0\aapt2.exe"
+$env:GRADLE_USER_HOME = "C:\project\notifyme\.gradle-home"
 
 # 构建（双 flavor 已验证通过）
 cd C:\project\notifyme

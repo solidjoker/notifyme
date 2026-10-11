@@ -47,3 +47,6 @@ build-native.log
 
 # 临时验证产物（含用户数据 dump，绝不入库）
 tmp/
+
+# 本地分发包输出目录（APK 已被 *.apk 忽略，整目录不入库）
+dist/

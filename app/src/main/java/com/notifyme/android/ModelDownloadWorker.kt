@@ -159,7 +159,8 @@ class ModelDownloadWorker(
         model: LocalModelStore.LocalModel,
         completedBytes: Long
     ) {
-        val appContext = applicationContext
+        val candidateUrls = listOf(file.url) +
+            if (file.mirrorUrl.isNotBlank()) listOf(file.mirrorUrl) else emptyList()
         val resumed = if (part.exists()) part.length() else 0L
         if (resumed >= file.size) {
             // .part 已完整（上次 rename 前被杀）：直接转正
@@ -167,7 +168,36 @@ class ModelDownloadWorker(
             part.delete()
         }
 
-        val requestBuilder = Request.Builder().url(file.url).get()
+        var lastFailure: java.io.IOException? = null
+        for ((index, url) in candidateUrls.withIndex()) {
+            if (index > 0) {
+                // 换源重下：丢弃可能半截的 .part，防止两个源拼接出坏文件
+                Log.i(TAG, "${file.name} 主源失败，切换镜像重试")
+                part.delete()
+            }
+            try {
+                httpFetch(file, part, target, url, if (index == 0) resumed else 0L, completedBytes, model)
+                return
+            } catch (failure: java.io.IOException) {
+                lastFailure = failure
+                Log.w(TAG, "${file.name} 下载失败（$url）：${failure.message}")
+            }
+        }
+        throw lastFailure ?: java.io.IOException("${file.name} 无可用下载源")
+    }
+
+    /** 单次 HTTP 取回：断点续传 + 进度上报 + 字节数校验 + .part 转正。失败抛 IOException。 */
+    private suspend fun httpFetch(
+        file: LocalModelStore.ModelFile,
+        part: File,
+        target: File,
+        url: String,
+        resumed: Long,
+        completedBytes: Long,
+        model: LocalModelStore.LocalModel
+    ) {
+        val appContext = applicationContext
+        val requestBuilder = Request.Builder().url(url).get()
         if (resumed > 0) {
             requestBuilder.header("Range", "bytes=$resumed-")
             Log.i(TAG, "${file.name} 断点续传，从 $resumed 字节继续")
@@ -210,7 +240,6 @@ class ModelDownloadWorker(
                 )
             }
         }
-
         if (!part.renameTo(target)) {
             throw java.io.IOException("${file.name} 落盘改名失败")
         }

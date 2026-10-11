@@ -35,8 +35,16 @@ object LocalModelStore {
     const val STATE_READY = "ready"
     const val STATE_ERROR = "error"
 
-    /** 单个模型文件：name=落盘文件名，url=ModelScope 直链，size=预期字节数（实测） */
-    data class ModelFile(val name: String, val url: String, val size: Long)
+    /**
+     * 单个模型文件：name=落盘文件名，url=主源直链，size=预期字节数（实测），
+     * mirrorUrl=国内可达镜像（主源 IOException 时自动重试一次，如 HF 直连超时走 hf-mirror）。
+     */
+    data class ModelFile(
+        val name: String,
+        val url: String,
+        val size: Long,
+        val mirrorUrl: String = ""
+    )
 
     data class LocalModel(
         val id: String,
@@ -51,6 +59,8 @@ object LocalModelStore {
     private const val MS_S1 = "https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/master"
     private const val MS_S2 = "https://www.modelscope.cn/models/OpenBMB/MiniCPM5-2B-GGUF/resolve/master"
     private const val HF_LAYA = "https://huggingface.co/litert-community/Laya-Multilingual-LiteRT/resolve/main"
+    private const val HF_LAYA_MIRROR =
+        "https://hf-mirror.com/litert-community/Laya-Multilingual-LiteRT/resolve/main"
 
     val MODELS: List<LocalModel> = listOf(
         LocalModel(
@@ -72,17 +82,20 @@ object LocalModelStore {
                 ModelFile("MiniCPM5-2B-Q4_K_M.gguf", "$MS_S2/MiniCPM5-2B-Q4_K_M.gguf", 1_561_318_368L)
             )
         ),
+        // 文件名与字节数以 repo assets.json 实测为准（2026-10 校对）；全部走官方契约。
         LocalModel(
             id = MODEL_LAYA,
             displayName = "Laya-Multilingual（LiteRT TFLite）",
-            roleLabel = "System 1 Laya 判定 · 端侧 TFLite 推理（mmBERT 多语言 · 51ms/问）",
-            sizeLabel = "~0.68 GB",
+            roleLabel = "System 1 laya 判定 · 端侧双图推理（embeds 查表 + 判定头，CPU 4 线程）",
+            sizeLabel = "648 MB",
             files = listOf(
-                ModelFile("laya_ml_s256_wfp16.tflite", "$HF_LAYA/laya_ml_s256_wfp16.tflite", 644_077_360L),
-                ModelFile("laya_ml_act_head_fp32.tflite", "$HF_LAYA/laya_ml_act_head_fp32.tflite", 795_816L),
-                ModelFile("tokenizer.json", "$HF_LAYA/multilingual/tokenizer.json", -1L),
-                ModelFile("tokenizer_config.json", "$HF_LAYA/multilingual/tokenizer_config.json", -1L),
-                ModelFile("calibration.json", "$HF_LAYA/multilingual/calibration.json", -1L)
+                ModelFile("laya_ml_s256_embeds_wfp16.tflite", "$HF_LAYA/laya_ml_s256_embeds_wfp16.tflite", 250_889_040L, "$HF_LAYA_MIRROR/laya_ml_s256_embeds_wfp16.tflite"),
+                ModelFile("laya_ml_act_head_fp32.tflite", "$HF_LAYA/laya_ml_act_head_fp32.tflite", 795_816L, "$HF_LAYA_MIRROR/laya_ml_act_head_fp32.tflite"),
+                ModelFile("laya_ml_calibration.json", "$HF_LAYA/laya_ml_calibration.json", 9_156L, "$HF_LAYA_MIRROR/laya_ml_calibration.json"),
+                ModelFile("tokenizer.json", "$HF_LAYA/tokenizer.json", 34_363_188L, "$HF_LAYA_MIRROR/tokenizer.json"),
+                ModelFile("tokenizer_config.json", "$HF_LAYA/tokenizer_config.json", 524L, "$HF_LAYA_MIRROR/tokenizer_config.json"),
+                ModelFile("token_embeddings_fp16.bin", "$HF_LAYA/token_embeddings_fp16.bin", 393_216_000L, "$HF_LAYA_MIRROR/token_embeddings_fp16.bin"),
+                ModelFile("token_embeddings.json", "$HF_LAYA/token_embeddings.json", 801L, "$HF_LAYA_MIRROR/token_embeddings.json")
             )
         )
     )

@@ -70,8 +70,8 @@ android {
         applicationId = "com.notifyme.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 6
-        versionName = "0.3.0"
+        versionCode = 7
+        versionName = "0.3.1"
 
         ndk {
             // 真机 arm64 + MuMu 模拟器 x86_64；不含 32 位与其它 ABI
@@ -207,9 +207,12 @@ dependencies {
     // 上报用 OkHttp；JSON 仍用平台内置 org.json，不引 Gson/Moshi
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // TensorFlow Lite — laya 端侧判别式决策模型推理（LiteRT 2.2.0 兼容 .tflite）
-    implementation("org.tensorflow:tensorflow-lite:2.14.0")
-    implementation("org.tensorflow:tensorflow-lite-select-tf-ops:2.14.0")
+    // LiteRT（官方 com.google.ai.edge.litert 2.2.0）— laya 端侧双图推理。
+    // 必须用 maven 坐标而不是本地 AAR：新 API 类（Accelerator/CompiledModel/Environment/TensorBuffer）在
+    // litert-api（aar）里，主包只带 org.tensorflow.lite 运行时实现与 libLiteRt.so；手动 files() 无法带出
+    // litert-api 及其传递依赖（guava / lifecycle / coroutines-guava / play ai-delivery）。
+    // CompiledModel API 需要它；旧 org.tensorflow:tensorflow-lite 不再使用（输入形态不同，混用会加载错运行时）。
+    implementation("com.google.ai.edge.litert:litert:2.2.0")
 
     // ---- 单元测试（M1 测试地基，只进 test classpath，不进 APK）----
     testImplementation("junit:junit:4.13.2")

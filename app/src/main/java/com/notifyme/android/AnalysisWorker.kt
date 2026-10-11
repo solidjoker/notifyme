@@ -87,7 +87,8 @@ class AnalysisWorker(
         // M3 仅端侧模式：云端链路整体停用。S1 配的是云端模型 -> 本轮无分析可做，
         // 明确文案、不重试（本地 S1 + 云端 S2 的情况在 S2 分支单独门控）
         val privacy = PrivacyConfig.get(applicationContext)
-        if (privacy.localOnly && !s1Local) {
+        if (privacy.localOnly && !s1Local &&
+            config.s1Type != AnalysisConfig.S1_TYPE_LAYA_ONDEVICE) {
             recordResult(config, "成功：仅端侧模式且 System 1 未配置本地模型，本轮不执行云端分析")
             return Result.success()
         }
@@ -105,7 +106,7 @@ class AnalysisWorker(
                 recordResult(config, "失败：" + engine.unavailableReason)
                 return Result.success()
             }
-        } else if (baseUrl.isEmpty()) {
+        } else if (config.s1Type != AnalysisConfig.S1_TYPE_LAYA_ONDEVICE && baseUrl.isEmpty()) {
             recordResult(config, "失败：未配置分析服务地址")
             return Result.success() // 配置未完成属用户态，重试无意义
         }
@@ -682,7 +683,10 @@ class AnalysisWorker(
     }
 
     /**
-     * S1 判定（laya 端侧 TFLite）：LayaTfliteEngine 对四类判定题逐题推理。
+     * S1 判定（laya 端侧）：官方契约双图引擎逐题推理（embeds 输入 + 选项位标量 logit +
+     * 温度校准 + act head），产出官方 answer schema，再压平为 parseS1Result 口径。
+     *
+     * confidence 取四题最小值——任一题不确定就不允许静默定案（升级闸 <0.5 交 S2 重判）。
      */
     private fun runS1LayaTflite(
         kase: AnalysisCase,
@@ -694,34 +698,35 @@ class AnalysisWorker(
         val stateText = kase.windowText()
         val questions = AnalysisCase.buildS1QuestionsJson()
         val qNames = listOf("need_action", "importance", "due_window", "topic")
-        val qTypes = listOf("noul", "score", "choice", "choice")
-        val answers = JSONObject()
-        for (i in qNames.indices) {
-            val qName = qNames[i]
-            val q = questions.getJSONObject(qName)
-            val qType = qTypes[i]
-            val instructions = q.optString("instructions", "")
-            val criteria = q.optJSONObject("criteria") ?: JSONObject()
-            val options = if (qType == "choice") {
-                val keys = criteria.keys()
-                val list = mutableListOf<String>()
-                while (keys.hasNext()) list.add(keys.next())
-                list
-            } else if (qType == "score") {
-                (0..9).map { it.toString() }
-            } else {
-                listOf("true", "false")
-            }
-            val answer = LayaTfliteEngine.runQuestion(
-                applicationContext, qType, instructions, options, stateText
-            )
-            val best = answer.labels.getOrNull(answer.bestIdx) ?: ""
-            val prob = answer.probs.getOrNull(answer.bestIdx) ?: 0.0
-            val answerObj = JSONObject().put("choice", best).put("value", best).put("prob", prob)
-            answers.put(qName, answerObj)
+        val ordered = qNames.map { name ->
+            name to LayaTfliteEngine.toOrderedMap(questions.getJSONObject(name))
         }
-        val raw = answers.toString()
-        return raw to AnalysisParsing.parseS1Result(JSONObject(raw), "local")
+        val answers = try {
+            LayaTfliteEngine.answerQuestions(applicationContext, ordered, stateText)
+        } catch (e: IllegalStateException) {
+            // 图编译/文件校验失败：归入本地引擎失败路径，保留原始原因
+            throw LocalEngineException("laya 端侧引擎不可用: ${e.message}")
+        }
+        val answersJson = JSONObject()
+        var minConfidence = 1.0
+        for ((i, name) in qNames.withIndex()) {
+            val answer = answers[i]
+            answersJson.put(name, LayaTfliteEngine.toJson(answer))
+            minConfidence = minOf(
+                minConfidence,
+                (answer["confidence"] as? Number)?.toDouble() ?: 0.0
+            )
+        }
+        val flat = JSONObject().apply {
+            put("need_action_prob", (answers[0]["noul"] as? Number)?.toDouble() ?: 0.0)
+            put("importance", (answers[1]["score"] as? Number)?.toDouble() ?: 0.0)
+            put("due_window", answers[2]["choice"] as? String ?: "none")
+            put("topic", answers[3]["choice"] as? String ?: "notice")
+            put("confidence", minConfidence)
+            put("action", answers[0]["action"] as? String ?: "")
+        }
+        val raw = JSONObject().put("answers", answersJson).put("flat", flat).toString()
+        return raw to AnalysisParsing.parseS1Result(flat, "laya_ondevice")
     }
 
     // ---------------- S2：深分析（openai 槽位） ----------------
