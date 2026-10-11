@@ -543,6 +543,7 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - **真机验证（25098PN5AC / HyperOS）**：CPU 门 201/201 ids/markers/argmax 全精确、max_delta_p=0.0014478（36s）；GPU 门 201/201、0.0014491（32s）；端到端 4 题 4.3s：need_action=0.47 / importance=4.2 / due_window=tomorrow / topic=schedule。差异仅官方契约标 NOT_EVALUATED 的 round(,4) 末位。
 - 本机构建坑：AGP 8.5.2 内嵌 aapt2 在本机 app\ 子树写输出报「数据无效 (13)」→ 用 build-tools 35.0.0 aapt2 经环境变量覆盖（`-P`/ORG_GRADLE_PROJECT_ 传入，**勿写入 gradle.properties 入库**）；HyperOS 装机需手机端放行「USB 安装」；Theme.NoDisplay 的 Activity 必须在启动后台任务后立即 finish()（否则 onResume 前未 finish 崩溃）。
 - 测试：LayaTfliteCoreTest 重写为 13 例纯 JVM 契约测试（JSON 键序/pythonFloat/温度桶覆盖/softmax/confidence/round4/decode schema 期望值/noul 默认文案/PromptBuilder 常量）；OpenDebug 单测 302 全绿。
+- UI 修复（602cfe2，用户真机反馈「laya 手机本地没有下载、保存的按钮」）：ModelListActivity 原来只绑 S1/S2 两卡片，laya 清单在 LocalModelStore 但 UI 无入口（报错文案指向不存在的「模型管理→Laya-Multilingual」）→ 补第三卡片复用 bindModel/refreshModel（下载/进度/取消/删除，删除时 releaseAll）；AnalysisSettingsActivity applyS1TypeEditable 补 S1_TYPE_LAYA_ONDEVICE 隐藏 PC 连接字段，选 laya 且未就绪时 Toast 指路。模拟器实测：点下载 6s 秒过 adb 预摆的 648MB 校验，prefs laya_ml_state=ready，UI 绿字「已下载·校验通过（648 MB）」。
 
 ## 四、构建与运行
 
