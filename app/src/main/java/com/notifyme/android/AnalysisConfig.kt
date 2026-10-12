@@ -46,6 +46,7 @@ class AnalysisConfig(context: Context) {
 
         // M10 advisor（第二模型评审，openai 协议；v5 起）
         private const val KEY_ADVISOR_ENABLED = "advisor_enabled"
+        private const val KEY_ADVISOR_PROVIDER = "advisor_provider"
         private const val KEY_CONSEC_FAILURES = "consec_failures"
 
         // 旧版字段（仅迁移用）
@@ -85,6 +86,10 @@ class AnalysisConfig(context: Context) {
 
         /** System 2 服务商（追加）：本地 MiniCPM3-4B 端侧生成（LocalLlmEngine） */
         const val S2_PROVIDER_LOCAL = "local"
+
+        /** M10 advisor 服务商：云端 openai 兼容槽位 / 本地端侧模型（复用 S2 的 MiniCPM5-2B，数据不出端） */
+        const val ADVISOR_PROVIDER_CLOUD = "cloud"
+        const val ADVISOR_PROVIDER_LOCAL = "local"
 
         /** S2 服务商预填值（用户可改；test 包密钥由 BuildConfig 播种） */
         const val S2_JEV_URL = "https://api.typesafe.ai/v1"
@@ -300,9 +305,19 @@ class AnalysisConfig(context: Context) {
         get() = prefs.getBoolean(KEY_ADVISOR_ENABLED, false)
         set(value) = prefs.edit().putBoolean(KEY_ADVISOR_ENABLED, value).apply()
 
+    /** advisor 服务商：cloud = 云端槽位（openai 兼容）；local = 端侧 MiniCPM5-2B */
+    var advisorProvider: String
+        get() = prefs.getString(KEY_ADVISOR_PROVIDER, ADVISOR_PROVIDER_CLOUD).orEmpty()
+        set(value) = prefs.edit().putString(KEY_ADVISOR_PROVIDER, value).apply()
+
+    /** advisor 是否走本地端侧模型：仅评审开关开启且服务商=local 时为 true（本地路径数据不出端） */
+    fun advisorUsesLocal(): Boolean =
+        advisorEnabled && advisorProvider == ADVISOR_PROVIDER_LOCAL
+
     /**
-     * advisor 槽位（固定 openai 协议）：开关关闭或地址为空视为未配置，返回 null。
+     * advisor 云端槽位（固定 openai 协议）：开关关闭或地址为空视为未配置，返回 null。
      * 与 S2 同款口径：调用方拿到 null 即跳过，不报错。
+     * 本地模式（[advisorUsesLocal]）不读本方法。
      */
     fun advisorSlot(): SlotConfig? {
         if (!advisorEnabled) return null

@@ -44,10 +44,10 @@ interface LocalLlmEngine {
 /** 本地引擎统一异常：message 直接展示到分析状态行。 */
 class LocalEngineException(message: String) : Exception(message)
 
-/** 推理库尚未编译进 APK 时的占位实现。 */
+/** 推理库加载失败/设备不支持时的占位实现（原生库已内置，正常不应出现）。 */
 class UnavailableLocalLlmEngine : LocalLlmEngine {
     override val isReady: Boolean = false
-    override val unavailableReason: String = "本地推理引擎未就绪（MNN/llama.cpp 原生库未编译）"
+    override val unavailableReason: String = "本地推理引擎未就绪（原生库加载失败或设备不支持）"
     override suspend fun chat(system: String, user: String, maxTokens: Int): String {
         throw LocalEngineException(unavailableReason)
     }

@@ -125,6 +125,19 @@ class AnalysisWorker(
             }
         } else null
 
+        // advisor 本地模式的跳过原因（拼进最终状态文案；null = 云端路径或已就绪）。
+        // 本地评审数据不出端，端侧/仅端侧隐私模式下同样可用——这正是它的价值。
+        val advisorLocalSkip = if (config.advisorUsesLocal()) {
+            when {
+                !LocalModelStore.isReady(applicationContext, LocalModelStore.MODEL_S2) ->
+                    "AI 评审本地模型未就绪，已跳过"
+                !LocalLlmEngines.forModel(
+                    applicationContext, LocalModelStore.MODEL_S2
+                ).isReady -> "AI 评审本地引擎未就绪，已跳过"
+                else -> null
+            }
+        } else null
+
         val forceConversation = inputData.getString(KEY_FORCE_CONVERSATION)
             ?.takeIf { it.isNotBlank() }
         val forceKey = forceConversation?.let {
@@ -140,7 +153,7 @@ class AnalysisWorker(
         // M11.4 会话级定时任务静默标记：成功/空结果不覆写全局分析状态文案
         val quiet = inputData.getBoolean(KEY_QUIET, false)
         return ANALYSIS_MUTEX.withLock {
-            doWorkExclusive(config, slot, baseUrl, forceKey, s2LocalSkip, quiet)
+            doWorkExclusive(config, slot, baseUrl, forceKey, s2LocalSkip, quiet, advisorLocalSkip)
         }
     }
 
@@ -150,7 +163,8 @@ class AnalysisWorker(
         baseUrl: String,
         forceKey: ConvKey?,
         s2LocalSkip: String? = null,
-        quiet: Boolean = false
+        quiet: Boolean = false,
+        advisorLocalSkip: String? = null
     ): Result {
 
         // 按 (pkg, 会话名) 分组 -> 组 case -> 过滤重点关注 -> caseId 去重。
@@ -290,7 +304,8 @@ class AnalysisWorker(
             "成功：分析 $done 个会话" +
                 if (escalatedCount > 0) "（升级深分析 $escalatedCount 个）" else "" +
                 if (filteredCount > 0) "（预筛过滤 $filteredCount 个）" else "" +
-                (s2LocalSkip?.let { "（$it）" } ?: "")
+                (s2LocalSkip?.let { "（$it）" } ?: "") +
+                (advisorLocalSkip?.let { "（$it）" } ?: "")
         )
         Log.i(TAG, "本轮分析完成: $done 个会话, 升级 $escalatedCount 个, 预筛过滤 $filteredCount 个")
         return Result.success()
@@ -460,9 +475,14 @@ class AnalysisWorker(
         // ---- M10 advisor：落库前 review（before-done 挂点） ----
         // 云端第二模型；仅端侧模式整体跳过；内容用脱敏后的 sendCase 口径；
         // advisor 失败绝不拖垮 case——错误以 ForkRecord(advisor_error) 记录。
-        val advisorSlotCfg = if (privacy.cloudBlocked) null else config.advisorSlot()
-        if (advisorSlotCfg != null) {
-            forks += advisorFork(advisorSlotCfg, s1, s2Summary, s2Tasks, sendCase)
+        // 本地评审优先：数据不出端，不受 cloudBlocked 限制；云端评审仅在非本地且允许出云时调用
+        if (config.advisorUsesLocal()) {
+            forks += advisorForkLocal(s1, s2Summary, s2Tasks, sendCase)
+        } else {
+            val advisorSlotCfg = if (privacy.cloudBlocked) null else config.advisorSlot()
+            if (advisorSlotCfg != null) {
+                forks += advisorFork(advisorSlotCfg, s1, s2Summary, s2Tasks, sendCase)
+            }
         }
 
         return AnalysisCaseRecord(
@@ -531,6 +551,53 @@ class AnalysisWorker(
             )
         } catch (e: Exception) {
             Log.w(TAG_FORK, "fork advisor 失败（不拖垮 case）: " + (e.message ?: "unknown"))
+            AnalysisCaseRecord.ForkRecord(
+                fork = "advisor",
+                prob = 0.0,
+                verdict = "advisor_error",
+                note = (e.message ?: "advisor 调用失败").take(200)
+            )
+        }
+    }
+
+    /**
+     * M10 advisor fork（本地端侧模型）：复用 S2 的 MiniCPM5-2B 引擎，prompt 与
+     * 结果形态同 [advisorFork]；HTTP 换成 LocalLlmEngine.chat，数据不出端。
+     * 引擎/模型未就绪同样落 advisor_error fork，不拖垮 case（就绪与否已在 doWork 预检写状态文案）。
+     */
+    private suspend fun advisorForkLocal(
+        s1: AnalysisCase.Companion.S1Result,
+        s2Summary: String,
+        s2Tasks: List<AnalysisCaseRecord.Task>,
+        sendCase: AnalysisCase
+    ): AnalysisCaseRecord.ForkRecord {
+        val tasksDigest = s2Tasks.joinToString("；") {
+            it.what + (it.`when`.takeIf { w -> w.isNotBlank() }?.let { w -> "@$w" } ?: "")
+        }
+        val windowDigest = sendCase.windowText().take(300)
+        return try {
+            val engine = LocalLlmEngines.forModel(applicationContext, LocalModelStore.MODEL_S2)
+            val advice = engine.chat(
+                AnalysisCase.buildAdvisorSystemPrompt(),
+                AnalysisCase.buildAdvisorUserContent(
+                    s1Digest = s1.toInjectText(),
+                    s2Summary = s2Summary,
+                    s2Tasks = tasksDigest,
+                    windowDigest = windowDigest
+                ),
+                1024
+            )
+            val content = AnalysisParsing.extractJsonPayload(advice)?.toString() ?: advice
+            val clean = content.trim().take(400)
+            Log.i(TAG_FORK, "fork advisor(local) advice | " + sendCase.conversation + " | " + clean)
+            AnalysisCaseRecord.ForkRecord(
+                fork = "advisor",
+                prob = s1.confidence,
+                verdict = "advice",
+                note = clean
+            )
+        } catch (e: Exception) {
+            Log.w(TAG_FORK, "fork advisor 本地评审失败（不拖垮 case）: " + (e.message ?: "unknown"))
             AnalysisCaseRecord.ForkRecord(
                 fork = "advisor",
                 prob = 0.0,
@@ -841,18 +908,31 @@ class AnalysisWorker(
      * 也不受 cloudBlocked 限制——错误信息不含用户数据）。诊断文本追加进状态行，
      * advisor 未配置或调用失败则静默返回原文本（诊断失败不改变重试语义）。
      */
-    private fun recordRetryFailure(config: AnalysisConfig, errorDigest: String, done: Int): String {
+    private suspend fun recordRetryFailure(config: AnalysisConfig, errorDigest: String, done: Int): String {
         val fails = config.consecFailures + 1
         config.consecFailures = fails
         val base = "失败：$errorDigest（已完成 $done 个会话）"
         if (fails < 2) return base
-        val slot = config.advisorSlot() ?: return base
+        val localAdvisor = config.advisorUsesLocal()
+        val slot = if (localAdvisor) null else config.advisorSlot()
+        if (!localAdvisor && slot == null) return base
         val advice = try {
-            postChatCompletions(
-                slot,
-                AnalysisCase.buildAdvisorSystemPrompt(),
-                AnalysisCase.buildAdvisorErrorContent(errorDigest.take(300))
-            )
+            if (localAdvisor) {
+                // 本地评审诊断：数据不出端；引擎未就绪则静默跳过
+                val engine = LocalLlmEngines.forModel(applicationContext, LocalModelStore.MODEL_S2)
+                if (!engine.isReady) return base
+                engine.chat(
+                    AnalysisCase.buildAdvisorSystemPrompt(),
+                    AnalysisCase.buildAdvisorErrorContent(errorDigest.take(300)),
+                    1024
+                )
+            } else {
+                postChatCompletions(
+                    slot!!,
+                    AnalysisCase.buildAdvisorSystemPrompt(),
+                    AnalysisCase.buildAdvisorErrorContent(errorDigest.take(300))
+                )
+            }
         } catch (e: Exception) {
             Log.w(TAG_FORK, "advisor 错误诊断失败（静默）: ${e.message}")
             return base

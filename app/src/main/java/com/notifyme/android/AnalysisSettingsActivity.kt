@@ -71,6 +71,7 @@ class AnalysisSettingsActivity : Activity() {
     private lateinit var etS2Model: EditText
     private lateinit var btnTestS2Connection: Button
     private lateinit var switchAdvisorEnabled: Switch
+    private lateinit var spinnerAdvisorProvider: Spinner
     private lateinit var etAdvisorBaseUrl: EditText
     private lateinit var etAdvisorApiKey: EditText
     private lateinit var etAdvisorModel: EditText
@@ -97,6 +98,12 @@ class AnalysisSettingsActivity : Activity() {
         AnalysisConfig.S2_PROVIDER_GLM,
         AnalysisConfig.S2_PROVIDER_CUSTOM,
         AnalysisConfig.S2_PROVIDER_LOCAL
+    )
+
+    /** advisor 服务商 spinner 顺序值：与 strings.xml 的 advisor_provider_labels 一一对应 */
+    private val advisorProviderValues = arrayOf(
+        AnalysisConfig.ADVISOR_PROVIDER_CLOUD,
+        AnalysisConfig.ADVISOR_PROVIDER_LOCAL
     )
 
     /** Spinner 初始化期屏蔽 listener 回调，避免回填时被当成用户修改 */
@@ -138,6 +145,7 @@ class AnalysisSettingsActivity : Activity() {
         etS2Model = findViewById(R.id.etS2Model)
         btnTestS2Connection = findViewById(R.id.btnTestS2Connection)
         switchAdvisorEnabled = findViewById(R.id.switchAdvisorEnabled)
+        spinnerAdvisorProvider = findViewById(R.id.spinnerAdvisorProvider)
         etAdvisorBaseUrl = findViewById(R.id.etAdvisorBaseUrl)
         etAdvisorApiKey = findViewById(R.id.etAdvisorApiKey)
         etAdvisorModel = findViewById(R.id.etAdvisorModel)
@@ -162,6 +170,10 @@ class AnalysisSettingsActivity : Activity() {
         val s2ProviderLabels = resources.getStringArray(R.array.s2_provider_labels)
         spinnerS2Provider.adapter = ArrayAdapter(
             this, android.R.layout.simple_spinner_dropdown_item, s2ProviderLabels
+        )
+        val advisorProviderLabels = resources.getStringArray(R.array.advisor_provider_labels)
+        spinnerAdvisorProvider.adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_dropdown_item, advisorProviderLabels
         )
         val intervalLabels = resources.getStringArray(R.array.sync_interval_labels)
         spinnerAnalysisInterval.adapter = ArrayAdapter(
@@ -296,8 +308,10 @@ class AnalysisSettingsActivity : Activity() {
                     model = etS2Model.text.toString().trim()
                 )
             )
-            // M10 advisor 槽位（固定 advisor 槽位，openai 协议）
+            // M10 advisor 槽位（固定 advisor 槽位，openai 协议）+ 服务商
             analysisConfig.advisorEnabled = switchAdvisorEnabled.isChecked
+            analysisConfig.advisorProvider =
+                advisorProviderValues[spinnerAdvisorProvider.selectedItemPosition]
             analysisConfig.saveSlot(
                 AnalysisConfig.PRESET_ADVISOR,
                 AnalysisConfig.SlotConfig(
@@ -328,6 +342,9 @@ class AnalysisSettingsActivity : Activity() {
 
         // M10 advisor：开关即时生效 + 槽位回填 + 独立连接测试（固定 openai 协议）
         switchAdvisorEnabled.isChecked = analysisConfig.advisorEnabled
+        spinnerAdvisorProvider.setSelection(
+            advisorProviderValues.indexOf(analysisConfig.advisorProvider).coerceAtLeast(0)
+        )
         val advisorSlot = analysisConfig.loadSlot(AnalysisConfig.PRESET_ADVISOR)
         etAdvisorBaseUrl.setText(advisorSlot.url)
         etAdvisorApiKey.setText(advisorSlot.key)
@@ -336,6 +353,28 @@ class AnalysisSettingsActivity : Activity() {
         switchAdvisorEnabled.setOnCheckedChangeListener { _, isChecked ->
             analysisConfig.advisorEnabled = isChecked
             applyAdvisorFieldsEnabled(isChecked)
+        }
+        // advisor 服务商切换：本地 = 端侧 MiniCPM5-2B（数据不出端，不受仅端侧隐私模式限制）
+        spinnerAdvisorProvider.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (spinnerInitializing) return
+                val provider = advisorProviderValues[position]
+                analysisConfig.advisorProvider = provider
+                applyAdvisorFieldsEnabled(switchAdvisorEnabled.isChecked)
+                if (provider == AnalysisConfig.ADVISOR_PROVIDER_LOCAL &&
+                    !LocalModelStore.isReady(
+                        this@AnalysisSettingsActivity, LocalModelStore.MODEL_S2
+                    )
+                ) {
+                    Toast.makeText(
+                        this@AnalysisSettingsActivity,
+                        R.string.advisor_local_not_ready_toast,
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
         btnTestAdvisorConnection.setOnClickListener {
             testConnectionOpenAi(etAdvisorBaseUrl, etAdvisorApiKey, etAdvisorModel)
@@ -398,12 +437,24 @@ class AnalysisSettingsActivity : Activity() {
         btnTestS2Connection.isEnabled = enabled && !localProvider
     }
 
-    /** M10：advisor 连接字段随开关整组置灰（值保留） */
+    /**
+     * M10：advisor 字段可编辑性——开关关闭整组置灰（值保留）；
+     * 服务商为「本地端侧模型」时连接字段整组隐藏（同 S2 本地口径），开关与服务商仍可用。
+     */
     private fun applyAdvisorFieldsEnabled(enabled: Boolean) {
-        etAdvisorBaseUrl.isEnabled = enabled
-        etAdvisorApiKey.isEnabled = enabled
-        etAdvisorModel.isEnabled = enabled
-        btnTestAdvisorConnection.isEnabled = enabled
+        val position = spinnerAdvisorProvider.selectedItemPosition
+        val localProvider = position >= 0 &&
+            advisorProviderValues[position] == AnalysisConfig.ADVISOR_PROVIDER_LOCAL
+        spinnerAdvisorProvider.isEnabled = enabled
+        val connVis = if (enabled && !localProvider) View.VISIBLE else View.GONE
+        etAdvisorBaseUrl.visibility = connVis
+        etAdvisorApiKey.visibility = connVis
+        etAdvisorModel.visibility = connVis
+        btnTestAdvisorConnection.visibility = connVis
+        etAdvisorBaseUrl.isEnabled = enabled && !localProvider
+        etAdvisorApiKey.isEnabled = enabled && !localProvider
+        etAdvisorModel.isEnabled = enabled && !localProvider
+        btnTestAdvisorConnection.isEnabled = enabled && !localProvider
     }
 
     /** laya 协议：GET {baseUrl}/v1/models，展示可用模型或错误。 */

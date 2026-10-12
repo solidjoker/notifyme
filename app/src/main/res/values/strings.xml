@@ -284,8 +284,15 @@
 
     <!-- M10 advisor -->
     <string name="ai_review_section_title">AI 评审 · 第二模型复核（可选）</string>
-    <string name="ai_review_section_desc">分析落库前请第二模型复核 S1/S2 结论；连续失败时请它诊断原因。只给建议，不改结论。</string>
+    <string name="ai_review_section_desc">分析落库前请第二模型复核 S1/S2 结论；连续失败时请它诊断原因。只给建议，不改结论。服务商可选本地模型（MiniCPM5-2B，数据不出端）。</string>
     <string name="ai_review_enabled_switch">启用 AI 评审</string>
+    <string name="ai_review_provider_label">服务商</string>
+    <!-- 与 AnalysisConfig.ADVISOR_PROVIDER_CLOUD / ADVISOR_PROVIDER_LOCAL 一一对应 -->
+    <string-array name="advisor_provider_labels">
+        <item>云端服务（OpenAI 兼容）</item>
+        <item>本地 MiniCPM5-2B（端侧）</item>
+    </string-array>
+    <string name="advisor_local_not_ready_toast">本地模型尚未下载：本页底部「本地模型管理」→ MiniCPM5-2B → 下载（约 1.5 GB，支持断点续传）</string>
     <string name="ai_review_model_hint">评审模型名（可与主模型不同）</string>
     <string name="btn_test_ai_review_connection">测试 AI 评审连接</string>
 
@@ -314,7 +321,7 @@
     <string name="model_delete_message">删除 %1$s？将释放 %2$s 存储空间。</string>
     <string name="model_cancel_toast">已取消下载，已下载部分保留可续传</string>
     <string name="model_no_space">存储空间不足：需要约 %1$s，当前可用 %2$s</string>
-    <string name="model_engine_note">说明：端侧推理引擎（MNN / llama.cpp 原生库）当前版本尚未编译进 App，模型下载完成后分析会提示「引擎未就绪」；云端服务（JEV / GLM）不受影响，可正常分析。</string>
+    <string name="model_engine_note">说明：端侧推理引擎（llama.cpp / LiteRT）已内置进 App，对应模型下载校验通过后即可端侧分析（S1 本地快筛、S2 深度分析、AI 评审本地模式）；云端服务（JEV / GLM）不受影响，可正常分析。</string>
     <string name="analysis_preset_label">服务预设</string>
     <string name="analysis_baseurl_hint">分析服务地址，如 http://127.0.0.1:8124</string>
     <string name="analysis_user_hint">Basic 账号（公网入口用，可空）</string>

@@ -31,7 +31,12 @@ class AnalysisE2EActivity : android.app.Activity() {
                 config.enabled = true
                 config.s1Type = AnalysisConfig.S1_TYPE_LAYA_ONDEVICE
                 config.s2Enabled = false
-                Log.i(TAG, "config: enabled=" + config.enabled + " s1=" + config.s1Type)
+                // --es advisor local：用 App 自己的 API 开本地评审（绕开 adb 改文件的 prefs 缓存竞态）
+                if (intent?.getStringExtra("advisor") == "local") {
+                    config.advisorEnabled = true
+                    config.advisorProvider = AnalysisConfig.ADVISOR_PROVIDER_LOCAL
+                }
+                Log.i(TAG, "config: enabled=" + config.enabled + " s1=" + config.s1Type + " advisor=" + config.advisorProvider)
 
                 val pkg = AppSourceRegistry.PKG_WECHAT
                 val base = System.currentTimeMillis()
