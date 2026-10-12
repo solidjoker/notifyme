@@ -70,7 +70,7 @@ prefs analysis_config           AnalysisConfig.kt:24     分析预设/槽位/协
 prefs sync_config               SyncConfig.kt:18         服务器地址/令牌/周期
 prefs analysis_sync             AnalysisStore.kt:196     分析上报水位
 prefs advisor_store             AdvisorStore.kt:96       顾问上报水位
-prefs watchlist                 WatchlistStore.kt:18     重点关注名单（含 SENTINEL_NONE）
+prefs watchlist                 WatchlistStore.kt:18     重点关注名单（v3 默认空=不关注；SENTINEL_ALL=全部关注）
 prefs prompt_config             PromptStore.kt:16        会话级自定义提示词
 prefs history_sync              HistorySync.kt:32        自动提取开关/冷却/状态
 prefs a11y_extract              A11yExtractStore.kt:16   无障碍提取运行态
@@ -168,7 +168,7 @@ prefs app_state                 OnboardingActivity.kt:29 向导完成标记
 | 7 | 🧭 顾问复盘 | L727 | `advisor_auto_switch`(L737) · `btnAdvisorNow`(L742) |
 | 8 | 📅 日历提醒 | L782 | `reminder_enabled_switch`(L792) · `btnOpenReminders`(L826) |
 
-**重点关注名单的三态语义**（`WatchlistStore`）：空名单 = 关注全部（默认，零配置即全量分析）；非空 = 只关注列出的；`SENTINEL_NONE` 占位串（不可能与真实会话名相同）= 一个都不关注。在"关注全部"状态下首次取消勾选，会把名单物化为"当前全集减去被取消的"。
+**重点关注名单的三态语义**（`WatchlistStore`，v3 起**默认不关注**）：空名单 = 一个都不关注——新会话只收录、不分析、不弹卡，用户点 ⭐ 逐个放行；非空且不含哨兵 = 只关注列出的会话；含 `SENTINEL_ALL` 占位串（不可能与真实会话名相同）= 关注全部，此态下单独取消某会话是把它加入显式不关注黑名单（主列表同时隐藏）。v2 用 `SENTINEL_NONE` 表达"一个都不关注"，v3 不再写入它；老用户名单里的残留值因不匹配任何真实键，天然判为不关注，无需迁移。判定口径全端统一：`keyId !in 黑名单 && (SENTINEL_ALL ∈ 名单 || keyId ∈ 名单)`（纯函数 `isWatchedId`，首页 chip、关注列表勾选框、AnalysisWorker 跳过判定共用）。
 
 **会话级自定义提示词**（`PromptStore` / `PromptEditActivity`）：按会话名存，空白 = 用全局默认。注入三处——S1 systemone 的 `state.background`（服务端 4xx 拒绝时降级为不带 background 重试）、S1 openai 槽位 system prompt 的「背景信息」段、S2 prompt。编辑页有 3 个内置模板，点击整体替换编辑器内容。占位符 `{我}` / `{重要的人}` / `{关系}` 由用户手改——**刻意不做变量表单**，把提示词全文的控制权留给用户。
 

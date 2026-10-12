@@ -545,6 +545,27 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - 测试：LayaTfliteCoreTest 重写为 13 例纯 JVM 契约测试（JSON 键序/pythonFloat/温度桶覆盖/softmax/confidence/round4/decode schema 期望值/noul 默认文案/PromptBuilder 常量）；OpenDebug 单测 302 全绿。
 - UI 修复（602cfe2，用户真机反馈「laya 手机本地没有下载、保存的按钮」）：ModelListActivity 原来只绑 S1/S2 两卡片，laya 清单在 LocalModelStore 但 UI 无入口（报错文案指向不存在的「模型管理→Laya-Multilingual」）→ 补第三卡片复用 bindModel/refreshModel（下载/进度/取消/删除，删除时 releaseAll）；AnalysisSettingsActivity applyS1TypeEditable 补 S1_TYPE_LAYA_ONDEVICE 隐藏 PC 连接字段，选 laya 且未就绪时 Toast 指路。模拟器实测：点下载 6s 秒过 adb 预摆的 648MB 校验，prefs laya_ml_state=ready，UI 绿字「已下载·校验通过（648 MB）」。
 
+### 20. 关注默认反转 v3 + 悬浮窗消失自愈（2026-10-12，**待真机验证**，0.3.4/10）
+
+用户两项需求（m00002）：「通知默认不关注」「悬浮窗口不显示，需要修复」。
+
+**需求 1 · v3 反转默认**（`WatchlistStore`）：
+- 旧语义「空名单 = 全部关注」反转为 **空名单 = 一个都不关注**：新会话只落库存着，不分析、不弹卡、不排期，用户点 ⭐（或关注列表勾选）才放行；统一判定式 `keyId !in 黑名单 && (SENTINEL_ALL ∈ 名单 || keyId ∈ 名单)`。
+- 新增 `SENTINEL_ALL="__watch_all__"` 表达「全部关注」（含未来新会话，不物化全量）；v2 旧哨兵 `SENTINEL_NONE` 停止写入、保留读取兼容——它匹配不到任何真实键，老用户「全不关注」设置天然延续，**零迁移**。
+- 旧「全部取消」写 NONE 的用户升级后行为不变；旧「空=全关注」的用户升级后会变成全不关注（本次反转的预期语义变更，README/架构文档已同步口径）。
+- UI 三处同构改造：`WatchlistActivity`（btnWatchAll→写 ALL 哨兵+清黑名单；btnWatchNone→清空白名单；勾选/取消按 watchAll 态分流：ALL 态单独取消=进黑名单隐藏，白名单态取消=仅移出、会话仍可见）、`MainActivity.toggleWatch` 同逻辑；`buildFeed` 分区剔除双哨兵——ALL 态与空名单都扁平展示；chip 态仍由 `FeedItem.Header.watched` 预计算字段驱动（§三.16 的成果不动）。
+- 弹卡口径自动收紧：即时卡路径只认 `watchedKeys()`（显式 ⭐ 白名单），AnalysisWorker/Scheduler 走 `isWatched` 自动继承——「默认不关注」在全链路一次生效。
+
+**需求 2 · 悬浮窗消失根因与修复**：
+- 根因 1（主因）：`OverlayService` 是 START_NOT_STICKY，悬浮球只在卡片事件/设置页开关时挂载 → 进程重启、ROM 回收服务后球**永不回来**（正对应 §三.8 记录的 HyperOS force-stop 后需手动关开开关的现象）。修复 = 自愈四挂点：`NotifyMeListener.onListenerConnected`、`KeepAliveService.onStartCommand`（开机后立即）、看门狗每 60s（与服务被杀后重拉两条路径都覆盖）、`MainActivity.onResume`；全部收敛到新增的 `OverlayManager.ensureBallVisible(context)`（无权限/球开关关 → 静默跳过；startForegroundService 后台启动被拒 → catch 降级等下一跳）。
+- 根因 2：`ensureBall`/`reconcileBall` 无权限守卫、三处 `wm.addView` 无兜底 → 权限运行中被吊销时 SecurityException **直接崩掉悬浮服务**（球卡全灭）。修复 = reconcileBall 判 `ballEnabled && canDrawOverlays`；球/卡/面板三处 addView 全部 `runCatching`（挂不上就丢这层 UI，不崩服务、不丢已落库消息）。
+- 根因 3：设置页两开关旧代码 `if (checked) syncService()` 只在**开启**时下发 → 关球后球残留。修复 = 两开关无条件 syncService()（关球即时下发 RECONCILE 摘球）。
+- 卡片显示条件不变：`cardsEnabled`（默认关）+ 显式 ⭐ 白名单才即时弹——与需求 1 天然自洽。
+
+**验证与收尾**：`WatchlistIdTest` 按 v3 重写 6 例（含黑名单优先、ALL 态黑名单单独取消、旧 NONE 兼容）；OpenDebug 单测 **304 全绿**（基线 302−4+6）；`assembleOpenDebug` 通过。文档同步：README 特性行与 M9 行（原「规划中」已过时）、`docs/architecture/README.md` 三态语义段与 prefs 表、`04-analysis-pipeline.mmd` 已重渲 svg/png、`watchlist_hint` 文案。版本 `0.3.4/10`。
+本机环境事实：工作区缺 `local.properties`（AGP 报 SDK location not found）→ 已重建（gitignored，`sdk.dir=C:\Users\smith\AppData\Local\Android\Sdk`）；单测/打包仍需 §三.19 的 aapt2 覆盖 `-Pandroid.aapt2FromMavenOverride=...\build-tools\35.0.0\aapt2.exe`。
+**遗留**：真机（HyperOS）回归待用户验证——重启手机看球是否自动回来、吊销再恢复悬浮窗权限看服务是否还崩、关球开关看球是否即时消失；本轮改动未提交（工作区另有 M10 advisor 未提交改动，待真机验证通过后与 §三.15 遗留一并梳理提交边界）。
+
 ## 四、构建与运行
 
 ```powershell
@@ -585,7 +606,7 @@ ADB/设备要点（踩过的坑）：
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
-> 当前状态（2026-10-10 更新）：**W1 真机端到端已打通**，并按用户口径改为**全程手机内分析**（S1=端侧 Qwen2.5-0.5B + few-shot，S2=手机内配置的 GLM；不再依赖电脑 laya-local，见 §三.15 真机实测 ✅）；**M9 真机已验**（悬浮卡实拍 card_real.png）；**M10/M11/M11.4 已交付**；排程失联自愈 + 主页采集过滤 + 自采集噪声根除 + 悬浮面板「最近待办」与主页联动修复**全部真机验证通过（见 §三.14，§三.13 待办 1-3 已闭环）**；M12 分析范围筛选设计完成待实现；评测文档待补充；**0.5B few-shot 已完成并真机验证（§三.15，端侧 S1 已产出真实判定 JSON）**；本会话修复已随验证通过提交并推送；M0 代码与 CI 侧已完成，只剩 D5 正式密钥库 + 4 个 Secrets（等 `administration` 权限 token）。剩余待办：M12 分析范围筛选、评测文档补充、0.5B few-shot（低优先）；执行时以 docs/ROADMAP.md 为准。
+> 当前状态（2026-10-10 更新）：**W1 真机端到端已打通**，并按用户口径改为**全程手机内分析**（S1=端侧 Qwen2.5-0.5B + few-shot，S2=手机内配置的 GLM；不再依赖电脑 laya-local，见 §三.15 真机实测 ✅）；**M9 真机已验**（悬浮卡实拍 card_real.png）；**M10/M11/M11.4 已交付**；排程失联自愈 + 主页采集过滤 + 自采集噪声根除 + 悬浮面板「最近待办」与主页联动修复**全部真机验证通过（见 §三.14，§三.13 待办 1-3 已闭环）**；M12 分析范围筛选设计完成待实现；评测文档待补充；**0.5B few-shot 已完成并真机验证（§三.15，端侧 S1 已产出真实判定 JSON）**；本会话修复已随验证通过提交并推送；M0 代码与 CI 侧已完成，只剩 D5 正式密钥库 + 4 个 Secrets（等 `administration` 权限 token）。剩余待办：M12 分析范围筛选、评测文档补充、0.5B few-shot（低优先）；**2026-10-12 另有 v3「默认不关注」+ 悬浮窗自愈已交付待真机回归（§三.20，0.3.4/10）**；执行时以 docs/ROADMAP.md 为准。
 > 下面 8 项是 README 的对外表述，保留原样；执行时以 ROADMAP 为准。
 
 1. **iOS 原生查看端 + 提醒推送**：在 iPhone 上看分析结果并收到提醒（iOS 不允许后台捕获其他 App 通知，故不含本地捕获；当前仅 PWA 查看端）

@@ -98,6 +98,9 @@ class KeepAliveService : Service() {
             // 分析排程失联自愈：国产 ROM 会静默丢弃 WorkManager 的 job 注册，
             // 进程活着但定时/立即分析永不触发（W2 真机实测夜间停摆 10 小时）
             ScheduleSelfHeal.repairIfNeeded(this@KeepAliveService, "看门狗巡检")
+            // 悬浮球失联自愈：OverlayService 不是 START_STICKY，被 ROM 回收后
+            // 只有这里能周期性把它补回来（球开关关闭/无权限时内部自动跳过）
+            OverlayManager.ensureBallVisible(this@KeepAliveService)
             handler.postDelayed(this, WATCHDOG_INTERVAL_MS)
         }
     }
@@ -135,6 +138,8 @@ class KeepAliveService : Service() {
         // 只 postDelayed 不 removeCallbacks 会留下多条并行看门狗（重复巡检/重复 requestRebind）
         handler.removeCallbacks(watchdog)
         handler.postDelayed(watchdog, WATCHDOG_INTERVAL_MS)
+        // 开机/重启后立即补挂悬浮球，不等第一跳 60s（监听器此刻可能还没重连）
+        OverlayManager.ensureBallVisible(this)
         Log.i(TAG, "前台保活服务已启动")
         return START_STICKY
     }

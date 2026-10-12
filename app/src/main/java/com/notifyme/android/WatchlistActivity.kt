@@ -19,9 +19,9 @@ import androidx.recyclerview.widget.RecyclerView
  * 重点关注会话管理。
  *
  * 数据源：MessageStore 里出现过的所有会话（按 [ConvKey] 去重、按最近活跃排序）。
- * 语义：名单为空 = 全部关注；勾选框在「全部关注」态下全部显示勾选，
- * 首次取消某一项时把名单物化为「当前全量 - 被取消项」；
- * 「全部取消」用哨兵值 WatchlistStore.SENTINEL_NONE 表达。
+ * 语义（v3，默认不关注）：名单为空 = 一个都不关注；勾选某项 = 显式加入 ⭐ 白名单；
+ * 「全部关注」用哨兵值 WatchlistStore.SENTINEL_ALL 表达（含未来新会话），该态下
+ * 所有条目显示勾选，单独取消一项进显式不关注黑名单（主列表同步隐藏，M11 语义）。
  *
  * M2：身份是复合键——同名会话在不同 App 里是两个条目。手动添加无法指定 App，
  * 按微信处理（起点是微信工具；要关注飞书/钉钉会话先让其通知进来即可在此出现）。
@@ -69,15 +69,15 @@ class WatchlistActivity : Activity() {
         refreshList()
 
         findViewById<Button>(R.id.btnWatchAll).setOnClickListener {
-            // 空名单 = 全部关注（M11：同时清空显式不关注黑名单）
-            WatchlistStore.setWatched(this, emptySet())
+            // 全部关注 = 写入 SENTINEL_ALL 哨兵（M11：同时清空显式不关注黑名单）
+            WatchlistStore.setWatched(this, setOf(WatchlistStore.SENTINEL_ALL))
             WatchlistStore.setUnwatched(this, emptySet())
             refreshList()
         }
 
         findViewById<Button>(R.id.btnWatchNone).setOnClickListener {
-            // 哨兵表达「一个都不关注」，不占用「空=全部关注」语义
-            WatchlistStore.setWatched(this, setOf(WatchlistStore.SENTINEL_NONE))
+            // v3：空名单天然 = 全部取消关注，不再需要旧 SENTINEL_NONE 哨兵
+            WatchlistStore.setWatched(this, emptySet())
             refreshList()
         }
 
@@ -94,7 +94,7 @@ class WatchlistActivity : Activity() {
     }
 
     private fun refreshList() {
-        adapter.submit(allKeys, WatchlistStore.getWatched(this))
+        adapter.submit(allKeys, WatchlistStore.getWatched(this), WatchlistStore.getUnwatched(this))
         tvEmpty.visibility = if (allKeys.isEmpty()) View.VISIBLE else View.GONE
     }
 
@@ -105,25 +105,25 @@ class WatchlistActivity : Activity() {
     }
 
     /**
-     * 勾选状态变更的核心逻辑：
-     *  - 当前为「空=全部关注」态时，任何变动先把名单物化为当前全量；
-     *  - 取消勾选导致名单变空时补哨兵（否则语义会反弹回全部关注）。
+     * 勾选状态变更的核心逻辑（v3 默认不关注）：
+     *  - 勾选：全部关注态只需从黑名单摘除；白名单态加入白名单并顺带清黑名单残留。
+     *  - 取消：全部关注态进显式不关注黑名单（主列表同步隐藏，M11 语义）；白名单态
+     *    移出白名单即可——移出后名单为空就是「默认不关注」，不再需要物化全量或补哨兵。
      */
     private fun setConversationWatched(key: ConvKey, watched: Boolean) {
-        val set = WatchlistStore.getWatched(this)
-        val isWatchedNow = set.isEmpty() || set.contains(key.id)
-        set.remove(WatchlistStore.SENTINEL_NONE)
-        if (set.isEmpty() && isWatchedNow && watched) {
-            // 全部关注态下勾上一项：语义不变，无需物化
-            return
+        val w = WatchlistStore.getWatched(this)
+        val u = WatchlistStore.getUnwatched(this).toMutableSet()
+        val watchAll = WatchlistStore.SENTINEL_ALL in w
+        if (watched) {
+            u.remove(key.id)
+            if (!watchAll) w.add(key.id)
+        } else if (watchAll) {
+            u.add(key.id)
+        } else {
+            w.remove(key.id)
         }
-        if (set.isEmpty()) {
-            // 全部关注态下取消一项：物化为「全量 - 该项」
-            set.addAll(allKeys.map { it.id })
-        }
-        if (watched) set.add(key.id) else set.remove(key.id)
-        if (set.isEmpty() && !watched) set.add(WatchlistStore.SENTINEL_NONE)
-        WatchlistStore.setWatched(this, set)
+        WatchlistStore.setWatched(this, w)
+        WatchlistStore.setUnwatched(this, u)
     }
 
     /** 会话列表 Adapter：勾选切换关注；右侧「提示词」按钮进编辑页，已设提示词显示 ✎ 小标。 */
@@ -133,17 +133,19 @@ class WatchlistActivity : Activity() {
 
         private val items = mutableListOf<ConvKey>()
         private var watched: Set<String> = emptySet()
+        private var unwatched: Set<String> = emptySet()
 
-        fun submit(keys: List<ConvKey>, watchedSet: Set<String>) {
+        fun submit(keys: List<ConvKey>, watchedSet: Set<String>, unwatchedSet: Set<String>) {
             items.clear()
             items.addAll(keys)
             watched = watchedSet
+            unwatched = unwatchedSet
             notifyDataSetChanged()
         }
 
-        /** 空名单=全部关注 -> 全部显示勾选；含哨兵或部分名单 -> 按包含判断 */
+        /** 勾选态 = 完整关注判定（白名单/全部关注哨兵命中，且不在黑名单） */
         private fun isChecked(key: ConvKey): Boolean =
-            watched.isEmpty() || watched.contains(key.id)
+            WatchlistStore.isWatchedId(key.id, unwatched, watched)
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
             val view = LayoutInflater.from(parent.context)

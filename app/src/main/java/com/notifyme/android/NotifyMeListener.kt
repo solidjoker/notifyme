@@ -158,8 +158,8 @@ class NotifyMeListener : NotificationListenerService() {
             Log.i(TAG, "捕获消息[$pkg]: ${message.text.length} 字")
         }
 
-        // 8) M9 悬浮卡（即时路径）：只对「用户显式加入重点名单」的会话弹卡——
-        //    空名单语义是「全部关注」，此时每条都弹会打扰，改由分析完成路径出卡
+        // 8) M9 悬浮卡（即时路径）：只对「用户显式加 ⭐」的会话弹卡——
+        //    默认不关注（空名单）不弹；全部关注态每条都弹会打扰，改由分析完成路径出卡
         if (OverlayConfig.get(applicationContext).cardsEnabled) {
             val explicit = WatchlistStore.watchedKeys(applicationContext)
             if (explicit.contains(message.convKey)) {
@@ -255,6 +255,8 @@ class NotifyMeListener : NotificationListenerService() {
     override fun onListenerConnected() {
         connected = true
         Log.i(TAG, "通知监听服务已连接")
+        // 进程被回收后随监听重建补挂悬浮球：球的消失不需要用户再手动关开开关
+        OverlayManager.ensureBallVisible(applicationContext)
     }
 
     override fun onListenerDisconnected() {

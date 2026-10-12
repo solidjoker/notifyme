@@ -77,6 +77,28 @@ object OverlayManager {
             Uri.parse("package:${context.packageName}")
         )
 
+    /**
+     * 悬浮球自愈补挂（W2 真机坑）：球只在服务收到 RECONCILE/卡片事件时挂，
+     * 进程重启、服务被回收后没人再触发，悬浮球就永远消失。
+     * 触发点在「进程确定活着且可合法起服务」的时机：监听器连上、保活看门狗、主界面启动；
+     * 本方法只做配置/权限预判 + 幂等的 RECONCILE 下发，已挂上时是空操作。
+     */
+    fun ensureBallVisible(context: Context) {
+        // 无权限不起服务：起了也挂不上球，还会闪一条常驻通知；
+        // 球关着同样不碰——尊重用户开关，不越权复活
+        if (!canDrawOverlays(context)) return
+        if (!OverlayConfig.get(context).ballEnabled) return
+        val intent = Intent(context, OverlayService::class.java).apply {
+            action = OverlayService.ACTION_RECONCILE
+        }
+        try {
+            ContextCompat.startForegroundService(context, intent)
+        } catch (e: RuntimeException) {
+            // Android 12+ 后台起 FGS 受限：本轮放弃，下一个心跳/可见时机再试
+            Log.w(TAG, "悬浮球自愈起服务失败，等下一次触发", e)
+        }
+    }
+
     // ---------------- 降级 heads-up ----------------
 
     private fun showFallbackNotification(context: Context, card: Card) {

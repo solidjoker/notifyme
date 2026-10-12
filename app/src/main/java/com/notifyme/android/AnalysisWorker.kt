@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit
  *
  * 流程（对齐 JEV case 体系，见 AnalysisCase 注释）：
  *  1. 开关关闭 / 当前预设槽位 URL 为空 -> 直接 success；
- *  2. 遍历重点关注会话（空名单=全部关注），每个会话取最近 10 条组 case；
+ *  2. 遍历重点关注会话（v3 默认不关注：仅 ⭐ 白名单 + 全部关注态），每个会话取最近 10 条组 case；
  *  3. 按 caseId 去重：窗口没变（无新消息）就跳过；
  *  4. S1 判定：当前预设槽位——laya 协议发 systemone 题集（noul/choice/score），
  *     openai 协议（glm/custom）用对话模型模拟判定题（prompt 要求只输出 JSON 判定）；
@@ -229,8 +229,8 @@ class AnalysisWorker(
                     done++
                     if (record.escalated) escalatedCount++
 
-                    // M9 悬浮卡（分析路径）：S1 判定需要行动才弹，覆盖空名单（全部关注）
-                    // 场景；卡带 caseId，「标记已处理」即删除该 case
+                    // M9 悬浮卡（分析路径）：S1 判定需要行动才弹，覆盖全部关注态
+                    // （SENTINEL_ALL）等即时路径不弹卡的场景；卡带 caseId，「标记已处理」即删除该 case
                     if (record.s1NeedAction &&
                         OverlayConfig.get(applicationContext).cardsEnabled
                     ) {

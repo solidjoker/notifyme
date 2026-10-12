@@ -79,12 +79,13 @@ class OverlaySettingsActivity : Activity() {
         switchCards.setOnCheckedChangeListener { _, checked ->
             state = OverlayConfig.get(this).copy(cardsEnabled = checked)
             OverlayConfig.set(this, state)
-            if (checked) syncService()
+            // 开与关都立即下发：关球靠 reconcile 即时摘掉旧球（旧版只开不同步，球关了仍常驻）
+            syncService()
         }
         switchBall.setOnCheckedChangeListener { _, checked ->
             state = OverlayConfig.get(this).copy(ballEnabled = checked)
             OverlayConfig.set(this, state)
-            if (checked) syncService()
+            syncService()
         }
 
         fun refreshPermission() {

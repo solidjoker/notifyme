@@ -391,7 +391,7 @@
     </string-array>
 
     <!-- 重点关注会话 -->
-    <string name="watchlist_hint">说明：名单为空 = 全部关注（默认）。勾选具体会话后只分析名单内的会话。点右侧「提示词」可为该会话设置自定义分析提示词。</string>
+    <string name="watchlist_hint">说明：新会话默认不关注——不分析、不弹悬浮卡，消息仅收录。勾选具体会话后只分析名单内的会话；点「全部关注」则分析所有会话。点右侧「提示词」可为该会话设置自定义分析提示词。</string>
     <string name="btn_watch_all">全部关注</string>
     <string name="btn_watch_none">全部取消</string>
     <string name="watchlist_add_hint">手动添加会话名</string>

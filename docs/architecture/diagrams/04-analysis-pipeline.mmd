@@ -13,7 +13,7 @@ flowchart TB
     TRIG --> GATE
     GATE -->|"是"| SKIP["直接 Result.success()<br/>不产生任何网络请求"]:::stop
 
-    GATE -->|"否"| LOOP["遍历重点关注会话<br/>WatchlistStore：空名单 = 全部关注<br/>SENTINEL_NONE = 一个都不关注<br/>每会话取最近 ≤10 条组成 case 窗口<br/>单轮 ≤ MAX_CONVERSATIONS_PER_ROUND=10 · 间隔 500ms"]:::start
+    GATE -->|"否"| LOOP["遍历重点关注会话<br/>WatchlistStore v3：空名单 = 默认不关注<br/>SENTINEL_ALL = 全部关注<br/>每会话取最近 ≤10 条组成 case 窗口<br/>单轮 ≤ MAX_CONVERSATIONS_PER_ROUND=10 · 间隔 500ms"]:::start
 
     LOOP --> DEDUP{"caseId 已存在于<br/>analysis.jsonl？<br/>（强制分析单会话时跳过）"}:::dec
     DEDUP -->|"是 · 窗口无新消息"| SKIP2["跳过，不重复分析"]:::stop

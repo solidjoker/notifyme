@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -52,6 +53,8 @@ class OverlayService : Service() {
 
         /** 悬浮卡同时最多几张：autoDismissSeconds ≤ 0（不自动消失）时防止无限堆叠盖满屏幕 */
         private const val MAX_CARDS = 3
+
+        private const val TAG = "OverlayService"
     }
 
     private lateinit var wm: WindowManager
@@ -132,7 +135,13 @@ class OverlayService : Service() {
             horizontalMargin = 0.04f
             y = statusBarHeight() + dp(10) + activeCards.size * dp(96)
         }
-        wm.addView(view, params)
+        // 权限在入口判过，但到 addView 之间可能被吊销：崩服务不如丢这张卡
+        //（消息本体已落库，主页永远可见，不丢数据）
+        if (runCatching { wm.addView(view, params) }.isFailure) {
+            Log.w(TAG, "悬浮卡挂载失败（权限可能刚被吊销），本条丢弃")
+            maybeStopSelf()
+            return
+        }
 
         val config = OverlayConfig.get(this)
         val autoRemove = if (config.autoDismissSeconds > 0) {
@@ -179,10 +188,15 @@ class OverlayService : Service() {
 
     // ---------------- 悬浮球 ----------------
 
-    /** 卡片事件到来时，若配置允许则确保球已挂上。 */
+    /**
+     * 卡片事件到来时，若配置允许则确保球已挂上。
+     * 权限守卫 + addView 兜底：权限在运行中被吊销时挂不上球属于预期，
+     * 绝不让 SecurityException 崩掉整个悬浮服务（那样连卡也没了）。
+     */
     private fun ensureBall() {
         if (ballView != null) return
         if (!OverlayConfig.get(this).ballEnabled) return
+        if (!OverlayManager.canDrawOverlays(this)) return
 
         val view = LayoutInflater.from(this).inflate(R.layout.view_overlay_ball, null)
         val size = dp(BALL_SIZE_DP)
@@ -191,18 +205,23 @@ class OverlayService : Service() {
             x = displayWidth() - size - dp(6)
             y = displayHeight() / 3
         }
-        wm.addView(view, params)
+        if (runCatching { wm.addView(view, params) }.isFailure) {
+            Log.w(TAG, "悬浮球挂载失败（权限可能刚被吊销），等下一次 reconcile")
+            maybeStopSelf()
+            return
+        }
         ballView = view
         ballParams = params
         bindBallTouch(view, params)
     }
 
     /**
-     * 按当前配置挂/摘球：配置关闭且球在 → 移除；配置开启且无球 → 挂上。
-     * 控制台每次切换开关都会下发 [ACTION_RECONCILE]。
+     * 按当前配置挂/摘球：配置关闭或权限失效且球在 → 移除；两者俱全且无球 → 挂上。
+     * 控制台每次切换开关、以及各自愈触发点都会下发 [ACTION_RECONCILE]。
      */
     private fun reconcileBall() {
-        val enabled = OverlayConfig.get(this).ballEnabled
+        // 权限被吊销视同球关闭：先摘旧球，不尝试挂载（ensureBall 内部同样有守卫双保险）
+        val enabled = OverlayConfig.get(this).ballEnabled && OverlayManager.canDrawOverlays(this)
         if (!enabled && ballView != null) {
             runCatching { wm.removeView(ballView!!) }
             ballView = null
@@ -321,7 +340,11 @@ class OverlayService : Service() {
             removePanel()
         }
 
-        wm.addView(view, params)
+        // 点球时权限恰被吊销同理：丢面板不丢服务
+        if (runCatching { wm.addView(view, params) }.isFailure) {
+            Log.w(TAG, "待办面板挂载失败（权限可能刚被吊销）")
+            return
+        }
         panelView = view
     }
 
