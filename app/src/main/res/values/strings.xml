@@ -159,6 +159,7 @@
     <string name="overlay_panel_title">最近待办</string>
     <string name="overlay_panel_open_app">打开 NotifyMe</string>
     <string name="overlay_panel_empty">暂无待办</string>
+    <string name="overlay_panel_loading">加载中…</string>
     <string name="overlay_section_title">悬浮通知</string>
     <string name="overlay_cards_switch">重要消息悬浮卡</string>
     <string name="overlay_ball_switch">常驻悬浮球</string>

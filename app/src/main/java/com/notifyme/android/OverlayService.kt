@@ -303,36 +303,9 @@ class OverlayService : Service() {
             verticalMargin = 0.2f
         }
 
-        // 数据联动：按主页可见口径过滤——会话已删/不采集/不关注的待办不再显示，
-        // 同会话只认最新窗口结论（latestByConvKey），新分析的待办即时出现。
-        val unwatchedIds = WatchlistStore.getUnwatched(this)
-        val visibleKeys = MessageStore.readRecent(this, 500).asSequence()
-            .map { it.convKey }
-            .distinct()
-            .filter {
-                it.id !in unwatchedIds &&
-                    !AppSourceRegistry.isBlocked(it.pkg) &&
-                    AppSourceStore.isEnabled(this, it.pkg)
-            }
-            .toSet()
-        val todos = TodoPanelCore.selectTodos(
-            AnalysisStore.latestByConvKey(this), visibleKeys
-        )
         val container = view.findViewById<LinearLayout>(R.id.llPanelTodos)
-        if (todos.isEmpty()) {
-            container.addView(buildPanelRow(getString(R.string.overlay_panel_empty), null))
-        } else {
-            todos.forEach { rec ->
-                // M12：displayTodo() 让主页编辑过的待办文本在面板同步生效
-                val summary = rec.displayTodo()
-                container.addView(
-                    buildPanelRow("${rec.conversation} · $summary") {
-                        openConversation(rec.convKey)
-                        removePanel()
-                    }
-                )
-            }
-        }
+        // H5 评审：messages/analysis 全量读上后台，主线程只挂「加载中」占位行
+        container.addView(buildPanelRow(getString(R.string.overlay_panel_loading), null))
         view.findViewById<Button>(R.id.btnPanelOpenApp).setOnClickListener {
             startActivity(
                 Intent(this, MainActivity::class.java)
@@ -347,6 +320,43 @@ class OverlayService : Service() {
             return
         }
         panelView = view
+
+        Thread {
+            // 数据联动：按主页可见口径过滤——会话已删/不采集/不关注的待办不再显示，
+            // 同会话只认最新窗口结论（latestByConvKey），新分析的待办即时出现。
+            val unwatchedIds = WatchlistStore.getUnwatched(this)
+            val visibleKeys = MessageStore.readRecent(this, 500).asSequence()
+                .map { it.convKey }
+                .distinct()
+                .filter {
+                    it.id !in unwatchedIds &&
+                        !AppSourceRegistry.isBlocked(it.pkg) &&
+                        AppSourceStore.isEnabled(this, it.pkg)
+                }
+                .toSet()
+            val todos = TodoPanelCore.selectTodos(
+                AnalysisStore.latestByConvKey(this), visibleKeys
+            )
+            handler.post {
+                // 数据回来前面板已被关掉/重建：丢弃过期结果，别往死视图里塞行
+                if (panelView !== view) return@post
+                container.removeAllViews()
+                if (todos.isEmpty()) {
+                    container.addView(buildPanelRow(getString(R.string.overlay_panel_empty), null))
+                } else {
+                    todos.forEach { rec ->
+                        // M12：displayTodo() 让主页编辑过的待办文本在面板同步生效
+                        val summary = rec.displayTodo()
+                        container.addView(
+                            buildPanelRow("${rec.conversation} · $summary") {
+                                openConversation(rec.convKey)
+                                removePanel()
+                            }
+                        )
+                    }
+                }
+            }
+        }.start()
     }
 
     private fun buildPanelRow(text: String, onClick: (() -> Unit)?): View =

@@ -49,3 +49,22 @@ object ReminderRecovery {
         return rearmed
     }
 }
+
+/**
+ * 待办删除时的提醒连带清理（M2 评审）：删 case 原先只删分析记录，
+ * 已挂的闹钟/已写的日历事件/提醒记录都成孤儿——闹钟点醒一个不存在的待办，
+ * 提醒列表永远挂着幽灵条目。删除待办必须取消提醒，三步幂等（与 ReminderListActivity 删除一致）。
+ */
+object ReminderCleanup {
+
+    /** 按 dedupKey（=caseId）取消提醒：闹钟 → 日历事件 → 记录。无记录时静默返回。后台线程调用。 */
+    fun forCase(context: Context, dedupKey: String) {
+        val record = ReminderStore.findByKey(context, dedupKey) ?: return
+        AlarmHelper.cancelReminder(context, dedupKey)
+        if (record.calendarEventId > 0L) {
+            CalendarHelper.deleteEvent(context, record.calendarEventId)
+        }
+        ReminderStore.remove(context, dedupKey)
+        Log.i("ReminderCleanup", "删除待办连带取消提醒：$dedupKey")
+    }
+}

@@ -88,7 +88,13 @@ class MainActivity : Activity() {
     private var searchQuery = ""
 
     /** 刷新代次：后台装载完成时若已有更新的刷新，丢弃过期结果（旧查询不覆盖新列表） */
+    @Volatile
     private var refreshToken = 0
+
+    /** M5 单飞：同一时刻最多一个装载线程；期间新请求只置重跑位，不叠线程 */
+    private val feedLock = Any()
+    private var feedRunning = false
+    private var feedRerun = false
 
     /** 搜索防抖：输入停顿 [SEARCH_DEBOUNCE_MS] 后刷新一次，避免每个按键都全量读盘 */
     private val searchHandler by lazy { Handler(Looper.getMainLooper()) }
@@ -536,13 +542,34 @@ class MainActivity : Activity() {
      * 刷新代次 [refreshToken] 保证过期结果不会覆盖更新的列表。
      */
     private fun refreshMessages() {
-        val token = ++refreshToken
-        val query = searchQuery.trim().lowercase()
+        // M5：单飞 + 尾随重跑。入库回调/授权补跑/搜索防抖可能连环触发，
+        // 每次都开线程全量读三份 jsonl 会互相叠 IO；合并为「跑完这轮再跑一轮最新」。
+        synchronized(feedLock) {
+            if (feedRunning) {
+                feedRerun = true
+                return
+            }
+            feedRunning = true
+        }
         Thread {
-            val result = buildFeed(query)
-            runOnUiThread {
-                if (token != refreshToken || isFinishing || isDestroyed) return@runOnUiThread
-                applyFeed(result, query)
+            while (true) {
+                val token = ++refreshToken
+                val query = searchQuery.trim().lowercase()
+                val result = buildFeed(query)
+                runOnUiThread {
+                    if (token != refreshToken || isFinishing || isDestroyed) return@runOnUiThread
+                    applyFeed(result, query)
+                }
+                val again = synchronized(feedLock) {
+                    if (feedRerun) {
+                        feedRerun = false
+                        true
+                    } else {
+                        feedRunning = false
+                        false
+                    }
+                }
+                if (!again) break
             }
         }.start()
     }
@@ -854,7 +881,9 @@ class MainActivity : Activity() {
             val config = AnalysisConfig(this)
             // 最近一条同会话消息：给日历事件描述补上发送者与原文（没有就留空，描述逐条拼接）
             val last = MessageStore.readRecent(this, 500).lastOrNull { it.convKey == rec.convKey }
-            val note = CalendarHelper.createReminder(
+            // M1：手动入口以「现在」为基准——老记录的 analyzedAt 可能已过点，
+            // 拿它算出的事件时间会直接落进过去，日历/闹钟永不触发（Worker 自动路径仍用 analyzedAt）
+            val outcome = CalendarHelper.createReminderResult(
                 this,
                 dedupKey = caseId,
                 pkg = rec.pkg,
@@ -863,14 +892,15 @@ class MainActivity : Activity() {
                 sourceText = last?.text.orEmpty(),
                 summary = rec.displayTodo(),
                 dueTimeText = rec.displayDue(),
-                baseTime = rec.analyzedAt,
+                baseTime = System.currentTimeMillis(),
                 leadMinutes = config.reminderLeadMinutes
             )
-            // 直接写入日历 / 兜底闹钟成功时，明示提前量，免得用户以为不会响
-            val text = if (note.startsWith("成功") || note == "已设App内提醒") {
-                getString(R.string.todo_calendar_lead, note, config.reminderLeadMinutes)
+            // M6：以结构化 created 判定成功（日历插入/闹钟挂上），不再耦合「成功」文案前缀；
+            // 明示提前量，免得用户以为不会响
+            val text = if (outcome.created) {
+                getString(R.string.todo_calendar_lead, outcome.note, config.reminderLeadMinutes)
             } else {
-                note
+                outcome.note
             }
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
@@ -888,6 +918,8 @@ class MainActivity : Activity() {
     private fun deleteTodoCase(rec: AnalysisCaseRecord) {
         val caseId = rec.caseId
         Thread {
+            // M2：连带取消已挂的闹钟/日历事件，不留幽灵提醒
+            ReminderCleanup.forCase(this, caseId)
             val removed = AnalysisStore.deleteCase(this, caseId)
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread

@@ -618,6 +618,31 @@ Git 提交身份（本仓库局部配置，未改全局）：
 
 **未修遗留（下批候选）**：H5（主线程整文件读×4：OverlayService.kt:308、AnalysisListActivity.kt:91、AnalysisSettingsActivity.kt:589、ReminderListActivity.kt:80）；M1-M11（提醒生命周期族建议统一 ReminderRecovery/Cleanup 入口收口）；Low 18 条。H2 畸形 Bundle 真机注入未实测（代码级防御+编译验证）。正式 APK 仍需打 tag（0.3.4-0.3.7 均未打）。
 
+### 24. v0.3.7 发布 + M 批修复（H5+M1-M11）（2026-10-13，**0.3.8/14**）
+
+用户批复「先打 v0.3.7 tag 出正式 APK 继续修」：`v0.3.7` 注解 tag 打 69f7738 推送，release run 38366675824 **success**——首个 CI 全自动正式 APK（notifyme-open.apk + sha256 挂 Releases，验证了 release.yml 与 Secrets）。随后开修 M 批（H5+M1-M11，14 files）。
+
+**本批修复**：
+- **M1** 主页手动加日历 `baseTime` 由 `analyzedAt` 改 `now`——老分析记录的「明天15:00」不再按过期锚点解析。
+- **M2** 新 `ReminderCleanup.forCase`（取消闹钟+删日历事件+删提醒记录，三步幂等）；主页删除待办与悬浮卡「标记已处理」两入口接上——删待办不再留幽灵提醒。
+- **M3** `ReminderStore.fromJson` legacy 无 status 记录按 note 推断（App内提醒→ALARM/唤起日历→INTENT/else→CALENDAR），不再误判 FAILED 绕过去重；新 `findByKey`。
+- **M4** `JsonlStore.overwrite` renameTo 失败→`Files.move(REPLACE_EXISTING)`→仍失败抛 IOException 保留原文件（原实现退化截断写可毁全量数据）。
+- **M5** `MainActivity.refreshMessages` 单飞锁+重跑标记（feedLock/feedRerun+token），搜索连点不再并发全量读。
+- **M6** 日历结果判定改 `ReminderOutcome.created` 结构化字段，不再 `startsWith("成功")` 文案耦合；toast 带提前量。
+- **M7** 调试广播接收器 `RECEIVER_NOT_EXPORTED`。
+- **M8** `NotifyMeListener` recentKeys 全路径 `synchronized`（含 onNotificationRemoved）+ 应用名 labelCache（PM IPC 缓存），主线程 prefs/PM 调用消除。
+- **M9** 端侧模型下载支持 sha256 校验（`ModelFile.sha256`，跳过路径/最终校验/.part 转正前三点校验；未配置时 Log.w 明示仅字节数校验）。
+- **M10** `AnalysisWorker` 失败路径 msg 落 `recordResult` 状态行（原来只 return Result 不落盘，UI 看不到失败原因）。
+- **M11** `CoroutineWorker` 循环开头 `isStopped` 检查→保存进度 `Result.retry()`，10min 上限不再白烧已完成会话。
+- **H5** 四处主线程整文件读全部后台化：OverlayService.togglePanel（先挂「加载中」占位，Thread 读数据 handler.post 回填，token 守卫防塞死视图）、AnalysisListActivity/AnalysisSettingsActivity 统计/ReminderListActivity 同样本改造。
+
+新 `ReminderLegacyStatusTest` 7 例（M3 推断+M6 判定）；两 flavor 编译+全量单测+assembleOpenDebug 全绿。
+
+**模拟器走查（emulator-5556）**：M3 legacy 记录主页显示「已加日历」且重点→toast「跳过：已创建过（去重）」不新增 ✓；M1+M6 新记录 created_at=now、event_time=设备本地明天15:00、toast「已设App内提醒，默认提前 15 分钟提醒」✓；M2 删除待办→reminders.jsonl 记录消失+`dumpsys alarm` 出现 `Reason=alarm_cancelled` 快照 ✓；M5 搜索框连打快删进程存活、空态正常 ✓；H5 四页（分析结果列表/已创建的提醒（legacy 徽章「已设App内提醒」）/分析设置统计「已分析 1 个会话 / 待办 1 个」/悬浮球面板「最近待办·项目群 · 写周报草稿」回填）全过 ✓。
+走查坑：`cmd notification post` 通知 pkg=com.android.shell 被来源注册表过滤不入库，M8 去重锁无法 shell 注入实测（代码级+编译验证）；悬浮球窗口 `fitTypes=STATUS_BARS` 使输入 frame 比 `dumpsys window` mAttrs y 低一个状态栏高度（136px），点球要按 `dumpsys input` 的 frame 中心；OverlayService exported=false，需 `adb root` 后 `am start-foreground-service`；悬浮球需 `overlay_config` prefs `cards_enabled=true`+appops SYSTEM_ALERT_WINDOW allow。
+
+**未修遗留**：Low 18 条（见评审报告）；H2 畸形 Bundle 注入、M9 真实下载校验（需模型 URL 配 sha256 后验证）、M4 rename 失败路径（需模拟锁文件）均代码级验证。M1-M11 修复版正式 APK 待打 `v0.3.8` tag。
+
 ## 四、构建与运行
 
 ```powershell

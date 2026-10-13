@@ -3,6 +3,7 @@
 
 package com.notifyme.android
 
+import android.util.Log
 import java.io.File
 import java.io.RandomAccessFile
 
@@ -131,8 +132,17 @@ internal class JsonlStore(val file: File) {
                 out.fd.sync()
             }
             if (!tmp.renameTo(file)) {
-                // rename 失败（个别文件系统/权限场景）退化为整体覆盖写，至少不丢原文件
-                file.writeText(lines.joinToString("") { "$it\n" }, Charsets.UTF_8)
+                // renameTo 在部分文件系统上会因目标已存在而失败，换 NIO 原子替换（M4 评审）；
+                // 仍失败就保留原文件不动并抛出——丢一次重写结果，远好于退化截断写丢整文件历史
+                try {
+                    java.nio.file.Files.move(
+                        tmp.toPath(), file.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                    )
+                } catch (e: Exception) {
+                    Log.e("JsonlStore", "原子替换失败，保留原文件不截断：${file.name}", e)
+                    throw java.io.IOException("重写失败：${file.name}", e)
+                }
             }
         } finally {
             tmp.delete()

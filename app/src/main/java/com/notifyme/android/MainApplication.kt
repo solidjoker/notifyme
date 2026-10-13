@@ -43,7 +43,8 @@ class MainApplication : Application() {
                     }
                 },
                 IntentFilter("$packageName.A11Y_DEBUG_START"),
-                Context.RECEIVER_EXPORTED
+                // 仅本机 adb（shell uid 有特权）自检用，不对其他 App 开放
+                Context.RECEIVER_NOT_EXPORTED
             )
         }
     }

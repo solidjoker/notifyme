@@ -75,10 +75,25 @@ class ReminderListActivity : Activity() {
         reload()
     }
 
-    /** 重读记录并刷新列表（重试/删除后状态会变化）。 */
+    /** 重读记录并刷新列表（重试/删除后状态会变化）。H5：readAll 上后台，token 防过期覆盖。 */
+    private var reloadToken = 0
+
     private fun reload() {
-        var records = ReminderStore.readAll(this)
-        filterKey?.let { f -> records = records.filter { it.convKey == f } }
+        val token = ++reloadToken
+        val filter = filterKey
+        Thread {
+            var records = ReminderStore.readAll(this)
+            filter?.let { f -> records = records.filter { it.convKey == f } }
+            val snapshot = records
+            runOnUiThread {
+                if (token != reloadToken || isFinishing || isDestroyed) return@runOnUiThread
+                renderRecords(snapshot)
+            }
+        }.start()
+    }
+
+    /** 主线程渲染：装载完成后回填列表。 */
+    private fun renderRecords(records: List<ReminderRecord>) {
         emptyView.visibility = if (records.isEmpty()) View.VISIBLE else View.GONE
         recycler.adapter = ReminderAdapter(
             records,

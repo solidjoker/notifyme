@@ -22,6 +22,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
 
@@ -107,20 +108,29 @@ class ModelDownloadWorker(
                 val target = File(dir, file.name)
                 val part = File(dir, file.name + ".part")
 
-                // 已完成且大小匹配：跳过（重复入队/杀进程恢复时幂等）
-                if (target.exists() && target.length() == file.size) continue
+                // 已完成且大小匹配：跳过（重复入队/杀进程恢复时幂等）；
+                // M9：登记了 sha256 还要过摘要，防止半截/拼接文件被当完整复用
+                if (target.exists() && target.length() == file.size) {
+                    if (file.sha256.isBlank() || digestMatches(target, file.sha256)) continue
+                    Log.w(TAG, "${file.name} 大小符合但 sha256 不符，判定损坏重下")
+                    target.delete()
+                }
                 // 目标存在但大小不符：损坏，重来
                 if (target.exists()) target.delete()
 
+                if (file.sha256.isBlank()) {
+                    Log.w(TAG, "${file.name} 未配置 sha256，仅校验字节数（M9）")
+                }
                 downloadFile(file, part, target, model, completedBytes)
                 completedBytes += file.size
                 LocalModelStore.setDownloaded(appContext, model.id, completedBytes)
             }
 
-            // 最终校验：全部文件存在且字节数等于预期
+            // 最终校验：全部文件存在、字节数等于预期，且（若登记）sha256 相符
             val bad = model.files.filter { f ->
                 val t = File(dir, f.name)
-                !t.exists() || t.length() != f.size
+                !t.exists() || t.length() != f.size ||
+                    (f.sha256.isNotBlank() && !digestMatches(t, f.sha256))
             }
             if (bad.isEmpty()) {
                 LocalModelStore.setState(appContext, model.id, LocalModelStore.STATE_READY)
@@ -151,6 +161,26 @@ class ModelDownloadWorker(
 
     private class CancelledByUserException : Exception("cancelled")
 
+    /** 流式计算文件 sha256 并与预期比对（大小写不敏感）。1.5GB 约数秒，仅在关键节点调用。 */
+    private fun digestMatches(f: File, expected: String): Boolean {
+        return try {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            FileInputStream(f).use { input ->
+                val buffer = ByteArray(BUFFER_SIZE)
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    digest.update(buffer, 0, n)
+                }
+            }
+            val hex = digest.digest().joinToString("") { "%02x".format(it) }
+            hex.equals(expected, ignoreCase = true)
+        } catch (e: Exception) {
+            Log.w(TAG, "sha256 计算失败 ${f.name}", e)
+            false
+        }
+    }
+
     /** 单文件下载：.part 续传 + 周期进度上报；stopped 时抛 CancelledByUserException。 */
     private suspend fun downloadFile(
         file: LocalModelStore.ModelFile,
@@ -163,8 +193,12 @@ class ModelDownloadWorker(
             if (file.mirrorUrl.isNotBlank()) listOf(file.mirrorUrl) else emptyList()
         val resumed = if (part.exists()) part.length() else 0L
         if (resumed >= file.size) {
-            // .part 已完整（上次 rename 前被杀）：直接转正
-            if (part.renameTo(target)) return
+            // .part 已完整（上次 rename 前被杀）：过摘要校验后转正，不符则删掉重下
+            if (file.sha256.isBlank() || digestMatches(part, file.sha256)) {
+                if (part.renameTo(target)) return
+            } else {
+                Log.w(TAG, "${file.name} 续传的 .part sha256 不符，删除重下")
+            }
             part.delete()
         }
 

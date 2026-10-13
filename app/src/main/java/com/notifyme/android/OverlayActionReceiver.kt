@@ -27,6 +27,15 @@ class OverlayActionReceiver : BroadcastReceiver() {
         val caseId = intent.getStringExtra(EXTRA_CASE_ID).orEmpty()
         if (caseId.isNotEmpty()) {
             AnalysisStore.deleteCase(context, caseId)
+            // M2：标记已处理同样连带取消提醒；jsonl 重写放后台线程，goAsync 保广播存活
+            val pendingResult = goAsync()
+            Thread {
+                try {
+                    ReminderCleanup.forCase(context, caseId)
+                } finally {
+                    pendingResult.finish()
+                }
+            }.start()
         }
         val notifId = intent.getIntExtra(EXTRA_NOTIFICATION_ID, 0)
         if (notifId != 0 && NotificationManagerCompat.from(context).areNotificationsEnabled()) {

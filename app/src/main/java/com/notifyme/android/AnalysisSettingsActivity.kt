@@ -574,6 +574,9 @@ class AnalysisSettingsActivity : Activity() {
         }
     }
 
+    /** H5：统计装载代次，过期结果丢弃 */
+    private var statsToken = 0
+
     private fun refreshAnalysisStatus() {
         val time = analysisConfig.lastAnalysisTime
         tvAnalysisStatus.text = if (time <= 0L) {
@@ -585,20 +588,27 @@ class AnalysisSettingsActivity : Activity() {
         }
         tintStatus(tvAnalysisStatus, analysisConfig.lastAnalysisResult)
 
-        // 分析结果统计（case 版）：已分析会话数 / 待办会话数（按会话去重）
-        val records = AnalysisStore.readRecent(this, 500)
-        val conversations = records.map { it.conversation }.toSet()
-        val todoConversations = records.filter { it.s1NeedAction }
-            .map { it.conversation }.toSet()
-        tvAnalysisStats.text = getString(
-            R.string.analysis_stats_format, conversations.size, todoConversations.size
-        )
-        tvAnalysisStats.setTextColor(
-            getColor(
-                if (todoConversations.isNotEmpty()) R.color.accent_orange
-                else R.color.status_gray
-            )
-        )
+        // 分析结果统计（case 版）：已分析会话数 / 待办会话数（按会话去重）。
+        // H5 评审：readRecent(500) 全量读上后台，回来只更新两个文案字段。
+        val token = ++statsToken
+        Thread {
+            val records = AnalysisStore.readRecent(this, 500)
+            val conversations = records.map { it.conversation }.toSet()
+            val todoConversations = records.filter { it.s1NeedAction }
+                .map { it.conversation }.toSet()
+            runOnUiThread {
+                if (token != statsToken || isFinishing || isDestroyed) return@runOnUiThread
+                tvAnalysisStats.text = getString(
+                    R.string.analysis_stats_format, conversations.size, todoConversations.size
+                )
+                tvAnalysisStats.setTextColor(
+                    getColor(
+                        if (todoConversations.isNotEmpty()) R.color.accent_orange
+                        else R.color.status_gray
+                    )
+                )
+            }
+        }.start()
     }
 
     /** 状态文字着色：含「成功/完成」绿，含「失败/鉴权」红，其余次要灰。 */

@@ -60,12 +60,17 @@ class NotifyMeListener : NotificationListenerService() {
      * 用 LinkedHashMap 做一个有界 LRU：key -> 最近一次的内容指纹。
      * 指纹包含文本内容，避免「内容没变的刷新」被重复入库，
      * 同时保证同一会话来了新消息（内容变了）不会被误丢弃。
+     * access-order LRU 的 get 也是结构修改；posted/removed 回调可能落在不同
+     * binder 线程，全部访问必须上锁（M8 评审：无锁会撕裂内部表）。
      */
     private val recentKeys = object : LinkedHashMap<String, String>(64, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean {
             return size > DEDUP_CAPACITY
         }
     }
+
+    /** 包名→应用显示名缓存：避免每条通知一次 PackageManager IPC（M8 评审）。 */
+    private val labelCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         CaptureStats.onPosted()
@@ -132,11 +137,18 @@ class NotifyMeListener : NotificationListenerService() {
                 append('|').append(it.sender).append('|').append(it.timestamp)
             }
         }
-        if (recentKeys[sbn.key] == fingerprint) {
+        val duplicated = synchronized(recentKeys) {
+            if (recentKeys[sbn.key] == fingerprint) {
+                true
+            } else {
+                recentKeys[sbn.key] = fingerprint
+                false
+            }
+        }
+        if (duplicated) {
             CaptureStats.onDuplicate()
             return
         }
-        recentKeys[sbn.key] = fingerprint
 
         // 7) 按来源规则解析；入库 + 记录来源 + 日志（parser 兜底：解析器 bug 不该崩进程）
         val message = try {
@@ -257,21 +269,25 @@ class NotifyMeListener : NotificationListenerService() {
     }
 
     /**
-     * 应用显示名：注册表内置名直接用；其余向 PackageManager 查，
-     * 查不到（Android 11+ 包可见性限制）返回空，由 UI/parser 回落包名。
+     * 应用显示名：注册表内置名直接用；其余向 PackageManager 查一次并缓存。
+     * 每条通知都打 PM IPC 会拖慢 binder 回调（M8 评审）；标签随应用更新才变，
+     * 进程存活期内缓存可接受。查不到（Android 11+ 包可见性限制）返回空，
+     * 由 UI/parser 回落包名。
      */
     private fun resolveAppLabel(pkg: String): String =
-        AppSourceRegistry.labelFor(pkg) ?: try {
-            packageManager.getApplicationLabel(
-                packageManager.getApplicationInfo(pkg, 0)
-            ).toString()
-        } catch (e: Exception) {
-            ""
+        AppSourceRegistry.labelFor(pkg) ?: labelCache.getOrPut(pkg) {
+            try {
+                packageManager.getApplicationLabel(
+                    packageManager.getApplicationInfo(pkg, 0)
+                ).toString()
+            } catch (e: Exception) {
+                ""
+            }
         }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
         // 通知被用户滑掉/对方撤回时回调。多源后不再按包名判定，统一清理去重缓存，不删历史记录。
-        recentKeys.remove(sbn.key)
+        synchronized(recentKeys) { recentKeys.remove(sbn.key) }
     }
 
     override fun onListenerConnected() {

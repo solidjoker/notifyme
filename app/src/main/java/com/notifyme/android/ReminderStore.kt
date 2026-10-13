@@ -61,12 +61,16 @@ data class ReminderRecord(
 
         fun fromJson(obj: JSONObject): ReminderRecord {
             val note = obj.optString("note")
-            // 旧记录无 status 字段：按 note 前缀推断，保证列表徽标不空
+            // 旧记录无 status 字段：按 note 文案推断。关键约束（M3 评审）：
+            // 推断结果绝不能误落 FAILED——failed 不算生效，会让 containsActive 去重
+            // 失效，同一条消息重复创建日历事件。未知文案保守按 calendar（生效）处理。
             val status = obj.optString("status").ifEmpty {
                 when {
                     note.startsWith("成功") || note.startsWith("跳过") -> STATUS_CALENDAR
                     note.startsWith("失败") -> STATUS_FAILED
-                    else -> STATUS_FAILED
+                    note.contains("App内提醒") -> STATUS_ALARM
+                    note.contains("唤起日历") -> STATUS_INTENT
+                    else -> STATUS_CALENDAR
                 }
             }
             return ReminderRecord(
@@ -198,6 +202,10 @@ object ReminderStore {
             .toList()
             .sortedByDescending { it.createdAt }
     }
+
+    /** 按指纹查单条记录（取最新一条）；提醒清理（ReminderCleanup）用。 */
+    fun findByKey(context: Context, dedupKey: String): ReminderRecord? =
+        readAll(context).firstOrNull { it.dedupKey == dedupKey }
 
     /**
      * 保留策略清理（与 messages 同 7 天口径）：创建时间早于 [cutoffMs] 且**已无生效价值**

@@ -213,6 +213,13 @@ class AnalysisWorker(
         var escalatedCount = 0
         var filteredCount = 0
         for ((index, kase) in cases.withIndex()) {
+            // M11：WorkManager 到时限会 cancel 本 worker。逐 case 已落盘 + caseId 去重，
+            // 提前让出并 retry 即可从下一个未完成会话续跑，不再白烧剩余会话的 token。
+            if (isStopped) {
+                recordResultQuiet(quiet, config, "已中断：完成 $done 个会话，等待重试续跑")
+                Log.i(TAG, "分析被取消（时限/约束），已完成 $done/${cases.size}，交还重试")
+                return Result.retry()
+            }
             try {
                 // ---- fork 1：廉价本地启发式预筛（零网络成本） ----
                 val pre = ForkPrefilter.evaluate(kase)
@@ -279,12 +286,16 @@ class AnalysisWorker(
                     }
                 }
             } catch (e: IOException) {
+                // M10：失败也要写状态行——否则控制台永远停留在上一轮「成功」，
+                // 网络断了用户无感知（advisor 诊断文本已含在 msg 里）
                 val msg = recordRetryFailure(config, "网络错误 ${e.message ?: "未知"}", done)
+                recordResult(config, msg)
                 Log.w(TAG, "分析失败: 网络错误", e)
                 return Result.retry()
             } catch (e: HttpException) {
                 val detail = if (e.body.isBlank()) "" else " ${e.body.take(120)}"
                 val msg = recordRetryFailure(config, "HTTP ${e.code}$detail", done)
+                recordResult(config, msg)
                 Log.w(TAG, "分析失败: HTTP ${e.code}$detail")
                 return Result.retry()
             } catch (e: LocalEngineException) {
@@ -302,8 +313,10 @@ class AnalysisWorker(
             quiet,
             config,
             "成功：分析 $done 个会话" +
-                if (escalatedCount > 0) "（升级深分析 $escalatedCount 个）" else "" +
-                if (filteredCount > 0) "（预筛过滤 $filteredCount 个）" else "" +
+                // 每个 if-else 必须括号：否则 escalated>0 时走第一个分支，
+                // 后面的「+ if … else ""+拼接」全被吞进 else 里丢失（评审 low 修复）
+                (if (escalatedCount > 0) "（升级深分析 $escalatedCount 个）" else "") +
+                (if (filteredCount > 0) "（预筛过滤 $filteredCount 个）" else "") +
                 (s2LocalSkip?.let { "（$it）" } ?: "") +
                 (advisorLocalSkip?.let { "（$it）" } ?: "")
         )

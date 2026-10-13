@@ -88,12 +88,23 @@ class AnalysisListActivity : Activity() {
         refreshList()
     }
 
+    /** H5 评审：readRecent 上后台线程；token 保证过期装载结果不覆盖新列表。 */
+    private var listToken = 0
+
     private fun refreshList() {
-        var all = AnalysisStore.readRecent(this, 200)
-        filterKey?.let { f -> all = all.filter { it.convKey == f } }
-        val shown = if (switchOnlyTodo.isChecked) all.filter { it.s1NeedAction } else all
-        adapter.submit(shown)
-        tvEmpty.visibility = if (shown.isEmpty()) View.VISIBLE else View.GONE
+        val token = ++listToken
+        val onlyTodo = switchOnlyTodo.isChecked
+        val filter = filterKey
+        Thread {
+            var all = AnalysisStore.readRecent(this, 200)
+            filter?.let { f -> all = all.filter { it.convKey == f } }
+            val shown = if (onlyTodo) all.filter { it.s1NeedAction } else all
+            runOnUiThread {
+                if (token != listToken || isFinishing || isDestroyed) return@runOnUiThread
+                adapter.submit(shown)
+                tvEmpty.visibility = if (shown.isEmpty()) View.VISIBLE else View.GONE
+            }
+        }.start()
     }
 
     /** 分析结果 Adapter（case 版）：会话/主题/摘要/截止/分析时间。 */

@@ -37,13 +37,16 @@ object LocalModelStore {
 
     /**
      * 单个模型文件：name=落盘文件名，url=主源直链，size=预期字节数（实测），
-     * mirrorUrl=国内可达镜像（主源 IOException 时自动重试一次，如 HF 直连超时走 hf-mirror）。
+     * mirrorUrl=国内可达镜像（主源 IOException 时自动重试一次，如 HF 直连超时走 hf-mirror），
+     * sha256=内容摘要十六进制（M9：仅字节数无法发现换源拼接/静默损坏；
+     * 留空 = 注册表未登记摘要，降级只校验字节数并打警告）。
      */
     data class ModelFile(
         val name: String,
         val url: String,
         val size: Long,
-        val mirrorUrl: String = ""
+        val mirrorUrl: String = "",
+        val sha256: String = ""
     )
 
     data class LocalModel(

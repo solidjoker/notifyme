@@ -66,9 +66,17 @@ object CalendarHelper {
     )
 
     /**
-     * 原语字段版（M12 主页待办手动「加日历」不依赖消息对象）：
-     * sender/sourceText 可为空串，描述行按非空逐条拼接。
+     * 提醒链结构化结果（M6）：UI 分支不再耦合中文文案前缀。
+     * created=true 仅表示「本次真正创建了提醒」（L1 插入成功 / L3 闹钟成功）；
+     * 去重跳过、L2 待手动保存、失败均为 false。status 为落库状态（跳过时 null）。
      */
+    data class ReminderOutcome(
+        val note: String,
+        val created: Boolean,
+        val status: String? = null
+    )
+
+    /** 字符串版（Worker / 日志用）：返回写库 note。UI 分支请用 [createReminderResult]。 */
     @Synchronized
     fun createReminder(
         context: Context,
@@ -81,7 +89,28 @@ object CalendarHelper {
         dueTimeText: String,
         baseTime: Long,
         leadMinutes: Long
-    ): String {
+    ): String = createReminderResult(
+        context, dedupKey, pkg, conversation, sender, sourceText,
+        summary, dueTimeText, baseTime, leadMinutes
+    ).note
+
+    /**
+     * 原语字段版（M12 主页待办手动「加日历」不依赖消息对象）：
+     * sender/sourceText 可为空串，描述行按非空逐条拼接。
+     */
+    @Synchronized
+    fun createReminderResult(
+        context: Context,
+        dedupKey: String,
+        pkg: String,
+        conversation: String,
+        sender: String,
+        sourceText: String,
+        summary: String,
+        dueTimeText: String,
+        baseTime: Long,
+        leadMinutes: Long
+    ): ReminderOutcome {
         val title = "任务：${summary.ifEmpty { sourceText.take(12) }}（$conversation）"
         val description = listOfNotNull(
             "发送者：$sender".takeIf { sender.isNotEmpty() },
@@ -91,7 +120,7 @@ object CalendarHelper {
 
         // 防重 1：只对「生效中」的记录去重（failed 不算，否则一次失败会永久挡掉后续提醒）
         if (ReminderStore.containsActive(context, dedupKey)) {
-            return "跳过：已创建过（去重）"
+            return ReminderOutcome("跳过：已创建过（去重）", created = false)
         }
 
         val eventTime = parseDueTime(dueTimeText, baseTime)
@@ -104,7 +133,7 @@ object CalendarHelper {
         if (result.status != ReminderRecord.STATUS_FAILED) {
             ReminderStore.remove(context, dedupKey)
         } else if (ReminderStore.contains(context, dedupKey)) {
-            return result.note
+            return ReminderOutcome(result.note, created = false, status = result.status)
         }
         ReminderStore.append(
             context, ReminderRecord(
@@ -120,7 +149,11 @@ object CalendarHelper {
                 pkg = pkg
             )
         )
-        return result.note
+        // created：L1 真实插入（eventId 非空）或 L3 闹钟成功才算本次创建了提醒；
+        // L1 去重跳过（CALENDAR 但无 eventId）与 L2 待手动保存均不算
+        val created = (result.status == ReminderRecord.STATUS_CALENDAR && result.eventId != null) ||
+            result.status == ReminderRecord.STATUS_ALARM
+        return ReminderOutcome(result.note, created = created, status = result.status)
     }
 
     /**
@@ -227,7 +260,7 @@ object CalendarHelper {
                 calendarEventId = result.eventId ?: record.calendarEventId,
                 createdAt = System.currentTimeMillis(),
                 status = result.status,
-                note = "重试：$result.note"
+                note = "重试：${result.note}"
             )
         )
         return result.note
