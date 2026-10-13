@@ -108,6 +108,20 @@ data class AnalysisCase(
          * @param messages 该会话全部已知消息（任意顺序），内部取最近 [WINDOW_SIZE] 条
          * @return 消息为空时返回 null
          */
+        /**
+         * 分析窗口消息：时间戳 ≤ windowEnd 的最近 [messageCount] 条。
+         * 与 [fromMessages] 构建 case 的窗口口径一致（消息按时间正序取尾），
+         * 供 UI 回看该 case 依据的原文；消息已被裁剪时自然取不满。
+         */
+        fun windowOf(messages: List<ChatMessage>, windowEnd: Long, messageCount: Int): List<ChatMessage> =
+            messages.sortedBy { it.timestamp }
+                .filter { it.timestamp <= windowEnd }
+                .takeLast(messageCount.coerceAtLeast(0))
+
+        /** 窗口原文拼接：每行「发送者: 内容」；空窗口返回空串。 */
+        fun formatWindowSource(window: List<ChatMessage>): String =
+            window.joinToString("\n") { "${it.sender}: ${it.text}" }
+
         fun fromMessages(pkg: String, conversation: String, messages: List<ChatMessage>): AnalysisCase? {
             if (messages.isEmpty()) return null
             val window = messages.sortedBy { it.timestamp }.takeLast(WINDOW_SIZE)

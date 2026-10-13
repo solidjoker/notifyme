@@ -99,25 +99,48 @@ class AnalysisListActivity : Activity() {
             var all = AnalysisStore.readRecent(this, 200)
             filter?.let { f -> all = all.filter { it.convKey == f } }
             val shown = if (onlyTodo) all.filter { it.s1NeedAction } else all
+            val sources = if (shown.isEmpty()) emptyMap() else buildSourceMap(shown)
             runOnUiThread {
                 if (token != listToken || isFinishing || isDestroyed) return@runOnUiThread
-                adapter.submit(shown)
+                adapter.submit(shown, sources)
                 tvEmpty.visibility = if (shown.isEmpty()) View.VISIBLE else View.GONE
             }
         }.start()
     }
 
-    /** 分析结果 Adapter（case 版）：会话/主题/摘要/截止/分析时间。 */
+    /**
+     * M13 回看原文：按 case 窗口口径（ts ≤ windowEnd 的最近 messageCount 条）
+     * 从本地消息库重组原文。不落库到 analysis.jsonl，隐私口径不变；
+     * 消息已被裁剪的旧记录自然无原文（隐藏该行）。
+     */
+    private fun buildSourceMap(records: List<AnalysisCaseRecord>): Map<String, String> {
+        val byConv = MessageStore.readRecent(this, 500).groupBy { it.convKey }
+        val prefix = getString(R.string.analysis_source_prefix)
+        return records.mapNotNull { record ->
+            val window = AnalysisCase.windowOf(
+                byConv[record.convKey].orEmpty(), record.windowEnd, record.messageCount
+            )
+            val text = AnalysisCase.formatWindowSource(window)
+            if (text.isEmpty()) null else record.caseId to "$prefix\n$text"
+        }.toMap()
+    }
+
+    /** 分析结果 Adapter（case 版）：会话/主题/摘要/截止/窗口原文/分析时间。 */
     private inner class AnalysisAdapter(
         private val onClearMark: (AnalysisCaseRecord) -> Unit
     ) : RecyclerView.Adapter<AnalysisAdapter.VH>() {
 
         private val items = mutableListOf<AnalysisCaseRecord>()
+        private var sources: Map<String, String> = emptyMap()
+        /** M13 展开原文的 caseId 集合：刷新列表后保持展开态不跳变 */
+        private val expanded = mutableSetOf<String>()
         private val timeFormat = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
 
-        fun submit(records: List<AnalysisCaseRecord>) {
+        fun submit(records: List<AnalysisCaseRecord>, sources: Map<String, String>) {
             items.clear()
             items.addAll(records)
+            this.sources = sources
+            expanded.retainAll(records.map { it.caseId }.toSet())
             notifyDataSetChanged()
         }
 
@@ -163,6 +186,20 @@ class AnalysisListActivity : Activity() {
             } else {
                 ctx.getString(R.string.msg_count, record.messageCount)
             }
+            // M13 窗口原文：折叠 4 行，点击展开/收起；无原文（旧消息已裁剪）隐藏
+            val source = sources[record.caseId]
+            if (source.isNullOrEmpty()) {
+                holder.tvSource.visibility = View.GONE
+                holder.tvSource.setOnClickListener(null)
+            } else {
+                holder.tvSource.visibility = View.VISIBLE
+                holder.tvSource.text = source
+                holder.tvSource.maxLines = if (record.caseId in expanded) 64 else 4
+                holder.tvSource.setOnClickListener {
+                    if (!expanded.add(record.caseId)) expanded.remove(record.caseId)
+                    holder.tvSource.maxLines = if (record.caseId in expanded) 64 else 4
+                }
+            }
             holder.tvTime.text = timeFormat.format(Date(record.analyzedAt))
         }
 
@@ -198,6 +235,7 @@ class AnalysisListActivity : Activity() {
             val tvSummary: TextView = itemView.findViewById(R.id.tvAnalysisSummary)
             val tvDue: TextView = itemView.findViewById(R.id.tvAnalysisDue)
             val tvText: TextView = itemView.findViewById(R.id.tvAnalysisText)
+            val tvSource: TextView = itemView.findViewById(R.id.tvAnalysisSource)
             val tvTime: TextView = itemView.findViewById(R.id.tvAnalysisTime)
             val btnClearMark: TextView = itemView.findViewById(R.id.btnClearMark)
         }

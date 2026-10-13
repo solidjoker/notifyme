@@ -518,4 +518,5 @@
     <string name="todo_due_prefix">截止 %1$s</string>
     <string name="todo_calendar_perm">已申请日历权限：允许后再点一次「日历」即可直接写入系统日历</string>
     <string name="todo_calendar_lead">%1$s，默认提前 %2$d 分钟提醒</string>
+    <string name="analysis_source_prefix">原文：</string>
 </resources>

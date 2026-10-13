@@ -643,6 +643,16 @@ Git 提交身份（本仓库局部配置，未改全局）：
 
 **未修遗留**：Low 18 条（见评审报告）；H2 畸形 Bundle 注入、M9 真实下载校验（需模型 URL 配 sha256 后验证）、M4 rename 失败路径（需模拟锁文件）均代码级验证。M1-M11 修复版正式 APK 待打 `v0.3.8` tag。
 
+### 25. v0.3.8 正式发布 + 分析结果回看原文（2026-10-13，**0.3.9/15**）
+
+`v0.3.8` 注解 tag 打 4721740 推送，release run 38371491105 **success**（约 8 分钟），正式 APK+sha256（74276082…2422be75e）挂 https://github.com/solidjoker/notifyme/releases/tag/v0.3.8 。
+
+用户新需求「分析结果里没有了原文，需要加上原文」+「插上手机，安装最新 apk」：
+- **M13 回看原文**：`AnalysisCase.windowOf(messages, windowEnd, messageCount)`（ts ≤ windowEnd 的最近 N 条，与建 case/主页高亮同口径）+ `formatWindowSource`（每行「发送者: 内容」）纯函数；`AnalysisListActivity` 后台线程从 `MessageStore.readRecent(500)` 按 convKey 分组重组 caseId→原文 map（**不落库 analysis.jsonl，隐私口径不变**；消息被裁剪的旧记录自然无原文→隐藏该行）。卡片新增 `tvAnalysisSource`：默认折叠 4 行、点击展开/收起（expanded 集合跨刷新保持）。新 `AnalysisWindowSourceTest` 6 例。
+- **真机验收（ebb079b5 Redmi Android 16，0.3.4→0.3.9 `-r` 升级数据保留）**：分析结果页「原文：姜倩: 好的…」折叠显示 ✓，点击 208px→572px 展开 10 行 ✓，再点收起 ✓；主页待办区/信息流升级后正常。多张「姜倩」卡原文相同系数据正确反映（多次手动分析同一窗口，windowEnd 一致）。
+- 两 flavor 编译+全量单测+assembleOpenDebug 全绿。**按硬约束未推送**，等用户明示。
+
+
 ## 四、构建与运行
 
 ```powershell
