@@ -323,7 +323,8 @@ class OverlayService : Service() {
             container.addView(buildPanelRow(getString(R.string.overlay_panel_empty), null))
         } else {
             todos.forEach { rec ->
-                val summary = rec.s2Summary.ifEmpty { rec.s1Topic }
+                // M12：displayTodo() 让主页编辑过的待办文本在面板同步生效
+                val summary = rec.displayTodo()
                 container.addView(
                     buildPanelRow("${rec.conversation} · $summary") {
                         openConversation(rec.convKey)

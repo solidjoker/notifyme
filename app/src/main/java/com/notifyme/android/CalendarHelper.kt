@@ -60,9 +60,34 @@ object CalendarHelper {
         dueTimeText: String,
         baseTime: Long,
         leadMinutes: Long
+    ): String = createReminder(
+        context, dedupKey, message.pkg, message.conversation,
+        message.sender, message.text, summary, dueTimeText, baseTime, leadMinutes
+    )
+
+    /**
+     * 原语字段版（M12 主页待办手动「加日历」不依赖消息对象）：
+     * sender/sourceText 可为空串，描述行按非空逐条拼接。
+     */
+    @Synchronized
+    fun createReminder(
+        context: Context,
+        dedupKey: String,
+        pkg: String,
+        conversation: String,
+        sender: String,
+        sourceText: String,
+        summary: String,
+        dueTimeText: String,
+        baseTime: Long,
+        leadMinutes: Long
     ): String {
-        val title = "任务：${summary.ifEmpty { message.text.take(12) }}（${message.conversation}）"
-        val description = "发送者：${message.sender}\n原文：${message.text}\n会话：${message.conversation}"
+        val title = "任务：${summary.ifEmpty { sourceText.take(12) }}（$conversation）"
+        val description = listOfNotNull(
+            "发送者：$sender".takeIf { sender.isNotEmpty() },
+            "原文：$sourceText".takeIf { sourceText.isNotEmpty() },
+            "会话：$conversation"
+        ).joinToString("\n")
 
         // 防重 1：只对「生效中」的记录去重（failed 不算，否则一次失败会永久挡掉后续提醒）
         if (ReminderStore.containsActive(context, dedupKey)) {
@@ -71,7 +96,7 @@ object CalendarHelper {
 
         val eventTime = parseDueTime(dueTimeText, baseTime)
         val result = runReminderChain(
-            context, dedupKey, title, description, message.pkg, message.conversation,
+            context, dedupKey, title, description, pkg, conversation,
             summary, eventTime, leadMinutes
         )
         // 写库策略：成功级别先清掉同指纹的旧记录（多为上一轮失败记录），保证一条消息只有一条生效记录；
@@ -86,13 +111,13 @@ object CalendarHelper {
                 dedupKey = dedupKey,
                 title = title,
                 description = description,
-                conversation = message.conversation,
+                conversation = conversation,
                 eventTime = eventTime,
                 calendarEventId = result.eventId ?: -1L,
                 createdAt = System.currentTimeMillis(),
                 status = result.status,
                 note = result.note,
-                pkg = message.pkg
+                pkg = pkg
             )
         )
         return result.note

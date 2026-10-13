@@ -59,10 +59,21 @@ data class AnalysisCaseRecord(
     /** 实际命中的规则 id（规则清单顺序去重） */
     val redactionRules: List<String> = emptyList(),
     /** 窗口内总命中替换数（所有消息、所有规则求和） */
-    val redactionHits: Int = 0
+    val redactionHits: Int = 0,
+    // ---- M12 待办手动覆盖：只影响显示与日历文本，不改动原始分析结论 ----
+    /** 用户编辑的待办内容；非空时显示/日历优先用它（取代 S2 概括与 S1 话题） */
+    val todoText: String = "",
+    /** 用户编辑的截止时间文本；非空时日历解析优先用它 */
+    val todoDue: String = ""
 ) {
     /** 会话复合键（M2）：分析结果归属哪个 App 的哪个会话。 */
     val convKey: ConvKey get() = ConvKey(pkg, conversation)
+
+    /** 展示与日历用待办文本：手动覆盖 > S2 概括 > S1 话题。 */
+    fun displayTodo(): String = todoText.ifEmpty { s2Summary.ifEmpty { s1Topic } }
+
+    /** 展示与日历解析用截止时间文本：手动覆盖 > S2 截止时间 > S1 截止窗口。 */
+    fun displayDue(): String = todoDue.ifEmpty { s2DueTime.ifEmpty { s1DueWindow } }
 
     /**
      * 一个分叉的判定记录。
@@ -152,6 +163,9 @@ data class AnalysisCaseRecord(
             put("redaction_rules", JSONArray(redactionRules))
             put("redaction_hits", redactionHits)
         }
+        // M12 手动覆盖字段仅在非空时写出，老记录格式不变（缺键即未编辑）
+        if (todoText.isNotEmpty()) put("todo_text", todoText)
+        if (todoDue.isNotEmpty()) put("todo_due", todoDue)
     }
 
     companion object {
@@ -206,7 +220,9 @@ data class AnalysisCaseRecord(
                             arr.optString(it).ifEmpty { null }
                         }
                     }.orEmpty(),
-                redactionHits = obj.optInt("redaction_hits")
+                redactionHits = obj.optInt("redaction_hits"),
+                todoText = obj.optString("todo_text"),
+                todoDue = obj.optString("todo_due")
             )
         }
     }
@@ -294,6 +310,43 @@ object AnalysisStore {
     @Synchronized
     fun deleteCase(context: Context, caseId: String): Boolean =
         rewrite(context) { it.caseId != caseId } > 0
+
+    /**
+     * 按 caseId 原地更新一条记录（M12 待办编辑）。
+     *
+     * 只重写第一条命中的行，其余行原样保留（含无法解析的损坏行）；
+     * 未命中不写盘，避免无谓 IO 和重写窗口。与 [append] 同为对象锁，
+     * 与 Worker 并发追加互斥安全。返回是否命中并更新。
+     */
+    @Synchronized
+    fun updateRecord(
+        context: Context,
+        caseId: String,
+        patch: (AnalysisCaseRecord) -> AnalysisCaseRecord
+    ): Boolean {
+        val file = storeFile(context)
+        if (!file.exists()) return false
+        var patched = false
+        val out = mutableListOf<String>()
+        for (line in file.readLines(Charsets.UTF_8)) {
+            if (line.isBlank()) continue
+            if (!patched) {
+                val record = try {
+                    AnalysisCaseRecord.fromJson(JSONObject(line))
+                } catch (e: Exception) {
+                    null
+                }
+                if (record != null && record.caseId == caseId) {
+                    out += patch(record).toJson().toString()
+                    patched = true
+                    continue
+                }
+            }
+            out += line
+        }
+        if (patched) JsonlStore.atomicWrite(file, out)
+        return patched
+    }
 
     /** 删除某会话（复合键）的全部 case 记录（删除整个会话时联动），返回实际删除条数。 */
     @Synchronized

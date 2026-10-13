@@ -496,4 +496,25 @@
     <string name="due_tomorrow">明天</string>
     <string name="due_this_week">本周内</string>
     <string name="due_later">更晚</string>
+
+    <!-- M12 主页「最近待办」：导航栏顶端区块，可编辑/加日历/删除 -->
+    <string name="home_todos_title">⚡ 最近待办</string>
+    <string name="home_todos_count">⚡ 最近待办 %1$d</string>
+    <string name="todos_view_all">查看全部</string>
+    <string name="todo_action_edit">编辑</string>
+    <string name="todo_action_calendar">日历</string>
+    <string name="todo_action_calendar_done">已加日历</string>
+    <string name="todo_action_delete">删除</string>
+    <string name="todo_edit_title">编辑待办</string>
+    <string name="todo_edit_hint_text">待办内容</string>
+    <string name="todo_edit_hint_due">截止时间（如：明天15:00，留空则用分析结果）</string>
+    <string name="todo_edit_empty">待办内容不能为空</string>
+    <string name="todo_edit_saved">待办已更新</string>
+    <string name="todo_edit_gone">该待办已被新记录取代，无法编辑</string>
+    <string name="todo_deleted">待办已删除</string>
+    <string name="todo_gone">该待办已不在记录中</string>
+    <string name="todo_meta_format">%1$s · %2$s</string>
+    <string name="todo_due_prefix">截止 %1$s</string>
+    <string name="todo_calendar_perm">已申请日历权限：允许后再点一次「日历」即可直接写入系统日历</string>
+    <string name="todo_calendar_lead">%1$s，默认提前 %2$d 分钟提醒</string>
 </resources>

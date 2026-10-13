@@ -61,6 +61,59 @@
         android:layout_height="1dp"
         android:background="@color/divider" />
 
+    <!-- M12 最近待办：固定在导航栏顶端（标题栏下、信息流上），可编辑/加日历/删除；无待办隐藏 -->
+    <LinearLayout
+        android:id="@+id/llHomeTodos"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/card_bg"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="16dp"
+            android:paddingTop="10dp"
+            android:paddingEnd="8dp">
+
+            <TextView
+                android:id="@+id/tvHomeTodosTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/home_todos_title"
+                android:textColor="@color/accent_orange"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btnTodosAll"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:padding="8dp"
+                android:text="@string/todos_view_all"
+                android:textColor="@color/brand_green"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/llHomeTodoRows"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="4dp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/divider" />
+    </LinearLayout>
+
     <!-- 组头点击热区说明：点文字区进详情、点箭头折叠 -->
     <TextView
         android:layout_width="match_parent"

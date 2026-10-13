@@ -19,6 +19,8 @@ import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.text.Editable
+import android.text.InputFilter
+import android.text.InputType
 import android.text.TextWatcher
 import android.view.LayoutInflater
 import android.view.Menu
@@ -27,6 +29,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
@@ -59,6 +62,12 @@ class MainActivity : Activity() {
     companion object {
         /** POST_NOTIFICATIONS 运行时权限请求码 */
         private const val REQ_POST_NOTIFICATIONS = 42
+
+        /** M12 主页待办「加日历」的日历读写权限请求码 */
+        private const val REQ_CALENDAR_PERMISSION = 43
+
+        /** 主页待办区最多显示几条（悬浮面板用 DEFAULT_LIMIT=8，首页只占顶端一小块） */
+        private const val HOME_TODO_LIMIT = 5
 
         /** 日期分组兜底 key：时间戳 ≤0（如 a11y 直读估算失败）的消息归「未标注日期」组 */
         private const val DAY_KEY_UNKNOWN = "__unknown__"
@@ -122,6 +131,9 @@ class MainActivity : Activity() {
     private var batchActionMode: android.view.ActionMode? = null
     private val selectedConversations = linkedSetOf<ConvKey>()
 
+    /** M12 主页待办「日历」：等待日历权限授予后自动补跑一次的目标记录 */
+    private var pendingTodoCalendar: AnalysisCaseRecord? = null
+
     // 保活状态相关视图
     private lateinit var tvKeepAliveStatus: TextView
     private lateinit var btnBatteryWhitelist: Button
@@ -145,6 +157,11 @@ class MainActivity : Activity() {
 
         recyclerMessages.layoutManager = LinearLayoutManager(this)
         recyclerMessages.adapter = adapter
+
+        // M12 待办区「查看全部」：进分析结果列表（自带只看待办过滤）
+        findViewById<TextView>(R.id.btnTodosAll).setOnClickListener {
+            AnalysisListActivity.start(this)
+        }
 
         // 左滑删除：会话头=删整个会话；日期头=删该会话当天；其它行不响应
         ItemTouchHelper(SwipeDeleteCallback()).attachToRecyclerView(recyclerMessages)
@@ -530,8 +547,14 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    /** 后台装载结果：列表项 + 是否为空态。 */
-    private class FeedResult(val items: List<FeedItem>, val empty: Boolean)
+    /** 后台装载结果：列表项 + 是否为空态 + 主页待办区数据（M12）。 */
+    private class FeedResult(
+        val items: List<FeedItem>,
+        val empty: Boolean,
+        val todos: List<AnalysisCaseRecord>,
+        /** 已有生效提醒的 caseId 集合：待办行「日历」按钮显示「已加日历」 */
+        val remindedCaseIds: Set<String>
+    )
 
     /** 后台线程执行：读存储 + 过滤 + 组装 [FeedItem]（不碰视图）。 */
     private fun buildFeed(query: String): FeedResult {
@@ -540,8 +563,12 @@ class MainActivity : Activity() {
         val collapsedDates = CollapseStore.loadDates(this)
         val latestCases = AnalysisStore.latestByConvKey(this)
         // 有提醒的会话集合：首页会话头显示 📅
-        val reminderKeys = ReminderStore.readAll(this)
-            .map { it.convKey }.toSet()
+        val reminderRecords = ReminderStore.readAll(this)
+        val reminderKeys = reminderRecords.map { it.convKey }.toSet()
+        // 与 CalendarHelper 去重同口径（failed 不算生效）：待办行「已加日历」标识用
+        val remindedCaseIds = reminderRecords
+            .filter { it.status != ReminderRecord.STATUS_FAILED }
+            .map { it.dedupKey }.toSet()
 
         val dayKeyFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
         val currentYear = SimpleDateFormat("yyyy", Locale.getDefault()).format(Date())
@@ -571,6 +598,17 @@ class MainActivity : Activity() {
                 !AppSourceRegistry.isBlocked(it.first.pkg) &&
                     AppSourceStore.isEnabled(this, it.first.pkg)
             }
+
+        // M12「最近待办」区：与悬浮面板同口径（TodoPanelCore），但必须在搜索过滤前算——
+        // 待办区不受搜索框影响；可见集用未过滤的 groups 口径，与会话头角标一致
+        val todoVisibleKeys = messages.asSequence().map { it.convKey }.distinct()
+            .filter {
+                it.id !in unwatchedIds &&
+                    !AppSourceRegistry.isBlocked(it.pkg) &&
+                    AppSourceStore.isEnabled(this, it.pkg)
+            }
+            .toSet()
+        val todos = TodoPanelCore.selectTodos(latestCases, todoVisibleKeys, HOME_TODO_LIMIT)
 
         // 汇总分区：仅当名单里有真实 ⭐ 会话（剔除新旧哨兵）时才分区；
         // 默认不关注（空名单）与全部关注态（仅 SENTINEL_ALL 哨兵）都扁平展示。
@@ -669,10 +707,10 @@ class MainActivity : Activity() {
                 }
             }
         }
-        return FeedResult(items, visibleGroups.isEmpty())
+        return FeedResult(items, visibleGroups.isEmpty(), todos, remindedCaseIds)
     }
 
-    /** 主线程渲染：提交列表数据 + 空态提示。 */
+    /** 主线程渲染：提交列表数据 + 空态提示 + 导航栏顶端待办区（M12）。 */
     private fun applyFeed(result: FeedResult, query: String) {
         adapter.submit(result.items)
         if (result.empty) {
@@ -683,6 +721,198 @@ class MainActivity : Activity() {
         } else {
             tvEmpty.visibility = View.GONE
         }
+        renderTodos(result.todos, result.remindedCaseIds)
+    }
+
+    /**
+     * M12 导航栏顶端「最近待办」区：空则整块隐藏；
+     * 每行 = 待办文本（手动编辑优先）+ 会话·截止 + 编辑/日历/删除。
+     * 数据与点击全部 case 级（与角标/悬浮面板/提醒去重同口径）。
+     */
+    private fun renderTodos(todos: List<AnalysisCaseRecord>, remindedCaseIds: Set<String>) {
+        val section = findViewById<LinearLayout>(R.id.llHomeTodos)
+        val rows = findViewById<LinearLayout>(R.id.llHomeTodoRows)
+        if (todos.isEmpty()) {
+            section.visibility = View.GONE
+            rows.removeAllViews()
+            return
+        }
+        section.visibility = View.VISIBLE
+        findViewById<TextView>(R.id.tvHomeTodosTitle).text =
+            getString(R.string.home_todos_count, todos.size)
+        rows.removeAllViews()
+        for (rec in todos) {
+            val row = layoutInflater.inflate(R.layout.item_home_todo, rows, false)
+            row.findViewById<TextView>(R.id.tvHomeTodoText).text = rec.displayTodo()
+            val due = rec.displayDue()
+            row.findViewById<TextView>(R.id.tvHomeTodoMeta).text = if (due.isEmpty()) {
+                rec.conversation
+            } else {
+                getString(
+                    R.string.todo_meta_format,
+                    rec.conversation,
+                    getString(R.string.todo_due_prefix, due)
+                )
+            }
+            // 点文本区进会话（与会话头交互一致）；按钮各自处理本行
+            row.setOnClickListener { ConversationActivity.start(this, rec.convKey) }
+            row.findViewById<TextView>(R.id.btnHomeTodoEdit).setOnClickListener {
+                showTodoEditDialog(rec)
+            }
+            val calBtn = row.findViewById<TextView>(R.id.btnHomeTodoCal)
+            if (rec.caseId in remindedCaseIds) {
+                calBtn.text = getString(R.string.todo_action_calendar_done)
+            }
+            calBtn.setOnClickListener { addTodoToCalendar(rec) }
+            row.findViewById<TextView>(R.id.btnHomeTodoDel).setOnClickListener {
+                deleteTodoCase(rec)
+            }
+            rows.addView(row)
+        }
+    }
+
+    /**
+     * M12 编辑待办：覆盖 todoText/todoDue 字段（显示与日历优先用覆盖值，原始分析结论不动）。
+     * 内容为空不允许保存——确定按钮自行校验后再关，避免静默丢掉输入。
+     */
+    private fun showTodoEditDialog(rec: AnalysisCaseRecord) {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        val etText = EditText(this).apply {
+            hint = getString(R.string.todo_edit_hint_text)
+            setText(rec.displayTodo())
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            filters = arrayOf(InputFilter.LengthFilter(200))
+        }
+        val etDue = EditText(this).apply {
+            hint = getString(R.string.todo_edit_hint_due)
+            setText(rec.displayDue())
+            inputType = InputType.TYPE_CLASS_TEXT
+            filters = arrayOf(InputFilter.LengthFilter(50))
+            isSingleLine = true
+        }
+        container.addView(etText)
+        container.addView(etDue)
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.todo_edit_title)
+            .setView(container)
+            .setNegativeButton(R.string.common_cancel, null)
+            .setPositiveButton(R.string.prompt_edit_save, null)
+            .create()
+        dialog.show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val text = etText.text.toString().trim()
+            if (text.isEmpty()) {
+                Toast.makeText(this, R.string.todo_edit_empty, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val due = etDue.text.toString().trim()
+            dialog.dismiss()
+            val caseId = rec.caseId
+            Thread {
+                val ok = AnalysisStore.updateRecord(this, caseId) {
+                    it.copy(todoText = text, todoDue = due)
+                }
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    Toast.makeText(
+                        this,
+                        getString(if (ok) R.string.todo_edit_saved else R.string.todo_edit_gone),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    refreshMessages()
+                }
+            }.start()
+        }
+    }
+
+    /**
+     * M12 加日历：无权限先走运行时申请（授予后回调里自动补跑），
+     * 已授权直接跑三级降级链；拒绝授权也会跑——降级到唤起日历 App / App 内闹钟。
+     */
+    private fun addTodoToCalendar(rec: AnalysisCaseRecord) {
+        if (!CalendarHelper.hasCalendarPermission(this)) {
+            pendingTodoCalendar = rec
+            requestPermissions(
+                arrayOf(
+                    android.Manifest.permission.READ_CALENDAR,
+                    android.Manifest.permission.WRITE_CALENDAR
+                ),
+                REQ_CALENDAR_PERMISSION
+            )
+            return
+        }
+        runTodoReminderChain(rec)
+    }
+
+    /** 后台跑提醒链并 toast 结果：加日历默认带提醒（提前量取分析设置，链内三级降级）。 */
+    private fun runTodoReminderChain(rec: AnalysisCaseRecord) {
+        val caseId = rec.caseId
+        Thread {
+            val config = AnalysisConfig(this)
+            // 最近一条同会话消息：给日历事件描述补上发送者与原文（没有就留空，描述逐条拼接）
+            val last = MessageStore.readRecent(this, 500).lastOrNull { it.convKey == rec.convKey }
+            val note = CalendarHelper.createReminder(
+                this,
+                dedupKey = caseId,
+                pkg = rec.pkg,
+                conversation = rec.conversation,
+                sender = last?.sender.orEmpty(),
+                sourceText = last?.text.orEmpty(),
+                summary = rec.displayTodo(),
+                dueTimeText = rec.displayDue(),
+                baseTime = rec.analyzedAt,
+                leadMinutes = config.reminderLeadMinutes
+            )
+            // 直接写入日历 / 兜底闹钟成功时，明示提前量，免得用户以为不会响
+            val text = if (note.startsWith("成功") || note == "已设App内提醒") {
+                getString(R.string.todo_calendar_lead, note, config.reminderLeadMinutes)
+            } else {
+                note
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                Toast.makeText(this, text, Toast.LENGTH_LONG).show()
+                refreshMessages()
+            }
+        }.start()
+    }
+
+    /** dp -> px（编辑弹窗内边距用，与 OverlayService 同名辅助逻辑一致） */
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
+
+    /** M12 删除待办 = 删除该 case 记录（与悬浮卡「标记已处理」同语义），一键生效。 */
+    private fun deleteTodoCase(rec: AnalysisCaseRecord) {
+        val caseId = rec.caseId
+        Thread {
+            val removed = AnalysisStore.deleteCase(this, caseId)
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                Toast.makeText(
+                    this,
+                    getString(if (removed) R.string.todo_deleted else R.string.todo_gone),
+                    Toast.LENGTH_SHORT
+                ).show()
+                refreshMessages()
+            }
+        }.start()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_CALENDAR_PERMISSION) return
+        val rec = pendingTodoCalendar
+        pendingTodoCalendar = null
+        if (rec == null) return
+        // 授予或被拒都继续：链内自带 L2（唤起日历 App）/ L3（App 内闹钟）降级
+        runTodoReminderChain(rec)
     }
 
     /**
