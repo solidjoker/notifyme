@@ -93,12 +93,18 @@
             </intent-filter>
         </service>
 
-        <!-- 前台保活服务：仅供本 App 内部启动，exported=false；
-             foregroundServiceType=dataSync 对应消息同步用途 -->
+        <!-- 前台保活服务：仅供本 App 内部启动，exported=false。
+             类型用 specialUse 而非 dataSync：Android 14 起 dataSync 类 FGS
+             每 24h 累计限 ~6 小时，超时被系统强停，常驻看门狗会被每日腰斩；
+             本服务是「维持通知监听连接」的常驻用途，specialUse 无时长预算。 -->
         <service
             android:name=".KeepAliveService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="维持通知监听连接与断绑自愈看门狗常驻，防止消息漏捕" />
+        </service>
 
         <!-- M9 悬浮通知服务：specialUse，Android 14 要求声明用途属性 -->
         <service

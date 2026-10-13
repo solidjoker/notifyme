@@ -105,7 +105,16 @@ class NotifyMeListener : NotificationListenerService() {
         }
 
         // 4) 系统通知 → 纯数据（此步之后解析逻辑就能在 JVM 单测里复用）
-        val raw = toRawNotification(pkg, notification, sbn.postTime)
+        //    extras 是任意 App 可构造的 Bundle：unparcel 畸形数据可能抛
+        //    BadParcelableException/ClassCastException，必须整体兜底，否则崩掉的是
+        //    整个共享进程（listener/overlay/a11y/keepalive 同进程）。
+        val raw = try {
+            toRawNotification(pkg, notification, sbn.postTime)
+        } catch (e: Exception) {
+            Log.w(TAG, "通知 extras 解析失败，丢弃：$pkg", e)
+            CaptureStats.onEmpty()
+            return
+        }
 
         // 5) 标题与正文（含 bigText）都为空的通知（如纯状态更新）没有意义，丢弃
         if (raw.title.isEmpty() && raw.text.isEmpty() && raw.bigText.isEmpty()) {
@@ -129,8 +138,13 @@ class NotifyMeListener : NotificationListenerService() {
         }
         recentKeys[sbn.key] = fingerprint
 
-        // 7) 按来源规则解析；入库 + 记录来源 + 日志
-        val message = AppSourceRegistry.parserFor(pkg).parse(raw) ?: run {
+        // 7) 按来源规则解析；入库 + 记录来源 + 日志（parser 兜底：解析器 bug 不该崩进程）
+        val message = try {
+            AppSourceRegistry.parserFor(pkg).parse(raw)
+        } catch (e: Exception) {
+            Log.w(TAG, "消息解析异常：$pkg", e)
+            null
+        } ?: run {
             CaptureStats.onParseFailed()
             return
         }
@@ -207,18 +221,26 @@ class NotifyMeListener : NotificationListenerService() {
      * 不用隐藏 API extractMessagingStyleFromNotification，公开 SDK 内只有这条路。
      */
     private fun extractStyleMessages(extras: Bundle?, postTime: Long): List<RawStyleMessage> {
-        // API 33 起推荐带类型的 getParcelableArray，minSdk 26 仍需旧签名
-        @Suppress("DEPRECATION")
-        val messagesArray = extras?.getParcelableArray(Notification.EXTRA_MESSAGES)
-            ?: return emptyList()
-        return MessagingStyle.Message.getMessagesFromBundleArray(messagesArray)
-            .map { m ->
-                RawStyleMessage(
-                    sender = extractSenderName(m),
-                    text = m.text?.toString()?.trim().orEmpty(),
-                    timestamp = if (m.timestamp > 0) m.timestamp else postTime
-                )
-            }
+        // 整体兜底：EXTRA_MESSAGES 里的 Bundle 由第三方 App 构造，getParcelableArray
+        // 解畸形 parcel 或 getMessagesFromBundleArray 强转都可能抛异常，绝不能让它
+        // 冲出回调崩掉整个进程；解析失败按「无 style 明细」降级（title/text 仍可用）。
+        return try {
+            // API 33 起推荐带类型的 getParcelableArray，minSdk 26 仍需旧签名
+            @Suppress("DEPRECATION")
+            val messagesArray = extras?.getParcelableArray(Notification.EXTRA_MESSAGES)
+                ?: return emptyList()
+            MessagingStyle.Message.getMessagesFromBundleArray(messagesArray)
+                .map { m ->
+                    RawStyleMessage(
+                        sender = extractSenderName(m),
+                        text = m.text?.toString()?.trim().orEmpty(),
+                        timestamp = if (m.timestamp > 0) m.timestamp else postTime
+                    )
+                }
+        } catch (e: Exception) {
+            Log.w(TAG, "MessagingStyle 明细解析失败，按无明细降级", e)
+            emptyList()
+        }
     }
 
     /**

@@ -35,6 +35,8 @@ class KeepAliveService : Service() {
         private const val CHANNEL_ID = "keep_alive"
         private const val NOTIFICATION_ID = 1001
         private const val WATCHDOG_INTERVAL_MS = 60_000L
+        /** 启动后补挂丢失闹钟的延迟：给系统/存储一点就绪时间 */
+        private const val RECOVERY_DELAY_MS = 5_000L
 
         /** 心跳存储：服务自己写，界面自己读，跨进程重启不失真 */
         private const val PREFS_NAME = "keepalive_state"
@@ -131,8 +133,13 @@ class KeepAliveService : Service() {
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .build()
-        // 前台服务类型 dataSync 在 Manifest 中声明（消息同步用途）
+        // 前台服务类型 specialUse 在 Manifest 中声明（常驻看门狗用途，无 dataSync 的 6h 时长预算）
         startForeground(NOTIFICATION_ID, notification)
+        // 开机/进程重建后补挂丢失的 App 内闹钟（L3 闹钟不跨重启；幂等，可重复调）。
+        // 延迟 5s 让系统起来，读文件/设闹钟在后台线程做，不占主线程。
+        handler.postDelayed({
+            Thread { ReminderRecovery.rescheduleLostAlarms(applicationContext) }.start()
+        }, RECOVERY_DELAY_MS)
 
         // 先摘掉旧链再挂新链：onStartCommand 可能被多次调用，
         // 只 postDelayed 不 removeCallbacks 会留下多条并行看门狗（重复巡检/重复 requestRebind）

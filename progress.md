@@ -600,6 +600,24 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - CI 既有 lint error（`NotifyMeListener.kt:214` getMessagesFromBundleArray NewApi，52a6182 引入）未修，与本次无关；CI lint 步骤被 `| tail -20` 吞退出码。
 - 正式签名 APK 需打 `v0.3.6` tag 触发 release.yml（0.3.4/0.3.5/0.3.6 均未打 tag，推 main 仅出 debug artifact）。
 
+### 23. 五路代码评审 + H1-H4 修复（2026-10-13，**0.3.7/13**）
+
+用户发起全量代码评审（5 路并行精读：数据层/分析管线/UI/服务与通知/日历与工程 + 端侧引擎定向核查，评审全程只读）；报告交付后用户批复「开修」（按 H1→H4）。
+
+**评审结论**：安全隐私五专项全过（无密钥入库、release 无 exported 攻击面、脱敏强制点齐、OkHttp 全超时、JNI 加载失败有降级）。发现 High 5 / Medium 11 / Low 18；核心债务两族同源——「提醒三份状态与外部世界不同步」与「analysis/reminders 无界增长 × 主线程读取点未清完」。完整清单见评审报告（未入库）。
+
+**本批修复（H1-H4，10 files）**：
+- **H1** KeepAliveService FGS 类型 `dataSync`→`specialUse`（+`PROPERTY_SPECIAL_USE_FGS_SUBTYPE` 说明）——A14+ dataSync 每 24h 限 ~6h 强停，看门狗每日被腰斩。
+- **H2** NotifyMeListener 第三方 Bundle 解析三层 try/catch（toRawNotification/extractStyleMessages/parser.parse）——畸形 Bundle 不再崩整进程（listener/overlay/a11y 同进程）。
+- **H3** 新 `ReminderRecovery.rescheduleLostAlarms`：扫 `status==alarm && event_time>now` 幂等重排 L3 闹钟；挂 BootReceiver（BOOT_COMPLETED）+ KeepAliveService 启动后 5s 双保险（PendingIntent requestCode=dedupKey.hashCode+UPDATE_CURRENT 天然幂等）。修复「重启后闹钟全丢但 jsonl 仍 active 挡重建 → 主页假已加日历永不响」。
+- **H4** `Retention.pruneNow` 扩 analysis.jsonl/reminders.jsonl 两文件（7 天同口径；reminders 中非 failed 且 event_time>now 一律保留，它们是去重/补挂/重试依据）；`AnalysisStore.readRecent` 改 `readTailLines`（原全文件读）。纯决策拆 `AnalysisRetentionCore`/`ReminderRetentionCore` 可单测。
+- 新 `RetentionPruneTest` 10 例；两 flavor 编译 + 全量单测 + assembleOpenDebug 全绿。
+
+**模拟器走查（emulator-5556，API 34；注：MuMu 三台 127.0.0.1:16384/:5555/emulator-5554 宿主注入 frida-agent 崩所有 App，不可用）**：种子注入（3 analysis + 4 reminders，含 8 天前过期记录）→ prune：analysis 3→2（fixcaseOLD 删）、reminders 4→1（3 条过期/失败删，alarm+未来事件豁免保留）✓；主页「⚡ 最近待办 2」tail 读回归 ✓；`adb reboot` 后 BootReceiver+KeepAliveService 双路径各补挂 1 条，`dumpsys alarm` 仅 1 个 `RTC_WAKEUP origWhen=1791885751317`（=event−900000，精确提前 15 分钟）✓；KeepAliveService `isForeground=true types=0x40000000`（specialUse）无异常 ✓。
+走查坑：run-as 读不了 /sdcard（A15），种子必须推 `/data/local/tmp`；PowerShell `Set-Content -Encoding utf8` 带 BOM 会让首行 JSON 解析失败被当损坏行保留，种子用 `UTF8Encoding($false)` 写；BOOT_COMPLETED 会在装包后立刻拉起进程跑一次 pruneIfDue，注入种子前若已过该点需删 `shared_prefs/retention_state.xml` 重触发。
+
+**未修遗留（下批候选）**：H5（主线程整文件读×4：OverlayService.kt:308、AnalysisListActivity.kt:91、AnalysisSettingsActivity.kt:589、ReminderListActivity.kt:80）；M1-M11（提醒生命周期族建议统一 ReminderRecovery/Cleanup 入口收口）；Low 18 条。H2 畸形 Bundle 真机注入未实测（代码级防御+编译验证）。正式 APK 仍需打 tag（0.3.4-0.3.7 均未打）。
+
 ## 四、构建与运行
 
 ```powershell
@@ -640,7 +658,7 @@ ADB/设备要点（踩过的坑）：
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
-> 当前状态（2026-10-13 更新）：§三.21/§三.22 已交付推送——M10 advisor 端侧本地评审（0.3.5/11）+ 主页「⚡ 最近待办」区编辑/删除/一键加日历（0.3.6/12，模拟器走查通过，L1 日历直写待真机确认）；§三.20 v3 批次提交闭环，HyperOS 真机回归仍待用户确认。
+> 当前状态（2026-10-13 更新）：§三.21/§三.22/§三.23 已交付推送——M10 advisor 端侧本地评审（0.3.5/11）+ 主页「⚡ 最近待办」区编辑/删除/一键加日历（0.3.6/12，模拟器走查通过，L1 日历直写待真机确认）+ 五路评审 H1-H4 修复（0.3.7/13，重启闹钟补挂/FGS specialUse/Bundle 防御/jsonl 裁剪）；§三.20 v3 批次提交闭环，HyperOS 真机回归仍待用户确认。
 > 当前状态（2026-10-10 更新）：**W1 真机端到端已打通**，并按用户口径改为**全程手机内分析**（S1=端侧 Qwen2.5-0.5B + few-shot，S2=手机内配置的 GLM；不再依赖电脑 laya-local，见 §三.15 真机实测 ✅）；**M9 真机已验**（悬浮卡实拍 card_real.png）；**M10/M11/M11.4 已交付**；排程失联自愈 + 主页采集过滤 + 自采集噪声根除 + 悬浮面板「最近待办」与主页联动修复**全部真机验证通过（见 §三.14，§三.13 待办 1-3 已闭环）**；M12 分析范围筛选设计完成待实现；评测文档待补充；**0.5B few-shot 已完成并真机验证（§三.15，端侧 S1 已产出真实判定 JSON）**；本会话修复已随验证通过提交并推送；M0 代码与 CI 侧已完成，只剩 D5 正式密钥库 + 4 个 Secrets（等 `administration` 权限 token）。剩余待办：M12 分析范围筛选、评测文档补充、0.5B few-shot（低优先）；**2026-10-12 另有 v3「默认不关注」+ 悬浮窗自愈已交付待真机回归（§三.20，0.3.4/10）**；执行时以 docs/ROADMAP.md 为准。
 > 下面 8 项是 README 的对外表述，保留原样；执行时以 ROADMAP 为准。
 

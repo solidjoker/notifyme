@@ -23,6 +23,10 @@ class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+        // L3 闹钟不跨重启：无论前台服务能否拉起，先自行后台补挂（幂等，与
+        // KeepAliveService 启动后的补挂互为兜底，重复设置只会覆盖同一 PendingIntent）
+        val appContext = context.applicationContext
+        Thread { ReminderRecovery.rescheduleLostAlarms(appContext) }.start()
         try {
             context.startForegroundService(Intent(context, KeepAliveService::class.java))
             Log.i(TAG, "开机完成，已请求拉起前台保活服务")

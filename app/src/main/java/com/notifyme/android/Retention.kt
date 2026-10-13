@@ -12,7 +12,9 @@ import org.json.JSONObject
  * 每天最多跑一次全量清理（prefs 记录上次执行日期，跨天触发）。
  * 调用方：SyncWorker.doWork 开头 + MainApplication.onCreate。
  *
- * 清理范围：messages.jsonl 与 pending.jsonl 中 timestamp 超过 [RETENTION_DAYS] 天的条目。
+ * 清理范围：messages.jsonl、pending.jsonl、analysis.jsonl 与 reminders.jsonl 中
+ * 超过 [RETENTION_DAYS] 天的条目。analysis 与消息同窗口清理后不会引发重复分析
+ * （旧消息已不在建案范围）；reminders 中仍指向未来事件的记录一律保留。
  * timestamp ≤0（a11y 估算失败）与损坏行保守保留，不因清理丢数据。
  */
 object Retention {
@@ -24,7 +26,12 @@ object Retention {
     private const val KEY_LAST_PRUNE_DAY = "last_prune_day"
 
     /** 清理统计。 */
-    data class PruneReport(val messagesRemoved: Int, val pendingRemoved: Int)
+    data class PruneReport(
+        val messagesRemoved: Int,
+        val pendingRemoved: Int,
+        val analysisRemoved: Int = 0,
+        val remindersRemoved: Int = 0
+    )
 
     /** 每天最多执行一次清理；[force] = true 跳过节流。 */
     fun pruneIfDue(
@@ -47,7 +54,9 @@ object Retention {
         val cutoff = nowMs - RETENTION_DAYS * 86_400_000L
         val messagesRemoved = MessageStore.pruneOlderThan(context, cutoff)
         val pendingRemoved = PendingQueue.pruneOlderThan(context, cutoff)
-        return PruneReport(messagesRemoved, pendingRemoved)
+        val analysisRemoved = AnalysisStore.pruneOlderThan(context, cutoff)
+        val remindersRemoved = ReminderStore.pruneOlderThan(context, cutoff, nowMs)
+        return PruneReport(messagesRemoved, pendingRemoved, analysisRemoved, remindersRemoved)
     }
 }
 
@@ -82,5 +91,43 @@ internal object RetentionCore {
             }
         }
         return Result(kept, removed)
+    }
+}
+
+/**
+ * analysis.jsonl 保留判定（纯函数，可直接单测）：
+ * analyzed_at 在 (0, cutoff) 区间的行删除；损坏行与 analyzed_at≤0 保守保留。
+ */
+internal object AnalysisRetentionCore {
+
+    fun shouldKeep(line: String, cutoffMs: Long): Boolean {
+        val analyzedAt = try {
+            JSONObject(line).optLong("analyzed_at", -1L)
+        } catch (e: Exception) {
+            -1L
+        }
+        return analyzedAt <= 0L || analyzedAt >= cutoffMs
+    }
+}
+
+/**
+ * reminders.jsonl 保留判定（纯函数，可直接单测）：
+ * 创建时间早于 cutoff 且已无生效价值的删除；仍指向未来事件的记录（非 failed
+ * 且 event_time > now，含无 status 的 legacy 行）一律保留——它们是 L1 去重、
+ * 重启补挂（ReminderRecovery）与列表页重试的依据。损坏行保守保留。
+ */
+internal object ReminderRetentionCore {
+
+    fun shouldKeep(line: String, cutoffMs: Long, nowMs: Long): Boolean {
+        val obj = try {
+            JSONObject(line)
+        } catch (e: Exception) {
+            return true
+        }
+        val status = obj.optString("status")
+        val eventTime = obj.optLong("event_time")
+        val createdAt = obj.optLong("created_at")
+        val stillPending = status != ReminderRecord.STATUS_FAILED && eventTime > nowMs
+        return createdAt <= 0L || createdAt >= cutoffMs || stillPending
     }
 }

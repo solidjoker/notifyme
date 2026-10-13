@@ -198,4 +198,16 @@ object ReminderStore {
             .toList()
             .sortedByDescending { it.createdAt }
     }
+
+    /**
+     * 保留策略清理（与 messages 同 7 天口径）：创建时间早于 [cutoffMs] 且**已无生效价值**
+     * 的记录删除。仍指向未来事件的记录（非 failed 且 event_time > [nowMs]）一律保留——
+     * 它们是 L1 去重、L3 重启补挂（ReminderRecovery）与列表页重试的依据。
+     * 损坏行与 created_at≤0 保守保留。返回删除条数。
+     */
+    @Synchronized
+    fun pruneOlderThan(context: Context, cutoffMs: Long, nowMs: Long): Int =
+        JsonlStore(storeFile(context)).rewriteRaw { line ->
+            ReminderRetentionCore.shouldKeep(line, cutoffMs, nowMs)
+        }
 }

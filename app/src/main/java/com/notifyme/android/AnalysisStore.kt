@@ -279,15 +279,14 @@ object AnalysisStore {
     /**
      * 读取最近 [limit] 条 case 记录，按分析时间倒序（最新在前）。
      * 旧格式记录（无 case_id）与损坏行防御式跳过。
+     *
+     * 只从文件尾部读 [limit] 行（append 语义下尾部≈最近），不再整文件载入——
+     * 与 MessageStore 同口径，避免分析历史增长后每次主页刷新/搜索都 O(文件)。
      */
     @Synchronized
-    fun readRecent(context: Context, limit: Int = 100): List<AnalysisCaseRecord> {
-        val file = storeFile(context)
-        if (!file.exists()) return emptyList()
-
-        return file.readLines(Charsets.UTF_8)
+    fun readRecent(context: Context, limit: Int = 100): List<AnalysisCaseRecord> =
+        JsonlStore(storeFile(context)).readTailLines(limit.coerceAtLeast(1))
             .asSequence()
-            .filter { it.isNotBlank() }
             .mapNotNull { line ->
                 try {
                     AnalysisCaseRecord.fromJson(JSONObject(line))
@@ -298,7 +297,17 @@ object AnalysisStore {
             .toList()
             .sortedByDescending { it.analyzedAt }
             .take(limit)
-    }
+
+    /**
+     * 删除分析时间早于 [cutoffMs] 的记录（保留策略，与 messages 同 7 天口径）。
+     * 损坏行与 analyzed_at≤0 的行保守保留；消息侧同窗口早已清理，旧 case 不会被
+     * 重新分析，删除不影响 caseId 去重成本。返回删除条数。
+     */
+    @Synchronized
+    fun pruneOlderThan(context: Context, cutoffMs: Long): Int =
+        JsonlStore(storeFile(context)).rewriteRaw { line ->
+            AnalysisRetentionCore.shouldKeep(line, cutoffMs)
+        }
 
     /** [ConvKey] 口径的最新记录：M2 起同名会话在不同 App 里分别给角标。 */
     fun latestByConvKey(context: Context): Map<ConvKey, AnalysisCaseRecord> =
