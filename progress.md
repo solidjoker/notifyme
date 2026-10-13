@@ -565,6 +565,40 @@ Git 提交身份（本仓库局部配置，未改全局）：
 **验证与收尾**：`WatchlistIdTest` 按 v3 重写 6 例（含黑名单优先、ALL 态黑名单单独取消、旧 NONE 兼容）；OpenDebug 单测 **304 全绿**（基线 302−4+6）；`assembleOpenDebug` 通过。文档同步：README 特性行与 M9 行（原「规划中」已过时）、`docs/architecture/README.md` 三态语义段与 prefs 表、`04-analysis-pipeline.mmd` 已重渲 svg/png、`watchlist_hint` 文案。版本 `0.3.4/10`。
 本机环境事实：工作区缺 `local.properties`（AGP 报 SDK location not found）→ 已重建（gitignored，`sdk.dir=C:\Users\smith\AppData\Local\Android\Sdk`）；单测/打包仍需 §三.19 的 aapt2 覆盖 `-Pandroid.aapt2FromMavenOverride=...\build-tools\35.0.0\aapt2.exe`。
 **遗留**：真机（HyperOS）回归待用户验证——重启手机看球是否自动回来、吊销再恢复悬浮窗权限看服务是否还崩、关球开关看球是否即时消失；本轮改动未提交（工作区另有 M10 advisor 未提交改动，待真机验证通过后与 §三.15 遗留一并梳理提交边界）。
+（2026-10-13 注：两批改动均已提交推送，见 §三.21；HyperOS 真机回归仍待用户确认。）
+
+### 21. §三.20 提交闭环 + M10 advisor 端侧本地评审（2026-10-13，0.3.5/11，d616d84）
+
+- v3 关注默认反转 + 悬浮球自愈批次随 `52a6182` 提交推送（`da7571d..52a6182`），§三.20「本轮改动未提交」遗留闭环。
+- **M10 advisor 本地评审**：AI 评审新增 `advisor_provider` 云/本地二选一；本地复用已内置的 MiniCPM5-2B 端侧推理引擎，评审数据不出端、不受 cloudBlocked 限制；端侧推理引擎文案同步「已内置」。9 files +208/−36。
+- **编译修复（该批次自身阻塞项）**：`AnalysisParsing.kt:141` 有一行粘贴截断的注释（`* 真机实测：2B 常在 maxTokens 内不闭合`）导致 KDoc 未闭合且 `fun extractJsonFromText(content: String): JSONObject?` 签名行丢失 → 补全注释并恢复签名（函数体逐字未动）；同批删除的 `stripThinkTags` 在 HEAD 即零调用（死代码）。链路：`extractJsonPayload(raw)` → 取 `choices[0].message.content` → `extractJsonFromText`；Worker/tests 统一调 `extractJsonPayload`。
+- 验证：`compileOpen/BetaDebugKotlin` + 两 flavor 单测源集编译 + `:app:testBetaDebugUnitTest` 全绿后提交推送（`52a6182..d616d84`）。
+
+### 22. 主页「⚡ 最近待办」区：编辑/删除/一键加日历（2026-10-13，**0.3.6/12**，995a480 + 4d579dd）
+
+用户需求（m00082）：「"最近待办" 需要放在导航栏顶端，待办事项可以编辑、删除、加到日历中，加到日历默认会设置提醒。功能加好以后更新apk并推送」。
+**编号勘误**：commit message 里的「M12」是误标——ROADMAP 的 M12 = 分析范围筛选（仍未实现），本节功能未占用里程碑号。
+
+**设计与实现**（9 files +560/−16）：
+- **位置**：MainActivity 标题栏 divider 之下、信息流顶端固定区块（代码库无「导航栏」实体，主页即唯一常驻入口）；`activity_main.xml` 静态插 `llHomeTodos`（标题行「⚡ 最近待办 N」+ 查看全部 → `AnalysisListActivity`），行布局新文件 `item_home_todo.xml` = 摘要(2行)+meta（会话 · 截止 X）+ 编辑/日历/删除 三按钮；空则整区 GONE。
+- **数据口径**：与悬浮面板同源 `TodoPanelCore.selectTodos(latestByConvKey, visibleKeys, HOME_TODO_LIMIT=5)`；visibleKeys 复用主页过滤（readRecent(500) convKey 剔 unwatched/blocked/disabled），在 `buildFeed` 同一后台线程顺手算，`FeedResult` 扩 `(items, empty, todos, remindedCaseIds)`。
+- **粒度=会话 case 级**（caseId 即 dedupKey，与角标/面板/提醒全一致）；不做 per-task 编辑——`Task(who,what,when)` 无稳定 id，索引会漂。
+- **编辑=覆盖字段不毁原结论**：record 新增 `todoText/todoDue`（JSON 键 `todo_text`/`todo_due`，仅非空写出），显示走回退链 `displayTodo() = todoText.ifEmpty { s2Summary.ifEmpty { s1Topic } }`、`displayDue()` 同理；悬浮面板行同步改 `displayTodo()`。弹窗预填当前值，空内容拒存且弹窗不关，长度上限 200/50。
+- **`AnalysisStore.updateRecord(caseId, patch)`**：`@Synchronized` 只替换第一条命中行、损坏行原样保留、未命中不写盘，`JsonlStore.atomicWrite` 原子重写——与 Worker `append` 同对象锁并发安全。删除复用 `deleteCase`（与悬浮卡「标记已处理」同语义，无确认弹窗，即删即刷）。
+- **加日历默认带提醒**：`CalendarHelper.createReminder` 新增不依赖 `ChatMessage` 的原语重载（旧签名委托）；手动入口复用三级降级链（provider→前台插入→App 内闹钟），lead=`AnalysisConfig.reminderLeadMinutes`（默认 15 分钟），**不要求 reminderEnabled 开关**（手动操作即意图）；`ReminderStore.containsActive(caseId)` 去重，成功后按钮变「已加日历」。无日历权限先 `requestPermissions(REQ=43)`，授权返回自动补跑（拒绝也跑降级链兜底）。
+- 版本 `0.3.6/12`；README「提醒」特性与架构图同步（4d579dd）。
+
+**验证**：
+- 单测：新 `TodoOverrideTest` 4 例（displayTodo/displayDue 优先级、空不写键、round-trip、老记录默认空）；OpenDebug 全量 + Beta 20 suites 0 失败；`assembleOpen/BetaDebug` 绿，aapt 确认 0.3.6/12。
+- 模拟器走查（emulator-5556，API 34——原三台设备 adb 全僵尸，新起 AVD）：种子 jsonl 注入 → 显示 2 条/计数/meta ✓；编辑空文本拒存不关窗 ✓；保存即时更新 + `todo_text`/`todo_due` 落盘 + 杀进程重启仍在 ✓；日历权限弹窗→授权自动补跑 ✓；模拟器无日历账户走 L3 App 内闹钟，**闹钟 `origWhen = event_time − 900000ms` 精确提前 15 分钟** ✓，`reminders.jsonl` status=alarm ✓；连点第二次去重（记录仍 1 条）✓；删除计数 2→1→0 整区隐藏 + jsonl 行消失 ✓；查看全部跳转 ✓。
+- 走查坑：转场动画期间 uiautomator dump 坐标会过期（误点行打开会话页），需等待后重 dump；bounds 中心点 = ((x1+x2)/2, (y1+y2)/2)。
+
+**遗留**：
+- L1 provider 直写日历与 L2 前台 Intent 路径未在模拟器覆盖（无日历账户/无日历 App）——需真机带账户确认。
+- 弹窗中文输入未经 adb 验证（只能注 ASCII）；中文显示/存储已由种子数据覆盖。
+- `README_EN.md` 未同步本功能（惯例功能提交只更中文 README）。
+- CI 既有 lint error（`NotifyMeListener.kt:214` getMessagesFromBundleArray NewApi，52a6182 引入）未修，与本次无关；CI lint 步骤被 `| tail -20` 吞退出码。
+- 正式签名 APK 需打 `v0.3.6` tag 触发 release.yml（0.3.4/0.3.5/0.3.6 均未打 tag，推 main 仅出 debug artifact）。
 
 ## 四、构建与运行
 
@@ -606,6 +640,7 @@ ADB/设备要点（踩过的坑）：
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
+> 当前状态（2026-10-13 更新）：§三.21/§三.22 已交付推送——M10 advisor 端侧本地评审（0.3.5/11）+ 主页「⚡ 最近待办」区编辑/删除/一键加日历（0.3.6/12，模拟器走查通过，L1 日历直写待真机确认）；§三.20 v3 批次提交闭环，HyperOS 真机回归仍待用户确认。
 > 当前状态（2026-10-10 更新）：**W1 真机端到端已打通**，并按用户口径改为**全程手机内分析**（S1=端侧 Qwen2.5-0.5B + few-shot，S2=手机内配置的 GLM；不再依赖电脑 laya-local，见 §三.15 真机实测 ✅）；**M9 真机已验**（悬浮卡实拍 card_real.png）；**M10/M11/M11.4 已交付**；排程失联自愈 + 主页采集过滤 + 自采集噪声根除 + 悬浮面板「最近待办」与主页联动修复**全部真机验证通过（见 §三.14，§三.13 待办 1-3 已闭环）**；M12 分析范围筛选设计完成待实现；评测文档待补充；**0.5B few-shot 已完成并真机验证（§三.15，端侧 S1 已产出真实判定 JSON）**；本会话修复已随验证通过提交并推送；M0 代码与 CI 侧已完成，只剩 D5 正式密钥库 + 4 个 Secrets（等 `administration` 权限 token）。剩余待办：M12 分析范围筛选、评测文档补充、0.5B few-shot（低优先）；**2026-10-12 另有 v3「默认不关注」+ 悬浮窗自愈已交付待真机回归（§三.20，0.3.4/10）**；执行时以 docs/ROADMAP.md 为准。
 > 下面 8 项是 README 的对外表述，保留原样；执行时以 ROADMAP 为准。
 
