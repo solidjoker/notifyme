@@ -15,6 +15,9 @@ import android.view.View
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * 移动端控制台首页（原巨型配置中心拆分后的入口页）：
@@ -28,6 +31,9 @@ class ConsoleActivity : Activity() {
 
     companion object {
         private const val REQ_POST_NOTIFICATIONS = 42
+
+        /** 天组键（与主页 dayKeyFormat 同格式，折叠显式态的键成分） */
+        private val dayKeyFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
     }
 
     // 保活状态相关视图
@@ -60,15 +66,21 @@ class ConsoleActivity : Activity() {
 
         setupKeepAliveSection()
 
-        // 快捷按钮：全部折叠 / 全部展开（与主页 ☰ 菜单同功能，方便从控制台一键操作）
+        // 快捷按钮：全部折叠 / 全部展开（M14：按天显式态；主页 ☰ 菜单同功能）
         findViewById<Button>(R.id.btnCollapseAll).setOnClickListener {
-            val keys = MessageStore.readRecent(this, 500).map { it.convKey }.toSet()
-            CollapseStore.setAll(this, keys, true)
+            val pairs = MessageStore.readRecent(this, 500)
+                .groupBy { it.convKey }
+                .flatMap { (k, l) ->
+                    l.map {
+                        if (it.timestamp > 0) dayKeyFmt.format(Date(it.timestamp))
+                        else MessageStore.DAY_KEY_UNKNOWN
+                    }.distinct().map { k to it }
+                }
+            CollapseStore.setAllDates(this, pairs, true)
             Toast.makeText(this, R.string.quick_collapse_done, Toast.LENGTH_SHORT).show()
         }
         findViewById<Button>(R.id.btnExpandAll).setOnClickListener {
-            CollapseStore.setAll(this, emptySet(), false)
-            CollapseStore.clearDates(this)
+            CollapseStore.setAllDates(this, emptyList(), false)
             Toast.makeText(this, R.string.quick_expand_done, Toast.LENGTH_SHORT).show()
         }
         // 快捷按钮：回到主页（全部折叠/展开已在主页标题栏，此处仅提供导航入口）

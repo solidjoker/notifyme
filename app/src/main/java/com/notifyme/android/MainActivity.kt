@@ -101,26 +101,15 @@ class MainActivity : Activity() {
     private val searchRefresh = Runnable { refreshMessages() }
 
     private val adapter: FeedAdapter = FeedAdapter(
-        onToggle = { key ->
-            if (adapter.selectionActive) return@FeedAdapter
-            // 点击箭头：折叠/展开整组并持久化
-            val collapsed = CollapseStore.load(this)
-            CollapseStore.setCollapsed(this, key, key.id !in collapsed)
-            refreshMessages()
-        },
         onOpen = { key ->
             // 点击文字区：批量选择态=勾选；否则进会话详情页
             if (adapter.selectionActive) toggleSelection(key)
             else ConversationActivity.start(this, key)
         },
-        onToggleDate = { key, dayKey ->
+        onToggleDate = { key, dayKey, nowCollapsed ->
             if (adapter.selectionActive) return@FeedAdapter
-            // 点击日期组头：折叠/展开该会话下这一天的消息并持久化
-            val dates = CollapseStore.loadDates(this)
-            CollapseStore.setDateCollapsed(
-                this, key, dayKey,
-                !CollapseStore.isDateCollapsed(dates, key, dayKey)
-            )
+            // M14：折叠只按天。点击日期组头=显式切换该天（覆盖「非最新天默认折叠」规则）并持久化
+            CollapseStore.toggleDate(this, key, dayKey, nowCollapsed)
             refreshMessages()
         },
         onToggleWatch = { key ->
@@ -192,21 +181,13 @@ class MainActivity : Activity() {
             }
         })
 
-        // 标题栏快捷操作：全部折叠 / 全部展开（状态持久化；全部展开同时清掉日期组折叠态）
+        // 标题栏快捷操作：全部折叠 / 全部展开（M14：作用对象是「所有会话的所有天组」，写显式态）
         findViewById<TextView>(R.id.btnCollapseAll).setOnClickListener {
-            // 读盘放后台：历史大时主线程 readRecent 会卡住点击响应
-            Thread {
-                val keys = MessageStore.readRecent(this, 500).map { it.convKey }.toSet()
-                CollapseStore.setAll(this, keys, true)
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    refreshMessages()
-                }
-            }.start()
+            CollapseStore.setAllDates(this, feedDayPairs, collapsed = true)
+            refreshMessages()
         }
         findViewById<TextView>(R.id.btnExpandAll).setOnClickListener {
-            CollapseStore.setAll(this, emptySet(), false)
-            CollapseStore.clearDates(this)
+            CollapseStore.setAllDates(this, feedDayPairs, collapsed = false)
             refreshMessages()
         }
 
@@ -574,9 +555,12 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    /** M14：buildFeed 后台算好的「(会话, 天)」全集，供主线程「全部折叠/展开」直接写显式态 */
+    @Volatile
+    private var feedDayPairs: List<Pair<ConvKey, String>> = emptyList()
+
     /** 后台装载结果：列表项 + 是否为空态 + 主页待办区数据（M12）。 */
-    private class FeedResult(
-        val items: List<FeedItem>,
+    private class FeedResult(        val items: List<FeedItem>,
         val empty: Boolean,
         val todos: List<AnalysisCaseRecord>,
         /** 已有生效提醒的 caseId 集合：待办行「日历」按钮显示「已加日历」 */
@@ -586,9 +570,13 @@ class MainActivity : Activity() {
     /** 后台线程执行：读存储 + 过滤 + 组装 [FeedItem]（不碰视图）。 */
     private fun buildFeed(query: String): FeedResult {
         val messages = MessageStore.readRecent(this, 500)
-        val collapsed = CollapseStore.load(this)
-        val collapsedDates = CollapseStore.loadDates(this)
-        val latestCases = AnalysisStore.latestByConvKey(this)
+        // M14：折叠只按天，三态（显式折叠/显式展开/默认非最新天折叠）
+        val collapsedDates = CollapseStore.loadCollapsedDates(this)
+        val expandedDates = CollapseStore.loadExpandedDates(this)
+        // M14：一次全量读，同时供「每会话最新 case」与「历史天逐条挂结果」使用
+        val allCases = AnalysisStore.readRecent(this, 200)
+        val latestCases = allCases.groupBy { it.convKey }
+            .mapValues { (_, recs) -> recs.maxByOrNull { it.windowEnd }!! }
         // 有提醒的会话集合：首页会话头显示 📅
         val reminderRecords = ReminderStore.readAll(this)
         val reminderKeys = reminderRecords.map { it.convKey }.toSet()
@@ -660,11 +648,16 @@ class MainActivity : Activity() {
         }
 
         val items = mutableListOf<FeedItem>()
+        // M14：全部分析记录（不只每会话最新一条）——历史天的消息也要挂各自窗口的结果
+        val casesByConv = allCases.groupBy { it.convKey }
+        // M14：「全部折叠/展开」作用的天组全集（搜索过滤前口径，主线程按钮直接读，不再起线程读盘）
+        feedDayPairs = visibleGroups.flatMap { (k, l) ->
+            l.map { if (it.timestamp > 0) dayKeyFormat.format(Date(it.timestamp)) else DAY_KEY_UNKNOWN }
+                .distinct().map { k to it }
+        }
         for ((sectionTitle, sectionGroups) in sections) {
             if (sectionTitle != null) items += FeedItem.Section(sectionTitle)
             for ((key, list) in sectionGroups) {
-                // 搜索期间会话强制展开，保证命中内容可见
-                val isCollapsed = query.isEmpty() && key.id in collapsed
                 val case = latestCases[key]
                 items += FeedItem.Header(
                     key = key,
@@ -672,19 +665,10 @@ class MainActivity : Activity() {
                     isGroup = list.last().isGroup,
                     count = list.size,
                     preview = "${list.last().sender}: ${list.last().text}",
-                    collapsed = isCollapsed,
                     analysis = case,
                     hasReminder = key in reminderKeys,
                     watched = WatchlistStore.isWatchedId(key.id, unwatchedIds, watchedRaw)
                 )
-                if (isCollapsed) continue
-
-                // 窗口内消息集合：时间戳 ≤ windowEnd 的最近 messageCount 条
-                val windowMessages = case?.let { c ->
-                    list.filter { it.timestamp <= c.windowEnd }
-                        .takeLast(c.messageCount)
-                        .toSet()
-                }.orEmpty()
 
                 // 二级分组：按日期切分（groupBy 保序，组内消息已是时间正序）。
                 // 时间戳兜底：a11y 直读等来源可能带来 ts<=0 的估算失败值，归「未标注日期」组，
@@ -695,13 +679,34 @@ class MainActivity : Activity() {
                     if (it.timestamp > 0) dayKeyFormat.format(Date(it.timestamp))
                     else DAY_KEY_UNKNOWN
                 }
+                // M14：折叠只按天——该会话最新一天默认展开，历史天默认折叠
+                val latestDay = CollapseStore.latestDayKeyOf(byDate.keys, DAY_KEY_UNKNOWN)
+                // M14：该会话各天被哪些分析窗口覆盖（窗口=ts≤windowEnd 的最近 messageCount 条，
+                // 与建案口径一致）；同天多窗口按 windowEnd 升序，最新一条作主展示
+                val casesOfDay = HashMap<String, List<AnalysisCaseRecord>>()
+                for (c in casesByConv[key].orEmpty()) {
+                    val window = list.filter { it.timestamp <= c.windowEnd }
+                        .takeLast(c.messageCount)
+                    if (window.isEmpty()) continue
+                    val covered = window
+                        .map {
+                            if (it.timestamp > 0) dayKeyFormat.format(Date(it.timestamp))
+                            else DAY_KEY_UNKNOWN
+                        }
+                        .distinct()
+                    for (day in covered) {
+                        casesOfDay[day] = (casesOfDay[day] ?: emptyList()) + c
+                    }
+                }
+                casesOfDay.replaceAll { _, list2 -> list2.sortedBy { it.windowEnd } }
+
                 for ((dayKey, dayMessages) in byDate) {
                     val dateHit = query.isNotEmpty() && dayMessages.any {
                         it.sender.lowercase().contains(query) ||
                             it.text.lowercase().contains(query)
                     }
                     val dateCollapsed = CollapseStore.isDateCollapsed(
-                        collapsedDates, key, dayKey
+                        collapsedDates, expandedDates, key, dayKey, latestDay
                     ) && !(query.isNotEmpty() && (dateHit || convNameHit))
                     val label = if (dayKey == DAY_KEY_UNKNOWN) {
                         getString(R.string.date_unknown_label)
@@ -718,6 +723,8 @@ class MainActivity : Activity() {
                         collapsed = dateCollapsed
                     )
                     if (dateCollapsed) continue
+                    val dayCases = casesOfDay[dayKey].orEmpty()
+                    val topCase = dayCases.lastOrNull()
                     dayMessages.forEach { msg ->
                         val hit = query.isNotEmpty() && (
                             msg.sender.lowercase().contains(query) ||
@@ -725,9 +732,9 @@ class MainActivity : Activity() {
                             )
                         items += FeedItem.Msg(
                             message = msg,
-                            // 仅窗口内消息带分析标签；待办会话只在窗口末条上标 ⚡
-                            analysis = if (msg in windowMessages) case else null,
-                            isWindowLast = case != null && msg.timestamp == case.windowEnd,
+                            // M14：该天被分析窗口覆盖时，每条消息旁直接显示结果内容
+                            analysis = topCase,
+                            analysisCount = dayCases.size,
                             highlight = hit
                         )
                     }
@@ -985,7 +992,6 @@ class MainActivity : Activity() {
             val isGroup: Boolean,
             val count: Int,
             val preview: String,
-            val collapsed: Boolean,
             val analysis: AnalysisCaseRecord?,
             val hasReminder: Boolean,
             /** 关注态是内容字段：点「关注」后该字段翻转 → DiffUtil 判 change 重绑头部 chip。
@@ -1003,8 +1009,10 @@ class MainActivity : Activity() {
 
         data class Msg(
             val message: ChatMessage,
+            /** M14：该条消息所在天被哪些分析覆盖（无覆盖=null，不挂标签） */
             val analysis: AnalysisCaseRecord?,
-            val isWindowLast: Boolean,
+            /** M14：该天被几个分析窗口覆盖；>1 时标签追加「等N次分析」 */
+            val analysisCount: Int,
             val highlight: Boolean
         ) : FeedItem()
     }
@@ -1013,9 +1021,8 @@ class MainActivity : Activity() {
      *  折叠的组（会话或日期）内消息不入数据集。
      *  会话头热区分开：文字区进详情页，箭头折叠/展开；日期组头整行可点折叠。 */
     private class FeedAdapter(
-        private val onToggle: (ConvKey) -> Unit,
         private val onOpen: (ConvKey) -> Unit,
-        private val onToggleDate: (ConvKey, String) -> Unit,
+        private val onToggleDate: (ConvKey, String, Boolean) -> Unit,
         private val onToggleWatch: (ConvKey) -> Unit,
         private val onHeaderLongPress: (ConvKey) -> Unit,
         private val onToggleSelection: (ConvKey) -> Unit,
@@ -1126,7 +1133,8 @@ class MainActivity : Activity() {
             holder.tvConversation.text = key.conversation
             holder.tvCount.text = ctx.getString(R.string.msg_count, header.count)
             holder.tvPreview.text = header.preview
-            holder.tvArrow.text = if (header.collapsed) "▶" else "▼"
+            // M14：会话级折叠取消，折叠只按天（日期组头控制）；箭头隐藏
+            holder.tvArrow.visibility = View.GONE
 
             // 来源 App 标记（M11：所有 App 都显示，含微信——多来源场景下来源必须可见）
             holder.tvApp.visibility = View.VISIBLE
@@ -1177,7 +1185,6 @@ class MainActivity : Activity() {
                 onHeaderLongPress(key)
                 true
             }
-            holder.tvArrow.setOnClickListener { onToggle(key) }
 
             // 快捷入口：关注（切换，文案/颜色反映状态）。选择态屏蔽 chips 操作。
             // 关注态取自 Header 内容字段（buildFeed 预计算）：它参与 DiffUtil 内容比较，
@@ -1248,8 +1255,10 @@ class MainActivity : Activity() {
             holder.tvDateLabel.text = header.label
             holder.tvDateCount.text = ctx.getString(R.string.msg_count, header.count)
             holder.tvDateArrow.text = if (header.collapsed) "▶" else "▼"
-            // 整行点击折叠/展开该日期组
-            holder.itemView.setOnClickListener { onToggleDate(header.key, header.dayKey) }
+            // 整行点击折叠/展开该日期组（M14：折叠的唯一层级）
+            holder.itemView.setOnClickListener {
+                onToggleDate(header.key, header.dayKey, header.collapsed)
+            }
         }
 
         private fun bindMessage(holder: MsgVH, item: FeedItem.Msg) {
@@ -1268,33 +1277,49 @@ class MainActivity : Activity() {
                 if (item.highlight) R.drawable.bg_card_highlight else R.drawable.bg_card
             )
 
-            // 分析结果联动（会话级 case 映射）：窗口内消息标「已分析」；
-            // 待办会话只在窗口末条上显示「⚡ 待办 + 摘要 + 截止」
+            // M14：该天被分析窗口覆盖时，每条消息旁直接显示结果内容——
+            // 待办=橙底「⚡ 待办 内容 · 截止」；非待办=灰底「主题 · 重要度 X.X」；
+            // 同天多次分析追加「等N次分析」
             val analysis = item.analysis
+            val suffix = if (item.analysisCount > 1) {
+                "（" + ctx.getString(R.string.analysis_times_suffix, item.analysisCount) + "）"
+            } else ""
             when {
                 analysis == null -> holder.tvAnalysis.visibility = View.GONE
-                item.isWindowLast && analysis.s1NeedAction -> {
+                analysis.s1NeedAction -> {
                     holder.tvAnalysis.visibility = View.VISIBLE
                     holder.tvAnalysis.setBackgroundResource(R.drawable.bg_tag_todo)
                     holder.tvAnalysis.setTextColor(ctx.getColor(R.color.card_bg))
-                    val summary = analysis.s2Summary.ifEmpty {
+                    val summary = analysis.displayTodo().ifEmpty {
                         msg.text.replace("\n", " ").take(15)
                     }
-                    val dueText = analysis.s2DueTime.ifEmpty { analysis.s1DueWindow }
+                    val dueText = analysis.displayDue()
                     val due = if (dueText.isNotEmpty() && dueText != "none") {
                         " · " + ctx.getString(R.string.analysis_due_prefix) + dueText
                     } else ""
                     holder.tvAnalysis.text =
-                        ctx.getString(R.string.analysis_label_todo) + " " + summary + due
+                        ctx.getString(R.string.analysis_label_todo) + " " + summary + due + suffix
                 }
                 else -> {
                     holder.tvAnalysis.visibility = View.VISIBLE
                     holder.tvAnalysis.setBackgroundResource(R.drawable.bg_tag_analyzed)
                     holder.tvAnalysis.setTextColor(ctx.getColor(R.color.text_secondary))
-                    holder.tvAnalysis.text = ctx.getString(R.string.analysis_label_done)
+                    holder.tvAnalysis.text = topicLabel(ctx, analysis.s1Topic) + " · " +
+                        ctx.getString(R.string.chip_importance, analysis.s1Importance) + suffix
                 }
             }
         }
+
+        /** topic 取值本地化（未知值原样显示，兼容端侧模型自由输出；与分析结果页同映射） */
+        private fun topicLabel(ctx: android.content.Context, topic: String): String =
+            when (topic) {
+                "work_task" -> ctx.getString(R.string.topic_work_task)
+                "schedule" -> ctx.getString(R.string.topic_schedule)
+                "notice" -> ctx.getString(R.string.topic_notice)
+                "smalltalk" -> ctx.getString(R.string.topic_smalltalk)
+                "risk" -> ctx.getString(R.string.topic_risk)
+                else -> topic
+            }
 
         override fun getItemCount(): Int = items.size
 
@@ -1379,15 +1404,16 @@ class MainActivity : Activity() {
 }
 
 /**
- * 首页折叠状态持久化：SharedPreferences 存「已折叠会话集合」与「已折叠日期组集合」。
- *  - 会话层元素是 ConvKey.id；
- *  - 日期层元素是 ConvKey.id + [DATE_SEP] + yyyy-MM-dd；
- *  两层折叠态互相独立，各自持久化。
+ * 首页折叠状态持久化（M14：折叠彻底改为按天，三态）：
+ *  - 元素是 ConvKey.id + [DATE_SEP] + yyyy-MM-dd；
+ *  - 显式折叠集合 collapsed_dates 与显式展开集合 expanded_dates 互斥；
+ *  - 无显式状态的天：默认折叠「该会话最新一天之外」的历史天（历史信息不再刷屏）；
+ *  - 旧会话级 collapsed_conversations 已废弃：不再读写（存量数据留着无害）。
  */
 object CollapseStore {
     private const val PREFS_NAME = "collapse_state"
-    private const val KEY_COLLAPSED = "collapsed_conversations"
     private const val KEY_COLLAPSED_DATES = "collapsed_dates"
+    private const val KEY_EXPANDED_DATES = "expanded_dates"
 
     /** 日期组复合 key 的分隔符：刻意不用 '|'（那是 ConvKey 内部分隔符） */
     private const val DATE_SEP = ""
@@ -1395,44 +1421,67 @@ object CollapseStore {
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    fun load(context: Context): Set<String> =
-        prefs(context).getStringSet(KEY_COLLAPSED, emptySet()).orEmpty()
-
-    fun setCollapsed(context: Context, key: ConvKey, collapsed: Boolean) {
-        val set = load(context).toMutableSet()
-        if (collapsed) set.add(key.id) else set.remove(key.id)
-        prefs(context).edit().putStringSet(KEY_COLLAPSED, set).apply()
-    }
-
-    /** collapsed=true 收拢全部给定会话；false 清空集合（全部展开） */
-    fun setAll(context: Context, keys: Collection<ConvKey>, collapsed: Boolean) {
-        val set = if (collapsed) keys.map { it.id }.toSet() else emptySet()
-        prefs(context).edit().putStringSet(KEY_COLLAPSED, set).apply()
-    }
-
-    fun loadDates(context: Context): Set<String> =
-        prefs(context).getStringSet(KEY_COLLAPSED_DATES, emptySet()).orEmpty()
-
     private fun dateComposite(key: ConvKey, dayKey: String): String =
         "${key.id}$DATE_SEP$dayKey"
 
-    /** 某会话某天是否处于折叠态。 */
+    fun loadCollapsedDates(context: Context): Set<String> =
+        prefs(context).getStringSet(KEY_COLLAPSED_DATES, emptySet()).orEmpty()
+
+    fun loadExpandedDates(context: Context): Set<String> =
+        prefs(context).getStringSet(KEY_EXPANDED_DATES, emptySet()).orEmpty()
+
+    /** 某会话某天是否处于折叠态（三态：显式折叠 > 显式展开 > 非最新天默认折叠）。 */
     fun isDateCollapsed(
-        collapsedDates: Set<String>, key: ConvKey, dayKey: String
-    ): Boolean = collapsedDates.contains(dateComposite(key, dayKey))
-
-    /** 日期组折叠/展开。true=折叠；false=展开；切换语义由调用方决定。 */
-    fun setDateCollapsed(
-        context: Context, key: ConvKey, dayKey: String, collapsed: Boolean
-    ) {
-        val set = loadDates(context).toMutableSet()
+        collapsed: Set<String>,
+        expanded: Set<String>,
+        key: ConvKey,
+        dayKey: String,
+        latestDayKey: String
+    ): Boolean {
         val composite = dateComposite(key, dayKey)
-        if (collapsed) set.add(composite) else set.remove(composite)
-        prefs(context).edit().putStringSet(KEY_COLLAPSED_DATES, set).apply()
+        return when {
+            composite in collapsed -> true
+            composite in expanded -> false
+            else -> dayKey != latestDayKey
+        }
     }
 
-    /** 清空全部日期组折叠态（「全部展开」时一并复位） */
-    fun clearDates(context: Context) {
-        prefs(context).edit().putStringSet(KEY_COLLAPSED_DATES, emptySet()).apply()
+    /** 点击日期组头切换：按当前有效态写入对立集合、清掉另一侧（显式覆盖默认）。 */
+    fun toggleDate(
+        context: Context, key: ConvKey, dayKey: String, nowCollapsed: Boolean
+    ) {
+        val composite = dateComposite(key, dayKey)
+        val collapsed = loadCollapsedDates(context).toMutableSet()
+        val expanded = loadExpandedDates(context).toMutableSet()
+        if (nowCollapsed) {
+            collapsed.remove(composite)
+            expanded.add(composite)
+        } else {
+            expanded.remove(composite)
+            collapsed.add(composite)
+        }
+        prefs(context).edit()
+            .putStringSet(KEY_COLLAPSED_DATES, collapsed)
+            .putStringSet(KEY_EXPANDED_DATES, expanded)
+            .apply()
     }
+
+    /**
+     * 全部折叠/展开：对给定 (会话, 天) 集合写显式态并清对侧。
+     * 「全部展开」必须写显式展开集——只清状态会被默认规则把历史天重新收起。
+     */
+    fun setAllDates(context: Context, pairs: Collection<Pair<ConvKey, String>>, collapsed: Boolean) {
+        val composites = pairs.map { dateComposite(it.first, it.second) }.toSet()
+        prefs(context).edit()
+            .putStringSet(KEY_COLLAPSED_DATES, if (collapsed) composites else emptySet())
+            .putStringSet(KEY_EXPANDED_DATES, if (collapsed) emptySet() else composites)
+            .apply()
+    }
+
+    /**
+     * 该会话的「最新一天」：取最大 dayKey（yyyy-MM-dd 字典序即时间序）；
+     * 「未标注日期」组是时间戳缺失的历史残渣，有正常天时永远不算最新。
+     */
+    fun latestDayKeyOf(dayKeys: Collection<String>, unknownDayKey: String): String =
+        dayKeys.filterNot { it == unknownDayKey }.maxOrNull() ?: unknownDayKey
 }
