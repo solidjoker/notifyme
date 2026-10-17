@@ -465,6 +465,17 @@
                     android:layout_marginTop="8dp"
                     android:textColor="@color/text_secondary"
                     android:textSize="12sp" />
+
+                <!-- M15 端侧分析实时进度条：可算百分比时确定态，否则不确定态 -->
+                <ProgressBar
+                    android:id="@+id/progressAnalysis"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:indeterminate="true"
+                    android:indeterminateTint="@color/brand_green"
+                    android:visibility="gone" />
             </LinearLayout>
 
             <!-- 卡片 4.5：顾问复盘（Fable 层） -->

@@ -520,4 +520,17 @@
     <string name="todo_calendar_lead">%1$s，默认提前 %2$d 分钟提醒</string>
     <string name="analysis_source_prefix">原文：</string>
     <string name="analysis_times_suffix">等%1$d次分析</string>
+
+    <!-- M15 端侧分析进度：阶段名 + 百分比/token 数 + 已用时间 -->
+    <string name="analysis_progress_case">第 %1$d/%2$d 个会话</string>
+    <string name="analysis_stage_preparing">准备分析</string>
+    <string name="analysis_stage_loading">加载本地模型</string>
+    <string name="analysis_stage_prefill">读取会话上下文</string>
+    <string name="analysis_stage_decode">端侧推理</string>
+    <string name="analysis_stage_remote">云端分析</string>
+    <string name="analysis_stage_saving">整理结果</string>
+    <string name="analysis_progress_elapsed">%1$s · 已用 %2$s</string>
+    <string name="analysis_progress_prefill">%1$s %2$d/%3$d token · 已用 %4$s</string>
+    <string name="analysis_progress_decode">%1$s %2$d%% · 已生成 %3$d token · 已用 %4$s</string>
+    <string name="analysis_progress_queued">已加入分析队列…</string>
 </resources>

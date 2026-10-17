@@ -86,6 +86,7 @@ class ConversationActivity : Activity() {
     private lateinit var tvLastAnalysisTime: TextView
     private lateinit var btnAnalyzeThis: Button
     private lateinit var progressAnalyzeThis: android.widget.ProgressBar
+    private lateinit var tvAnalysisProgress: TextView
     private lateinit var llQuickReply: View
 
     private val timeFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
@@ -159,6 +160,7 @@ class ConversationActivity : Activity() {
         tvLastAnalysisTime = findViewById(R.id.tvLastAnalysisTime)
         btnAnalyzeThis = findViewById(R.id.btnAnalyzeThis)
         progressAnalyzeThis = findViewById(R.id.progressAnalyzeThis)
+        tvAnalysisProgress = findViewById(R.id.tvAnalysisProgress)
         llQuickReply = findViewById(R.id.llQuickReply)
 
         findViewById<TextView>(R.id.btnBack).setOnClickListener { finish() }
@@ -240,13 +242,49 @@ class ConversationActivity : Activity() {
         }
     }
 
+    /** M15 实时分析进度：Worker 发布 -> 本页展示阶段 / token 进度 / 已用时间。 */
+    private val analysisProgressListener = AnalysisProgressBus.Listener { state ->
+        renderAnalysisProgress(state)
+    }
+
+    /**
+     * 只认本会话的运行态：分析别的会话时本页保持原样（进度条仍由
+     * WorkManager observer 决定显隐），否则会把无关会话的百分比画上来。
+     */
+    private fun renderAnalysisProgress(state: AnalysisRunState?) {
+        if (state == null || state.convKeyId != key.id) {
+            handler.removeCallbacks(progressTick)
+            tvAnalysisProgress.visibility = View.GONE
+            progressAnalyzeThis.isIndeterminate = true
+            return
+        }
+        AnalysisProgressUi.render(this, tvAnalysisProgress, progressAnalyzeThis, state)
+        // 「已用 N秒」只有在重新渲染时才前进；prefill 一批可能要十几秒，
+        // 这里每秒补一帧，避免进度文案看起来冻住。
+        handler.removeCallbacks(progressTick)
+        handler.postDelayed(progressTick, 1000)
+    }
+
+    /** 每秒重绘一帧（只读总线里最新状态，不新增任何跨线程状态）。 */
+    private val progressTick = object : Runnable {
+        override fun run() {
+            val state = AnalysisProgressBus.state
+            if (state != null && state.convKeyId == key.id) {
+                AnalysisProgressUi.render(this@ConversationActivity, tvAnalysisProgress, progressAnalyzeThis, state)
+                handler.postDelayed(this, 1000)
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         renderContent()
         MessageStore.addOnMessagesChangedListener(storeListener)
+        AnalysisProgressBus.addListener(analysisProgressListener)
     }
 
     override fun onPause() {
+        AnalysisProgressBus.removeListener(analysisProgressListener)
         MessageStore.removeOnMessagesChangedListener(storeListener)
         super.onPause()
     }

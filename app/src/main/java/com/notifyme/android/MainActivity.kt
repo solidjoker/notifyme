@@ -266,11 +266,44 @@ class MainActivity : Activity() {
         OverlayManager.ensureBallVisible(this)
         // 前台期间新消息入库即时刷新列表
         MessageStore.addOnMessagesChangedListener(storeListener)
+        // M15：分析运行态 -> 会话头分析进度条（阶段/百分比）
+        AnalysisProgressBus.addListener(analysisProgressListener)
     }
 
     override fun onPause() {
+        AnalysisProgressBus.removeListener(analysisProgressListener)
         MessageStore.removeOnMessagesChangedListener(storeListener)
         super.onPause()
+    }
+
+    /**
+     * M15 实时分析进度：只改当前可见会话头的进度条，绝不整表重绑
+     * （decode 阶段每 8 个 token 一次回调，全量刷新会卡列表）。
+     */
+    private val analysisProgressListener = AnalysisProgressBus.Listener { state ->
+        applyAnalysisProgress(state)
+    }
+
+    private fun applyAnalysisProgress(state: AnalysisRunState?) {
+        for (i in 0 until recyclerMessages.childCount) {
+            val vh = recyclerMessages.getChildViewHolder(recyclerMessages.getChildAt(i))
+                as? FeedAdapter.HeaderVH ?: continue
+            val keyId = vh.boundConvKeyId ?: continue
+            val bar = vh.progressAnalyze
+            if (state == null || state.convKeyId != keyId) {
+                // 不匹配：显隐仍由 WorkManager observer 决定，只恢复不确定态
+                bar.isIndeterminate = true
+                continue
+            }
+            bar.visibility = View.VISIBLE
+            val percent = state.percent()
+            if (percent == null) {
+                bar.isIndeterminate = true
+            } else {
+                bar.isIndeterminate = false
+                bar.progress = percent
+            }
+        }
     }
 
     /** 拉起前台保活服务（幂等：已运行时系统只走 onStartCommand）。 */
@@ -1129,6 +1162,8 @@ class MainActivity : Activity() {
         private fun bindHeader(holder: HeaderVH, header: FeedItem.Header) {
             val ctx = holder.itemView.context
             val key = header.key
+            // M15：记录绑定的会话，Activity 级进度监听据此决定更新哪条进度条
+            holder.boundConvKeyId = key.id
             bindTag(holder.tvTag, header.isGroup)
             holder.tvConversation.text = key.conversation
             holder.tvCount.text = ctx.getString(R.string.msg_count, header.count)
@@ -1384,6 +1419,9 @@ class MainActivity : Activity() {
             // WorkManager 进度观察句柄（observeForever，必须成对移除）
             var progressTag: String? = null
             var progressObserver: Observer<List<WorkInfo>>? = null
+
+            /** M15：当前绑定的会话 id（进度监听用它判断该不该更新本条的进度条） */
+            var boundConvKeyId: String? = null
         }
 
         class DateVH(itemView: View) : RecyclerView.ViewHolder(itemView) {

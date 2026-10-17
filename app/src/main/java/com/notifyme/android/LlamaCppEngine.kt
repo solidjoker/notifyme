@@ -34,16 +34,27 @@ class LlamaCppEngine(
     override val isReady: Boolean get() = handle != 0L
     override val unavailableReason: String get() = "llama.cpp 引擎未加载"
 
-    override suspend fun chat(system: String, user: String, maxTokens: Int): String =
-        withContext(Dispatchers.IO) {
-            try {
-                LlamaJni.nativeComplete(
-                    handle, system, user, maxTokens, temperature
-                ).orEmpty()
-            } catch (e: Throwable) {
-                throw LocalEngineException(e.message ?: "本地推理失败")
+    override suspend fun chat(
+        system: String,
+        user: String,
+        maxTokens: Int,
+        onProgress: ((LocalLlmProgress) -> Unit)?
+    ): String = withContext(Dispatchers.IO) {
+        try {
+            // native 侧在推理线程上回调：转成 Kotlin 数据对象后交给上层，
+            // 回调异常必须在这里吃掉——穿回 JNI 会让推理状态无法收拾。
+            val sink = onProgress?.let { cb ->
+                LlamaJni.ProgressSink { phase, current, total ->
+                    runCatching { cb(LocalLlmProgress(phase, current, total)) }
+                }
             }
+            LlamaJni.nativeComplete(
+                handle, system, user, maxTokens, temperature, sink
+            ).orEmpty()
+        } catch (e: Throwable) {
+            throw LocalEngineException(e.message ?: "本地推理失败")
         }
+    }
 
     override fun close() {
         val h = handle

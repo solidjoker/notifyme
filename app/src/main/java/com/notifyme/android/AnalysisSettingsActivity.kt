@@ -80,6 +80,12 @@ class AnalysisSettingsActivity : Activity() {
     private lateinit var tvAnalysisStatus: TextView
     private lateinit var tvAnalysisStats: TextView
 
+    /** M15：分析运行中的实时进度条（与 tvAnalysisStatus 文案联动） */
+    private lateinit var progressAnalysis: android.widget.ProgressBar
+
+    /** 是否有运行态正占用 tvAnalysisStatus（结束后要还原「上次结果」文案） */
+    private var progressShowing = false
+
     private lateinit var switchAdvisorAuto: Switch
     private lateinit var tvAdvisorStatus: TextView
     private lateinit var tvAdvisorReport: TextView
@@ -127,6 +133,51 @@ class AnalysisSettingsActivity : Activity() {
         super.onResume()
         refreshAnalysisStatus()
         refreshAdvisorStatus()
+        AnalysisProgressBus.addListener(analysisProgressListener)
+    }
+
+    override fun onPause() {
+        AnalysisProgressBus.removeListener(analysisProgressListener)
+        super.onPause()
+    }
+
+    /** M15：分析运行态 -> 状态行文案 + 进度条（控制台是全局视图，不看具体会话）。 */
+    private val analysisProgressListener = AnalysisProgressBus.Listener { state ->
+        renderAnalysisProgress(state)
+    }
+
+    /** 每秒重绘一帧，避免 prefill 期间「已用时间」看起来冻住。 */
+    private val progressTick = object : Runnable {
+        override fun run() {
+            val state = AnalysisProgressBus.state ?: return
+            renderAnalysisProgress(state)
+        }
+    }
+
+    private fun renderAnalysisProgress(state: AnalysisRunState?) {
+        if (state == null) {
+            tvAnalysisStatus.removeCallbacks(progressTick)
+            if (!progressShowing) return
+            progressShowing = false
+            progressAnalysis.visibility = android.view.View.GONE
+            // 运行态结束后把状态行还原成「上次分析结果 + 时间」，别停在最后的阶段文案
+            refreshAnalysisStatus()
+            return
+        }
+        progressShowing = true
+        progressAnalysis.visibility = android.view.View.VISIBLE
+        // 每秒补一帧，让「已用 N秒」在 prefill 的一大批之间也继续走
+        tvAnalysisStatus.removeCallbacks(progressTick)
+        tvAnalysisStatus.postDelayed(progressTick, 1000)
+        tvAnalysisStatus.text = AnalysisProgressUi.text(this, state)
+        tvAnalysisStatus.setTextColor(getColor(R.color.brand_green))
+        val percent = state.percent()
+        if (percent == null) {
+            progressAnalysis.isIndeterminate = true
+        } else {
+            progressAnalysis.isIndeterminate = false
+            progressAnalysis.progress = percent
+        }
     }
 
     private fun bindViews() {
@@ -154,6 +205,7 @@ class AnalysisSettingsActivity : Activity() {
         spinnerAnalysisInterval = findViewById(R.id.spinnerAnalysisInterval)
         tvAnalysisStatus = findViewById(R.id.tvAnalysisStatus)
         tvAnalysisStats = findViewById(R.id.tvAnalysisStats)
+        progressAnalysis = findViewById(R.id.progressAnalysis)
 
         switchAdvisorAuto = findViewById(R.id.switchAdvisorAuto)
         tvAdvisorStatus = findViewById(R.id.tvAdvisorStatus)

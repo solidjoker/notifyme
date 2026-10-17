@@ -16,19 +16,35 @@ internal object LlamaJni {
         System.loadLibrary("notifyme-llama")
     }
 
+    /**
+     * 原生推理进度接收端（M15）。
+     *
+     * native 侧在 prefill 每批、decode 每若干 token 调用一次；实现必须
+     * 立刻返回且不抛异常（JNI 侧会清异常，但抛异常会拖慢推理）。
+     */
+    fun interface ProgressSink {
+        /** @param phase [LocalLlmProgress.PHASE_PREFILL] / [LocalLlmProgress.PHASE_DECODE] */
+        fun onProgress(phase: Int, current: Int, total: Int)
+    }
+
     /** 进程级一次性初始化（llama_backend_init，内部有幂等保护）。 */
     external fun nativeBackendInit()
 
     /** 加载 GGUF 并建上下文，返回句柄；失败抛 RuntimeException。 */
     external fun nativeCreate(modelPath: String, nCtx: Int): Long
 
-    /** 非流式补全：返回完整助手文本；输入超长/解码失败抛 RuntimeException。 */
+    /**
+     * 非流式补全：返回完整助手文本；输入超长/解码失败抛 RuntimeException。
+     *
+     * [progress] 可为 null（不需要进度时省掉 JNI 回调开销）。
+     */
     external fun nativeComplete(
         handle: Long,
         system: String,
         user: String,
         maxTokens: Int,
-        temperature: Float
+        temperature: Float,
+        progress: ProgressSink?
     ): String?
 
     external fun nativeDestroy(handle: Long)

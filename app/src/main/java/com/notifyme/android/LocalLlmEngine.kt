@@ -37,18 +37,58 @@ interface LocalLlmEngine {
      * 生成式对话：system prompt + user 文本 -> 模型输出原文。
      * 实现要求：线程安全由上层 Mutex 保证（AnalysisWorker.ANALYSIS_MUTEX）；
      * 非流式，一次返回完整文本；超时/内存不足时抛 LocalEngineException。
+     *
+     * [onProgress] 为可选的推理进度回调（M15）：native 侧每批 prefill /
+     * 每若干 token 回调一次，实现可在任意线程调用（推理线程），回调里
+     * 只做轻量状态更新，不要做 IO。
      */
-    suspend fun chat(system: String, user: String, maxTokens: Int): String
+    suspend fun chat(
+        system: String,
+        user: String,
+        maxTokens: Int,
+        onProgress: ((LocalLlmProgress) -> Unit)? = null
+    ): String
 }
 
 /** 本地引擎统一异常：message 直接展示到分析状态行。 */
 class LocalEngineException(message: String) : Exception(message)
 
+/**
+ * 端侧推理进度（M15）：native 侧在 prefill / decode 阶段回报。
+ *
+ * [current]/[total] 的含义按阶段区分：prefill 是已处理/总 prompt token，
+ * decode 是已生成/上限 token。decode 的 total 是采样上限，不是预期输出长度
+ * （模型通常提前 EOG 收尾），UI 侧据此算的百分比只是「预算消耗」，文案里
+ * 同时给出真实 token 数，避免让用户误判完成度。
+ */
+data class LocalLlmProgress(
+    val phase: Int,
+    val current: Int,
+    val total: Int
+) {
+    val isPrefill: Boolean get() = phase == PHASE_PREFILL
+    val isDecode: Boolean get() = phase == PHASE_DECODE
+
+    /** 本阶段已走比例（0..1）；total<=0 时返回 null（无法估算）。 */
+    val fraction: Float?
+        get() = if (total > 0) (current.toFloat() / total).coerceIn(0f, 1f) else null
+
+    companion object {
+        const val PHASE_PREFILL = 1
+        const val PHASE_DECODE = 2
+    }
+}
+
 /** 推理库加载失败/设备不支持时的占位实现（原生库已内置，正常不应出现）。 */
 class UnavailableLocalLlmEngine : LocalLlmEngine {
     override val isReady: Boolean = false
     override val unavailableReason: String = "本地推理引擎未就绪（原生库加载失败或设备不支持）"
-    override suspend fun chat(system: String, user: String, maxTokens: Int): String {
+    override suspend fun chat(
+        system: String,
+        user: String,
+        maxTokens: Int,
+        onProgress: ((LocalLlmProgress) -> Unit)?
+    ): String {
         throw LocalEngineException(unavailableReason)
     }
 }
@@ -70,13 +110,18 @@ private class GuardedLocalLlmEngine(
     override val isReady: Boolean get() = delegate.isReady
     override val unavailableReason: String get() = delegate.unavailableReason
 
-    override suspend fun chat(system: String, user: String, maxTokens: Int): String {
+    override suspend fun chat(
+        system: String,
+        user: String,
+        maxTokens: Int,
+        onProgress: ((LocalLlmProgress) -> Unit)?
+    ): String {
         synchronized(lock) {
             if (releaseRequested || closed) throw LocalEngineException("本地引擎已释放")
             inFlight += 1
         }
         try {
-            return delegate.chat(system, user, maxTokens)
+            return delegate.chat(system, user, maxTokens, onProgress)
         } finally {
             synchronized(lock) { inFlight -= 1 }
             closeIfIdle()
@@ -132,8 +177,12 @@ object LocalLlmEngines {
     private fun unavailable(reason: String): LocalLlmEngine = object : LocalLlmEngine {
         override val isReady = false
         override val unavailableReason = reason
-        override suspend fun chat(system: String, user: String, maxTokens: Int): String =
-            throw LocalEngineException(reason)
+        override suspend fun chat(
+            system: String,
+            user: String,
+            maxTokens: Int,
+            onProgress: ((LocalLlmProgress) -> Unit)?
+        ): String = throw LocalEngineException(reason)
     }
 
     private fun createEngine(context: Context, modelId: String): LocalLlmEngine {

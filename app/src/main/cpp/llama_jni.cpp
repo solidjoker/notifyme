@@ -33,6 +33,10 @@ constexpr int N_THREADS_MIN      = 2;
 constexpr int N_THREADS_HEADROOM = 2;
 constexpr int DEFAULT_BATCH      = 512;
 
+// prefill 分批大小（< DEFAULT_BATCH）：一批 512 个 prompt token 在真机上要十几秒，
+// 只在批首/批末回报会让进度条十几秒不动；64 一批约 2-3 秒一次，足够跟手。
+constexpr int PREFILL_CHUNK      = 64;
+
 struct llama_state {
     llama_model   * model   = nullptr;
     llama_context * ctx     = nullptr;
@@ -53,6 +57,31 @@ int pick_threads() {
     return static_cast<int>(t);
 }
 
+// 进度阶段，与 Kotlin 侧 LocalLlmProgress 常量保持一致。
+constexpr int PHASE_PREFILL = 1;
+constexpr int PHASE_DECODE  = 2;
+
+// decode 阶段每生成这么多个 token 回报一次（JNI 往返在 8 token 量级可忽略，
+// 又足以让 UI 每几百毫秒收到一次）。
+constexpr int DECODE_REPORT_INTERVAL = 8;
+
+/**
+ * 调用 Kotlin 侧 LocalLlmProgressSink.onProgress(phase, current, total)。
+ * 回调是可选的；Java 侧若抛异常一律清掉，绝不让异常穿过 native 栈帧
+ * （穿过会让 llama 状态与 sampler 泄漏，且推理结果不可回收）。
+ */
+void report_progress(JNIEnv * env, jobject cb, int phase, int current, int total) {
+    if (cb == nullptr) { return; }
+    jclass cls = env->GetObjectClass(cb);
+    if (cls == nullptr) { return; }
+    jmethodID mid = env->GetMethodID(cls, "onProgress", "(III)V");
+    if (mid != nullptr) {
+        env->CallVoidMethod(cb, mid, static_cast<jint>(phase),
+                            static_cast<jint>(current), static_cast<jint>(total));
+    }
+    if (env->ExceptionCheck()) { env->ExceptionClear(); }
+    env->DeleteLocalRef(cls);
+}
 } // namespace
 
 extern "C" {
@@ -117,7 +146,8 @@ Java_com_notifyme_android_LlamaJni_nativeCreate(
 JNIEXPORT jstring JNICALL
 Java_com_notifyme_android_LlamaJni_nativeComplete(
         JNIEnv * env, jclass, jlong handle,
-        jstring jsystem, jstring juser, jint max_tokens, jfloat temperature) {
+        jstring jsystem, jstring juser, jint max_tokens, jfloat temperature,
+        jobject progress) {
 
     auto * st = reinterpret_cast<llama_state *>(handle);
     if (!st || !st->ctx) {
@@ -164,13 +194,16 @@ Java_com_notifyme_android_LlamaJni_nativeComplete(
     // decode error on the second and later calls). Clear it every time.
     llama_memory_clear(llama_get_memory(st->ctx), /*data=*/true);
 
-    // Prefill: decode the prompt in DEFAULT_BATCH-sized chunks, requesting logits
+    // Prefill: decode the prompt in PREFILL_CHUNK-sized chunks (batch buffer is
+    // DEFAULT_BATCH, so every chunk fits), requesting logits
     // only on the very last token. The batch buffer holds DEFAULT_BATCH tokens;
     // the previous version added every prompt token in one batch, so any prompt
     // longer than that wrote past the end of the buffer (heap corruption).
-    for (size_t start = 0; start < prompt_tokens.size(); start += DEFAULT_BATCH) {
+    const int prompt_total = static_cast<int>(prompt_tokens.size());
+    report_progress(env, progress, PHASE_PREFILL, 0, prompt_total);
+    for (size_t start = 0; start < prompt_tokens.size(); start += PREFILL_CHUNK) {
         const size_t end = std::min(
-            prompt_tokens.size(), start + static_cast<size_t>(DEFAULT_BATCH));
+            prompt_tokens.size(), start + static_cast<size_t>(PREFILL_CHUNK));
         common_batch_clear(st->batch);
         for (size_t i = start; i < end; ++i) {
             const bool want_logit = (i + 1 == prompt_tokens.size());
@@ -182,12 +215,16 @@ Java_com_notifyme_android_LlamaJni_nativeComplete(
             throw_rt(env, "prefill 解码失败");
             return nullptr;
         }
+        report_progress(env, progress, PHASE_PREFILL,
+                        static_cast<int>(end), prompt_total);
     }
 
     llama_pos position = static_cast<llama_pos>(prompt_tokens.size());
     const llama_vocab * vocab = llama_model_get_vocab(st->model);
     std::string out;
+    int generated = 0;
 
+    report_progress(env, progress, PHASE_DECODE, 0, max_tokens);
     for (int n = 0; n < max_tokens; ++n) {
         llama_token token = common_sampler_sample(sampler, st->ctx, -1);
         common_sampler_accept(sampler, token, true);
@@ -205,7 +242,13 @@ Java_com_notifyme_android_LlamaJni_nativeComplete(
             return nullptr;
         }
         ++position;
+        ++generated;
+        if (generated % DECODE_REPORT_INTERVAL == 0) {
+            report_progress(env, progress, PHASE_DECODE, generated, max_tokens);
+        }
     }
+    // 结束（EOG / 达到上限）补一次终值，UI 侧才知道生成真的收尾了。
+    report_progress(env, progress, PHASE_DECODE, generated, max_tokens);
 
     common_sampler_free(sampler);
     return env->NewStringUTF(out.c_str());

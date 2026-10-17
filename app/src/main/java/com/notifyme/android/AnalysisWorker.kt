@@ -78,6 +78,16 @@ class AnalysisWorker(
     }
 
     override suspend fun doWork(): Result {
+        // M15 端侧分析进度：本轮无论正常收尾、提前返回、抛异常还是被 WorkManager
+        // 取消，都必须把进度态清成 null，否则 UI 会永久停在最后一个阶段。
+        try {
+            return runRound()
+        } finally {
+            AnalysisProgressBus.publish(null)
+        }
+    }
+
+    private suspend fun runRound(): Result {
         val config = AnalysisConfig(applicationContext)
         if (!config.enabled) return Result.success()
 
@@ -245,7 +255,10 @@ class AnalysisWorker(
                         "fork prefilter p=%.2f split → s1 | %s"
                             .format(pre.prob, kase.conversation)
                     )
-                    val record = analyzeOneCase(config, slot, baseUrl, kase, preFork)
+                    val record = analyzeOneCase(
+                        config, slot, baseUrl, kase, preFork,
+                        caseIndex = index, caseTotal = cases.size
+                    )
                     AnalysisStore.append(applicationContext, record)
                     done++
                     if (record.escalated) escalatedCount++
@@ -369,8 +382,34 @@ class AnalysisWorker(
         slot: AnalysisConfig.SlotConfig,
         baseUrl: String,
         kase: AnalysisCase,
-        prefilterFork: AnalysisCaseRecord.ForkRecord
+        prefilterFork: AnalysisCaseRecord.ForkRecord,
+        caseIndex: Int = 0,
+        caseTotal: Int = 1
     ): AnalysisCaseRecord {
+        // M15：本 case 的进度广播。startedAt 每 case 重置，UI 的「已用时间」按会话算；
+        // 首个 case 之前本地模型要加载（构造 LlamaCppEngine 即加载 GGUF），先报加载阶段。
+        val startedAt = android.os.SystemClock.elapsedRealtime()
+        fun emit(stage: AnalysisStage, token: Int = 0, maxToken: Int = 0) {
+            AnalysisProgressBus.publish(
+                AnalysisRunState(
+                    convKeyId = ConvKey(kase.pkg, kase.conversation).id,
+                    conversation = kase.conversation,
+                    stage = stage,
+                    caseIndex = caseIndex + 1,
+                    caseTotal = caseTotal,
+                    token = token,
+                    maxToken = maxToken,
+                    startedAt = startedAt
+                )
+            )
+        }
+        // native 回调跑在推理线程：这里只发布状态（总线自己切主线程），不做任何 IO。
+        val onLocalProgress: (LocalLlmProgress) -> Unit = { p ->
+            if (p.isPrefill) emit(AnalysisStage.LOCAL_PREFILL, p.current, p.total)
+            else emit(AnalysisStage.LOCAL_DECODE, p.current, p.total)
+        }
+        emit(if (caseIndex == 0) AnalysisStage.LOADING_MODEL else AnalysisStage.PREPARING)
+
         val forks = mutableListOf(prefilterFork)
         // 会话级自定义提示词（PromptStore，空=全局默认）：S1 state/S1 prompt/S2 prompt 三处注入
         val background = PromptStore.getPrompt(
@@ -390,10 +429,11 @@ class AnalysisWorker(
 
         // ---- fork 2：S1 判定 ----
         val result = if (s1Local) {
-            runS1Local(kase, background)
-                } else if (config.s1Type == AnalysisConfig.S1_TYPE_LAYA_ONDEVICE) {
+            runS1Local(kase, background, onLocalProgress)
+        } else if (config.s1Type == AnalysisConfig.S1_TYPE_LAYA_ONDEVICE) {
             runS1LayaTflite(kase, background)
         } else {
+            emit(AnalysisStage.REMOTE)
             runS1SystemOne(config, slot, baseUrl, sendCase, cloudBackground)
         }
         val s1Raw = result.first
@@ -443,7 +483,7 @@ class AnalysisWorker(
             ) {
                 // S2 本地端侧引擎（模型/引擎未就绪已在 doWork 预检并写入状态文案）
                 try {
-                    val s2 = runS2Local(kase, s1, background)
+                    val s2 = runS2Local(kase, s1, background, onLocalProgress)
                     escalated = true
                     s2Summary = s2.summary
                     s2DueTime = s2.dueTime
@@ -461,6 +501,7 @@ class AnalysisWorker(
                 val s2Slot = if (privacy.cloudBlocked) null else config.s2Slot()
                 if (s2Slot != null) {
                     try {
+                        emit(AnalysisStage.REMOTE)
                         val s2 = runS2OpenAi(s2Slot, sendCase, s1, cloudBackground)
                         escalated = true
                         s2Summary = s2.summary
@@ -490,14 +531,16 @@ class AnalysisWorker(
         // advisor 失败绝不拖垮 case——错误以 ForkRecord(advisor_error) 记录。
         // 本地评审优先：数据不出端，不受 cloudBlocked 限制；云端评审仅在非本地且允许出云时调用
         if (config.advisorUsesLocal()) {
-            forks += advisorForkLocal(s1, s2Summary, s2Tasks, sendCase)
+            forks += advisorForkLocal(s1, s2Summary, s2Tasks, sendCase, onLocalProgress)
         } else {
             val advisorSlotCfg = if (privacy.cloudBlocked) null else config.advisorSlot()
             if (advisorSlotCfg != null) {
+                emit(AnalysisStage.REMOTE)
                 forks += advisorFork(advisorSlotCfg, s1, s2Summary, s2Tasks, sendCase)
             }
         }
 
+        emit(AnalysisStage.SAVING)
         return AnalysisCaseRecord(
             caseId = kase.caseId,
             conversation = kase.conversation,
@@ -582,7 +625,8 @@ class AnalysisWorker(
         s1: AnalysisCase.Companion.S1Result,
         s2Summary: String,
         s2Tasks: List<AnalysisCaseRecord.Task>,
-        sendCase: AnalysisCase
+        sendCase: AnalysisCase,
+        onProgress: ((LocalLlmProgress) -> Unit)? = null
     ): AnalysisCaseRecord.ForkRecord {
         val tasksDigest = s2Tasks.joinToString("；") {
             it.what + (it.`when`.takeIf { w -> w.isNotBlank() }?.let { w -> "@$w" } ?: "")
@@ -598,7 +642,8 @@ class AnalysisWorker(
                     s2Tasks = tasksDigest,
                     windowDigest = windowDigest
                 ),
-                1024
+                1024,
+                onProgress
             )
             val content = AnalysisParsing.extractJsonPayload(advice)?.toString() ?: advice
             val clean = content.trim().take(400)
@@ -751,13 +796,15 @@ class AnalysisWorker(
      */
     private suspend fun runS1Local(
         kase: AnalysisCase,
-        background: String = ""
+        background: String = "",
+        onProgress: ((LocalLlmProgress) -> Unit)? = null
     ): Pair<String, AnalysisCase.Companion.S1Result> {
         val engine = LocalLlmEngines.forModel(applicationContext, LocalModelStore.MODEL_S1)
         val raw = engine.chat(
             AnalysisCase.buildS1LocalSystemPrompt(background),
             "会话「${kase.conversation}」最近消息：\n${kase.windowText()}",
-            2048
+            2048,
+            onProgress
         )
         return raw to AnalysisParsing.parseS1Result(AnalysisParsing.extractJsonFromText(raw), "local")
     }
@@ -836,13 +883,15 @@ class AnalysisWorker(
     private suspend fun runS2Local(
         kase: AnalysisCase,
         s1: AnalysisCase.Companion.S1Result,
-        background: String = ""
+        background: String = "",
+        onProgress: ((LocalLlmProgress) -> Unit)? = null
     ): AnalysisParsing.S2Output {
         val engine = LocalLlmEngines.forModel(applicationContext, LocalModelStore.MODEL_S2)
         val raw = engine.chat(
             AnalysisCase.buildS2SystemPrompt(s1, background),
             "会话「${kase.conversation}」最近消息：\n${kase.windowText()}",
-            4096
+            4096,
+            onProgress
         )
         return AnalysisParsing.parseS2Output(AnalysisParsing.extractJsonFromText(raw), kase, raw)
     }

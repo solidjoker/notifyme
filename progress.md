@@ -663,6 +663,19 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - **按硬约束未推送**，等用户明示（M13/0.3.9 亦未推）。
 
 
+### 27. 端侧分析进度（M15）（2026-10-17，**0.3.11/17**）
+
+用户需求（m03179）：「手机端用手机模型分析对话需要显示进度」。原实现只有 WorkManager 的 4dp 不确定进度条：本地 0.5B 推理一个会话要几十秒（真机实测 prefill 502 token ≈ 20s），期间界面完全没反馈。
+
+- **native 进度回调**（`llama_jni.cpp`）：`nativeComplete` 增加可选 `progress` 对象，Kotlin 侧 `LlamaJni.ProgressSink.onProgress(phase, current, total)`；prefill 每批、decode 每 8 token 回报，回调异常在 native 侧清掉（绝不让异常穿 native 栈）。prefill 批从 512 改为 64（`PREFILL_CHUNK`）：真机从「20 秒一动不动」变成约 2-3 秒一次。
+- **状态总线**（`AnalysisProgress.kt`）：`AnalysisRunState`（阶段/会话/token/上限/起始时刻）+ `AnalysisProgressBus`（单进程单例，publish 切主线程、同帧合并）+ `AnalysisProgressUi`（文案拼装 + 文字/进度条渲染，可算百分比走确定态）。阶段：准备 → 加载模型 → 读取上下文（prefill）→ 端侧推理（decode）→ 云端 → 整理。
+- **Worker 接线**（`AnalysisWorker`）：每个 case 发布状态（第 i/n 个会话），本地 S1/S2/本地评审的 `chat(...)` 都传进度回调；云端分支报 REMOTE；`doWork` 用 try/finally 保证任何路径（取消/异常/提前返回）都 `publish(null)`，不会卡在最后一个阶段。
+- **三处 UI**：会话详情页（新增 `tvAnalysisProgress` + 原进度条）、控制台分析设置状态行（新增 `progressAnalysis` 条）、主页会话头 chip 下的进度条（按会话匹配改确定态）。prefill 期间每秒补一帧，让「已用 N秒」不冻住。
+- **单测**：`AnalysisProgressTest` 7 例（percent 的 decode 区间/跨 case 折算/夹取/无预算 null；formatElapsed 秒/分/负值）。
+- **真机验收（vermeer / Android 15，0.3.10-test→0.3.11-test `-r` 升级）**：S1 本地模型（Qwen2.5-0.5B-Instruct Q4_K_M，491400032 字节）单会话分析，界面实时显示「读取会话上下文 128/502 token · 已用 5秒」→「320/502 · 13秒」→「192/502 · 9秒」（另一轮），完成后回到结果 chips（需要行动 95% / 重要度 7.0 / 截止 明天 / 主题 工作任务）。logcat 证据：`publish LOADING_MODEL → LOCAL_PREFILL 0/502 → 502/502 → LOCAL_DECODE 0/2048 … 43/2048 → SAVING → null` 全程连续；`files/analysis.jsonl` 落库 S1 判定 0.90/7.0。真机 prefill 502 token≈20s、decode ≈20 token/s，分批后肉眼跟手。
+- 本机 `aapt2` 在当前环境无法在 `app\` 下建文件（Gradle 资源链接报 stableIds.txt「数据无效」），本次验证用临时 `layout.buildDirectory` 改到 `build/appout` 完成构建，**验证后已还原，未入库**。
+- 按硬约束未推送，等用户明示。
+
 ## 四、构建与运行
 
 ```powershell
