@@ -26,6 +26,9 @@ enum class AnalysisStage {
     /** 端侧 decode：逐 token 生成结果 */
     LOCAL_DECODE,
 
+    /** 端侧判定题（Laya TFLite：4 道题逐题推理，无 token 级进度） */
+    LOCAL_QUESTIONS,
+
     /** 走云端接口（无 token 级进度，只报已用时间） */
     REMOTE,
 
@@ -68,8 +71,11 @@ data class AnalysisRunState(
      */
     val caseFraction: Float?
         get() = when {
-            stage != AnalysisStage.LOCAL_DECODE -> null
-            maxToken > 0 -> (token.toFloat() / maxToken).coerceIn(0f, 1f)
+            // decode 用「已生成/采样上限」；端侧判定题用「已答/总题数」
+            stage == AnalysisStage.LOCAL_DECODE && maxToken > 0 ->
+                (token.toFloat() / maxToken).coerceIn(0f, 1f)
+            stage == AnalysisStage.LOCAL_QUESTIONS && maxToken > 0 ->
+                (token.toFloat() / maxToken).coerceIn(0f, 1f)
             else -> null
         }
 
@@ -118,6 +124,15 @@ object AnalysisProgressBus {
 
     /** 发布新状态；传 null 表示本轮分析结束（UI 收起进度）。 */
     fun publish(newState: AnalysisRunState?) {
+        // 只在阶段切换时打一行：支持/真机排查「进度到哪一步停住」用，token 级不刷日志
+        if (newState?.stage != state?.stage) {
+            android.util.Log.i(
+                "AnalysisProgress",
+                "stage=" + (newState?.stage?.name ?: "idle") +
+                    " case=" + (newState?.caseIndex ?: 0) + "/" + (newState?.caseTotal ?: 0) +
+                    " progress=" + (newState?.token ?: 0) + "/" + (newState?.maxToken ?: 0)
+            )
+        }
         state = newState
         mainHandler.removeCallbacks(dispatch)
         mainHandler.post(dispatch)
@@ -171,6 +186,13 @@ object AnalysisProgressUi {
                     )
                 }
             }
+
+            AnalysisStage.LOCAL_QUESTIONS ->
+                casePrefix + context.getString(
+                    R.string.analysis_progress_questions,
+                    context.getString(R.string.analysis_stage_questions),
+                    state.token, state.maxToken, elapsed
+                )
 
             AnalysisStage.REMOTE ->
                 casePrefix + context.getString(R.string.analysis_progress_elapsed,

@@ -62,6 +62,14 @@ class AnalysisProgressTest {
         assertNull(state(token = 5, maxToken = 0).percent())
     }
 
+    @Test
+    fun `question stage steps per answered question`() {
+        // Laya TFLite 按题回报：4 题答完 1 题 = 25%
+        assertEquals(25, state(stage = AnalysisStage.LOCAL_QUESTIONS, token = 1, maxToken = 4).percent())
+        assertEquals(100, state(stage = AnalysisStage.LOCAL_QUESTIONS, token = 4, maxToken = 4).percent())
+        assertNull(state(stage = AnalysisStage.LOCAL_QUESTIONS, token = 1, maxToken = 0).percent())
+    }
+
     // ---- formatElapsed ----
 
     @Test

@@ -74,6 +74,7 @@ object LayaTfliteEngine {
         questions: List<Pair<String, Map<String, Any?>>>,
         stateText: String,
         window: Int = WINDOW,
+        onProgress: ((done: Int, total: Int) -> Unit)? = null,
     ): List<Map<String, Any?>> {
         val dir = modelDir(context).absolutePath
         val engine = obtainEngine(context)
@@ -81,8 +82,12 @@ object LayaTfliteEngine {
             engine.initialize(LayaEngine.Backend.CPU, window)
             initializedDir = dir
         }
-        return questions.map { (id, question) ->
-            engine.answer(stateText, question, LayaEngine.Backend.CPU, id, window).answer
+        // 逐题回报：4 道题每题一次图推理，真机上要几秒，UI 靠它显示「第 n/4 题」
+        onProgress?.invoke(0, questions.size)
+        return questions.mapIndexed { index, (id, question) ->
+            val answer = engine.answer(stateText, question, LayaEngine.Backend.CPU, id, window)
+            onProgress?.invoke(index + 1, questions.size)
+            answer.answer
         }
     }
 

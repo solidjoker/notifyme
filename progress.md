@@ -673,6 +673,7 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - **三处 UI**：会话详情页（新增 `tvAnalysisProgress` + 原进度条）、控制台分析设置状态行（新增 `progressAnalysis` 条）、主页会话头 chip 下的进度条（按会话匹配改确定态）。prefill 期间每秒补一帧，让「已用 N秒」不冻住。
 - **单测**：`AnalysisProgressTest` 7 例（percent 的 decode 区间/跨 case 折算/夹取/无预算 null；formatElapsed 秒/分/负值）。
 - **真机验收（vermeer / Android 15，0.3.10-test→0.3.11-test `-r` 升级）**：S1 本地模型（Qwen2.5-0.5B-Instruct Q4_K_M，491400032 字节）单会话分析，界面实时显示「读取会话上下文 128/502 token · 已用 5秒」→「320/502 · 13秒」→「192/502 · 9秒」（另一轮），完成后回到结果 chips（需要行动 95% / 重要度 7.0 / 截止 明天 / 主题 工作任务）。logcat 证据：`publish LOADING_MODEL → LOCAL_PREFILL 0/502 → 502/502 → LOCAL_DECODE 0/2048 … 43/2048 → SAVING → null` 全程连续；`files/analysis.jsonl` 落库 S1 判定 0.90/7.0。真机 prefill 502 token≈20s、decode ≈20 token/s，分批后肉眼跟手。
+- **端侧 Laya 判定题进度**（补 M15 覆盖）：用户真机 S1 配的是「Laya 端侧」（4 道判定题逐题图推理），原来没有任何进度。`LayaTfliteEngine.answerQuestions` 增加 `onProgress(done,total)`，Worker 每答完一题发布 `LOCAL_QUESTIONS` 阶段，UI 显示「端侧判定 n/4 题 · 已用 x秒」；真机实测阶段日志 `LOADING_MODEL → LOCAL_QUESTIONS 0/4 → SAVING → idle`（图加载约 4 秒、4 题约 0.9 秒）。`AnalysisProgressBus` 增加阶段切换日志（只切阶段时打一行，token 级不刷屏）便于真机排查。
 - 本机 `aapt2` 在当前环境无法在 `app\` 下建文件（Gradle 资源链接报 stableIds.txt「数据无效」），本次验证用临时 `layout.buildDirectory` 改到 `build/appout` 完成构建，**验证后已还原，未入库**。
 - 按硬约束未推送，等用户明示。
 

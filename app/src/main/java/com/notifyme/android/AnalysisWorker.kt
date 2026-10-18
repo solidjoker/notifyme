@@ -431,7 +431,10 @@ class AnalysisWorker(
         val result = if (s1Local) {
             runS1Local(kase, background, onLocalProgress)
         } else if (config.s1Type == AnalysisConfig.S1_TYPE_LAYA_ONDEVICE) {
-            runS1LayaTflite(kase, background)
+            // Laya TFLite 没有 token 级进度，按题回报（4 题逐题推理）
+            runS1LayaTflite(kase, background) { done, total ->
+                emit(AnalysisStage.LOCAL_QUESTIONS, done, total)
+            }
         } else {
             emit(AnalysisStage.REMOTE)
             runS1SystemOne(config, slot, baseUrl, sendCase, cloudBackground)
@@ -817,7 +820,8 @@ class AnalysisWorker(
      */
     private fun runS1LayaTflite(
         kase: AnalysisCase,
-        background: String
+        background: String,
+        onProgress: ((done: Int, total: Int) -> Unit)? = null
     ): Pair<String, AnalysisCase.Companion.S1Result> {
         if (!LayaTfliteEngine.isReady(applicationContext)) {
             throw LocalEngineException("laya TFLite 模型未下载（模型管理→Laya-Multilingual→下载）")
@@ -829,7 +833,7 @@ class AnalysisWorker(
             name to LayaTfliteEngine.toOrderedMap(questions.getJSONObject(name))
         }
         val answers = try {
-            LayaTfliteEngine.answerQuestions(applicationContext, ordered, stateText)
+            LayaTfliteEngine.answerQuestions(applicationContext, ordered, stateText, onProgress = onProgress)
         } catch (e: IllegalStateException) {
             // 图编译/文件校验失败：归入本地引擎失败路径，保留原始原因
             throw LocalEngineException("laya 端侧引擎不可用: ${e.message}")

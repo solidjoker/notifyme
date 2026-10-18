@@ -533,4 +533,6 @@
     <string name="analysis_progress_prefill">%1$s %2$d/%3$d token · 已用 %4$s</string>
     <string name="analysis_progress_decode">%1$s %2$d%% · 已生成 %3$d token · 已用 %4$s</string>
     <string name="analysis_progress_queued">已加入分析队列…</string>
+    <string name="analysis_stage_questions">端侧判定</string>
+    <string name="analysis_progress_questions">%1$s %2$d/%3$d 题 · 已用 %4$s</string>
 </resources>
