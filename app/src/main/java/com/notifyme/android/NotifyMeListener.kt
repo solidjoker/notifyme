@@ -3,6 +3,7 @@
 
 package com.notifyme.android
 
+import android.annotation.TargetApi
 import android.app.Notification
 import android.app.Notification.MessagingStyle
 import android.content.ComponentName
@@ -233,6 +234,18 @@ class NotifyMeListener : NotificationListenerService() {
      * 不用隐藏 API extractMessagingStyleFromNotification，公开 SDK 内只有这条路。
      */
     private fun extractStyleMessages(extras: Bundle?, postTime: Long): List<RawStyleMessage> {
+        // getMessagesFromBundleArray 是 API 30 才有的公开入口（lint NewApi 会直接
+        // 判 error）：低于 30 没有公开等价 API，按「无 style 明细」降级——
+        // title/text/bigText 仍照常解析，只是拿不到逐条发言人明细。
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return emptyList()
+        return extractStyleMessagesFromBundles(extras, postTime)
+    }
+
+    @TargetApi(Build.VERSION_CODES.R)
+    private fun extractStyleMessagesFromBundles(
+        extras: Bundle?,
+        postTime: Long
+    ): List<RawStyleMessage> {
         // 整体兜底：EXTRA_MESSAGES 里的 Bundle 由第三方 App 构造，getParcelableArray
         // 解畸形 parcel 或 getMessagesFromBundleArray 强转都可能抛异常，绝不能让它
         // 冲出回调崩掉整个进程；解析失败按「无 style 明细」降级（title/text 仍可用）。

@@ -563,7 +563,7 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - 卡片显示条件不变：`cardsEnabled`（默认关）+ 显式 ⭐ 白名单才即时弹——与需求 1 天然自洽。
 
 **验证与收尾**：`WatchlistIdTest` 按 v3 重写 6 例（含黑名单优先、ALL 态黑名单单独取消、旧 NONE 兼容）；OpenDebug 单测 **304 全绿**（基线 302−4+6）；`assembleOpenDebug` 通过。文档同步：README 特性行与 M9 行（原「规划中」已过时）、`docs/architecture/README.md` 三态语义段与 prefs 表、`04-analysis-pipeline.mmd` 已重渲 svg/png、`watchlist_hint` 文案。版本 `0.3.4/10`。
-本机环境事实：工作区缺 `local.properties`（AGP 报 SDK location not found）→ 已重建（gitignored，`sdk.dir=C:\Users\smith\AppData\Local\Android\Sdk`）；单测/打包仍需 §三.19 的 aapt2 覆盖 `-Pandroid.aapt2FromMavenOverride=...\build-tools\35.0.0\aapt2.exe`。
+本机环境事实：工作区缺 `local.properties`（AGP 报 SDK location not found）→ 已重建（gitignored，`sdk.dir=C:\Users\<你>\AppData\Local\Android\Sdk`）；单测/打包仍需 §三.19 的 aapt2 覆盖 `-Pandroid.aapt2FromMavenOverride=...\build-tools\35.0.0\aapt2.exe`。
 **遗留**：真机（HyperOS）回归待用户验证——重启手机看球是否自动回来、吊销再恢复悬浮窗权限看服务是否还崩、关球开关看球是否即时消失；本轮改动未提交（工作区另有 M10 advisor 未提交改动，待真机验证通过后与 §三.15 遗留一并梳理提交边界）。
 （2026-10-13 注：两批改动均已提交推送，见 §三.21；HyperOS 真机回归仍待用户确认。）
 
