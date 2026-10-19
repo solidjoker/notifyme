@@ -66,21 +66,13 @@ class ConsoleActivity : Activity() {
 
         setupKeepAliveSection()
 
-        // 快捷按钮：全部折叠 / 全部展开（M14：按天显式态；主页 ☰ 菜单同功能）
+        // 快捷按钮：全部折叠 / 全部展开（M16：与主页标题栏同口径——会话级 + 天级一起写）
         findViewById<Button>(R.id.btnCollapseAll).setOnClickListener {
-            val pairs = MessageStore.readRecent(this, 500)
-                .groupBy { it.convKey }
-                .flatMap { (k, l) ->
-                    l.map {
-                        if (it.timestamp > 0) dayKeyFmt.format(Date(it.timestamp))
-                        else MessageStore.DAY_KEY_UNKNOWN
-                    }.distinct().map { k to it }
-                }
-            CollapseStore.setAllDates(this, pairs, true)
+            CollapseStore.setAll(this, collapseTargets(), collapsed = true)
             Toast.makeText(this, R.string.quick_collapse_done, Toast.LENGTH_SHORT).show()
         }
         findViewById<Button>(R.id.btnExpandAll).setOnClickListener {
-            CollapseStore.setAllDates(this, emptyList(), false)
+            CollapseStore.setAll(this, collapseTargets(), collapsed = false)
             Toast.makeText(this, R.string.quick_expand_done, Toast.LENGTH_SHORT).show()
         }
         // 快捷按钮：回到主页（全部折叠/展开已在主页标题栏，此处仅提供导航入口）
@@ -89,6 +81,20 @@ class ConsoleActivity : Activity() {
         }
 
     }
+
+    /**
+     * 折叠作用域：近 500 条消息里出现的每个 (会话, 天) 组合，与主页 buildFeed 的
+     * feedDayPairs 同口径（同一份数据、同一套复合键），两处按钮行为完全一致。
+     */
+    private fun collapseTargets(): List<Pair<ConvKey, String>> =
+        MessageStore.readRecent(this, 500)
+            .groupBy { it.convKey }
+            .flatMap { (k, l) ->
+                l.map {
+                    if (it.timestamp > 0) dayKeyFmt.format(Date(it.timestamp))
+                    else MessageStore.DAY_KEY_UNKNOWN
+                }.distinct().map { k to it }
+            }
 
     override fun onResume() {
         super.onResume()

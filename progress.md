@@ -677,6 +677,18 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - 本机 `aapt2` 在当前环境无法在 `app\` 下建文件（Gradle 资源链接报 stableIds.txt「数据无效」），本次验证用临时 `layout.buildDirectory` 改到 `build/appout` 完成构建，**验证后已还原，未入库**。
 - 按硬约束未推送，等用户明示。
 
+### 28. 恢复「按对话折叠」：会话级 + 天级两级并存（M16）（2026-10-19，**0.3.12/18**）
+
+用户需求（m01356）：「按对话折叠功能现在点不到了，需要恢复」。M14（§三.26）删掉会话级整块折叠并把会话头箭头 `View.GONE`，但主页提示语 `home_header_hint`「点会话名查看对话与分析 · 点右侧箭头折叠」和控制台引导文案都还写着点箭头折叠 → 用户照文案去点，什么都没有。拍板：**两级并存**（会话头箭头收整组，天组头箭头收某一天），不回到「只有天级」。
+
+- **CollapseStore**（`MainActivity.kt` 底部）：新增会话级显式集 `collapsed_conversations_v2`（**刻意换新键名**——M13 的旧键 `collapsed_conversations` 仍不读写，免得多年前的旧状态突然复活）；纯函数 `isConversationCollapsed(set, key) = key.id in set`；`toggleConversation(ctx, key, nowCollapsed)` 只动会话集，组内各天的显式态原样保留（展开即回到原状）；`setAll(ctx, pairs, collapsed)` 一次写齐三集（折叠=会话全选 + 每个 (会话,天) 进显式折叠；展开=清会话集 + 每个 (会话,天) 进显式展开）。旧 `setAllDates` 保留。
+- **MainActivity**：`buildFeed` 里 `convCollapsed = isConversationCollapsed(...) && query.isEmpty()`（搜索命中时强制展开，保证结果可见）；`FeedItem.Header` 重新带 `collapsed` 内容字段（`identityOf` 仍只用 `key`，靠 DiffUtil 内容比较让 ▼/▶ 重绑，不会误判整项替换）；`bindHeader` 恢复箭头可见（多选态仍 GONE）并挂 `onToggleConversation`；标题栏「全部折叠/展开」改走 `setAll(feedDayPairs, …)`。
+- **ConsoleActivity**：两个快捷按钮同口径改 `setAll(collapseTargets(), …)`，抽出 `collapseTargets()`（readRecent(500)→按会话分组→distinct 天，与主页 `feedDayPairs` 同一份口径）。顺带修老 bug：「全部展开」原来传 `emptyList()`，只清态不写显式展开 → 历史天立刻被默认规则重新收起，等于按了没反应。
+- **单测** `CollapseStoreTest` +3 例（集合内才收 / 会话级与天级互相独立 / 跨 App 同名会话不串味），共 11 例；全量门禁 `:app:testOpenDebugUnitTest :app:assembleOpenDebug :app:assembleBetaDebug` BUILD SUCCESSFUL。
+- **模拟器走查（emulator-5554，0.3.12/18 真包）**：点会话头 ▼→▶，整组（天头 + 消息）消失、下一会话不受影响 ✓；再点恢复 ✓；「全部折叠」→ 所有会话 ▶、无天组无消息 ✓；「全部展开」→ `expanded_dates` 写入全部 (会话,天) 复合键（含 10-16/17/18 历史天）✓；单独点天组箭头仍能只收一天（两级互不干扰）✓；`am force-stop` 重启后会话折叠保持（`shared_prefs/collapse_state.xml` 的 `collapsed_conversations_v2`）✓；折叠态下搜索命中 → 强制展开、清搜索 → 回到折叠 ✓。
+- **真机待装**：本轮收尾时小米17（`ebb079b5`）未连 adb，只有 MuMu 在线；APK 已就绪 `build/appout/outputs/apk/open/debug/notifyme-open.apk`（临时 build 目录，见 §三.27），装上后需确认用户实际那台机的箭头能点。
+- 按硬约束未推送（连同 §三.27 的 Laya 进度提交一起等用户明示）。
+
 ## 四、构建与运行
 
 ```powershell
@@ -712,11 +724,15 @@ ADB/设备要点（踩过的坑）：
 - 设备自转横屏时：`adb shell settings put system accelerometer_rotation 0` 可立即恢复竖屏
   （`user_rotation` 在加速度模式开时不生效）
 - 设备 Sogou IME 无法用 adb 输入中文；uiautomator dump 不含 GONE 节点
+- MuMu 测试机上微博/抖音会自己抢前台（`am start` 后被顶掉，uiautomator 拍到别人）：`pm disable-user --user 0 com.sina.weibo` / `com.ss.android.ugc.aweme` 后立刻正常（要恢复用 `pm enable <包名>`）
+- adb 输不了中文，但验证「搜索态强制展开」可以挑**名字里带 ASCII 的会话**（如 `Jmoon`）当探针：`input text Jmoon`
+- uiautomator 属性顺序是 `text` 在 `resource-id` 之前，写解析正则别假定顺序；节点里 `&#1;` 就是 ConvKey/日期复合键的分隔符 \u0001
 - 本机当前文件策略 danger-full-access；无需申请 sandbox_permissions
 
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
+> 当前状态（2026-10-19 更新）：§三.27 M15 端侧分析进度已随 **0.3.11/17** 推送（b6105d7），CI 护栏修复 23b0e0d 已推送且绿；Laya 判定题进度（98d13e8）与 §三.28 M16 恢复按对话折叠（**0.3.12/18**）**已交付未推送**；小米17 上 0.3.12/18 待装。
 > 当前状态（2026-10-14 更新）：§三.25/26 已交付**未推送**（M13 分析结果回看原文 0.3.9/15 + M14 主页按天折叠与逐条结果 0.3.10/16，模拟器走查通过）；v0.3.8 正式发布完成；M1-M11 评审修复已随 0.3.8 发布（§三.24）。
 > 当前状态（2026-10-13 更新）：§三.21/§三.22/§三.23 已交付推送——M10 advisor 端侧本地评审（0.3.5/11）+ 主页「⚡ 最近待办」区编辑/删除/一键加日历（0.3.6/12，模拟器走查通过，L1 日历直写待真机确认）+ 五路评审 H1-H4 修复（0.3.7/13，重启闹钟补挂/FGS specialUse/Bundle 防御/jsonl 裁剪）；§三.20 v3 批次提交闭环，HyperOS 真机回归仍待用户确认。
 > 当前状态（2026-10-10 更新）：**W1 真机端到端已打通**，并按用户口径改为**全程手机内分析**（S1=端侧 Qwen2.5-0.5B + few-shot，S2=手机内配置的 GLM；不再依赖电脑 laya-local，见 §三.15 真机实测 ✅）；**M9 真机已验**（悬浮卡实拍 card_real.png）；**M10/M11/M11.4 已交付**；排程失联自愈 + 主页采集过滤 + 自采集噪声根除 + 悬浮面板「最近待办」与主页联动修复**全部真机验证通过（见 §三.14，§三.13 待办 1-3 已闭环）**；M12 分析范围筛选设计完成待实现；评测文档待补充；**0.5B few-shot 已完成并真机验证（§三.15，端侧 S1 已产出真实判定 JSON）**；本会话修复已随验证通过提交并推送；M0 代码与 CI 侧已完成，只剩 D5 正式密钥库 + 4 个 Secrets（等 `administration` 权限 token）。剩余待办：M12 分析范围筛选、评测文档补充、0.5B few-shot（低优先）；**2026-10-12 另有 v3「默认不关注」+ 悬浮窗自愈已交付待真机回归（§三.20，0.3.4/10）**；执行时以 docs/ROADMAP.md 为准。

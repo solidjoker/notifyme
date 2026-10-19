@@ -8,8 +8,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * M14 折叠模型纯逻辑单测：latestDayKeyOf 与 isDateCollapsed 均为无 Context 依赖的纯函数，
- * 覆盖「显式折叠 > 显式展开 > 默认（非最新天折叠）」三态优先级与未知日期组不参与最大值的边界。
+ * 折叠模型纯逻辑单测：latestDayKeyOf / isDateCollapsed / isConversationCollapsed 均为
+ * 无 Context 依赖的纯函数，覆盖天级「显式折叠 > 显式展开 > 默认（非最新天折叠）」三态优先级、
+ * 未知日期组不参与最大值的边界，以及 M16 恢复的会话级折叠（与会话互不串味、与天级互相独立）。
  */
 class CollapseStoreTest {
 
@@ -91,5 +92,40 @@ class CollapseStoreTest {
         assertFalse(
             CollapseStore.isDateCollapsed(collapsed, emptySet(), key, "2026-10-13", "2026-10-13")
         )
+    }
+
+    // ---- M16 会话级折叠（与天级独立的两层） ----
+
+    @Test
+    fun `conversation collapsed only when its id is in set`() {
+        val other = ConvKey("com.tencent.mm", "李四")
+        val collapsed = setOf(key.id)
+        assertTrue(CollapseStore.isConversationCollapsed(collapsed, key))
+        assertFalse(CollapseStore.isConversationCollapsed(collapsed, other))
+        // 集合外一律默认展开
+        assertFalse(CollapseStore.isConversationCollapsed(emptySet(), key))
+    }
+
+    @Test
+    fun `conversation level and day level states stay independent`() {
+        // 会话整组收起时组内不进列表；天级的显式展开不会解除会话级折叠（两层各自记账）
+        val collapsedConversations = setOf(key.id)
+        val expandedDay = "${key.id}\u00012026-10-11"
+        assertTrue(CollapseStore.isConversationCollapsed(collapsedConversations, key))
+        assertFalse(
+            CollapseStore.isDateCollapsed(
+                emptySet(), setOf(expandedDay), key, "2026-10-11", "2026-10-13"
+            )
+        )
+    }
+
+    @Test
+    fun `same conversation name across apps does not collide`() {
+        // ConvKey.id 含 pkg：同名会话跨 App 不互相收起
+        val weixin = ConvKey("com.tencent.mm", "张三")
+        val qq = ConvKey("com.tencent.qq", "张三")
+        val collapsed = setOf(weixin.id)
+        assertTrue(CollapseStore.isConversationCollapsed(collapsed, weixin))
+        assertFalse(CollapseStore.isConversationCollapsed(collapsed, qq))
     }
 }

@@ -106,9 +106,15 @@ class MainActivity : Activity() {
             if (adapter.selectionActive) toggleSelection(key)
             else ConversationActivity.start(this, key)
         },
+        onToggleConversation = { key, nowCollapsed ->
+            if (adapter.selectionActive) return@FeedAdapter
+            // M16：会话级折叠恢复。点会话头箭头=收起/展开整组；组内各天的折叠态原样保留
+            CollapseStore.toggleConversation(this, key, nowCollapsed)
+            refreshMessages()
+        },
         onToggleDate = { key, dayKey, nowCollapsed ->
             if (adapter.selectionActive) return@FeedAdapter
-            // M14：折叠只按天。点击日期组头=显式切换该天（覆盖「非最新天默认折叠」规则）并持久化
+            // M14：按天折叠。点击日期组头=显式切换该天（覆盖「非最新天默认折叠」规则）并持久化
             CollapseStore.toggleDate(this, key, dayKey, nowCollapsed)
             refreshMessages()
         },
@@ -181,13 +187,14 @@ class MainActivity : Activity() {
             }
         })
 
-        // 标题栏快捷操作：全部折叠 / 全部展开（M14：作用对象是「所有会话的所有天组」，写显式态）
+        // 标题栏快捷操作：全部折叠 / 全部展开（M16：会话级+天级一起写——
+        // 折叠=整组收起；展开=会话全开且每一天显式展开，不会被默认规则再收回去）
         findViewById<TextView>(R.id.btnCollapseAll).setOnClickListener {
-            CollapseStore.setAllDates(this, feedDayPairs, collapsed = true)
+            CollapseStore.setAll(this, feedDayPairs, collapsed = true)
             refreshMessages()
         }
         findViewById<TextView>(R.id.btnExpandAll).setOnClickListener {
-            CollapseStore.setAllDates(this, feedDayPairs, collapsed = false)
+            CollapseStore.setAll(this, feedDayPairs, collapsed = false)
             refreshMessages()
         }
 
@@ -539,7 +546,7 @@ class MainActivity : Activity() {
      * 结构（自上而下）：
      *  - 分区标题（⭐ 重点关注 N / 其它会话 N）：仅当名单里有真实 ⭐ 会话（剔除新旧哨兵）时出现；
      *    默认不关注（空名单）或全部关注态（仅哨兵）时扁平展示，不出分区标题。
-     *  - 会话头：组按最新消息时间倒序；点击箭头折叠整组。
+     *  - 会话头：组按最新消息时间倒序；点击右侧箭头折叠整组（M16 恢复），点文字区进详情页。
      *  - 日期组头：会话展开后，组内消息按日期（yyyy-MM-dd）再分组（时间正序），
      *    点击日期胶囊折叠/展开当天的消息，折叠态独立持久化。
      *  - 消息：窗口内消息带分析标签；待办会话只在窗口末条标 ⚡。
@@ -603,9 +610,10 @@ class MainActivity : Activity() {
     /** 后台线程执行：读存储 + 过滤 + 组装 [FeedItem]（不碰视图）。 */
     private fun buildFeed(query: String): FeedResult {
         val messages = MessageStore.readRecent(this, 500)
-        // M14：折叠只按天，三态（显式折叠/显式展开/默认非最新天折叠）
+        // M14：天级三态（显式折叠/显式展开/默认非最新天折叠）；M16：再叠加会话级折叠
         val collapsedDates = CollapseStore.loadCollapsedDates(this)
         val expandedDates = CollapseStore.loadExpandedDates(this)
+        val collapsedConversations = CollapseStore.loadCollapsedConversations(this)
         // M14：一次全量读，同时供「每会话最新 case」与「历史天逐条挂结果」使用
         val allCases = AnalysisStore.readRecent(this, 200)
         val latestCases = allCases.groupBy { it.convKey }
@@ -692,6 +700,11 @@ class MainActivity : Activity() {
             if (sectionTitle != null) items += FeedItem.Section(sectionTitle)
             for ((key, list) in sectionGroups) {
                 val case = latestCases[key]
+                // M16：会话级折叠。收起时只保留会话头（名称/角标/最新一条预览仍有信息量）；
+                // 搜索态强制展开——否则命中内容被整组挡住，搜索框就成了「搜得到看不见」。
+                val convCollapsed =
+                    CollapseStore.isConversationCollapsed(collapsedConversations, key) &&
+                        query.isEmpty()
                 items += FeedItem.Header(
                     key = key,
                     appLabel = list.last().appLabel,
@@ -700,8 +713,10 @@ class MainActivity : Activity() {
                     preview = "${list.last().sender}: ${list.last().text}",
                     analysis = case,
                     hasReminder = key in reminderKeys,
-                    watched = WatchlistStore.isWatchedId(key.id, unwatchedIds, watchedRaw)
+                    watched = WatchlistStore.isWatchedId(key.id, unwatchedIds, watchedRaw),
+                    collapsed = convCollapsed
                 )
+                if (convCollapsed) continue
 
                 // 二级分组：按日期切分（groupBy 保序，组内消息已是时间正序）。
                 // 时间戳兜底：a11y 直读等来源可能带来 ts<=0 的估算失败值，归「未标注日期」组，
@@ -1029,7 +1044,9 @@ class MainActivity : Activity() {
             val hasReminder: Boolean,
             /** 关注态是内容字段：点「关注」后该字段翻转 → DiffUtil 判 change 重绑头部 chip。
              *  若不加此字段，点关注只是移动位置，DiffUtil 判 move 不重绑，文案停在旧值。 */
-            val watched: Boolean
+            val watched: Boolean,
+            /** M16：会话级折叠态（内容字段）——同一 Header 需重绑才能翻转箭头 ▼/▶ */
+            val collapsed: Boolean
         ) : FeedItem()
 
         data class DateHeader(
@@ -1055,6 +1072,7 @@ class MainActivity : Activity() {
      *  会话头热区分开：文字区进详情页，箭头折叠/展开；日期组头整行可点折叠。 */
     private class FeedAdapter(
         private val onOpen: (ConvKey) -> Unit,
+        private val onToggleConversation: (ConvKey, Boolean) -> Unit,
         private val onToggleDate: (ConvKey, String, Boolean) -> Unit,
         private val onToggleWatch: (ConvKey) -> Unit,
         private val onHeaderLongPress: (ConvKey) -> Unit,
@@ -1168,8 +1186,10 @@ class MainActivity : Activity() {
             holder.tvConversation.text = key.conversation
             holder.tvCount.text = ctx.getString(R.string.msg_count, header.count)
             holder.tvPreview.text = header.preview
-            // M14：会话级折叠取消，折叠只按天（日期组头控制）；箭头隐藏
-            holder.tvArrow.visibility = View.GONE
+            // M16：会话级折叠恢复——箭头可见可点，收起/展开整组；批量选择态隐藏箭头避免误点
+            holder.tvArrow.visibility = if (selectionActive) View.GONE else View.VISIBLE
+            holder.tvArrow.text = if (header.collapsed) "▶" else "▼"
+            holder.tvArrow.setOnClickListener { onToggleConversation(key, header.collapsed) }
 
             // 来源 App 标记（M11：所有 App 都显示，含微信——多来源场景下来源必须可见）
             holder.tvApp.visibility = View.VISIBLE
@@ -1442,16 +1462,19 @@ class MainActivity : Activity() {
 }
 
 /**
- * 首页折叠状态持久化（M14：折叠彻底改为按天，三态）：
- *  - 元素是 ConvKey.id + [DATE_SEP] + yyyy-MM-dd；
- *  - 显式折叠集合 collapsed_dates 与显式展开集合 expanded_dates 互斥；
- *  - 无显式状态的天：默认折叠「该会话最新一天之外」的历史天（历史信息不再刷屏）；
- *  - 旧会话级 collapsed_conversations 已废弃：不再读写（存量数据留着无害）。
+ * 首页折叠状态持久化（M14 按天三态 + M16 恢复会话级折叠，两级并存）：
+ *  - 会话级：collapsed_conversations_v2 里的会话整组收起（组内各天状态原样保留，展开即回到原状）；
+ *    默认展开；搜索时忽略会话级折叠，保证命中内容可见。
+ *  - 天级：元素是 ConvKey.id + [DATE_SEP] + yyyy-MM-dd；
+ *    显式折叠集合 collapsed_dates 与显式展开集合 expanded_dates 互斥；
+ *    无显式状态的天：默认折叠「该会话最新一天之外」的历史天（历史信息不再刷屏）。
+ *  - M13 的旧键 collapsed_conversations 仍不读写：新键另起名，免得多年前的旧状态突然复活。
  */
 object CollapseStore {
     private const val PREFS_NAME = "collapse_state"
     private const val KEY_COLLAPSED_DATES = "collapsed_dates"
     private const val KEY_EXPANDED_DATES = "expanded_dates"
+    private const val KEY_COLLAPSED_CONVERSATIONS = "collapsed_conversations_v2"
 
     /** 日期组复合 key 的分隔符：刻意不用 '|'（那是 ConvKey 内部分隔符） */
     private const val DATE_SEP = ""
@@ -1467,6 +1490,21 @@ object CollapseStore {
 
     fun loadExpandedDates(context: Context): Set<String> =
         prefs(context).getStringSet(KEY_EXPANDED_DATES, emptySet()).orEmpty()
+
+    /** 会话级折叠（M16 恢复）：被显式收起的 ConvKey.id 集合，集合外一律默认展开。 */
+    fun loadCollapsedConversations(context: Context): Set<String> =
+        prefs(context).getStringSet(KEY_COLLAPSED_CONVERSATIONS, emptySet()).orEmpty()
+
+    /** 纯函数（便于单测）：该会话是否被整组收起。 */
+    fun isConversationCollapsed(collapsedConversations: Set<String>, key: ConvKey): Boolean =
+        key.id in collapsedConversations
+
+    /** 点会话头箭头：按当前有效态收起/展开整组。天级显式状态不动——展开后回到原来的按天形态。 */
+    fun toggleConversation(context: Context, key: ConvKey, nowCollapsed: Boolean) {
+        val set = loadCollapsedConversations(context).toMutableSet()
+        if (nowCollapsed) set.remove(key.id) else set.add(key.id)
+        prefs(context).edit().putStringSet(KEY_COLLAPSED_CONVERSATIONS, set).apply()
+    }
 
     /** 某会话某天是否处于折叠态（三态：显式折叠 > 显式展开 > 非最新天默认折叠）。 */
     fun isDateCollapsed(
@@ -1511,6 +1549,21 @@ object CollapseStore {
     fun setAllDates(context: Context, pairs: Collection<Pair<ConvKey, String>>, collapsed: Boolean) {
         val composites = pairs.map { dateComposite(it.first, it.second) }.toSet()
         prefs(context).edit()
+            .putStringSet(KEY_COLLAPSED_DATES, if (collapsed) composites else emptySet())
+            .putStringSet(KEY_EXPANDED_DATES, if (collapsed) emptySet() else composites)
+            .apply()
+    }
+
+    /**
+     * 全部折叠/展开（M16：会话级 + 天级一次写齐，主页标题栏与控制台共用）：
+     *  - 折叠：所有会话整组收起，同时把每个 (会话,天) 写进显式折叠集——展开单个会话后历史天仍是收起的；
+     *  - 展开：清会话级折叠 + 每个 (会话,天) 写进显式展开集（只清状态会被默认规则把历史天重新收起）。
+     */
+    fun setAll(context: Context, pairs: Collection<Pair<ConvKey, String>>, collapsed: Boolean) {
+        val composites = pairs.map { dateComposite(it.first, it.second) }.toSet()
+        val convIds = pairs.map { it.first.id }.toSet()
+        prefs(context).edit()
+            .putStringSet(KEY_COLLAPSED_CONVERSATIONS, if (collapsed) convIds else emptySet())
             .putStringSet(KEY_COLLAPSED_DATES, if (collapsed) composites else emptySet())
             .putStringSet(KEY_EXPANDED_DATES, if (collapsed) emptySet() else composites)
             .apply()
