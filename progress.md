@@ -701,8 +701,9 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - **顺带加固**：`ReminderListActivity` 的「删除/取消」原来**一键即删**（连带删日历事件），M17 后这页成了常用管理入口，改为 AlertDialog 二次确认（取消/删除）。
 - **单测**：新增 `ManualReminderCoreTest` 9 例（去重键稳定且随维度变化、时间文本往返、默认时间=下一整点、纯时刻未到算今天/已过顺延明天、无时间信息返回 null 且 `parseDueTime` 仍回退 +1h、预填折叠空白限长、`isInPast` 容差、`leadLabel` 与档位数组一致）；全量 `:app:testOpenDebugUnitTest` **359 例 0 失败**，`:app:lintOpenDebug` 通过。
 - **模拟器走查（emulator-5554，0.3.13/19 真包）**：按钮/弹窗字段/四档 Spinner（不提前/15 分钟/1 小时/1 天）/选时间（日历 24 日 → 时钟切文字输入 10:30 → 回填 `2026-10-24 10:30`）全部正确；两条校验 Toast 实拍确认；长按气泡 →「建提醒」标题预填 + 来源提示 ✓；降级链日志（无日历账户时）`L1 跳过：无可写日历账户 → L2 跳过：无日历 App → AlarmHelper: App 内提醒已设置 key=man:fd48ce235884746d`，`reminders.jsonl` 落 `status=alarm`、`event_time=1792809000000`（= 2026-10-24 10:30 +08，与所选一致）。给模拟器塞一条可写日历后 **L1 真写成功**：`Events` 行 title=消息原文（无前缀）、dtstart=1792681200000（2026-10-22 23:00 +08）、dtend=+1h、description 三行齐全，`Reminders` 行 `minutes=15 method=1`；记录变 `status=calendar, calendar_event_id=1`。计数行随之显示「本会话已设 2 条提醒」；重复保存同一条 → Toast「跳过：已创建过（去重）」且文件仍 2 行；列表页状态徽标（已建日历事件 / 已设App内提醒）正确；删除确认 →「取消」保留、「删除」后 `reminders.jsonl` 清空且 `Events`/`Reminders` 查询均 `No result found`（日历事件同步删掉）、列表回到「暂无提醒记录」。
-- 真机（小米17）**尚未验证**：本轮设备未连电脑；L1 直写日历在真机上才是常态路径（模拟器无日历 App，只能靠塞库验证），下次插上手机补跑一遍并确认小米日历里能看到事件。
-- 按硬约束未推送（连同 §三.27 Laya 进度、§三.28 M16 一起等用户明示）。
+- **真机已验（2026-10-23，小米17 `ebb079b5` / HyperOS 16 / Android 16，0.3.13/19）**：`adb install -r` 从 0.3.12/18 平滑升级（数据全留、无 FATAL、通知监听自动重绑）。日历权限 granted=true，机上有两个 `calendar_access_level=700` 的可写日历（`Xiaomi Calendar` / `XesPY`）→ **L1 直写真实日历成功**：日志 `CalendarHelper: L1 日历事件已创建: id=1956 title=M17 test clear later`；`content query events` 回 `_id=1956, dtstart=1792710000000（2026-10-23 07:00 +08）, dtend=+1h, calendar_id=1, description=会话：姜倩`；`reminders` 行 `event_id=1956, minutes=15, method=1`。第二条特意选**新增的「不提前」档** → `id=1957` 且 `reminders` 行 `minutes=0`（证明 0 档能落、AlarmHelper 的 `maxOf(eventTime-0, now+1s)` 不会算出过去）。
+- UI 实拍核对：弹窗默认时间=**下一个整点**（06:59 时给 07:00、07:02 时给 08:00 都对）、Spinner 四档「不提前/15 分钟/1 小时/1 天」、长按气泡 → 多选条「建提醒」→ 标题预填消息原文 + 「来自：姜倩 的消息」、计数行「📅 本会话已设 2 条提醒 · 点击管理」→ 管理页两条徽标均「已建日历事件」+「事件时间 10-23 08:00 ｜ 创建于 10-23 07:02」、删除弹「删除这条提醒？已写入的日历事件会一并删除。」。删除后 `reminders.jsonl` 清空、列表回「暂无提醒记录」、计数行隐藏，`Events` 两行变 `deleted=1`（可同步日历是软删，由同步适配器清），`Reminders` 查询 `No result found` → **用户日历无残留**。
+- **已推送（2026-10-23）**：`origin/main` = 7050aad（连同 §三.27 Laya 进度 98d13e8、§三.28 M16 ff91f5c/bd72b60 一并），CI run 39868475598 **全绿**（Lint / Unit tests + assemble / Server tests / Guard 全 success，约 6.5 分钟）。
 ## 四、构建与运行
 
 ```powershell
@@ -749,12 +750,15 @@ ADB/设备要点（踩过的坑）：
 - 模拟器没有日历账户时想验 L1：`content insert` 会被拒（`Only sync adapters may write to account_name`），改走 `adb shell "sqlite3 /data/data/com.android.providers.calendar/databases/calendar.db < /data/local/tmp/x.sql"` 直接 `INSERT INTO Calendars (account_name, account_type, _sync_id, dirty, name, calendar_displayName, calendar_access_level, visible, sync_events, calendar_timezone, ownerAccount, isPrimary, deleted) VALUES (…600…)`（老 AOSP 库表名/列名是 `Calendars`/`calendar_displayName`，先 `.schema` 确认）；测完 `DELETE FROM Calendars WHERE account_name=…`，库上有 trigger 会级联删 Events
 - uiautomator 取层级最稳的写法：`cmd /c "adb -s <s> exec-out uiautomator dump /dev/tty > x.xml 2>nul"`（`shell "uiautomator dump …; cat /sdcard/ui.xml" > x` 经常落空文件）
 - **Toast 不进 uiautomator 层级**：要验 Toast 文案必须在点击后立刻 `exec-out screencap`（约 0.5-2 秒窗口），别指望 dump 里能看到
+- **HyperOS 上输入法弹出会把 AlertDialog 整体上移**：在 EditText 里打完字后按钮 bounds 会变（实测「存入日历」从 y≈1771 移到 y≈1268），照上一帧坐标点就会点空/点错行 → **每次 tap 前重新 dump 取坐标**
+- 真机（小米17）`adb shell content query --uri content://com.android.calendar/{events,reminders}` 免 root 直接可读（`--where '_id in (1956,1957)'` 这种写法可用）；但**删掉可同步日历上的事件是软删**：`events` 行仍在、只是 `deleted=1 dirty=1`（同步适配器稍后物理清），判据要查 `deleted` 列而不是「行消失」；`reminders` 行则是真删（`No result found`）
 - 驱动 TimePicker：先点 `toggle_mode`（content-desc「切换到文字输入模式…」）再用 `input keyevent KEYCODE_MOVE_END; input keyevent 67 67; input text 10` 改 `input_hour`/`input_minute`，比点表盘准；DatePicker 的日期格子是无 id 的 `View`，按行列坐标数日期容易点错一天，落库后务必回读 `event_time` 核对
 - 本机当前文件策略 danger-full-access；无需申请 sandbox_permissions
 
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
+> 当前状态（2026-10-23 更新）：**0.3.13/19 已推送且 CI 全绿**（run 39868475598），M17 已在小米17 真机走查通过（L1 直写小米日历、「不提前」档、长按建提醒、删除联动；测试事件已全部清理）。待办：①会话去重三口径待用户拍板（重复画像见 §三.26 前后记录）；②结果页「本会话 0 条 · 全部会话 N 条 →」可点空态（已提议未确认）；③M13 遗留的陈旧 prefs 键 `collapsed_conversations`（真机上仍留 72 条）要不要顺手清。
 > 当前状态（2026-10-22 更新）：§三.29 M17 会话内自建提醒并关联日历（**0.3.13/19**）已交付，模拟器全链路走查通过（含 L1 真写日历、去重、删除二次确认），**真机未验**（本轮手机未连）；本地 main 领先 origin 三个提交（98d13e8 Laya 进度 / ff91f5c M16 / bd72b60 docs）+ M17 待提交，均未推送。
 > 当前状态（2026-10-21 更新）：§三.27 M15 端侧分析进度已随 **0.3.11/17** 推送（b6105d7），CI 护栏修复 23b0e0d 已推送且绿；Laya 判定题进度（98d13e8）与 §三.28 M16 恢复按对话折叠（**0.3.12/18**）**已交付未推送**（本地 main 领先 origin 两个提交）。0.3.12/18 已装小米17 并实测折叠可用。
 > 当前状态（2026-10-14 更新）：§三.25/26 已交付**未推送**（M13 分析结果回看原文 0.3.9/15 + M14 主页按天折叠与逐条结果 0.3.10/16，模拟器走查通过）；v0.3.8 正式发布完成；M1-M11 评审修复已随 0.3.8 发布（§三.24）。
