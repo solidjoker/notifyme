@@ -130,6 +130,13 @@ class ConversationActivity : Activity() {
     private var pendingDraft: ReminderDraft? = null
 
     /**
+     * 「新建提醒」自动预填的素材：上一次渲染时读到的分析待办（手动待办 > S2 摘要）
+     * 与本会话消息文本（旧→新）。随 renderContent 刷新，不另起磁盘读取。
+     */
+    private var cachedAnalysisTodo: String = ""
+    private var cachedMessageTexts: List<String> = emptyList()
+
+    /**
      * 新消息实时刷新：MessageStore 入库回调（主线程分发）。
      * 停在本页时对方又发了消息 -> 直接重渲染对话流并滚到底部。
      */
@@ -347,6 +354,8 @@ class ConversationActivity : Activity() {
                 refreshQuickReply()
                 renderAnalysisPanel(record)
                 renderReminderCount(reminderCount)
+                cachedAnalysisTodo = record?.let { it.todoText.ifEmpty { it.s2Summary } }.orEmpty()
+                cachedMessageTexts = messages.map { it.text }
                 shownAnalyzedAt = record?.analyzedAt ?: 0L
 
                 // 滚动到底部：最后一条消息与分析面板入镜（分析结果在对话后面显示）
@@ -736,12 +745,21 @@ class ConversationActivity : Activity() {
             setPadding(dp(20), dp(4), dp(20), 0)
         }
 
+        // 长按消息建提醒 → 用那条消息；面板按钮建提醒 → 自动挑分析待办 / 最近一条实质消息
+        val suggestion = if (source != null) {
+            ManualReminderCore.PrefillSuggestion(
+                ManualReminderCore.prefillTitle(source.text),
+                ManualReminderCore.PrefillSource.MESSAGE
+            )
+        } else {
+            ManualReminderCore.suggestPrefill(cachedAnalysisTodo, cachedMessageTexts)
+        }
         val etTitle = EditText(this).apply {
             hint = getString(R.string.reminder_manual_hint_text)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             maxLines = 3
             filters = arrayOf(InputFilter.LengthFilter(ManualReminderCore.MAX_TITLE_LEN))
-            setText(ManualReminderCore.prefillTitle(source?.text.orEmpty()))
+            setText(suggestion.text)
         }
         container.addView(etTitle)
 
@@ -808,9 +826,18 @@ class ConversationActivity : Activity() {
         leadRow.addView(spinnerLead, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         container.addView(leadRow)
 
-        if (source != null && source.text.isNotBlank()) {
+        val sourceNote = when {
+            source != null && source.text.isNotBlank() ->
+                getString(R.string.reminder_manual_from_msg, source.sender.ifEmpty { conversation })
+            suggestion.source == ManualReminderCore.PrefillSource.ANALYSIS ->
+                getString(R.string.reminder_manual_prefill_analysis)
+            suggestion.source == ManualReminderCore.PrefillSource.MESSAGE ->
+                getString(R.string.reminder_manual_prefill_message)
+            else -> null
+        }
+        if (sourceNote != null) {
             container.addView(TextView(this).apply {
-                text = getString(R.string.reminder_manual_from_msg, source.sender.ifEmpty { conversation })
+                text = sourceNote
                 textSize = 12f
                 setTextColor(getColor(R.color.text_secondary))
                 top = dp(8)

@@ -115,4 +115,66 @@ class ManualReminderCoreTest {
         assertEquals(0L, AnalysisConfig.REMINDER_LEAD_OPTIONS[0])
         assertEquals(4, AnalysisConfig.REMINDER_LEAD_OPTIONS.size)
     }
+
+    @Test
+    fun `自动预填优先用分析待办`() {
+        val s = ManualReminderCore.suggestPrefill(
+            analysisTodo = "周五前交周报，抄送张总",
+            messages = listOf("在吗", "明天开会"),
+        )
+        assertEquals("周五前交周报，抄送张总", s.text)
+        assertEquals(ManualReminderCore.PrefillSource.ANALYSIS, s.source)
+    }
+
+    @Test
+    fun `没有分析结果时用最近一条实质消息`() {
+        val s = ManualReminderCore.suggestPrefill(
+            analysisTodo = "",
+            messages = listOf(
+                "记得带合同",
+                "[图片]",
+                "[4条]姜倩: 明天下午三点评审排期",
+                "[动画表情]",
+            ),
+        )
+        assertEquals("明天下午三点评审排期", s.text)
+        assertEquals(ManualReminderCore.PrefillSource.MESSAGE, s.source)
+    }
+
+    @Test
+    fun `全是占位符或过短消息时不编内容`() {
+        val s = ManualReminderCore.suggestPrefill(
+            analysisTodo = null,
+            messages = listOf("[图片]", "嗯", "好的"),
+        )
+        assertEquals("", s.text)
+        assertEquals(ManualReminderCore.PrefillSource.NONE, s.source)
+    }
+
+    @Test
+    fun `通知拼接形态只取正文`() {
+        assertEquals("记得带合同", ManualReminderCore.messageBody("[4条]姜倩: 记得带合同"))
+        assertEquals("记得带合同", ManualReminderCore.messageBody("[2条]张三：记得带合同"))
+        // 媒体标签后面还有正文时只留正文；纯标签留给 isPlaceholder 判定
+        assertEquals("布置了一份作业", ManualReminderCore.messageBody("[6条]陈老师: [小程序] 布置了一份作业"))
+        assertEquals("[图片]", ManualReminderCore.messageBody("[图片]"))
+        assertEquals("全部通知", ManualReminderCore.messageBody("[4条] 全部通知"))
+        assertEquals("正常一句话", ManualReminderCore.messageBody("正常一句话"))
+    }
+
+    @Test
+    fun `占位符判定不误伤正文`() {
+        assertTrue(ManualReminderCore.isPlaceholder("[图片]"))
+        assertTrue(ManualReminderCore.isPlaceholder("[动画表情]"))
+        assertTrue(!ManualReminderCore.isPlaceholder("[图片] 里有张合同照片"))
+        // 「[N条]X: 正文」的正文为空时才算占位符，正常句子不受影响
+        assertTrue(!ManualReminderCore.isPlaceholder("这个方案 OK"))
+    }
+
+    @Test
+    fun `预填内容限长 40 字`() {
+        val long = "一".repeat(80)
+        assertEquals(40, ManualReminderCore.suggestPrefill("", listOf(long)).text.length)
+        assertEquals(40, ManualReminderCore.prefillTitle(long).length)
+    }
 }

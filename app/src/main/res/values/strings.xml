@@ -406,6 +406,8 @@
     <string name="reminder_manual_past_time">这个时间已经过了，改到未来再存</string>
     <string name="reminder_manual_desc">事件按所选时间写入系统日历，并按「提前提醒」设闹钟；没有可写日历时自动降级为唤起日历 App 或 App 内到点通知。</string>
     <string name="reminder_manual_from_msg">来自：%1$s 的消息</string>
+  <string name="reminder_manual_prefill_analysis">已按分析结果预填，可直接改</string>
+  <string name="reminder_manual_prefill_message">已按最近一条消息预填，可直接改</string>
     <string name="reminder_manual_created">已存入日历：%1$s</string>
     <string name="reminder_manual_fallback">未写入日历（降级）：%1$s</string>
     <string name="reminder_manual_no_permission">未给日历权限，将走降级方式</string>
