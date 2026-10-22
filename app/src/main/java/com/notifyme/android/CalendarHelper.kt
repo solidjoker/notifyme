@@ -109,9 +109,14 @@ object CalendarHelper {
         summary: String,
         dueTimeText: String,
         baseTime: Long,
-        leadMinutes: Long
+        leadMinutes: Long,
+        titleOverride: String = "",
+        explicitEventTime: Long? = null
     ): ReminderOutcome {
-        val title = "任务：${summary.ifEmpty { sourceText.take(12) }}（$conversation）"
+        // 手动提醒（M17）用用户自己写的标题，不加「任务：」前缀；会话信息留在描述里
+        val title = titleOverride.ifEmpty {
+            "任务：${summary.ifEmpty { sourceText.take(12) }}（$conversation）"
+        }
         val description = listOfNotNull(
             "发送者：$sender".takeIf { sender.isNotEmpty() },
             "原文：$sourceText".takeIf { sourceText.isNotEmpty() },
@@ -123,7 +128,8 @@ object CalendarHelper {
             return ReminderOutcome("跳过：已创建过（去重）", created = false)
         }
 
-        val eventTime = parseDueTime(dueTimeText, baseTime)
+        // explicitEventTime：UI 已经算好精确时间，不再走「文本再解析」的有损往返
+        val eventTime = explicitEventTime ?: parseDueTime(dueTimeText, baseTime)
         val result = runReminderChain(
             context, dedupKey, title, description, pkg, conversation,
             summary, eventTime, leadMinutes
@@ -397,10 +403,14 @@ object CalendarHelper {
      *  - 「周X/星期X HH:mm」（当天时刻未到取当天，已过才取下周）
      *  - 时间部分支持「下午/晚上」加 12 小时
      */
-    fun parseDueTime(text: String, baseTime: Long): Long {
-        val fallback = baseTime + 60L * 60_000L
+    /**
+     * 解析截止时间文本；**解析不出返回 null**。
+     * 支持：完整年月日 / M月d日（已过顺延明年）/ 今天明天后天 / 周X / 下午晚上 +12 /
+     * 纯 HH:mm（今天该时刻，已过顺延明天，M17 手动提醒常见写法）。
+     */
+    fun tryParseDueTime(text: String, baseTime: Long): Long? {
         val trimmed = text.trim()
-        if (trimmed.isEmpty()) return fallback
+        if (trimmed.isEmpty()) return null
 
         try {
             val cal = Calendar.getInstance()
@@ -410,13 +420,14 @@ object CalendarHelper {
             val timeMatcher = Pattern.compile("(\\d{1,2})\\s*[:：点时]\\s*(\\d{1,2})?").matcher(trimmed)
             var hour = 9
             var minute = 0
-            if (timeMatcher.find()) {
+            val hasTime = timeMatcher.find()
+            if (hasTime) {
                 hour = timeMatcher.group(1)?.toIntOrNull() ?: 9
                 minute = timeMatcher.group(2)?.toIntOrNull() ?: 0
                 if ((trimmed.contains("下午") || trimmed.contains("晚上") || trimmed.contains("傍晚")) && hour < 12) {
                     hour += 12
                 }
-                if (hour > 23 || minute > 59) return fallback
+                if (hour > 23 || minute > 59) return null
             }
 
             fun buildTime(year: Int, month0: Int, day: Int): Long {
@@ -485,9 +496,26 @@ object CalendarHelper {
                 c.add(Calendar.DAY_OF_YEAR, diff)
                 return buildTime(c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH))
             }
+
+            // 5) 只有时刻没有日期（「15:00」「晚上8点」）：今天该时刻，已过顺延明天
+            if (hasTime) {
+                val c = Calendar.getInstance()
+                c.timeInMillis = baseTime
+                var t = buildTime(c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH))
+                if (t <= baseTime) {
+                    c.add(Calendar.DAY_OF_YEAR, 1)
+                    t = buildTime(c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH))
+                }
+                return t
+            }
+            return null
         } catch (e: Exception) {
             Log.w(TAG, "截止时间解析失败: $trimmed", e)
+            return null
         }
-        return fallback
     }
+
+    /** 解析不出时回退 baseTime + 1 小时（分析链路沿用：模型没给时间也要有提醒时间）。 */
+    fun parseDueTime(text: String, baseTime: Long): Long =
+        tryParseDueTime(text, baseTime) ?: (baseTime + 60L * 60_000L)
 }

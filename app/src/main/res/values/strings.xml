@@ -392,7 +392,29 @@
     <string name="reminder_action_reopen">再次唤起</string>
     <string name="reminder_action_retry">重试</string>
     <string name="reminder_retry_done">重试完成</string>
+
+    <!-- M17 会话内自建提醒（写入系统日历 + 提前量；无日历时降级） -->
+    <string name="btn_new_reminder">📅 新建提醒</string>
+    <string name="reminder_manual_title">新建提醒</string>
+    <string name="reminder_manual_hint_text">提醒内容（必填）</string>
+    <string name="reminder_manual_hint_time">时间（如：明天15:00 / 2026-10-24 14:00）</string>
+    <string name="reminder_manual_pick_time">📅 选时间</string>
+    <string name="reminder_manual_lead_label">提前提醒</string>
+    <string name="reminder_manual_save">存入日历</string>
+    <string name="reminder_manual_empty">提醒内容不能为空</string>
+    <string name="reminder_manual_bad_time">时间没看懂，可点右侧「选时间」直接选</string>
+    <string name="reminder_manual_past_time">这个时间已经过了，改到未来再存</string>
+    <string name="reminder_manual_desc">事件按所选时间写入系统日历，并按「提前提醒」设闹钟；没有可写日历时自动降级为唤起日历 App 或 App 内到点通知。</string>
+    <string name="reminder_manual_from_msg">来自：%1$s 的消息</string>
+    <string name="reminder_manual_created">已存入日历：%1$s</string>
+    <string name="reminder_manual_fallback">未写入日历（降级）：%1$s</string>
+    <string name="reminder_manual_no_permission">未给日历权限，将走降级方式</string>
+    <string name="reminder_conv_count">📅 本会话已设 %1$d 条提醒 · 点击管理</string>
+    <string name="reminder_menu_action">建提醒</string>
+    <string name="reminder_manual_intent">已在日历 App 里打开新建页，请点保存</string>
+    <string name="reminder_delete_confirm">删除这条提醒？已写入的日历事件会一并删除。</string>
     <string-array name="reminder_lead_labels">
+        <item>不提前</item>
         <item>15 分钟</item>
         <item>1 小时</item>
         <item>1 天</item>

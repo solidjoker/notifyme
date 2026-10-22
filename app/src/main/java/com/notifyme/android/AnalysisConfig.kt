@@ -108,7 +108,7 @@ class AnalysisConfig(context: Context) {
         val INTERVAL_OPTIONS = longArrayOf(15, 30, 60, 120)
 
         /** 提醒提前量可选项（分钟）；顺序与 strings.xml 的 reminder_lead_labels 一一对应 */
-        val REMINDER_LEAD_OPTIONS = longArrayOf(15, 60, 1440)
+        val REMINDER_LEAD_OPTIONS = longArrayOf(0, 15, 60, 1440)
 
         /** 预设 UI 顺序：与 strings.xml 的 analysis_preset_labels 一一对应 */
         val PRESET_VALUES = arrayOf(PRESET_SYSTEMONE, PRESET_GLM, PRESET_CUSTOM)

@@ -4,6 +4,7 @@
 package com.notifyme.android
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -117,7 +118,14 @@ class ReminderListActivity : Activity() {
                 Toast.makeText(this, "${getString(R.string.reminder_retry_done)}：$note", Toast.LENGTH_LONG).show()
                 reload()
             },
-            onDelete = { record -> deleteReminder(record) }
+            onDelete = { record ->
+                // 破坏性操作：先确认再删，避免误点把日历事件一起丢掉
+                AlertDialog.Builder(this)
+                    .setMessage(R.string.reminder_delete_confirm)
+                    .setNegativeButton(R.string.common_cancel, null)
+                    .setPositiveButton(R.string.common_delete) { _, _ -> deleteReminder(record) }
+                    .show()
+            }
         )
     }
 

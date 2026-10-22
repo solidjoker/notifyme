@@ -5,11 +5,16 @@ package com.notifyme.android
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.InputFilter
+import android.text.InputType
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.Menu
 import android.view.MenuItem
@@ -17,6 +22,7 @@ import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.Switch
@@ -24,6 +30,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.widget.NestedScrollView
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -52,8 +59,12 @@ class ConversationActivity : Activity() {
         private const val POLL_INTERVAL_MS = 4000L
         private const val POLL_MAX_COUNT = 10
 
-        /** ActionMode 多选删除菜单项 id */
+        /** ActionMode 多选菜单项 id */
         private const val MENU_MSG_DELETE = 1002
+        private const val MENU_MSG_REMIND = 1003
+
+        /** M17 手动提醒的日历权限请求码（与主页待办用的 1001 区分） */
+        private const val REQ_CALENDAR_PERMISSION = 4001
 
         /** 单次渲染的消息上限 */
         private const val MAX_CHAT_RENDER = 200
@@ -88,6 +99,8 @@ class ConversationActivity : Activity() {
     private lateinit var progressAnalyzeThis: android.widget.ProgressBar
     private lateinit var tvAnalysisProgress: TextView
     private lateinit var llQuickReply: View
+    private lateinit var btnNewReminder: Button
+    private lateinit var tvConvReminders: TextView
 
     private val timeFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
     private val handler = Handler(Looper.getMainLooper())
@@ -102,6 +115,19 @@ class ConversationActivity : Activity() {
     /** 消息多选删除：ActionMode 与选中消息集合（ChatMessage 是 data class，按值去重） */
     private var selectActionMode: android.view.ActionMode? = null
     private val selectedMessages = linkedSetOf<ChatMessage>()
+
+    /**
+     * M17 手动提醒草稿：申请日历权限会中断当前操作，
+     * onRequestPermissionsResult 回来后用草稿继续跑降级链。
+     */
+    private data class ReminderDraft(
+        val title: String,
+        val eventTime: Long,
+        val leadMinutes: Long,
+        val source: ChatMessage?
+    )
+
+    private var pendingDraft: ReminderDraft? = null
 
     /**
      * 新消息实时刷新：MessageStore 入库回调（主线程分发）。
@@ -161,6 +187,8 @@ class ConversationActivity : Activity() {
         btnAnalyzeThis = findViewById(R.id.btnAnalyzeThis)
         progressAnalyzeThis = findViewById(R.id.progressAnalyzeThis)
         tvAnalysisProgress = findViewById(R.id.tvAnalysisProgress)
+        btnNewReminder = findViewById(R.id.btnNewReminder)
+        tvConvReminders = findViewById(R.id.tvConvReminders)
         llQuickReply = findViewById(R.id.llQuickReply)
 
         findViewById<TextView>(R.id.btnBack).setOnClickListener { finish() }
@@ -186,6 +214,10 @@ class ConversationActivity : Activity() {
             handler.removeCallbacks(pollRefresh)
             handler.postDelayed(pollRefresh, POLL_INTERVAL_MS)
         }
+
+        // M17 会话内自建提醒：手动建一条 + 跳转本会话提醒管理
+        btnNewReminder.setOnClickListener { showReminderDialog(null) }
+        tvConvReminders.setOnClickListener { ReminderListActivity.start(this, key) }
 
         // M11 分析进度条：观察本会话 WorkManager tag，排队/运行时显示、结束消失
         androidx.work.WorkManager.getInstance(this)
@@ -307,12 +339,14 @@ class ConversationActivity : Activity() {
                 .filter { it.convKey == convKey }
                 .sortedBy { it.timestamp }
             val record = AnalysisStore.latestByConvKey(this)[convKey]
+            val reminderCount = ReminderStore.readAll(this).count { it.convKey == convKey }
             runOnUiThread {
                 if (token != renderToken || isFinishing || isDestroyed) return@runOnUiThread
                 renderHeader(messages.lastOrNull()?.isGroup ?: false)
                 renderChat(messages)
                 refreshQuickReply()
                 renderAnalysisPanel(record)
+                renderReminderCount(reminderCount)
                 shownAnalyzedAt = record?.analyzedAt ?: 0L
 
                 // 滚动到底部：最后一条消息与分析面板入镜（分析结果在对话后面显示）
@@ -488,6 +522,8 @@ class ConversationActivity : Activity() {
         override fun onCreateActionMode(mode: android.view.ActionMode, menu: Menu): Boolean {
             menu.add(0, MENU_MSG_DELETE, 0, R.string.batch_delete_action)
                 .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+            menu.add(0, MENU_MSG_REMIND, 0, R.string.reminder_menu_action)
+                .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
             return true
         }
 
@@ -496,6 +532,10 @@ class ConversationActivity : Activity() {
         override fun onActionItemClicked(mode: android.view.ActionMode, item: MenuItem): Boolean {
             if (item.itemId == MENU_MSG_DELETE) {
                 confirmMsgDelete()
+                return true
+            }
+            if (item.itemId == MENU_MSG_REMIND) {
+                createReminderFromSelection()
                 return true
             }
             return false
@@ -661,5 +701,258 @@ class ConversationActivity : Activity() {
         "this_week", "本周" -> getString(R.string.due_this_week)
         "later" -> getString(R.string.due_later)
         else -> dueWindow.ifEmpty { getString(R.string.due_none) }
+    }
+
+    // ---------- M17 会话内自建提醒（写系统日历 + 提前量，无日历时降级） ----------
+
+    /** 本会话已设提醒条数：0 条时隐藏入口（分析未跑过的会话也要能看到，故独立于分析面板）。 */
+    private fun renderReminderCount(count: Int) {
+        if (count <= 0) {
+            tvConvReminders.visibility = View.GONE
+            return
+        }
+        tvConvReminders.visibility = View.VISIBLE
+        tvConvReminders.text = getString(R.string.reminder_conv_count, count)
+    }
+
+    /** 长按消息建提醒：先捕获选中消息，再退出多选态（退出会清空选中集）。 */
+    private fun createReminderFromSelection() {
+        val msg = selectedMessages.lastOrNull()
+        selectActionMode?.finish()
+        showReminderDialog(msg)
+    }
+
+    /**
+     * 手动提醒弹窗：内容 + 时间（可手输可点选）+ 提前量。
+     * [source] 非空时用消息文本预填内容并把原文带进日历描述。
+     */
+    private fun showReminderDialog(source: ChatMessage?) {
+        val config = AnalysisConfig(this)
+        val density = resources.displayMetrics.density
+        fun dp(value: Int): Int = (value * density).toInt()
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(4), dp(20), 0)
+        }
+
+        val etTitle = EditText(this).apply {
+            hint = getString(R.string.reminder_manual_hint_text)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            maxLines = 3
+            filters = arrayOf(InputFilter.LengthFilter(ManualReminderCore.MAX_TITLE_LEN))
+            setText(ManualReminderCore.prefillTitle(source?.text.orEmpty()))
+        }
+        container.addView(etTitle)
+
+        val etTime = EditText(this).apply {
+            hint = getString(R.string.reminder_manual_hint_time)
+            inputType = InputType.TYPE_CLASS_DATETIME
+            isSingleLine = true
+            filters = arrayOf(InputFilter.LengthFilter(40))
+            setText(ManualReminderCore.defaultTimeText(System.currentTimeMillis()))
+        }
+        val btnPick = TextView(this).apply {
+            text = getString(R.string.reminder_manual_pick_time)
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTextColor(getColor(R.color.brand_green))
+            setBackgroundResource(R.drawable.btn_secondary)
+            setPadding(dp(10), dp(12), dp(10), dp(12))
+            setOnClickListener {
+                val now = System.currentTimeMillis()
+                val initial = CalendarHelper.tryParseDueTime(etTime.text.toString(), now) ?: now
+                pickDateTime(initial) { millis ->
+                    etTime.setText(ManualReminderCore.eventTimeFormat().format(Date(millis)))
+                }
+            }
+        }
+        val timeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        timeRow.addView(
+            etTime,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        timeRow.addView(
+            btnPick,
+            LinearLayout.LayoutParams(dp(92), LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                marginStart = dp(8)
+            }
+        )
+        container.addView(timeRow)
+
+        val leadRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        leadRow.addView(
+            TextView(this).apply {
+                text = getString(R.string.reminder_manual_lead_label)
+                textSize = 14f
+                setTextColor(getColor(R.color.text_secondary))
+            },
+            LinearLayout.LayoutParams(dp(80), LinearLayout.LayoutParams.WRAP_CONTENT)
+        )
+        val spinnerLead = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@ConversationActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                resources.getStringArray(R.array.reminder_lead_labels)
+            )
+            // 沿用「提醒设置」里的提前量偏好（档位表与分析链路共用）
+            val index = AnalysisConfig.REMINDER_LEAD_OPTIONS.indexOf(config.reminderLeadMinutes)
+            setSelection(if (index >= 0) index else 1)
+        }
+        leadRow.addView(spinnerLead, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        container.addView(leadRow)
+
+        if (source != null && source.text.isNotBlank()) {
+            container.addView(TextView(this).apply {
+                text = getString(R.string.reminder_manual_from_msg, source.sender.ifEmpty { conversation })
+                textSize = 12f
+                setTextColor(getColor(R.color.text_secondary))
+                top = dp(8)
+            })
+        }
+        container.addView(TextView(this).apply {
+            text = getString(R.string.reminder_manual_desc)
+            textSize = 12f
+            setTextColor(getColor(R.color.text_secondary))
+            setPadding(0, dp(8), 0, 0)
+        })
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.reminder_manual_title)
+            .setView(container)
+            .setNegativeButton(R.string.common_cancel, null)
+            .setPositiveButton(R.string.reminder_manual_save, null)
+            .create()
+        dialog.show()
+        // 点确定自己校验：校验不过不关窗，避免用户白填一遍
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val title = etTitle.text.toString().trim()
+            if (title.isEmpty()) {
+                toast(R.string.reminder_manual_empty)
+                return@setOnClickListener
+            }
+            val now = System.currentTimeMillis()
+            val eventTime = CalendarHelper.tryParseDueTime(etTime.text.toString(), now)
+            if (eventTime == null) {
+                toast(R.string.reminder_manual_bad_time)
+                return@setOnClickListener
+            }
+            if (ManualReminderCore.isInPast(eventTime, now)) {
+                toast(R.string.reminder_manual_past_time)
+                return@setOnClickListener
+            }
+            val leadMinutes = AnalysisConfig.REMINDER_LEAD_OPTIONS
+                .getOrElse(spinnerLead.selectedItemPosition) { 15L }
+            dialog.dismiss()
+            requestCalendarThenRun(ReminderDraft(title, eventTime, leadMinutes, source))
+        }
+    }
+
+    /** 日期 -> 时间两级系统选择器（不引第三方库）；结果按「yyyy-MM-dd HH:mm」回填。 */
+    private fun pickDateTime(initial: Long, onPicked: (Long) -> Unit) {
+        val cal = Calendar.getInstance().apply { timeInMillis = initial }
+        DatePickerDialog(
+            this,
+            { _, year, month, day ->
+                cal.set(year, month, day)
+                TimePickerDialog(
+                    this,
+                    { _, hour, minute ->
+                        cal.set(Calendar.HOUR_OF_DAY, hour)
+                        cal.set(Calendar.MINUTE, minute)
+                        cal.set(Calendar.SECOND, 0)
+                        cal.set(Calendar.MILLISECOND, 0)
+                        onPicked(cal.timeInMillis)
+                    },
+                    cal.get(Calendar.HOUR_OF_DAY),
+                    cal.get(Calendar.MINUTE),
+                    true
+                ).show()
+            },
+            cal.get(Calendar.YEAR),
+            cal.get(Calendar.MONTH),
+            cal.get(Calendar.DAY_OF_MONTH)
+        ).show()
+    }
+
+    /** 有日历权限直接落库；没有就先要权限——**被拒也继续**，链内自带 L2/L3 降级。 */
+    private fun requestCalendarThenRun(draft: ReminderDraft) {
+        if (CalendarHelper.hasCalendarPermission(this)) {
+            runManualReminder(draft)
+            return
+        }
+        pendingDraft = draft
+        requestPermissions(
+            arrayOf(
+                android.Manifest.permission.READ_CALENDAR,
+                android.Manifest.permission.WRITE_CALENDAR
+            ),
+            REQ_CALENDAR_PERMISSION
+        )
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_CALENDAR_PERMISSION) return
+        val draft = pendingDraft
+        pendingDraft = null
+        if (draft == null) return
+        if (!CalendarHelper.hasCalendarPermission(this)) {
+            toast(R.string.reminder_manual_no_permission)
+        }
+        runManualReminder(draft)
+    }
+
+    /**
+     * 跑三级降级链（日历插入 -> 唤起日历 App -> App 内闹钟）。
+     * ContentProvider 写入可能耗时，放独立线程；完成后刷新计数并重渲染。
+     */
+    private fun runManualReminder(draft: ReminderDraft) {
+        val convKey = key
+        Thread {
+            val outcome = CalendarHelper.createReminderResult(
+                this,
+                dedupKey = ManualReminderCore.dedupKey(
+                    convKey.pkg, convKey.conversation, draft.title, draft.eventTime
+                ),
+                pkg = convKey.pkg,
+                conversation = convKey.conversation,
+                sender = draft.source?.sender.orEmpty(),
+                sourceText = draft.source?.text.orEmpty(),
+                summary = draft.title,
+                dueTimeText = "",
+                baseTime = System.currentTimeMillis(),
+                leadMinutes = draft.leadMinutes,
+                titleOverride = draft.title,
+                explicitEventTime = draft.eventTime
+            )
+            val message = when {
+                outcome.status == ReminderRecord.STATUS_INTENT ->
+                    getString(R.string.reminder_manual_intent)
+
+                outcome.created -> getString(R.string.reminder_manual_created, outcome.note)
+                // 「跳过：已创建过（去重）」等原样回显，别谎报失败
+                else -> outcome.note
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+                renderContent()
+            }
+        }.start()
+    }
+
+    private fun toast(resId: Int) {
+        Toast.makeText(this, resId, Toast.LENGTH_SHORT).show()
     }
 }

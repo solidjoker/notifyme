@@ -240,6 +240,28 @@
                     android:indeterminate="true"
                     android:visibility="gone" />
 
+                <!-- M17 会话内自建提醒：写系统日历 + 提前量，无日历时降级 -->
+                <Button
+                    android:id="@+id/btnNewReminder"
+                    android:layout_width="match_parent"
+                    android:layout_height="46dp"
+                    android:layout_marginTop="10dp"
+                    android:background="@drawable/btn_secondary"
+                    android:minHeight="0dp"
+                    android:text="@string/btn_new_reminder"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp" />
+
+                <!-- 本会话已设提醒计数：点击进「该会话的提醒」管理页 -->
+                <TextView
+                    android:id="@+id/tvConvReminders"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:textColor="@color/brand_green"
+                    android:textSize="12sp"
+                    android:visibility="gone" />
+
                 <!-- M11.4 定时分析：已关注会话可设置独立分析周期 -->
                 <LinearLayout
                     android:layout_width="match_parent"

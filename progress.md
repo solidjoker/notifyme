@@ -689,6 +689,20 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - **真机已验（2026-10-21，小米17 `ebb079b5`，0.3.12/18）**：`adb install -r` 后主页会话头右侧 ▼ 正常显示且可点，点一下整组（天头 + 消息）收起、箭头变 ▶，再点恢复原状（uiautomator 逐帧比对：收起时 `tvDateArrow`/`tvText` 节点消失、展开后与收起前完全一致 43 leaves）；`collapsed_conversations_v2` 空集 = 用户原本无折叠，走查后状态无残留。顺带确认：真机 prefs 里 M13 时代的旧键 `collapsed_conversations` 还留着 72 条陈旧会话（`collapsed_dates` 5 条）——新代码不读写旧键，所以它们**完全不生效**（正是换新键名的目的），要不要顺手清掉等下次改动一起处理。
 - 按硬约束未推送（连同 §三.27 的 Laya 进度提交一起等用户明示）。
 
+### 29. 会话内自建提醒并关联日历（M17）（2026-10-22，**0.3.13/19**）
+
+用户需求（m01723）：「会话中可以自建提醒并关联日历」。此前提醒只能由**分析结果**自动创建（`CalendarHelper.createReminderResult` 由 AnalysisWorker 调用，标题固定带「任务：」前缀、时间来自模型给的 dueTime 文本），用户在会话里没有任何手动入口。
+
+- **两个入口**（`ConversationActivity` + `activity_conversation.xml`）：分析面板内「📅 新建提醒」次级按钮；长按消息 → 多选条上的「建提醒」（取选中最后一条，标题预填为折叠空白后的消息文本，弹窗里注明「来自：<会话> 的消息」）。面板下方新增 `tvConvReminders`「📅 本会话已设 N 条提醒 · 点击管理」→ `ReminderListActivity.start(this, key)`（N=0 时隐藏；计数在 `renderContent` 后台线程算，所以分析记录为空的会话也能看到）。
+- **弹窗**：内容（必填，`InputFilter.LengthFilter(60)`）、时间（默认**下一个整点**，可直接手输自然语言「明天15:00」，或点「📅 选时间」走 DatePicker→TimePicker 回填 `yyyy-MM-dd HH:mm`）、提前提醒 Spinner、说明文案。三条校验都在 positive 按钮里自校验、失败不关窗：空内容→「提醒内容不能为空」；解析不出时间→提示正确格式；时间已过（1 分钟容差）→「这个时间已经过了，改到未来再存」。
+- **CalendarHelper**：`parseDueTime` 拆出 `tryParseDueTime(text, base): Long?`（解析失败返回 null；`parseDueTime` 仍回退 `base+1h`，**分析链路语义不变**，`CalendarDueTimeTest` 7 例继续全过），新增纯 `HH:mm` 分支（今天该时刻，已过顺延明天——原来「15:00」这种写法会掉进 +1h 兜底）；`createReminderResult` 增两个默认参 `titleOverride`（手动提醒标题=用户原文，不加「任务：」前缀，会话信息留在 description）与 `explicitEventTime`（手动路径已有精确时间，不再二次解析）。
+- **新 `ManualReminderCore.kt`（纯 JVM 可单测）**：`dedupKey(pkg,conversation,title,eventTime) = "man:" + SHA-1("man|pkg|conv|title|time") 前 16 位`（同标题同时间即同一条，连点两次被 `ReminderStore.containsActive` 挡）；`defaultTimeText`/`nextWholeHour`/`prefillTitle`/`isInPast`/`leadLabel`。`AnalysisConfig.REMINDER_LEAD_OPTIONS` 由 `15/60/1440` 扩为 **`0/15/60/1440`**，`reminder_lead_labels` 同步加「不提前」（`ReminderSettingsActivity` 用 `indexOf` 定位，自动适配）。
+- **权限**：无日历权限时先 `requestPermissions(READ/WRITE_CALENDAR, 4001)`；**拒绝也照样跑**（提示「未给日历权限，将走降级方式」后走 L2 唤起日历 App / L3 App 内闹钟），不吞掉用户刚按下的动作。
+- **顺带加固**：`ReminderListActivity` 的「删除/取消」原来**一键即删**（连带删日历事件），M17 后这页成了常用管理入口，改为 AlertDialog 二次确认（取消/删除）。
+- **单测**：新增 `ManualReminderCoreTest` 9 例（去重键稳定且随维度变化、时间文本往返、默认时间=下一整点、纯时刻未到算今天/已过顺延明天、无时间信息返回 null 且 `parseDueTime` 仍回退 +1h、预填折叠空白限长、`isInPast` 容差、`leadLabel` 与档位数组一致）；全量 `:app:testOpenDebugUnitTest` **359 例 0 失败**，`:app:lintOpenDebug` 通过。
+- **模拟器走查（emulator-5554，0.3.13/19 真包）**：按钮/弹窗字段/四档 Spinner（不提前/15 分钟/1 小时/1 天）/选时间（日历 24 日 → 时钟切文字输入 10:30 → 回填 `2026-10-24 10:30`）全部正确；两条校验 Toast 实拍确认；长按气泡 →「建提醒」标题预填 + 来源提示 ✓；降级链日志（无日历账户时）`L1 跳过：无可写日历账户 → L2 跳过：无日历 App → AlarmHelper: App 内提醒已设置 key=man:fd48ce235884746d`，`reminders.jsonl` 落 `status=alarm`、`event_time=1792809000000`（= 2026-10-24 10:30 +08，与所选一致）。给模拟器塞一条可写日历后 **L1 真写成功**：`Events` 行 title=消息原文（无前缀）、dtstart=1792681200000（2026-10-22 23:00 +08）、dtend=+1h、description 三行齐全，`Reminders` 行 `minutes=15 method=1`；记录变 `status=calendar, calendar_event_id=1`。计数行随之显示「本会话已设 2 条提醒」；重复保存同一条 → Toast「跳过：已创建过（去重）」且文件仍 2 行；列表页状态徽标（已建日历事件 / 已设App内提醒）正确；删除确认 →「取消」保留、「删除」后 `reminders.jsonl` 清空且 `Events`/`Reminders` 查询均 `No result found`（日历事件同步删掉）、列表回到「暂无提醒记录」。
+- 真机（小米17）**尚未验证**：本轮设备未连电脑；L1 直写日历在真机上才是常态路径（模拟器无日历 App，只能靠塞库验证），下次插上手机补跑一遍并确认小米日历里能看到事件。
+- 按硬约束未推送（连同 §三.27 Laya 进度、§三.28 M16 一起等用户明示）。
 ## 四、构建与运行
 
 ```powershell
@@ -731,11 +745,17 @@ ADB/设备要点（踩过的坑）：
 - HyperOS 16 截图：`exec-out screencap -p > x.png` 会把 stderr 的 `[Warning] Multiple displays were found…` 一起写进文件（PNG 头变成 `[Warning]`，read_image 报 Unsupported or malformed image data）。可靠写法：`adb shell screencap -p /sdcard/x.png` + `adb pull`（或给 screencap 加 `-d <display-id>`，id 见 `dumpsys SurfaceFlinger --display-id`）
 - 读 App 私有 prefs 在真机上必须 `adb shell "run-as com.notifyme.android cat shared_prefs/collapse_state.xml"`；直接 `adb shell cat /data/data/…` 是 `Permission denied`（若再 `2>/dev/null || echo MISSING` 会把权限错误伪装成「文件不存在」，别据此判断状态）
 - 小米17 USB 会偶发掉线：`adb install` 中途报 `device 'ebb079b5' not found` + 空错误行 → `adb kill-server; adb start-server` 后重试即成功，不是签名/安装权限问题
+- **MuMu 上残留的 frida-server 会让所有新起进程 SIGSEGV**：崩在 `/memfd:frida-agent-64.so`（backtrace 9 帧全在里面），表现是「一点图标就屡次停止运行」+ `Process … failed to attach`，与被测 APK 无关。判定法：`am force-stop` 一个第三方 App 再启动，若同样崩 = 环境问题。修：`adb shell "ps -A | grep -i frida"` 找 pid → `adb shell kill -9 <pid>`，之后 App 立刻能起（需要时再自己启 frida-server）
+- 模拟器没有日历账户时想验 L1：`content insert` 会被拒（`Only sync adapters may write to account_name`），改走 `adb shell "sqlite3 /data/data/com.android.providers.calendar/databases/calendar.db < /data/local/tmp/x.sql"` 直接 `INSERT INTO Calendars (account_name, account_type, _sync_id, dirty, name, calendar_displayName, calendar_access_level, visible, sync_events, calendar_timezone, ownerAccount, isPrimary, deleted) VALUES (…600…)`（老 AOSP 库表名/列名是 `Calendars`/`calendar_displayName`，先 `.schema` 确认）；测完 `DELETE FROM Calendars WHERE account_name=…`，库上有 trigger 会级联删 Events
+- uiautomator 取层级最稳的写法：`cmd /c "adb -s <s> exec-out uiautomator dump /dev/tty > x.xml 2>nul"`（`shell "uiautomator dump …; cat /sdcard/ui.xml" > x` 经常落空文件）
+- **Toast 不进 uiautomator 层级**：要验 Toast 文案必须在点击后立刻 `exec-out screencap`（约 0.5-2 秒窗口），别指望 dump 里能看到
+- 驱动 TimePicker：先点 `toggle_mode`（content-desc「切换到文字输入模式…」）再用 `input keyevent KEYCODE_MOVE_END; input keyevent 67 67; input text 10` 改 `input_hour`/`input_minute`，比点表盘准；DatePicker 的日期格子是无 id 的 `View`，按行列坐标数日期容易点错一天，落库后务必回读 `event_time` 核对
 - 本机当前文件策略 danger-full-access；无需申请 sandbox_permissions
 
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
+> 当前状态（2026-10-22 更新）：§三.29 M17 会话内自建提醒并关联日历（**0.3.13/19**）已交付，模拟器全链路走查通过（含 L1 真写日历、去重、删除二次确认），**真机未验**（本轮手机未连）；本地 main 领先 origin 三个提交（98d13e8 Laya 进度 / ff91f5c M16 / bd72b60 docs）+ M17 待提交，均未推送。
 > 当前状态（2026-10-21 更新）：§三.27 M15 端侧分析进度已随 **0.3.11/17** 推送（b6105d7），CI 护栏修复 23b0e0d 已推送且绿；Laya 判定题进度（98d13e8）与 §三.28 M16 恢复按对话折叠（**0.3.12/18**）**已交付未推送**（本地 main 领先 origin 两个提交）。0.3.12/18 已装小米17 并实测折叠可用。
 > 当前状态（2026-10-14 更新）：§三.25/26 已交付**未推送**（M13 分析结果回看原文 0.3.9/15 + M14 主页按天折叠与逐条结果 0.3.10/16，模拟器走查通过）；v0.3.8 正式发布完成；M1-M11 评审修复已随 0.3.8 发布（§三.24）。
 > 当前状态（2026-10-13 更新）：§三.21/§三.22/§三.23 已交付推送——M10 advisor 端侧本地评审（0.3.5/11）+ 主页「⚡ 最近待办」区编辑/删除/一键加日历（0.3.6/12，模拟器走查通过，L1 日历直写待真机确认）+ 五路评审 H1-H4 修复（0.3.7/13，重启闹钟补挂/FGS specialUse/Bundle 防御/jsonl 裁剪）；§三.20 v3 批次提交闭环，HyperOS 真机回归仍待用户确认。
