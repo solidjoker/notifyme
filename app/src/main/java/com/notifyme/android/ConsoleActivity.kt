@@ -11,8 +11,10 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.graphics.Typeface
 import android.view.View
 import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import java.text.SimpleDateFormat
@@ -38,6 +40,11 @@ class ConsoleActivity : Activity() {
 
     // 保活状态相关视图
     private lateinit var tvKeepAliveStatus: TextView
+    // M20 定时分析面板
+    private lateinit var tvScheduleGlobal: TextView
+    private lateinit var tvScheduleWarn: TextView
+    private lateinit var llScheduleConvs: LinearLayout
+    private lateinit var tvScheduleTags: TextView
     private lateinit var btnBatteryWhitelist: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -65,6 +72,7 @@ class ConsoleActivity : Activity() {
         }
 
         setupKeepAliveSection()
+        setupScheduleSection()
 
         // 快捷按钮：全部折叠 / 全部展开（M16：与主页标题栏同口径——会话级 + 天级一起写）
         findViewById<Button>(R.id.btnCollapseAll).setOnClickListener {
@@ -96,9 +104,139 @@ class ConsoleActivity : Activity() {
                 }.distinct().map { k to it }
             }
 
+    /** 定时分析面板初始化：两个按钮——立即分析一轮、跳分析设置（周期与开关都在那里）。 */
+    private fun setupScheduleSection() {
+        tvScheduleGlobal = findViewById(R.id.tvScheduleGlobal)
+        tvScheduleWarn = findViewById(R.id.tvScheduleWarn)
+        llScheduleConvs = findViewById(R.id.llScheduleConvs)
+        tvScheduleTags = findViewById(R.id.tvScheduleTags)
+        findViewById<Button>(R.id.btnAnalyzeNow).setOnClickListener {
+            AnalysisScheduler.enqueueAnalysisNow(this)
+            Toast.makeText(this, R.string.console_schedule_enqueued, Toast.LENGTH_SHORT).show()
+            // 排一轮会顺带自愈补排，稍后刷新把「失联」提示撤掉
+            tvScheduleGlobal.postDelayed({ refreshAnalysisSchedule() }, 2500)
+        }
+        findViewById<Button>(R.id.btnScheduleSettings).setOnClickListener {
+            startActivity(Intent(this, AnalysisSettingsActivity::class.java))
+        }
+    }
+
+    /**
+     * 刷新定时分析面板。标签表与排期表都是磁盘读，放后台线程，回到 UI 再渲染
+     * （控制台首页一进来就卡主线程，体验上等同于「点了没反应」）。
+     */
+    private fun refreshAnalysisSchedule() {
+        Thread {
+            val config = AnalysisConfig(this)
+            val now = System.currentTimeMillis()
+            val status = AnalysisScheduleSummaryCore.evaluate(
+                enabled = config.enabled,
+                intervalMinutes = config.intervalMinutes,
+                lastRunAt = config.lastAnalysisTime,
+                now = now,
+            )
+            val schedules = ConvAnalysisScheduleStore.all(this)
+            val tagMap = ConvTagStore.readRaw(this)
+            val gated = tagMap.filterValues { ConvTagCore.stopsAnalyzing(ConvTag.fromCode(it)) }.keys
+            val rows = AnalysisScheduleSummaryCore.convRows(schedules, gated, status.lastRunAt, now)
+            val counts = ConvTagStore.countByTag(this)
+            runOnUiThread {
+                if (!isFinishing) renderSchedulePanel(status, rows, counts)
+            }
+        }.start()
+    }
+
+    private fun renderSchedulePanel(
+        status: AnalysisScheduleSummaryCore.ScheduleStatus,
+        rows: List<AnalysisScheduleSummaryCore.ConvRow>,
+        counts: Map<ConvTag, Int>,
+    ) {
+        val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
+        val last = timeFmt.format(Date(status.lastRunAt))
+        tvScheduleGlobal.text = when {
+            status.health == AnalysisScheduleSummaryCore.Health.DISABLED ->
+                getString(R.string.console_schedule_disabled)
+            status.health == AnalysisScheduleSummaryCore.Health.GLOBAL_OFF ->
+                getString(R.string.console_schedule_global_off)
+            status.health == AnalysisScheduleSummaryCore.Health.NEVER_RUN ->
+                getString(R.string.console_schedule_never, status.intervalMinutes)
+            status.nextRunAt <= 0L ->
+                getString(R.string.console_schedule_last, status.intervalMinutes, last)
+            status.nextRunAt <= System.currentTimeMillis() ->
+                getString(R.string.console_schedule_running_soon, status.intervalMinutes, last)
+            else ->
+                getString(R.string.console_schedule_running, status.intervalMinutes, last, timeFmt.format(Date(status.nextRunAt)))
+        }
+        if (status.health == AnalysisScheduleSummaryCore.Health.STALE) {
+            tvScheduleWarn.visibility = View.VISIBLE
+            tvScheduleWarn.text = getString(
+                R.string.console_schedule_stale,
+                status.minutesSinceLast,
+                status.staleThresholdMs / 60_000L,
+            )
+        } else {
+            tvScheduleWarn.visibility = View.GONE
+        }
+
+        llScheduleConvs.removeAllViews()
+        if (rows.isEmpty()) {
+            llScheduleConvs.addView(scheduleLine(getString(R.string.console_schedule_convs_none), R.color.text_secondary))
+        } else {
+            llScheduleConvs.addView(
+                scheduleLine(getString(R.string.console_schedule_convs_title, rows.size), R.color.text_primary, bold = true)
+            )
+            rows.take(5).forEach { row ->
+                val name = ConvKey.parse(row.convKeyId).conversation
+                val text = when {
+                    row.gatedOut -> getString(R.string.console_schedule_conv_gated, name, row.intervalMinutes)
+                    row.nextRunAt <= 0L || row.nextRunAt <= System.currentTimeMillis() ->
+                        getString(R.string.console_schedule_conv_row_soon, name, row.intervalMinutes)
+                    else -> getString(
+                        R.string.console_schedule_conv_row,
+                        name,
+                        row.intervalMinutes,
+                        SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(row.nextRunAt)),
+                    )
+                }
+                llScheduleConvs.addView(
+                    scheduleLine(text, if (row.gatedOut) R.color.status_gray else R.color.text_secondary)
+                )
+            }
+            if (rows.size > 5) {
+                llScheduleConvs.addView(
+                    scheduleLine(getString(R.string.console_schedule_convs_more, rows.size - 5), R.color.text_secondary)
+                )
+            }
+        }
+
+        if (counts.isEmpty()) {
+            tvScheduleTags.text = getString(R.string.console_schedule_tags_none)
+        } else {
+            val parts = ConvTagCore.PICKER_ORDER.filter { (counts[it] ?: 0) > 0 }
+                .joinToString(" · ") { ConvTagPicker.badgeText(this, it) + " " + counts[it] }
+            val stopped = (counts[ConvTag.DONE] ?: 0) + (counts[ConvTag.NOISE] ?: 0)
+            val body = if (stopped > 0) {
+                parts + " · " + getString(R.string.console_schedule_stop_hint, stopped)
+            } else parts
+            tvScheduleTags.text = getString(R.string.console_schedule_tags, body)
+        }
+    }
+
+    private fun scheduleLine(text: String, colorRes: Int, bold: Boolean = false): TextView =
+        TextView(this).apply {
+            this.text = text
+            textSize = 12f
+            setTextColor(getColor(colorRes))
+            if (bold) setTypeface(typeface, Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = (4f * resources.displayMetrics.density).toInt() }
+        }
     override fun onResume() {
         super.onResume()
         refreshKeepAliveStatus()
+        refreshAnalysisSchedule()
     }
 
     override fun onPause() {

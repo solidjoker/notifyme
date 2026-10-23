@@ -414,6 +414,42 @@
     <string name="reminder_conv_count">📅 本会话已设 %1$d 条提醒 · 点击管理</string>
     <string name="reminder_menu_action">建提醒</string>
     <string name="reminder_manual_intent">已在日历 App 里打开新建页，请点保存</string>
+    <!-- M20 控制台定时分析面板：全局节奏 + 每会话定时 + 标签门禁 + 失联提醒 -->
+    <string name="console_schedule_title">⏱ 定时分析</string>
+    <string name="console_schedule_disabled">定时分析已关闭：不会自动跑，点「分析」或下面「立即分析一轮」仍会跑</string>
+    <string name="console_schedule_global_off">全局周期未开：只有「按会话单独定时」的会话会自己跑，其余要点「立即分析一轮」</string>
+    <string name="console_schedule_never">每 %1$d 分钟一轮 · 还没跑过（首轮通常在几分钟内）</string>
+    <string name="console_schedule_running">每 %1$d 分钟一轮 · 上次 %2$s · 下次约 %3$s</string>
+    <string name="console_schedule_stale">上次运行距今 %1$d 分钟，超过 %2$d 分钟阈值：排程可能已被系统丢弃。点下面「立即分析一轮」会自动补排</string>
+    <string name="console_schedule_running_soon">每 %1$d 分钟一轮 · 上次 %2$s · 即将运行</string>
+    <string name="console_schedule_last">每 %1$d 分钟一轮 · 上次 %2$s</string>
+    <string name="console_schedule_enqueued">已排队一轮分析（标签为已办结/无关的会话仍会被跳过）</string>
+    <string name="console_schedule_convs_title">按会话单独定时：%1$d 个</string>
+    <string name="console_schedule_convs_none">没有按会话单独定时的会话</string>
+    <string name="console_schedule_conv_row">%1$s · 每 %2$d 分钟 · 下次约 %3$s</string>
+    <string name="console_schedule_conv_row_soon">%1$s · 每 %2$d 分钟 · 即将运行</string>
+    <string name="console_schedule_conv_gated">%1$s · 每 %2$d 分钟 · 已办结/无关，不再自动分析</string>
+    <string name="console_schedule_convs_more">…另有 %1$d 个未列出</string>
+    <string name="console_schedule_tags">标签：%1$s</string>
+    <string name="console_schedule_tags_none">标签：还没有给任何会话打标</string>
+    <string name="console_schedule_stop_hint">%1$d 个已办结/无关，之后不再自动分析</string>
+    <string name="console_schedule_run_now">▶ 立即分析一轮</string>
+    <string name="console_schedule_settings">⚙ 分析设置</string>
+    <!-- M19 会话标签体系：待办/跟踪 继续进后续分析，已办结/无关 不再自动分析，未标记跟随关注名单 -->
+    <string name="conv_tag_todo">待办</string>
+    <string name="conv_tag_track">跟踪</string>
+    <string name="conv_tag_done">已办结</string>
+    <string name="conv_tag_noise">无关</string>
+    <string name="conv_tag_none">未标记</string>
+    <string name="conv_tag_keep">继续分析</string>
+    <string name="conv_tag_stop">不再自动分析</string>
+    <string name="conv_tag_follow">跟随关注名单</string>
+    <string name="quick_tag">🏷 标签</string>
+    <string name="conv_tag_dialog_title">会话标签</string>
+    <string name="conv_tag_dialog_desc">待办、跟踪会继续进入后续定时分析；已办结、无关之后不再自动分析（点「🔍 分析」仍可手动跑一次）。未标记 = 按关注名单处理。</string>
+    <string name="conv_tag_changed">已标记为「%1$s」</string>
+    <string name="conv_tag_removed">已取消标签，恢复跟随关注名单</string>
+    <string name="conv_tag_row">🏷 标签：%1$s · 点击修改</string>
     <string name="reminder_delete_confirm">删除这条提醒？已写入的日历事件会一并删除。</string>
     <string-array name="reminder_lead_labels">
         <item>不提前</item>

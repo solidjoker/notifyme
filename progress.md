@@ -704,6 +704,36 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - **真机已验（2026-10-23，小米17 `ebb079b5` / HyperOS 16 / Android 16，0.3.13/19）**：`adb install -r` 从 0.3.12/18 平滑升级（数据全留、无 FATAL、通知监听自动重绑）。日历权限 granted=true，机上有两个 `calendar_access_level=700` 的可写日历（`Xiaomi Calendar` / `XesPY`）→ **L1 直写真实日历成功**：日志 `CalendarHelper: L1 日历事件已创建: id=1956 title=M17 test clear later`；`content query events` 回 `_id=1956, dtstart=1792710000000（2026-10-23 07:00 +08）, dtend=+1h, calendar_id=1, description=会话：姜倩`；`reminders` 行 `event_id=1956, minutes=15, method=1`。第二条特意选**新增的「不提前」档** → `id=1957` 且 `reminders` 行 `minutes=0`（证明 0 档能落、AlarmHelper 的 `maxOf(eventTime-0, now+1s)` 不会算出过去）。
 - UI 实拍核对：弹窗默认时间=**下一个整点**（06:59 时给 07:00、07:02 时给 08:00 都对）、Spinner 四档「不提前/15 分钟/1 小时/1 天」、长按气泡 → 多选条「建提醒」→ 标题预填消息原文 + 「来自：姜倩 的消息」、计数行「📅 本会话已设 2 条提醒 · 点击管理」→ 管理页两条徽标均「已建日历事件」+「事件时间 10-23 08:00 ｜ 创建于 10-23 07:02」、删除弹「删除这条提醒？已写入的日历事件会一并删除。」。删除后 `reminders.jsonl` 清空、列表回「暂无提醒记录」、计数行隐藏，`Events` 两行变 `deleted=1`（可同步日历是软删，由同步适配器清），`Reminders` 查询 `No result found` → **用户日历无残留**。
 - **已推送（2026-10-23）**：`origin/main` = 7050aad（连同 §三.27 Laya 进度 98d13e8、§三.28 M16 ff91f5c/bd72b60 一并），CI run 39868475598 **全绿**（Lint / Unit tests + assemble / Server tests / Guard 全 success，约 6.5 分钟）。
+### 30. 新建提醒自动预填内容（M18）（2026-10-23，**0.3.14/20**，be58a24）
+
+用户需求（m02331）：「新建提醒，需要自动填入提醒内容」。M17 的面板入口（非长按消息）内容框恒为空，用户要从零打字。
+
+- `ManualReminderCore` 新增 `PrefillSource { ANALYSIS, MESSAGE, NONE }`、`PrefillSuggestion(text, source)`、`suggestPrefill(analysisTodo, messages, minLength=4, maxLen=40)`：优先级 ①分析待办（`record.todoText.ifEmpty { it.s2Summary }`，**不用 s1Topic**——那只是「闲聊」这类分类词）②最近一条**有实质内容**的消息（传入旧→新，内部 `asReversed()`；跳过占位符与长度<4）③都没有→留空（不编内容）。
+- `messageBody(text)` 剥通知拼接前缀：`[4条]张三: …` → 正文（先 `substringAfter("条]")`，再取半/全角冒号 `minOf` 位置，colon>30 视为不是前缀）；开头是媒体标签（`[图片]`/`[小程序]`，`]` 在 2..12）且不是纯占位符时剥掉标签只留正文。`isPlaceholder`：trim 后长度 3..14、首尾方括号、内部不含方括号。
+- **刻意不用正则**：写 Kotlin 正则要叠三四层反斜杠（经 run_code 传输还要再叠一层），极易错；纯字符串操作可读性也更好。
+- `ConversationActivity`：`renderContent` 后台线程顺手缓存 `cachedAnalysisTodo` / `cachedMessageTexts`；`showReminderDialog` 里只有 `source == null` 才走 `suggestPrefill`（长按路径仍用消息原文）；弹窗下方三态提示 `reminder_manual_from_msg` / `reminder_manual_prefill_analysis`「已按分析结果预填，可直接改」/ `reminder_manual_prefill_message`。
+- 单测 +6（`ManualReminderCoreTest` 共 15 例）；全量 365 例 0 失败。真机（小米17）两分支均实拍通过：姜倩会话 → 预填分析摘要；小柿子班级群最后一条 `[6条]陈老师: [小程序] 布置了一份作业` → 预填「布置了一份作业」。
+
+### 31. 会话标签体系 + 控制台定时分析面板（M19/M20）（2026-10-23，**0.3.15/21**）
+
+用户需求（m02490）「分析过的会话内容要做标记，区分状态，其中一条是无需后续，后续不再分析这个标签的内容」+（m02508）「标签体系 需要程序设计一下 待办、跟踪、无关，还有什么？待办、跟踪 需要加到后续会话分析里，其他不再后续分析。定时分析的控制台需要加上。」
+
+**标签体系（4 档 + 未标记）**：🟠 待办 `todo` / 🔵 跟踪 `track` / ✅ 已办结 `done` / ⚪ 无关 `noise` / 未标记 `none`。回答用户「还有什么」：在待办/跟踪/无关之外补 **已办结**（事情办完，结果留档但别再自动分析）；**未标记**不是档位而是回落态（跟随关注名单，保证老用户行为不变）。拟再提「等待回复 / 仅提醒」两档，待用户拍板。
+
+- 门禁纯函数 `ConvTagCore.shouldAnalyze(tag, watched, forced)`：`keepsAnalyzing = TODO||TRACK` 强制纳入；`stopsAnalyzing = DONE||NOISE` 强制排除；否则回落 `watched`。`forced` 只在**用户真点分析**时为 true。
+- 三处接线：`AnalysisWorker.doWorkExclusive` 建案过滤；`AnalysisScheduler.syncAll` 撤孤儿条件（已办结/无关的会话级定时自动撤销）；`MainActivity` 会话头新增 `tvTagBadge`（未标记=灰色「🏷」，打标后「🟠 待办」并着色，点击弹选择器）+ `ConversationActivity` 面板下 `tvConvTag` 行。
+- **门禁语义修正（重要）**：`forced = forceKey != null && !quiet`。会话级定时也带 forceKey，但它是 `quiet=true` 的自动轮，**必须**同样被「已办结/无关」拦住，否则用户标了「无关」它照跑。
+- 存储 `ConvTagStore`：prefs `conv_tags` / 键 `tags` = JSON `{convKeyId: code}`，只存已打标条目。
+- **弹窗坑**：`AlertDialog` 同时 `setMessage` + `setSingleChoiceItems` 时选项面板被消息面板挤掉——模拟器实拍弹窗只剩标题+说明+取消（无异常，纯渲染层吞掉）。改为 `setView(自定义 LinearLayout)`：说明 TextView + 5 个 TextView 行（`btn_secondary` 背景、当前档 brand_green + 假粗体），行内点击落库并回调；`var dialog: AlertDialog? = null` 先声明再赋值（Kotlin 不许前向引用 val）。
+
+**M20 控制台「⏱ 定时分析」面板**（`activity_console.xml` + `ConsoleActivity`，插在「分析」与「日历提醒」两张入口卡之间）：
+
+- 纯 JVM 判定 `AnalysisScheduleSummaryCore.evaluate(enabled, intervalMinutes, lastRunAt, now)` → `Health { DISABLED, GLOBAL_OFF, NEVER_RUN, OK, STALE }`；STALE 阈值直接复用 `ScheduleSelfHealCore.thresholdFor(interval)`（**与自愈同一把尺**，避免面板说正常而自愈在补排）。
+- 面板内容：全局态一行（含「上次 / 下次约」）；STALE 时橙色告警「上次运行距今 N 分钟，超过 M 分钟阈值：排程可能已被系统丢弃。点下面『立即分析一轮』会自动补排」；按会话单独定时的列表（每会话下次触发；被标签拦掉的排最后并标「已办结/无关，不再自动分析」，最多 5 条 + 「…另有 N 个未列出」）；标签统计行「标签：🟠 待办 1 · ⚪ 无关 1 · 1 个已办结/无关，之后不再自动分析」；按钮「▶ 立即分析一轮」/「⚙ 分析设置」。
+- **顺带修掉一个真 bug**：`AnalysisWorker.runRound():92` 原来 `if (!config.enabled) return Result.success()` —— 总开关关掉时**连用户手点的分析也静默不跑**（点了没反应、也没日志）。新增 `KEY_MANUAL`（`AnalysisScheduler.enqueueAnalysisNow` 必定 true；定时轮用另一个 builder，不受影响），门禁改 `if (!config.enabled && !manual)`；`console_schedule_disabled` 文案同步改为「定时分析已关闭：不会自动跑，点「分析」或下面「立即分析一轮」仍会跑」。
+- **日志计数分家**：门禁原来把一切不通过都记成 `标签拦截`，实测出现 `候选 35 个, 标签拦截 35 个`（其实只有 1 个打了标，其余 34 个是未关注）→ 拆 `skippedByTag` / `skippedUnwatched`，日志变「标签拦截 1 个, 未关注拦截 34 个」。
+- 单测：`ConvTagCoreTest` 7 例 + `AnalysisScheduleSummaryCoreTest` 7 例；全量 **379 例 0 失败 0 错**；`:app:lintOpenDebug`（148 条全 Warning、0 Error）+ 双 flavor assemble 均 BUILD SUCCESSFUL。
+- 模拟器走查（emulator-5554）：徽标 🏷 → 弹窗五档齐全 → 选「⚪ 无关」→ 徽标变灰、prefs 落 `{convKeyId: noise}`；控制台显示「标签：⚪ 无关 1」；总开关关闭时点「▶ 立即分析一轮」→ 日志 `入选 0 个会话 (候选 35 个, 标签拦截 1 个, 未关注拦截 34 个, force=null)`；改标「🟠 待办」再跑 → `入选 1 个会话 (候选 35 个, 标签拦截 0 个, 未关注拦截 34 个)` 且真的开跑（`AnalysisProgress: stage=LOADING_MODEL → REMOTE → idle`）。**待办：小米17 真机回归（本轮手机未连）。**
 ## 四、构建与运行
 
 ```powershell
@@ -754,10 +784,16 @@ ADB/设备要点（踩过的坑）：
 - 真机（小米17）`adb shell content query --uri content://com.android.calendar/{events,reminders}` 免 root 直接可读（`--where '_id in (1956,1957)'` 这种写法可用）；但**删掉可同步日历上的事件是软删**：`events` 行仍在、只是 `deleted=1 dirty=1`（同步适配器稍后物理清），判据要查 `deleted` 列而不是「行消失」；`reminders` 行则是真删（`No result found`）
 - 驱动 TimePicker：先点 `toggle_mode`（content-desc「切换到文字输入模式…」）再用 `input keyevent KEYCODE_MOVE_END; input keyevent 67 67; input text 10` 改 `input_hour`/`input_minute`，比点表盘准；DatePicker 的日期格子是无 id 的 `View`，按行列坐标数日期容易点错一天，落库后务必回读 `event_time` 核对
 - 本机当前文件策略 danger-full-access；无需申请 sandbox_permissions
+- MuMu 上 `com.sankuai.moviepro` 会反复抢前台并让 `uiautomator dump` 报 `ERROR: could not get idle state.`（还伴随 Shutdown thread SIGSEGV）：`pm disable-user --user 0` **不够**（进程活着仍能把自己拉到前台），要 `adb shell pm disable com.sankuai.moviepro` + `am force-stop`（本机 adb shell 是 root 才能用 `pm disable`）；测完 `pm enable` 还原
+- **PowerShell 里 `adb … > file` 是 PowerShell 自己重定向，写出来是 UTF-16**：node 按 utf8 读会看到乱码/空匹配（`logcat -d > x.txt` 同理）。可靠写法：`cmd /c "adb -s <s> logcat -d > x.txt 2>&1"`
+- `am start … >/dev/null 2>&1` 在 PowerShell 里会因 `/dev/null` 不是合法路径而**报错并中断整条命令**（表现是 App 根本没启动，误判成 UI 没反应）→ 用 `| Out-Null`
+- 解析 uiautomator 的 `bounds`：`[800,532][861,580]` 用「删掉非数字和逗号」会粘成 `800,532861,580`（中间那个 `][` 被吃掉）→ 必须用四捕获组正则；另外按属性名取值时匹配串是 `text="`（前面是空格不是引号），写成 `"text="` 会一个都取不到
+- `AlertDialog` 同时 `setMessage` + `setSingleChoiceItems` 时选项面板会被消息面板挤掉（实测只剩标题+说明+按钮，无任何异常日志）→ 列表类弹窗一律用 `setView(自定义 LinearLayout)`（见 §三.31）
 
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
+> 当前状态（2026-10-23 更新 2）：**M18（0.3.14/20，be58a24）已提交**；**M19 会话标签体系 + M20 控制台定时分析面板（0.3.15/21）已交付**（379 单测全绿、lint 0 Error、模拟器走查通过），**未推送、小米17 未回归**（手机未连）。本地 main 领先 origin：be58a24 + M19/M20 待提交。新增待办：①标签是否再加「等待回复 / 仅提醒」两档待拍板；②会话去重三口径待拍板（§三.26 前后画像）；③结果页可点空态（已提议未确认）；④真机陈旧 prefs 键 `collapsed_conversations`（72 条）要不要清。
 > 当前状态（2026-10-23 更新）：**0.3.13/19 已推送且 CI 全绿**（run 39868475598），M17 已在小米17 真机走查通过（L1 直写小米日历、「不提前」档、长按建提醒、删除联动；测试事件已全部清理）。待办：①会话去重三口径待用户拍板（重复画像见 §三.26 前后记录）；②结果页「本会话 0 条 · 全部会话 N 条 →」可点空态（已提议未确认）；③M13 遗留的陈旧 prefs 键 `collapsed_conversations`（真机上仍留 72 条）要不要顺手清。
 > 当前状态（2026-10-22 更新）：§三.29 M17 会话内自建提醒并关联日历（**0.3.13/19**）已交付，模拟器全链路走查通过（含 L1 真写日历、去重、删除二次确认），**真机未验**（本轮手机未连）；本地 main 领先 origin 三个提交（98d13e8 Laya 进度 / ff91f5c M16 / bd72b60 docs）+ M17 待提交，均未推送。
 > 当前状态（2026-10-21 更新）：§三.27 M15 端侧分析进度已随 **0.3.11/17** 推送（b6105d7），CI 护栏修复 23b0e0d 已推送且绿；Laya 判定题进度（98d13e8）与 §三.28 M16 恢复按对话折叠（**0.3.12/18**）**已交付未推送**（本地 main 领先 origin 两个提交）。0.3.12/18 已装小米17 并实测折叠可用。

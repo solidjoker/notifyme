@@ -252,6 +252,15 @@
                     android:textColor="@color/text_primary"
                     android:textSize="14sp" />
 
+                <!-- M19 会话标签：一眼看出该会话之后还会不会被自动分析，点击换档 -->
+                <TextView
+                    android:id="@+id/tvConvTag"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:padding="4dp"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
                 <!-- 本会话已设提醒计数：点击进「该会话的提醒」管理页 -->
                 <TextView
                     android:id="@+id/tvConvReminders"

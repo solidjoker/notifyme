@@ -71,6 +71,20 @@
             android:textSize="11sp"
             android:visibility="gone" />
 
+        <!-- 会话标签徽标（M19）：未标记只显示 🏷，打标显示「🟠 待办」等；点击弹五档单选 -->
+        <TextView
+            android:id="@+id/tvTagBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:paddingStart="5dp"
+            android:paddingTop="2dp"
+            android:paddingEnd="5dp"
+            android:paddingBottom="2dp"
+            android:singleLine="true"
+            android:text="🏷"
+            android:textColor="@color/status_gray"
+            android:textSize="11sp" />
         <!-- 日历提醒标记：该会话存在提醒记录时显示，点击进该会话的提醒列表 -->
         <TextView
             android:id="@+id/tvReminderBadge"

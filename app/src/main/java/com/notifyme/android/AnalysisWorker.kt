@@ -56,6 +56,10 @@ class AnalysisWorker(
         /** M11.4 会话级定时任务静默标记：true 时成功类结果不覆写全局分析状态 */
         const val KEY_QUIET = "quiet"
 
+        /** 用户显式发起的一轮（首页 chip / 会话页按钮 / 控制台「立即分析一轮」）。
+         *  总开关只关「自动」，不关手动：否则用户点了毫无反应（M20 实测）。 */
+        const val KEY_MANUAL = "manual"
+
         /** 单轮最多分析会话数 */
         private const val MAX_CONVERSATIONS_PER_ROUND = 10
 
@@ -89,7 +93,8 @@ class AnalysisWorker(
 
     private suspend fun runRound(): Result {
         val config = AnalysisConfig(applicationContext)
-        if (!config.enabled) return Result.success()
+        val manual = inputData.getBoolean(KEY_MANUAL, false)
+        if (!config.enabled && !manual) return Result.success()
 
         // System 1 两条路径：本地 MiniCPM4-0.5B（端侧引擎）或 laya 服务（本地/自建地址）
         val s1Local = config.s1Type == AnalysisConfig.S1_TYPE_LOCAL_MODEL
@@ -180,6 +185,12 @@ class AnalysisWorker(
         // 按 (pkg, 会话名) 分组 -> 组 case -> 过滤重点关注 -> caseId 去重。
         // M2 起必须按 ConvKey 分组：只按会话名会把不同 App 里的同名会话拼成一个 case。
         val analyzedIds = AnalysisStore.loadCaseIds(applicationContext)
+        // M19：标签表整轮只读一次，逐会话判定要不要继续进分析
+        val tagMap = ConvTagStore.readRaw(applicationContext)
+        val unwatchedIds = WatchlistStore.getUnwatched(applicationContext)
+        val watchedRaw = WatchlistStore.getWatched(applicationContext)
+        var skippedByTag = 0
+        var skippedUnwatched = 0
         val byConversation = MessageStore.readRecent(applicationContext, 500)
             .groupBy { it.convKey }
 
@@ -196,7 +207,22 @@ class AnalysisWorker(
             }
             // 强制模式同样跳过关注名单过滤——用户在会话详情页点「立即分析本会话」
             // 是显式指定目标，不该被名单悄悄拦下（W1 真机实测发现）
-            .filter { (key, _) -> forceKey != null || WatchlistStore.isWatched(applicationContext, key) }
+            // M19 标签门禁：待办/跟踪强制纳入，已办结/无关强制排除，未标记才回落关注名单。
+            // 「手动」= 用户真点了分析（会话级定时也带 forceKey，但它是 quiet 自动轮，同样受标签拦截）。
+// 「立即分析本会话」（forceKey）是显式指定，标签也不拦。
+            .filter { (key, _) ->
+                val tag = ConvTag.fromCode(tagMap[key.id])
+                val pass = ConvTagCore.shouldAnalyze(
+                    tag,
+                    WatchlistStore.isWatchedId(key.id, unwatchedIds, watchedRaw),
+                    forceKey != null && !quiet
+                )
+                // 两个拦截原因分开计数：只看名单不通过时全记成「标签拦截」会误导排查
+                if (!pass) {
+                    if (ConvTagCore.stopsAnalyzing(tag)) skippedByTag++ else skippedUnwatched++
+                }
+                pass
+            }
             .mapNotNull { (key, list) -> AnalysisCase.fromMessages(key.pkg, key.conversation, list) }
             // 强制模式跳过去重（用户显式要求重分析）；否则窗口没变就跳过
             .filter { forceKey != null || it.caseId !in analyzedIds }
@@ -205,8 +231,9 @@ class AnalysisWorker(
             .toList()
         Log.i(
             TAG,
-            "本轮分析开始: 入选 " + cases.size + " 个会话 (候选 " +
-                byConversation.size + " 个, force=" + forceKey?.conversation
+            "本轮分析开始: 入选 " + cases.size + " 个会话 (候选 " + byConversation.size +
+                " 个, 标签拦截 " + skippedByTag + " 个, 未关注拦截 " + skippedUnwatched +
+                " 个, force=" + forceKey?.conversation + ")"
         )
 
         if (cases.isEmpty()) {

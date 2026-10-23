@@ -121,6 +121,10 @@ class MainActivity : Activity() {
         onToggleWatch = { key ->
             if (!adapter.selectionActive) toggleWatch(key)
         },
+        onSetTag = { key ->
+            // M19：点标签徽标弹五档单选；落库后整表刷新（tagCode 是 Header 内容字段，DiffUtil 会重绑该会话头）
+            ConvTagPicker.show(this, key) { refreshMessages() }
+        },
         onHeaderLongPress = { key -> startSelection(key) },
         onToggleSelection = { key -> toggleSelection(key) },
         onOpenReminders = { key ->
@@ -647,6 +651,8 @@ class MainActivity : Activity() {
 
         // M11：显式不关注的会话直接隐藏（不进主列表，分析也已跳过）
         val unwatchedIds = WatchlistStore.getUnwatched(this)
+        // M19：整轮只读一次标签表，逐会话取码
+        val tagMap = ConvTagStore.readRaw(this)
         // 按采集开关过滤：黑名单勾选 / 白名单外的 App，其会话不进主页；
         // 自身与系统源（如 a11y 自抓噪声）同样不展示
         val visibleGroups = groups.filter { it.first.id !in unwatchedIds }
@@ -714,7 +720,8 @@ class MainActivity : Activity() {
                     analysis = case,
                     hasReminder = key in reminderKeys,
                     watched = WatchlistStore.isWatchedId(key.id, unwatchedIds, watchedRaw),
-                    collapsed = convCollapsed
+                    collapsed = convCollapsed,
+                    tagCode = tagMap[key.id].orEmpty()
                 )
                 if (convCollapsed) continue
 
@@ -1046,7 +1053,9 @@ class MainActivity : Activity() {
              *  若不加此字段，点关注只是移动位置，DiffUtil 判 move 不重绑，文案停在旧值。 */
             val watched: Boolean,
             /** M16：会话级折叠态（内容字段）——同一 Header 需重绑才能翻转箭头 ▼/▶ */
-            val collapsed: Boolean
+            val collapsed: Boolean,
+            /** M19：会话标签码（""=未标记）。内容字段：改标签后 DiffUtil 判 change 重绑徽标 */
+            val tagCode: String
         ) : FeedItem()
 
         data class DateHeader(
@@ -1075,6 +1084,7 @@ class MainActivity : Activity() {
         private val onToggleConversation: (ConvKey, Boolean) -> Unit,
         private val onToggleDate: (ConvKey, String, Boolean) -> Unit,
         private val onToggleWatch: (ConvKey) -> Unit,
+        private val onSetTag: (ConvKey) -> Unit,
         private val onHeaderLongPress: (ConvKey) -> Unit,
         private val onToggleSelection: (ConvKey) -> Unit,
         private val onOpenReminders: (ConvKey) -> Unit
@@ -1232,6 +1242,17 @@ class MainActivity : Activity() {
                 holder.tvReminderBadge.setOnClickListener { onOpenReminders(key) }
             } else {
                 holder.tvReminderBadge.visibility = View.GONE
+            }
+
+            // M19 会话标签徽标：未标记也显示「🏷」保证入口可点；打标后显示「🟠 待办」等并着色。
+            // 已办结/无关＝后续不再自动分析，用户需要一眼看出哪些会话已经停止跟进。
+            val tag = ConvTag.fromCode(header.tagCode)
+            holder.tvTagBadge.visibility = View.VISIBLE
+            holder.tvTagBadge.text = if (tag == ConvTag.NONE)
+                "🏷" else ConvTagPicker.badgeText(ctx, tag)
+            holder.tvTagBadge.setTextColor(ConvTagPicker.color(ctx, tag))
+            holder.tvTagBadge.setOnClickListener {
+                if (!selectionActive) onSetTag(key)
             }
 
             // 热区：普通态文字区进详情页 / 长按进多选；选择态点击=勾选
@@ -1426,6 +1447,7 @@ class MainActivity : Activity() {
             val tvConversation: TextView = itemView.findViewById(R.id.tvConversation)
             val tvAnalysisBadge: TextView = itemView.findViewById(R.id.tvAnalysisBadge)
             val tvReminderBadge: TextView = itemView.findViewById(R.id.tvReminderBadge)
+            val tvTagBadge: TextView = itemView.findViewById(R.id.tvTagBadge)
             val tvCount: TextView = itemView.findViewById(R.id.tvCount)
             val tvPreview: TextView = itemView.findViewById(R.id.tvPreview)
             val tvArrow: TextView = itemView.findViewById(R.id.tvArrow)

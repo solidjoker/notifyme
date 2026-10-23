@@ -101,6 +101,7 @@ class ConversationActivity : Activity() {
     private lateinit var llQuickReply: View
     private lateinit var btnNewReminder: Button
     private lateinit var tvConvReminders: TextView
+    private lateinit var tvConvTag: TextView
 
     private val timeFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
     private val handler = Handler(Looper.getMainLooper())
@@ -196,6 +197,7 @@ class ConversationActivity : Activity() {
         tvAnalysisProgress = findViewById(R.id.tvAnalysisProgress)
         btnNewReminder = findViewById(R.id.btnNewReminder)
         tvConvReminders = findViewById(R.id.tvConvReminders)
+        tvConvTag = findViewById(R.id.tvConvTag)
         llQuickReply = findViewById(R.id.llQuickReply)
 
         findViewById<TextView>(R.id.btnBack).setOnClickListener { finish() }
@@ -225,6 +227,8 @@ class ConversationActivity : Activity() {
         // M17 会话内自建提醒：手动建一条 + 跳转本会话提醒管理
         btnNewReminder.setOnClickListener { showReminderDialog(null) }
         tvConvReminders.setOnClickListener { ReminderListActivity.start(this, key) }
+        // M19：点标签行进五档单选；落库后立刻重绘该行
+        tvConvTag.setOnClickListener { ConvTagPicker.show(this, key) { renderTagRow() } }
 
         // M11 分析进度条：观察本会话 WorkManager tag，排队/运行时显示、结束消失
         androidx.work.WorkManager.getInstance(this)
@@ -354,6 +358,7 @@ class ConversationActivity : Activity() {
                 refreshQuickReply()
                 renderAnalysisPanel(record)
                 renderReminderCount(reminderCount)
+            renderTagRow()
                 cachedAnalysisTodo = record?.let { it.todoText.ifEmpty { it.s2Summary } }.orEmpty()
                 cachedMessageTexts = messages.map { it.text }
                 shownAnalyzedAt = record?.analyzedAt ?: 0L
@@ -715,6 +720,15 @@ class ConversationActivity : Activity() {
     // ---------- M17 会话内自建提醒（写系统日历 + 提前量，无日历时降级） ----------
 
     /** 本会话已设提醒条数：0 条时隐藏入口（分析未跑过的会话也要能看到，故独立于分析面板）。 */
+    /** M19：标签行文案——已办结/无关明确告知「之后不再自动分析」，免得用户以为分析坏了。 */
+    private fun renderTagRow() {
+        if (!::tvConvTag.isInitialized || !::key.isInitialized) return
+        val tag = ConvTagStore.tagOf(this, key)
+        val label = ConvTagPicker.label(this, tag)
+        tvConvTag.text = getString(R.string.conv_tag_row, label)
+        tvConvTag.setTextColor(ConvTagPicker.color(this, tag))
+    }
+
     private fun renderReminderCount(count: Int) {
         if (count <= 0) {
             tvConvReminders.visibility = View.GONE

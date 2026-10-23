@@ -81,7 +81,10 @@ object AnalysisScheduler {
         val wm = WorkManager.getInstance(context)
         ConvAnalysisScheduleStore.all(context).forEach { (id, minutes) ->
             val key = ConvKey.parse(id)
-            if (minutes <= 0 || !WatchlistStore.isWatched(context, key)) {
+            // M19：会话被标成「已办结/无关」时，即便仍在关注名单里也要撤掉它的独立排期；
+            // 反之标了「待办/跟踪」的会话，即使没进名单也保留排期（排期本身就是显式指定）。
+            if (minutes <= 0 ||
+                !ConvTagStore.keepsAnalyzing(context, key, WatchlistStore.isWatched(context, key))) {
                 wm.cancelUniqueWork(UNIQUE_CONV_PREFIX + id)
             }
         }
@@ -106,16 +109,18 @@ object AnalysisScheduler {
         if (!fullyLocal) {
             builder.setConstraints(networkConstraint())
         }
+        // 走到这里的一定是用户显式点击（定时轮用另一个 builder），标记为手动轮：
+        // 总开关关闭时也要真的跑一轮，否则「立即分析」点了没反应（M20 实测）。
+        val data = androidx.work.Data.Builder().putBoolean(AnalysisWorker.KEY_MANUAL, true)
+        if (forceKey != null) {
+            data.putString(AnalysisWorker.KEY_FORCE_PKG, forceKey.pkg)
+                .putString(AnalysisWorker.KEY_FORCE_CONVERSATION, forceKey.conversation)
+        }
         builder
             // 通用 tag：所有立即分析；UI 可观察整体/单会话进度
             .addTag(TAG_ON_DEMAND)
+            .setInputData(data.build())
         if (forceKey != null) {
-            builder.setInputData(
-                androidx.work.Data.Builder()
-                    .putString(AnalysisWorker.KEY_FORCE_PKG, forceKey.pkg)
-                    .putString(AnalysisWorker.KEY_FORCE_CONVERSATION, forceKey.conversation)
-                    .build()
-            )
             // 单会话 tag：首页 chip / 会话详情按钮按会话观察进度
             builder.addTag(convTag(forceKey))
         }
