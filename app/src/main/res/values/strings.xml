@@ -595,4 +595,10 @@
     <string name="analysis_progress_queued">已加入分析队列…</string>
     <string name="analysis_stage_questions">端侧判定</string>
     <string name="analysis_progress_questions">%1$s %2$d/%3$d 题 · 已用 %4$s</string>
+    <!-- M21 后台分析进度常驻通知 -->
+    <string name="analysis_notif_channel_name">分析进度</string>
+    <string name="analysis_notif_channel_desc">后台分析进行时在通知栏显示当前阶段与进度</string>
+    <string name="analysis_notif_title">正在分析消息</string>
+    <string name="analysis_notif_title_round">正在分析会话（%1$d/%2$d）</string>
+    <string name="analysis_notif_title_conv">正在分析：%1$s</string>
 </resources>

@@ -734,6 +734,16 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - **日志计数分家**：门禁原来把一切不通过都记成 `标签拦截`，实测出现 `候选 35 个, 标签拦截 35 个`（其实只有 1 个打了标，其余 34 个是未关注）→ 拆 `skippedByTag` / `skippedUnwatched`，日志变「标签拦截 1 个, 未关注拦截 34 个」。
 - 单测：`ConvTagCoreTest` 7 例 + `AnalysisScheduleSummaryCoreTest` 7 例；全量 **379 例 0 失败 0 错**；`:app:lintOpenDebug`（148 条全 Warning、0 Error）+ 双 flavor assemble 均 BUILD SUCCESSFUL。
 - 模拟器走查（emulator-5554）：徽标 🏷 → 弹窗五档齐全 → 选「⚪ 无关」→ 徽标变灰、prefs 落 `{convKeyId: noise}`；控制台显示「标签：⚪ 无关 1」；总开关关闭时点「▶ 立即分析一轮」→ 日志 `入选 0 个会话 (候选 35 个, 标签拦截 1 个, 未关注拦截 34 个, force=null)`；改标「🟠 待办」再跑 → `入选 1 个会话 (候选 35 个, 标签拦截 0 个, 未关注拦截 34 个)` 且真的开跑（`AnalysisProgress: stage=LOADING_MODEL → REMOTE → idle`）。**待办：小米17 真机回归（本轮手机未连）。**
+### 32. 分析保活 + 后台进度通知（M21）（2026-10-23，**0.3.16/22**）
+
+用户需求（m03428）「分析需要保持运行，有后台能够看到分析的进度」。M15/M16 只在 App 在前台时显示进度；HOME/锁屏后分析虽在跑（WorkManager），用户看不到也容易被系统杀。
+
+- **保活**：`AnalysisWorker.doWork()` 注册 `AnalysisProgressBus.Listener`，首个进度状态一到就 `setForegroundAsync(...)` 把 Worker 提升为 WorkManager 托管的 `SystemForegroundService`（Manifest 早有该服务声明 + `FOREGROUND_SERVICE`/`FOREGROUND_SERVICE_DATA_SYNC` 权限，Android 14+ 带 `FOREGROUND_SERVICE_TYPE_DATA_SYNC`，异常兜底无类型 `ForegroundInfo`）。Worker 结束时 WorkManager 自动停服务、撤通知（`finally` 里先摘监听再 `publish(null)`，防 null 再触发一次提升）。
+- **常驻进度通知**（新文件 `AnalysisProgressNotifier.kt`）：渠道 `analysis_progress`，`IMPORTANCE_LOW`（静音、无振动无灯、不弹横幅，归入通知栏「静音」分组）；通知 id **4711**，ongoing/NO_CLEAR/ONLY_ALERT_ONCE；标题多会话轮「正在分析会话（i/n）」、单会话「正在分析：会话名」；正文复用 `AnalysisProgressUi.text`（如「第 5/10 个会话 · 端侧判定 1/4 题 · 已用 0秒」）；进度条确定态/indeterminate；`contentIntent` 解析 convKey 成功跳 `ConversationActivity`、失败回 `ConsoleActivity`（PI 按 convKey hash 区分、IMMUTABLE/UPDATE_CURRENT）。渠道在 `MainApplication.onCreate` 创建。
+- **控制台实时行**：定时分析卡内新增 `tvRunProgress`（绿字）+ `progressRun`（横条，初始 GONE）；`ConsoleActivity` 在 onResume 挂 bus 监听 + 每秒补帧 tick，onPause 全摘；空态隐藏。手动「立即分析一轮」改 `setExpedited(RUN_AS_NON_EXPEDITED_WORK_REQUEST)`（加急额度不足回落普通任务）。
+- 验证（emulator-5554，laya_ondevice + 临时给 10 个会话打 todo 让整轮跑满）：① 控制台抓到实时行 `🔄 第 1/10 个会话 · 加载本地模型 · 已用 7秒`；② HOME 后 logcat 完整跑完 10 个会话（约 22-35 秒），`WM-WorkerWrapper: Worker result SUCCESS`；③ `WM-SystemFgDispatcher: Started foreground service … SystemForegroundService`，结束时该服务 Stop、id=4711 通知记录被撤（`Cannot find enqueued record for key: 0|com.notifyme.android|4711|…`）；④ **中段 `dumpsys notification --noredact` 铁证**：`id=4711 channel=analysis_progress flags=ONGOING_EVENT|ONLY_ALERT_ONCE|NO_CLEAR|FOREGROUND_SERVICE groupKey=silent`，`android.title=正在分析会话（5/10）`、`android.text=第 5/10 个会话 · 端侧判定 1/4 题 · 已用 0秒`、`android.progress=42`，contentIntent 为 startActivity PendingIntent。
+- **坑**：① 同一批消息不重复分析——想重跑必须先 `run-as <pkg> sh -c ': > files/analysis.jsonl'`，否则日志 `入选 0 个会话`、Worker 秒退，根本不会提 FGS（误判功能失效）；② MuMu 会无征兆转横屏（`SurfaceOrientation:1`、dump bounds 宽 1920），竖屏坐标点空；锁定法仍是 `settings put system accelerometer_rotation 0` + `user_rotation 0` 后 force-stop 重开，且**点击前必须用 dump 断言按钮在屏**；③ `cmd statusbar expand-notifications` 在 MuMu 横屏 launcher 上展不开通知栏（uiautomator 拍到的是桌面），通知内容验证以 `dumpsys notification --noredact` 为准；④ LOW importance 通知在通知栏默认折进底部「静音」分组。
+- 测试后模拟器已还原：`conv_tags.xml`（仅原 moviepro=todo）、`analysis_config.xml`（s1_type=local）、`analysis.jsonl`（还原为首轮 10 条备份）、自动旋转恢复。门禁：`:app:testOpenDebugUnitTest :app:lintOpenDebug :app:assembleOpenDebug :app:assembleBetaDebug` 全绿（仅既有 warning）。**待办：小米17 真机回归 M19/M20/M21（手机未连）。**
 ## 四、构建与运行
 
 ```powershell
@@ -789,10 +799,13 @@ ADB/设备要点（踩过的坑）：
 - `am start … >/dev/null 2>&1` 在 PowerShell 里会因 `/dev/null` 不是合法路径而**报错并中断整条命令**（表现是 App 根本没启动，误判成 UI 没反应）→ 用 `| Out-Null`
 - 解析 uiautomator 的 `bounds`：`[800,532][861,580]` 用「删掉非数字和逗号」会粘成 `800,532861,580`（中间那个 `][` 被吃掉）→ 必须用四捕获组正则；另外按属性名取值时匹配串是 `text="`（前面是空格不是引号），写成 `"text="` 会一个都取不到
 - `AlertDialog` 同时 `setMessage` + `setSingleChoiceItems` 时选项面板会被消息面板挤掉（实测只剩标题+说明+按钮，无任何异常日志）→ 列表类弹窗一律用 `setView(自定义 LinearLayout)`（见 §三.31）
+- 想让分析轮重跑（同一批消息默认不重复分析）：`adb shell "run-as <pkg> sh -c ': > files/analysis.jsonl'"` 清空分析记录，否则 Worker 秒退（`入选 0 个会话`）、不会提前台服务，容易误判 M21 失效；测完记得还原
+- MuMu 横屏 launcher 下 `cmd statusbar expand-notifications` 展不开通知栏（uiautomator 拍到桌面）；验通知内容直接 `dumpsys notification --noredact`（可 grep `id=4711` 看 title/text/progress extras），比拉通知栏稳
 
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
+> 当前状态（2026-10-23 更新 3）：**M21 分析保活 + 后台进度通知（0.3.16/22）已提交未推送**——Worker 经 setForegroundAsync 提升为前台服务、id=4711 静音常驻通知随阶段实时更新、控制台定时卡加实时进度行；模拟器走查通过（dumpsys 中段抓到 title「正在分析会话（5/10）」、text「端侧判定 1/4 题 · 已用 0秒」、progress=42，结束自动撤通知）。本地 main 领先 origin：be58a24(M18)、d13d53a(M19/M20)、M21 三个提交。**M19/M20/M21 小米17 真机回归待手机连接。**
 > 当前状态（2026-10-23 更新 2）：**M18（0.3.14/20，be58a24）已提交**；**M19 会话标签体系 + M20 控制台定时分析面板（0.3.15/21）已交付**（379 单测全绿、lint 0 Error、模拟器走查通过），**未推送、小米17 未回归**（手机未连）。本地 main 领先 origin：be58a24 + M19/M20 待提交。新增待办：①标签是否再加「等待回复 / 仅提醒」两档待拍板；②会话去重三口径待拍板（§三.26 前后画像）；③结果页可点空态（已提议未确认）；④真机陈旧 prefs 键 `collapsed_conversations`（72 条）要不要清。
 > 当前状态（2026-10-23 更新）：**0.3.13/19 已推送且 CI 全绿**（run 39868475598），M17 已在小米17 真机走查通过（L1 直写小米日历、「不提前」档、长按建提醒、删除联动；测试事件已全部清理）。待办：①会话去重三口径待用户拍板（重复画像见 §三.26 前后记录）；②结果页「本会话 0 条 · 全部会话 N 条 →」可点空态（已提议未确认）；③M13 遗留的陈旧 prefs 键 `collapsed_conversations`（真机上仍留 72 条）要不要顺手清。
 > 当前状态（2026-10-22 更新）：§三.29 M17 会话内自建提醒并关联日历（**0.3.13/19**）已交付，模拟器全链路走查通过（含 L1 真写日历、去重、删除二次确认），**真机未验**（本轮手机未连）；本地 main 领先 origin 三个提交（98d13e8 Laya 进度 / ff91f5c M16 / bd72b60 docs）+ M17 待提交，均未推送。

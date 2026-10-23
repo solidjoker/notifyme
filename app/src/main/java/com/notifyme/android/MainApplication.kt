@@ -25,6 +25,8 @@ class MainApplication : Application() {
         Log.i("MainApplication", "notifyme 启动，数据目录: ${filesDir.absolutePath}")
         // App 内提醒（三级降级链 Level 3）的通知渠道，提前建好
         ReminderReceiver.ensureChannel(this)
+        // M21 后台分析进度通知渠道（LOW 重要性，静默常驻）
+        AnalysisProgressNotifier.ensureChannel(this)
         // 冷启动自动提取一次已有聊天记录（开关/冷却/降级逻辑在 HistorySync 内）
         HistorySync.maybeRunOnStartup(this)
         // 数据保留策略：启动时也跑一次（每天最多一次）

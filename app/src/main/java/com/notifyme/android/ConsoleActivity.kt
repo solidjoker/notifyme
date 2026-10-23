@@ -15,6 +15,7 @@ import android.graphics.Typeface
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import java.text.SimpleDateFormat
@@ -46,6 +47,20 @@ class ConsoleActivity : Activity() {
     private lateinit var llScheduleConvs: LinearLayout
     private lateinit var tvScheduleTags: TextView
     private lateinit var btnBatteryWhitelist: Button
+
+    // M21 后台分析实时进度行
+    private lateinit var tvRunProgress: TextView
+    private lateinit var progressRun: ProgressBar
+    private val runProgressListener = AnalysisProgressBus.Listener { state ->
+        renderRunProgress(state)
+    }
+    /** 远端/加载阶段总线不高频发布，每秒补一帧让「已用 N秒」继续走 */
+    private val runProgressTick = object : Runnable {
+        override fun run() {
+            AnalysisProgressBus.state?.let { renderRunProgress(it) }
+            tvRunProgress.postDelayed(this, 1000L)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -110,6 +125,8 @@ class ConsoleActivity : Activity() {
         tvScheduleWarn = findViewById(R.id.tvScheduleWarn)
         llScheduleConvs = findViewById(R.id.llScheduleConvs)
         tvScheduleTags = findViewById(R.id.tvScheduleTags)
+        tvRunProgress = findViewById(R.id.tvRunProgress)
+        progressRun = findViewById(R.id.progressRun)
         findViewById<Button>(R.id.btnAnalyzeNow).setOnClickListener {
             AnalysisScheduler.enqueueAnalysisNow(this)
             Toast.makeText(this, R.string.console_schedule_enqueued, Toast.LENGTH_SHORT).show()
@@ -237,11 +254,35 @@ class ConsoleActivity : Activity() {
         super.onResume()
         refreshKeepAliveStatus()
         refreshAnalysisSchedule()
+        AnalysisProgressBus.addListener(runProgressListener)
+        tvRunProgress.removeCallbacks(runProgressTick)
+        tvRunProgress.post(runProgressTick)
     }
 
     override fun onPause() {
         tvKeepAliveStatus.removeCallbacks(refreshKeepAliveOnce)
+        tvRunProgress.removeCallbacks(runProgressTick)
+        AnalysisProgressBus.removeListener(runProgressListener)
         super.onPause()
+    }
+
+    /** M21：把 Worker 进度渲染到定时卡顶部的实时进度行（不区分会话，整轮都显示）。 */
+    private fun renderRunProgress(state: AnalysisRunState?) {
+        if (state == null) {
+            tvRunProgress.visibility = View.GONE
+            progressRun.visibility = View.GONE
+            return
+        }
+        tvRunProgress.visibility = View.VISIBLE
+        tvRunProgress.text = "🔄 " + AnalysisProgressUi.text(this, state)
+        progressRun.visibility = View.VISIBLE
+        val percent = state.percent()
+        if (percent == null) {
+            progressRun.isIndeterminate = true
+        } else {
+            progressRun.isIndeterminate = false
+            progressRun.progress = percent
+        }
     }
 
     /** 保活区初始化：电池优化白名单按钮 + 通知运行时权限请求。 */

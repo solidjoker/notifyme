@@ -8,6 +8,7 @@ import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
@@ -120,6 +121,11 @@ object AnalysisScheduler {
             // 通用 tag：所有立即分析；UI 可观察整体/单会话进度
             .addTag(TAG_ON_DEMAND)
             .setInputData(data.build())
+            // M21：用户点的「立即分析」走加急任务——立即出队（绕过 JobScheduler
+            // 的批量延迟），并获得从后台启动前台服务的加急额度，配合 Worker 的
+            // setForegroundAsync 保证切后台后分析不中断；额度不足时回落普通任务，
+            // 行为退化为旧版（不会丢任务）。
+            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
         if (forceKey != null) {
             // 单会话 tag：首页 chip / 会话详情按钮按会话观察进度
             builder.addTag(convTag(forceKey))

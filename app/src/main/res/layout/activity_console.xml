@@ -216,6 +216,26 @@
                     android:textSize="12sp"
                     android:visibility="gone" />
 
+                <!-- M21 后台分析实时进度：有任务运行时才显示（文字 + 进度条） -->
+                <TextView
+                    android:id="@+id/tvRunProgress"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:textColor="@color/brand_green"
+                    android:textSize="12sp"
+                    android:visibility="gone" />
+
+                <ProgressBar
+                    android:id="@+id/progressRun"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:indeterminate="true"
+                    android:indeterminateTint="@color/brand_green"
+                    android:visibility="gone" />
+
                 <LinearLayout
                     android:id="@+id/llScheduleConvs"
                     android:layout_width="match_parent"

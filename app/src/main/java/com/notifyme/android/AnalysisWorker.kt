@@ -82,11 +82,28 @@ class AnalysisWorker(
     }
 
     override suspend fun doWork(): Result {
+        // M21：进度态同时驱动系统常驻通知（FGS）。Worker 一旦真的开始分析，
+        // 每次总线发布都把本任务提升/刷新为前台服务，App 切后台、锁屏甚至
+        // 被划掉近期任务后分析都继续跑，下拉通知栏随时可见阶段与已用时间。
+        // 回调在主线程；setForegroundAsync 本身异步，不阻塞推理线程。
+        val foregroundListener = AnalysisProgressBus.Listener { state ->
+            if (state != null) {
+                runCatching {
+                    setForegroundAsync(
+                        AnalysisProgressNotifier.foregroundInfo(applicationContext, state)
+                    )
+                }.onFailure { Log.w(TAG, "提升前台服务失败: ${it.message}") }
+            }
+        }
+        AnalysisProgressBus.addListener(foregroundListener)
         // M15 端侧分析进度：本轮无论正常收尾、提前返回、抛异常还是被 WorkManager
         // 取消，都必须把进度态清成 null，否则 UI 会永久停在最后一个阶段。
         try {
             return runRound()
         } finally {
+            // 先摘监听再发 null：null 表示收尾，不该再触发 FGS 提升。
+            // FGS 通知由 WorkManager 在 Worker 结束时自动撤掉。
+            AnalysisProgressBus.removeListener(foregroundListener)
             AnalysisProgressBus.publish(null)
         }
     }
