@@ -224,8 +224,19 @@ Java_com_notifyme_android_LlamaJni_nativeComplete(
     std::string out;
     int generated = 0;
 
-    report_progress(env, progress, PHASE_DECODE, 0, max_tokens);
-    for (int n = 0; n < max_tokens; ++n) {
+    // 生成槽位 = 上下文窗口剩余：n_ctx - prompt 占用。旧实现无条件跑 max_tokens
+    // 轮，prompt 较长且模型不吐 EOG（MiniCPM2B 真机实测会跑飞到边界）时，
+    // position 越过 n_ctx 后 llama_decode 必返回非零，旧代码把它当致命错误抛
+    // 「生成过程中解码失败」，整轮 S2 深分析结果丢光（S2 prefill 561 + 生成
+    // 3535 = 4096 即崩；M22 逐行时间把 prefill 从 326 撑大到 561 后引爆）。
+    // 钳到窗口内后，到边界等同正常到量收尾，返回已生成文本交上层截断修复。
+    const int context_room = st->n_ctx - prompt_total;
+    const int gen_limit    = std::min(max_tokens, context_room);
+    LOGI("completion: prompt=%d tokens, n_ctx=%d, gen_limit=%d (asked max=%d)",
+         prompt_total, st->n_ctx, gen_limit, max_tokens);
+
+    report_progress(env, progress, PHASE_DECODE, 0, gen_limit);
+    for (int n = 0; n < gen_limit; ++n) {
         llama_token token = common_sampler_sample(sampler, st->ctx, -1);
         common_sampler_accept(sampler, token, true);
 
@@ -244,11 +255,11 @@ Java_com_notifyme_android_LlamaJni_nativeComplete(
         ++position;
         ++generated;
         if (generated % DECODE_REPORT_INTERVAL == 0) {
-            report_progress(env, progress, PHASE_DECODE, generated, max_tokens);
+            report_progress(env, progress, PHASE_DECODE, generated, gen_limit);
         }
     }
-    // 结束（EOG / 达到上限）补一次终值，UI 侧才知道生成真的收尾了。
-    report_progress(env, progress, PHASE_DECODE, generated, max_tokens);
+    // 结束（EOG / 达到上限 / 上下文窗口到边）补一次终值，UI 侧才知道生成真的收尾了。
+    report_progress(env, progress, PHASE_DECODE, generated, gen_limit);
 
     common_sampler_free(sampler);
     return env->NewStringUTF(out.c_str());

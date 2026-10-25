@@ -557,6 +557,15 @@ class AnalysisCaseTest {
     }
 
     @Test
+    fun `M24 S2 prompt 明确禁止照抄字段说明并给填好的示例`() {
+        val prompt = AnalysisCase.buildS2SystemPrompt(s1())
+        assertTrue(prompt.contains("严禁照抄"))
+        assertTrue(prompt.contains("正确示例"))
+        assertTrue(prompt.contains("周五前交报销单"))
+        assertTrue(prompt.contains("没有明确截止时间时 due_time 输出空字符串"))
+    }
+
+    @Test
     fun `buildS2SystemPrompt 仅在背景非空时插入背景段`() {
         assertFalse(AnalysisCase.buildS2SystemPrompt(s1()).contains("背景信息"))
         assertFalse(AnalysisCase.buildS2SystemPrompt(s1(), "   ").contains("背景信息"))

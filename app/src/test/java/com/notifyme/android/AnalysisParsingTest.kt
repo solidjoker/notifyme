@@ -8,6 +8,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 /**
@@ -252,6 +253,63 @@ class AnalysisParsingTest {
         )
         assertEquals(raw, out.rawJson)
         assertEquals("窗口末条", out.summary)
+    }
+
+    // ---------------- M24：占位照抄检测 ----------------
+
+    @Test
+    fun `S2 照抄骨架字段说明时标记 placeholderEcho`() {
+        val payload = JSONObject(
+            """{"summary":"≤20字的会话摘要",
+               "due_time":"最晚完成时间的简短中文描述（如 今天下午3点、明天上午9点、10月5日14:00），没有明确时间则为空字符串",
+               "suggested_action":"给用户的建议动作，≤20字",
+               "tasks":[{"who":"责任人","what":"要做的事","when":"时间要求，无则空字符串"}]}"""
+        )
+        val out = AnalysisParsing.parseS2Output(payload, kase("在吗"), "raw-echo")
+        assertTrue(out.placeholderEcho)
+        assertEquals("raw-echo", out.rawJson)
+    }
+
+    @Test
+    fun `S2 占位照抄包在 answer 层或字段带空格也能识别`() {
+        val payload = JSONObject(
+            """{"answer":{"summary":"正常摘要","due_time":"明天",
+               "suggested_action":"正常建议",
+               "tasks":[{"who":" 责任人 ","what":"做事","when":""}]}}"""
+        )
+        assertTrue(AnalysisParsing.parseS2Output(payload, kase("x"), "raw").placeholderEcho)
+    }
+
+    @Test
+    fun `正常 S2 输出与兜底路径不判占位照抄`() {
+        val normal = AnalysisParsing.parseS2Output(
+            JSONObject("""{"summary":"周五前交报销单","due_time":"2026-10-30 18:00",
+                "suggested_action":"今天填好报销单","tasks":[]}"""),
+            kase("报销周五前交"), "raw"
+        )
+        assertFalse(normal.placeholderEcho)
+        // null / 缺字段的兜底路径不能误判为照抄
+        assertFalse(AnalysisParsing.parseS2Output(null, kase("就这一条"), "raw").placeholderEcho)
+        assertFalse(
+            AnalysisParsing.parseS2Output(JSONObject("{\"due_time\":\"明天\"}"), kase(), "raw").placeholderEcho
+        )
+    }
+
+    @Test
+    fun `rejectPlaceholderEcho 命中时抛异常 正常时静默`() {
+        val echo = AnalysisParsing.parseS2Output(
+            JSONObject("{\"summary\":\"≤20字的会话摘要\"}"), kase("x"), "raw"
+        )
+        try {
+            AnalysisParsing.rejectPlaceholderEcho(echo)
+            fail("照抄占位文案必须被判无效抛异常，以便上层回退 S1")
+        } catch (e: IllegalStateException) {
+            assertTrue(e.message.orEmpty().contains("照抄"))
+        }
+        val normal = AnalysisParsing.parseS2Output(
+            JSONObject("{\"summary\":\"正常摘要\"}"), kase("x"), "raw"
+        )
+        AnalysisParsing.rejectPlaceholderEcho(normal)
     }
 
     // ---------------- extractJsonPayload ----------------

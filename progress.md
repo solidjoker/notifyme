@@ -768,8 +768,24 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - 四个 builder 增加 `nowMs: Long = 0L`（>0 插首行，=0 保持旧常量、旧测试与错误诊断调用不变）：`buildS1OpenAiSystemPrompt`（英文行）、`buildS1LocalSystemPrompt`（中文行，0.5B few-shot 锚点不受影响）、`buildS2SystemPrompt`（中文行；due_time 绝对日期换算规则 M22 已有）、`buildAdvisorSystemPrompt`（两个会话评审 fork 传当前时间；`recordRetryFailure` 的错误诊断不传——只评审错误文本）。
 - `AnalysisWorker.kt`：S1 openai/端侧、S2 openai/端侧四个 run 方法各自取 `nowMs`，同一轮 system prompt 与 user prompt（`analysisUserPrompt(nowMs)`）用同一时刻；两个 advisorFork 传 `System.currentTimeMillis()`。systemone/laya 路径 M22 已在题面注入英文参考时间，本次不动。
 - 测试：新增「todayLine 中英文行」「四个 prompt 传/不传 nowMs」两例（不传时断言不塞日期，钉住缺省契约）；构建中抓到两个问题已修：英文 pattern 裸 `current time` 崩 IllegalPattern、星期正则要匹配「星期日」得写 `星期[…]` 不能写 `周[…]`。
-- 验证：门禁 `:app:testOpenDebugUnitTest :lintOpenDebug :assembleOpenDebug :assembleBetaDebug` 全绿；emulator-5554 装 0.3.18/24 force 分析「猫眼专业版票房预测」，laya 路径 4 秒 SUCCESS、FGS 正常启停，测试后 analysis.jsonl 裁回 10 行。**小米17 未连接，M22+M23 真机回归一起待插机。**
+- 验证：门禁 `:app:testOpenDebugUnitTest :lintOpenDebug :assembleOpenDebug :assembleBetaDebug` 全绿；emulator-5554 装 0.3.18/24 force 分析「猫眼专业版票房预测」，laya 路径 4 秒 SUCCESS、FGS 正常启停，测试后 analysis.jsonl 裁回 10 行。（M22+M23 小米17 真机回归已于当日下午完成，详见 §三.35 M24。）
 
+### 35. S2 本地深分析 n_ctx 越界修复 + 占位照抄防护（M24）（2026-10-25，**0.3.19/25**）
+
+M22/M23 小米17 真机回归（laya S1→S2 minicpm2b 全链路）发现并修复两个真实问题。M22/M23 本身回归通过：laya S1 亚秒出结果（need_action_prob=0.31、due_window=today 正确），FGS id=4711 全阶段正常；10-23「疑似降级」疑点澄清——token/百分比文案是 confidence<0.5 升级后的 S2 阶段，不是降级。
+
+**问题一（JNI 崩溃）：S2 长 prefill 下生成到上下文窗口边界必崩。**
+- 现象：两轮 S2 都在生成到 3280~3456 token（80~84%）报 `S2 本地深分析失败，保留 S1 结论: 生成过程中解码失败`，整轮 S2 丢弃。
+- 根因：`llama_jni.cpp` 解码循环 `for (int n=0;n<max_tokens;++n)` 每轮 `position++` 但无 n_ctx 钳制；`runS2Local` 传 maxTokens=4096 而 `LocalLlmEngine.S2_N_CTX=4096`，prefill 占掉 561 token 后可用生成额度只剩 3535，position 到 n_ctx 时 `llama_decode` 返回非零 → 抛「生成过程中解码失败」。M22 逐行时间把 S2 prefill 从 326 撑到 561（326+3584=3910 险过，561+3535=4096 必崩），所以 M22 前只是偶发（历史约 2%），M22 后确定性触发。
+- 修复（`app/src/main/cpp/llama_jni.cpp`）：`gen_limit = min(max_tokens, n_ctx - prompt_total)`，循环与三处进度分母（初始/中途/终值）改用 gen_limit；新增 LOGI `completion: prompt=%d tokens, n_ctx=%d, gen_limit=%d (asked max=%d)`。到窗口边界等同正常到量收尾，返回已生成文本交上层，不再抛异常。
+- 真机验证（0.3.19/25）：两轮分别跑到 100%/90%（3208/3535）正常收尾，日志 gen_limit=3535，升级 1 个，无解码失败。
+
+**问题二（输出污染）：S2 确定性照抄 system prompt 里的 JSON 字段说明。**
+- 现象：两轮 S2 落库内容逐字相同且全是骨架占位（`summary="≤20字的会话摘要"`、`due_time="最晚完成时间的简短中文描述（如 …）…"`、tasks 的 who/what/when 为「责任人/要做的事/时间要求，无则空字符串」），原代码 parse 后无条件 escalated=true，垃圾被当成功升级落库。历史同类照抄仅 3 次（约 2%，先于 M22），姜倩会话连续两轮是边界跑飞的新表现。
+- 修复一（prompt 加固，`AnalysisCase.buildS2SystemPrompt`）：骨架前加「冒号后的文字只是字段说明，严禁照抄进结果，必须替换成对话里的真实内容」；骨架后补规则「没有明确截止时间时 due_time 输出空字符串，没有具体任务时 tasks 输出 []」+ 一个填好的正确示例。
+- 修复二（解析层防线，`AnalysisParsing`）：`S2Output` 新增 `placeholderEcho`；`parseS2Output` 用六个骨架指纹（summary/dueTime/suggestedAction 精确/包含匹配，tasks 三字段 trim 后精确匹配）识别照抄；新增 `rejectPlaceholderEcho(out)`，命中抛 `IllegalStateException`，由 `runS2Local`/`runS2OpenAi` 调用后走既有的「S2 失败不拖垮 case」catch——escalated 保持 false、保留 S1 结论，raw 原文仍可在日志前 300 字排查。
+- 测试：AnalysisParsingTest 新增 4 例（完整骨架照抄命中、answer 层包裹+字段空格命中、正常输出与 null/缺字段兜底不误伤、reject 抛/静默）；AnalysisCaseTest 新增 prompt 加固 1 例。
+- 验证：门禁 `:app:testOpenDebugUnitTest :app:lintOpenDebug :app:assembleOpenDebug :app:assembleBetaDebug` 全绿（注意任务名必须带 `:app:` 前缀）。**占位照抄防护的真机复测待插机**（提交时真机已掉线，0.3.19 第二版 APK 45044945 字节已构建未安装；首版 0.3.19 已在真机验证 JNI 修复两轮通过）。
 ## 四、构建与运行
 
 ```powershell
@@ -829,11 +845,15 @@ ADB/设备要点（踩过的坑）：
 - MuMu 横屏 launcher 下 `cmd statusbar expand-notifications` 展不开通知栏（uiautomator 拍到桌面）；验通知内容直接 `dumpsys notification --noredact`（可 grep `id=4711` 看 title/text/progress extras），比拉通知栏稳
 - HyperOS 上**带进度条动画的通知会让 `uiautomator dump` 反复 `ERROR: could not get idle state`**（永不 idle）→ 通知栏内容别靠 dump：`dumpsys notification --noredact` 抓文本、`screencap -p /sdcard/x.png` + pull 抓画面；HyperOS 截图同样避免 exec-out 重定向（见前面 HyperOS 警告条目）
 - HyperOS 主页**长按会话行进入的是批量选择模式（「已选 N 个会话」+删除），不是建提醒菜单**；「新建提醒」入口在会话详情页 `btnNewReminder`，M17 的「长按建提醒」指详情页内长按消息气泡
+- 小米17（Android 16）debuggable 应用首装/升级可能弹 **PageSizeMismatchDialog**（16KB 页对齐警告）挡住启动；点「不再显示」永久消除后 `am start` 才正常，`wm dismiss-keyguard` 也会把它引出来
+- uiautomator dump 在真机偶发返回**同名陈旧文件**（pull 下来是旧帧）：dump 前先 `rm -f /sdcard/x.xml`，pull 后校验内容含期望 resource-id；容器节点是非自闭合标签，抓全部开标签用 `/<node\b[^>]*?>/g`
+- 小米17 USB 掉线 kill-server/start-server 后仍 `not found` = 物理掉线（线/口/锁屏），只能等重新插机；插回后序列号仍是 `ebb079b5`
+- Gradle 任务名必须带项目前缀：`:lintOpenDebug` 会被当成根项目任务报 `task not found`，正确写法 `:app:lintOpenDebug`（`testOpenDebugUnitTest` 等同理）
 
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
-> 当前状态（2026-10-25 更新 6）：**M23 当天日期直接进 system prompt 首行（0.3.18/24）已提交未推送**——S1 云端/端侧、S2、advisor 四个提示词首行均为「Today is …/今天是 …年…月…日 星期… HH:mm」，与 M22 的逐行发送时间 + 用户内容首行时间双保险；门禁全绿 + 模拟器 laya 走查通过，**M22+M23 小米17 真机回归待插机**。未推送提交：be58a24 / d13d53a / 734008c / e9ac8a9 / 0aea7cb(M22) / M23。
+> 当前状态（2026-10-25 更新 7）：**M22/M23 小米17 真机回归完成，回归中发现的两个真问题已修复（M24，0.3.19/25，本地已提交未推送）**——①llama_jni.cpp 生成循环无 n_ctx 钳制，M22 逐行时间把 S2 prefill 撑到 561 token 后到窗口边界必崩「生成过程中解码失败」，改 `gen_limit=min(max_tokens,n_ctx-prompt_total)`，真机两轮验证通过；②MiniCPM2B 确定性照抄 S2 prompt 骨架字段说明并被当成功升级落库，已加 prompt 禁止照抄+正确示例，解析层六指纹检测 placeholderEcho→判 S2 无效回退 S1（4+1 新单测）。M24 门禁全绿；**占位照抄防护的真机复测待插机**（提交时手机物理掉线，第二版 APK 已构建未安装，真机 analysis.jsonl 还多 5 条测试记录待插回后裁回 145 行）。M22(0aea7cb)/M23(6448828) 等六个提交已推送且 CI run 40170916846 绿。
 > 当前状态（2026-10-23 更新 2）：**M18（0.3.14/20，be58a24）已提交**；**M19 会话标签体系 + M20 控制台定时分析面板（0.3.15/21）已交付**（379 单测全绿、lint 0 Error、模拟器走查通过），**未推送、小米17 未回归**（手机未连）。本地 main 领先 origin：be58a24 + M19/M20 待提交。新增待办：①标签是否再加「等待回复 / 仅提醒」两档待拍板；②会话去重三口径待拍板（§三.26 前后画像）；③结果页可点空态（已提议未确认）；④真机陈旧 prefs 键 `collapsed_conversations`（72 条）要不要清。
 > 当前状态（2026-10-23 更新）：**0.3.13/19 已推送且 CI 全绿**（run 39868475598），M17 已在小米17 真机走查通过（L1 直写小米日历、「不提前」档、长按建提醒、删除联动；测试事件已全部清理）。待办：①会话去重三口径待用户拍板（重复画像见 §三.26 前后记录）；②结果页「本会话 0 条 · 全部会话 N 条 →」可点空态（已提议未确认）；③M13 遗留的陈旧 prefs 键 `collapsed_conversations`（真机上仍留 72 条）要不要顺手清。
 > 当前状态（2026-10-22 更新）：§三.29 M17 会话内自建提醒并关联日历（**0.3.13/19**）已交付，模拟器全链路走查通过（含 L1 真写日历、去重、删除二次确认），**真机未验**（本轮手机未连）；本地 main 领先 origin 三个提交（98d13e8 Laya 进度 / ff91f5c M16 / bd72b60 docs）+ M17 待提交，均未推送。

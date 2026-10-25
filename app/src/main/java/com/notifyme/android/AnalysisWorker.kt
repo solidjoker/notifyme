@@ -926,7 +926,9 @@ class AnalysisWorker(
             AnalysisCase.buildS2SystemPrompt(s1, background, nowMs),
             kase.analysisUserPrompt(nowMs)
         )
-        return AnalysisParsing.parseS2Output(AnalysisParsing.extractJsonPayload(raw), kase, raw)
+        val out = AnalysisParsing.parseS2Output(AnalysisParsing.extractJsonPayload(raw), kase, raw)
+        AnalysisParsing.rejectPlaceholderEcho(out)
+        return out
     }
 
     /**
@@ -947,7 +949,9 @@ class AnalysisWorker(
             4096,
             onProgress
         )
-        return AnalysisParsing.parseS2Output(AnalysisParsing.extractJsonFromText(raw), kase, raw)
+        val out = AnalysisParsing.parseS2Output(AnalysisParsing.extractJsonFromText(raw), kase, raw)
+        AnalysisParsing.rejectPlaceholderEcho(out)
+        return out
     }
 
     // ---------------- 公共 HTTP / 解析工具 ----------------
