@@ -760,6 +760,16 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - 测试：`AnalysisCaseTest` 既有 buildStateJson/windowText 断言改为含时间（固定参考时间 refNow=86400000ms + 同 JVM 时区 formatter 算期望，不写死时区），新增 4 例（currentTimeHeader 格式、同年省略/跨年带年份、题集英文参考时间注入且无中文、analysisUserPrompt 结构）；`AnalysisWindowSourceTest` 原文拼接断言同步。
 - 验证：门禁 `:app:testOpenDebugUnitTest :lintOpenDebug :assembleOpenDebug :assembleBetaDebug` 全绿（仅既有 warning）；emulator-5554 装 0.3.17/23 后 force 分析「猫眼专业版票房预测」，实际走 laya 路径（litert 1809 节点图加载 + 四题推理），`入选 1 → SUCCESS`、新记录 protocol=laya 正常落库，FGS/4711 通知保活不受影响；测试后 analysis.jsonl 从 11 行裁回 10 行、自动旋转恢复。**小米17 未连接，真机回归待插机。**
 
+### 34. 当天日期直接进提示词（M23）（2026-10-25，**0.3.18/24**）
+
+用户需求（m03942）「分析功能，需要加入提示词当天来进行分析」。M22 只把当前时间放在用户内容首行，端侧小模型/弱模型可能不读；M23 把「今天」直接写进每个 system prompt 的**首行**。
+
+- `AnalysisCase.kt` 新增 `todayLineCn(nowMs)`（`今天是 2026年10月25日 星期日 13:09。`，`SimpleDateFormat("yyyy年M月d日 EEEE HH:mm", Locale.CHINESE)`）与 `todayLineEn(nowMs)`（`Today is Sunday, 2026-10-25, current time 13:09.`；注意 pattern 里裸文本必须单引号包裹，否则 `Illegal pattern character 'c'`）。
+- 四个 builder 增加 `nowMs: Long = 0L`（>0 插首行，=0 保持旧常量、旧测试与错误诊断调用不变）：`buildS1OpenAiSystemPrompt`（英文行）、`buildS1LocalSystemPrompt`（中文行，0.5B few-shot 锚点不受影响）、`buildS2SystemPrompt`（中文行；due_time 绝对日期换算规则 M22 已有）、`buildAdvisorSystemPrompt`（两个会话评审 fork 传当前时间；`recordRetryFailure` 的错误诊断不传——只评审错误文本）。
+- `AnalysisWorker.kt`：S1 openai/端侧、S2 openai/端侧四个 run 方法各自取 `nowMs`，同一轮 system prompt 与 user prompt（`analysisUserPrompt(nowMs)`）用同一时刻；两个 advisorFork 传 `System.currentTimeMillis()`。systemone/laya 路径 M22 已在题面注入英文参考时间，本次不动。
+- 测试：新增「todayLine 中英文行」「四个 prompt 传/不传 nowMs」两例（不传时断言不塞日期，钉住缺省契约）；构建中抓到两个问题已修：英文 pattern 裸 `current time` 崩 IllegalPattern、星期正则要匹配「星期日」得写 `星期[…]` 不能写 `周[…]`。
+- 验证：门禁 `:app:testOpenDebugUnitTest :lintOpenDebug :assembleOpenDebug :assembleBetaDebug` 全绿；emulator-5554 装 0.3.18/24 force 分析「猫眼专业版票房预测」，laya 路径 4 秒 SUCCESS、FGS 正常启停，测试后 analysis.jsonl 裁回 10 行。**小米17 未连接，M22+M23 真机回归一起待插机。**
+
 ## 四、构建与运行
 
 ```powershell
@@ -823,7 +833,7 @@ ADB/设备要点（踩过的坑）：
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
-> 当前状态（2026-10-25 更新 5）：**M22 分析输入含日期（0.3.17/23）已提交未推送**——每条消息带 `[MM-dd HH:mm]` 发送时间、user prompt 首行给当前时间基准、due_window 题面注入英文参考时间、S2 要求绝对日期，云端 S1/S2、端侧 llama、Laya、advisor 六条路径全接通；门禁全绿 + 模拟器 laya 走查通过，**小米17 真机回归待插机**。此前 M18/M19/M20/M21 已真机回归通过（0.3.16/22）。未推送提交：be58a24 / d13d53a / 734008c / e9ac8a9 / M22。
+> 当前状态（2026-10-25 更新 6）：**M23 当天日期直接进 system prompt 首行（0.3.18/24）已提交未推送**——S1 云端/端侧、S2、advisor 四个提示词首行均为「Today is …/今天是 …年…月…日 星期… HH:mm」，与 M22 的逐行发送时间 + 用户内容首行时间双保险；门禁全绿 + 模拟器 laya 走查通过，**M22+M23 小米17 真机回归待插机**。未推送提交：be58a24 / d13d53a / 734008c / e9ac8a9 / 0aea7cb(M22) / M23。
 > 当前状态（2026-10-23 更新 2）：**M18（0.3.14/20，be58a24）已提交**；**M19 会话标签体系 + M20 控制台定时分析面板（0.3.15/21）已交付**（379 单测全绿、lint 0 Error、模拟器走查通过），**未推送、小米17 未回归**（手机未连）。本地 main 领先 origin：be58a24 + M19/M20 待提交。新增待办：①标签是否再加「等待回复 / 仅提醒」两档待拍板；②会话去重三口径待拍板（§三.26 前后画像）；③结果页可点空态（已提议未确认）；④真机陈旧 prefs 键 `collapsed_conversations`（72 条）要不要清。
 > 当前状态（2026-10-23 更新）：**0.3.13/19 已推送且 CI 全绿**（run 39868475598），M17 已在小米17 真机走查通过（L1 直写小米日历、「不提前」档、长按建提醒、删除联动；测试事件已全部清理）。待办：①会话去重三口径待用户拍板（重复画像见 §三.26 前后记录）；②结果页「本会话 0 条 · 全部会话 N 条 →」可点空态（已提议未确认）；③M13 遗留的陈旧 prefs 键 `collapsed_conversations`（真机上仍留 72 条）要不要顺手清。
 > 当前状态（2026-10-22 更新）：§三.29 M17 会话内自建提醒并关联日历（**0.3.13/19**）已交付，模拟器全链路走查通过（含 L1 真写日历、去重、删除二次确认），**真机未验**（本轮手机未连）；本地 main 领先 origin 三个提交（98d13e8 Laya 进度 / ff91f5c M16 / bd72b60 docs）+ M17 待提交，均未推送。

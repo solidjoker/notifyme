@@ -376,7 +376,7 @@ class AnalysisCaseTest {
     }
 
     private val refNow2026 = java.util.Calendar.getInstance().apply {
-        clear(); set(2026, java.util.Calendar.OCTOBER, 25, 12, 14)
+        clear(); set(2026, java.util.Calendar.OCTOBER, 25, 13, 9)
     }.timeInMillis
 
     // ---------------- S1 题集 ----------------
@@ -572,6 +572,48 @@ class AnalysisCaseTest {
         val prompt = AnalysisCase.buildAdvisorSystemPrompt()
         assertTrue(prompt.contains("只做评审"))
         assertTrue(prompt.contains("结论可靠"))
+    }
+
+    // ---------------- M23：当天日期直接进提示词 ----------------
+
+    @Test
+    fun `todayLine 中英文行都带当天年月日时分`() {
+        val cn = AnalysisCase.todayLineCn(refNow2026)
+        assertTrue(cn, cn.startsWith("今天是 2026年10月25日"))
+        assertTrue(cn, cn.contains("13:09"))
+        assertTrue(cn, Regex("星期[一二三四五六日天]").containsMatchIn(cn))
+
+        val en = AnalysisCase.todayLineEn(refNow2026)
+        assertTrue(en, en.startsWith("Today is Sunday, 2026-10-25"))
+        assertTrue(en, en.contains("13:09"))
+    }
+
+    @Test
+    fun `四个 system prompt 传入 nowMs 时首行含当天日期 不传时保持原样`() {
+        // S1 openai（英文行）+ 背景仍追加
+        val s1Cloud = AnalysisCase.buildS1OpenAiSystemPrompt("张三是上级", refNow2026)
+        assertTrue(s1Cloud, s1Cloud.startsWith("Today is Sunday, 2026-10-25"))
+        assertTrue(s1Cloud.contains("背景信息（判定该会话时必须纳入考量）：张三是上级"))
+
+        // S1 端侧（中文行）
+        val s1Local = AnalysisCase.buildS1LocalSystemPrompt("", refNow2026)
+        assertTrue(s1Local, s1Local.startsWith("今天是 2026年10月25日"))
+        assertTrue(s1Local.contains("示例一"))
+
+        // S2
+        val s2 = AnalysisCase.buildS2SystemPrompt(s1(), "", refNow2026)
+        assertTrue(s2, s2.startsWith("今天是 2026年10月25日"))
+        assertTrue(s2.contains("due_time"))
+
+        // advisor（评审窗口用；错误诊断调用不传时间）
+        val adv = AnalysisCase.buildAdvisorSystemPrompt(refNow2026)
+        assertTrue(adv, adv.startsWith("今天是 2026年10月25日"))
+
+        // 缺省 =0 时四个 builder 都不塞日期，旧契约/旧测试不变
+        assertFalse(AnalysisCase.buildS1OpenAiSystemPrompt().startsWith("Today is"))
+        assertFalse(AnalysisCase.buildS1LocalSystemPrompt().startsWith("今天是"))
+        assertFalse(AnalysisCase.buildS2SystemPrompt(s1()).startsWith("今天是"))
+        assertFalse(AnalysisCase.buildAdvisorSystemPrompt().startsWith("今天是"))
     }
 
     @Test

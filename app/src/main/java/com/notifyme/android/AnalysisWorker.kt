@@ -634,7 +634,7 @@ class AnalysisWorker(
         return try {
             val advice = postChatCompletions(
                 advisorSlot,
-                AnalysisCase.buildAdvisorSystemPrompt(),
+                AnalysisCase.buildAdvisorSystemPrompt(System.currentTimeMillis()),
                 AnalysisCase.buildAdvisorUserContent(
                     s1Digest = s1.toInjectText(),
                     s2Summary = s2Summary,
@@ -682,7 +682,7 @@ class AnalysisWorker(
         return try {
             val engine = LocalLlmEngines.forModel(applicationContext, LocalModelStore.MODEL_S2)
             val advice = engine.chat(
-                AnalysisCase.buildAdvisorSystemPrompt(),
+                AnalysisCase.buildAdvisorSystemPrompt(System.currentTimeMillis()),
                 AnalysisCase.buildAdvisorUserContent(
                     s1Digest = s1.toInjectText(),
                     s2Summary = s2Summary,
@@ -828,10 +828,11 @@ class AnalysisWorker(
         kase: AnalysisCase,
         background: String = ""
     ): Pair<String, AnalysisCase.Companion.S1Result> {
+        val nowMs = System.currentTimeMillis()
         val raw = postChatCompletions(
             slot,
-            AnalysisCase.buildS1OpenAiSystemPrompt(background),
-            kase.analysisUserPrompt()
+            AnalysisCase.buildS1OpenAiSystemPrompt(background, nowMs),
+            kase.analysisUserPrompt(nowMs)
         )
         return raw to AnalysisParsing.parseS1Result(AnalysisParsing.extractJsonPayload(raw), "openai")
     }
@@ -847,10 +848,11 @@ class AnalysisWorker(
         background: String = "",
         onProgress: ((LocalLlmProgress) -> Unit)? = null
     ): Pair<String, AnalysisCase.Companion.S1Result> {
+        val nowMs = System.currentTimeMillis()
         val engine = LocalLlmEngines.forModel(applicationContext, LocalModelStore.MODEL_S1)
         val raw = engine.chat(
-            AnalysisCase.buildS1LocalSystemPrompt(background),
-            kase.analysisUserPrompt(),
+            AnalysisCase.buildS1LocalSystemPrompt(background, nowMs),
+            kase.analysisUserPrompt(nowMs),
             2048,
             onProgress
         )
@@ -918,10 +920,11 @@ class AnalysisWorker(
         s1: AnalysisCase.Companion.S1Result,
         background: String = ""
     ): AnalysisParsing.S2Output {
+        val nowMs = System.currentTimeMillis()
         val raw = postChatCompletions(
             slot,
-            AnalysisCase.buildS2SystemPrompt(s1, background),
-            kase.analysisUserPrompt()
+            AnalysisCase.buildS2SystemPrompt(s1, background, nowMs),
+            kase.analysisUserPrompt(nowMs)
         )
         return AnalysisParsing.parseS2Output(AnalysisParsing.extractJsonPayload(raw), kase, raw)
     }
@@ -936,10 +939,11 @@ class AnalysisWorker(
         background: String = "",
         onProgress: ((LocalLlmProgress) -> Unit)? = null
     ): AnalysisParsing.S2Output {
+        val nowMs = System.currentTimeMillis()
         val engine = LocalLlmEngines.forModel(applicationContext, LocalModelStore.MODEL_S2)
         val raw = engine.chat(
-            AnalysisCase.buildS2SystemPrompt(s1, background),
-            kase.analysisUserPrompt(),
+            AnalysisCase.buildS2SystemPrompt(s1, background, nowMs),
+            kase.analysisUserPrompt(nowMs),
             4096,
             onProgress
         )

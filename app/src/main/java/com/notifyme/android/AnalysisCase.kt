@@ -153,6 +153,20 @@ data class AnalysisCase(
                 .format(Date(nowMs))
 
         /**
+         * 「今天」行（M23）：用户要求当天日期直接进**提示词**（不是只放在用户内容里）。
+         * 中文提示词用：如「今天是 2026年10月25日 星期日 13:09。」
+         */
+        fun todayLineCn(nowMs: Long): String =
+            "今天是 " + SimpleDateFormat("yyyy年M月d日 EEEE HH:mm", Locale.CHINESE)
+                .format(Date(nowMs)) + "。"
+
+        /** 同上，英文 S1 prompt 用：如「Today is Sunday, 2026-10-25, current time 13:09.」 */
+        fun todayLineEn(nowMs: Long): String =
+            "Today is " + SimpleDateFormat(
+                "EEEE, yyyy-MM-dd, 'current time' HH:mm", Locale.US
+            ).format(Date(nowMs)) + "."
+
+        /**
          * 单条消息时间标签：同年省略年份 [MM-dd HH:mm]，跨年带全年份
          * [yyyy-MM-dd HH:mm]（SimpleDateFormat 非线程安全，每次现建；窗口 ≤10 条）。
          */
@@ -303,11 +317,17 @@ data class AnalysisCase(
                 "\"topic\": \"work_task|schedule|notice|smalltalk|risk\", " +
                 "\"confidence\": 0.0-1.0 (your overall confidence in this judgment)}"
 
-        /** S1（openai 槽位）system prompt：有自定义提示词时追加「背景信息」段。 */
-        fun buildS1OpenAiSystemPrompt(background: String = ""): String =
-            if (background.isBlank()) S1_OPENAI_SYSTEM_PROMPT
-            else S1_OPENAI_SYSTEM_PROMPT +
+        /**
+         * S1（openai 槽位）system prompt。
+         * @param nowMs >0 时在最前面插入「Today is …」当天日期行（M23：直接进提示词，
+         *   不依赖模型去读用户内容首行）；=0（测试/旧调用）时保持常量原样。
+         */
+        fun buildS1OpenAiSystemPrompt(background: String = "", nowMs: Long = 0L): String {
+            val head = if (nowMs > 0L) todayLineEn(nowMs) + " " else ""
+            return if (background.isBlank()) head + S1_OPENAI_SYSTEM_PROMPT
+            else head + S1_OPENAI_SYSTEM_PROMPT +
                 "\n背景信息（判定该会话时必须纳入考量）：$background"
+        }
 
         /**
          * S1 端侧小模型（Qwen2.5-0.5B）few-shot system prompt（M11.5）。
@@ -329,11 +349,13 @@ data class AnalysisCase(
                 "示例一：\n用户消息：\n当前时间：2026-03-09 周一 10:00\n会话「老板」最近消息（每行方括号内是该消息的发送时间）：\n[03-09 09:58] 对方: 明天上午十点开会，材料你准备一下\n我的输出：\n{\"need_action_prob\": 0.9, \"importance\": 7.0, \"due_window\": \"tomorrow\", \"topic\": \"work_task\", \"confidence\": 0.9}\n" +
                 "示例二：\n用户消息：\n当前时间：2026-03-09 周一 10:00\n会话「朋友」最近消息（每行方括号内是该消息的发送时间）：\n[03-08 21:12] 对方: 哈哈哈昨天那个视频太搞笑了\n我的输出：\n{\"need_action_prob\": 0.05, \"importance\": 1.0, \"due_window\": \"none\", \"topic\": \"smalltalk\", \"confidence\": 0.85}"
 
-        /** S1（端侧小模型）system prompt：有自定义提示词时追加「背景信息」段。 */
-        fun buildS1LocalSystemPrompt(background: String = ""): String =
-            if (background.isBlank()) S1_LOCAL_SYSTEM_PROMPT
-            else S1_LOCAL_SYSTEM_PROMPT +
+        /** S1（端侧小模型）system prompt；nowMs>0 时首行嵌「今天是…」（M23）。 */
+        fun buildS1LocalSystemPrompt(background: String = "", nowMs: Long = 0L): String {
+            val head = if (nowMs > 0L) todayLineCn(nowMs) + "\n" else ""
+            return if (background.isBlank()) head + S1_LOCAL_SYSTEM_PROMPT
+            else head + S1_LOCAL_SYSTEM_PROMPT +
                 "\n背景信息（判定该会话时必须纳入考量）：$background"
+        }
 
         /** S1 判定结果（两种协议归一化后的统一形态） */
         data class S1Result(
@@ -372,10 +394,11 @@ data class AnalysisCase(
          * due_time 文案要求落在 CalendarHelper.parseDueTime 可解析的形式。
          * 有自定义提示词时以「背景信息」段注入（对齐 JEV background 知识上下文）。
          */
-        fun buildS2SystemPrompt(s1: S1Result, background: String = ""): String {
+        fun buildS2SystemPrompt(s1: S1Result, background: String = "", nowMs: Long = 0L): String {
             val bgSection = if (background.isBlank()) "" else
                 "背景信息（分析该会话时必须纳入考量）：$background\n"
-            return "你是微信会话深分析助手。窗口里「我:」开头是用户自己发出的消息，" +
+            val head = if (nowMs > 0L) todayLineCn(nowMs) + "\n" else ""
+            return head + "你是微信会话深分析助手。窗口里「我:」开头是用户自己发出的消息，" +
                 "不要把它们当成用户待办。用户消息第一行是当前时间，每行方括号里是" +
                 "该消息的发送时间；due_time 必须按这些真实日期把「明天/周五下午」等" +
                 "相对说法换算成绝对日期（如 2026-10-26 15:00），换算不了再退回简短中文描述。" +
@@ -392,7 +415,9 @@ data class AnalysisCase(
          * M10 advisor 系统提示词：评审者角色——只给建议，不重写结论，不改结构。
          * 对应拓扑图里 advisor「never writes itself，只 advise」的定位。
          */
-        fun buildAdvisorSystemPrompt(): String =
+        /** nowMs>0 时首行嵌「今天是…」（M23）；错误诊断调用不传，保持无日期。 */
+        fun buildAdvisorSystemPrompt(nowMs: Long = 0L): String =
+            (if (nowMs > 0L) todayLineCn(nowMs) + "\n" else "") +
             "你是通知分析结果的评审顾问（advisor）。你只做评审，不重写结论：" +
                 "指出误判风险、遗漏的待办、时间理解错误，或确认结论可靠。" +
                 "窗口里「我:」开头是用户自己发出的消息，不产生待办；" +
