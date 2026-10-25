@@ -729,13 +729,14 @@ class AnalysisWorker(
         kase: AnalysisCase,
         background: String = ""
     ): Pair<String, AnalysisCase.Companion.S1Result> {
+        val nowMs = System.currentTimeMillis()
 
         fun postWithState(stateJson: JSONObject): String {
             // 不带 stream 字段：线上 api.typesafe.ai 严格校验会 400（Invalid request），
             // laya 本地端 stream 有默认值 false，缺省行为一致
             val requestJson = JSONObject().apply {
                 put("state", stateJson)
-                put("questions", AnalysisCase.buildS1QuestionsJson())
+                put("questions", AnalysisCase.buildS1QuestionsJson(nowMs))
                 put("model", slot.model)
             }
             val request = Request.Builder()
@@ -760,11 +761,11 @@ class AnalysisWorker(
         }
 
         val raw = try {
-            postWithState(kase.buildStateJson(background))
+            postWithState(kase.buildStateJson(background, nowMs))
         } catch (e: HttpException) {
             if (background.isNotBlank() && e.code in 400..499) {
                 Log.w(TAG, "服务端拒收 background 字段（HTTP ${e.code}），降级重试不带 background")
-                postWithState(kase.buildStateJson())
+                postWithState(kase.buildStateJson(nowMs = nowMs))
             } else {
                 throw e
             }
@@ -830,7 +831,7 @@ class AnalysisWorker(
         val raw = postChatCompletions(
             slot,
             AnalysisCase.buildS1OpenAiSystemPrompt(background),
-            "会话「${kase.conversation}」最近消息：\n${kase.windowText()}"
+            kase.analysisUserPrompt()
         )
         return raw to AnalysisParsing.parseS1Result(AnalysisParsing.extractJsonPayload(raw), "openai")
     }
@@ -849,7 +850,7 @@ class AnalysisWorker(
         val engine = LocalLlmEngines.forModel(applicationContext, LocalModelStore.MODEL_S1)
         val raw = engine.chat(
             AnalysisCase.buildS1LocalSystemPrompt(background),
-            "会话「${kase.conversation}」最近消息：\n${kase.windowText()}",
+            kase.analysisUserPrompt(),
             2048,
             onProgress
         )
@@ -870,8 +871,9 @@ class AnalysisWorker(
         if (!LayaTfliteEngine.isReady(applicationContext)) {
             throw LocalEngineException("laya TFLite 模型未下载（模型管理→Laya-Multilingual→下载）")
         }
-        val stateText = kase.windowText()
-        val questions = AnalysisCase.buildS1QuestionsJson()
+        val nowMs = System.currentTimeMillis()
+        val stateText = AnalysisCase.currentTimeHeader(nowMs) + "\n" + kase.windowText(nowMs)
+        val questions = AnalysisCase.buildS1QuestionsJson(nowMs)
         val qNames = listOf("need_action", "importance", "due_window", "topic")
         val ordered = qNames.map { name ->
             name to LayaTfliteEngine.toOrderedMap(questions.getJSONObject(name))
@@ -919,7 +921,7 @@ class AnalysisWorker(
         val raw = postChatCompletions(
             slot,
             AnalysisCase.buildS2SystemPrompt(s1, background),
-            "会话「${kase.conversation}」最近消息：\n${kase.windowText()}"
+            kase.analysisUserPrompt()
         )
         return AnalysisParsing.parseS2Output(AnalysisParsing.extractJsonPayload(raw), kase, raw)
     }
@@ -937,7 +939,7 @@ class AnalysisWorker(
         val engine = LocalLlmEngines.forModel(applicationContext, LocalModelStore.MODEL_S2)
         val raw = engine.chat(
             AnalysisCase.buildS2SystemPrompt(s1, background),
-            "会话「${kase.conversation}」最近消息：\n${kase.windowText()}",
+            kase.analysisUserPrompt(),
             4096,
             onProgress
         )

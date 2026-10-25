@@ -6,6 +6,9 @@ package com.notifyme.android
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * 分析 case：分析单位从「单条消息」升级为「会话窗口」。
@@ -58,13 +61,16 @@ data class AnalysisCase(
      * 注意：chat 内不放 conversation 字段——线上 api.typesafe.ai 对未知字段
      * 严格校验（400 parsing error），jarvis 官方 build_state 也没有该字段。
      */
-    fun buildStateJson(background: String = ""): JSONObject {
+    fun buildStateJson(background: String = "", nowMs: Long = System.currentTimeMillis()): JSONObject {
         val arr = JSONArray()
         messages.forEach { msg ->
             // 群聊在 text 前带发言者名（from 只有 me/other 两个取值，发言人信息只能进 text）
-            val text = if (isGroup && msg.sender.isNotEmpty() && msg.sender != conversation) {
+            val body = if (isGroup && msg.sender.isNotEmpty() && msg.sender != conversation) {
                 "${msg.sender}: ${msg.text}"
             } else msg.text
+            // M22：text 前注入发送时间。不能新增 time 字段（线上 systemone 严格校验未知字段 400），
+            // 时间只能并进自由文本；模型据此 + 题面里的参考时间判 today/tomorrow。
+            val text = "${messageTimeLabel(msg.timestamp, nowMs)} $body"
             arr.put(JSONObject().apply {
                 // 自己发出的消息（a11y 右侧气泡）标 me；通知捕获恒 other
                 put("from", if (msg.isSelf) "me" else "other")
@@ -82,14 +88,27 @@ data class AnalysisCase(
         }
     }
 
-    /** 人类可读的窗口文本（openai 协议 S1/S2 的 user 消息用）：按发送者标我/对方视角。 */
-    fun windowText(): String = messages.joinToString("\n") { msg ->
+    /**
+     * 人类可读的窗口文本（openai 协议 S1/S2 的 user 消息用）：按发送者标我/对方视角。
+     * M22：每行带发送时间 [MM-dd HH:mm]（与当前时间跨年时带年份），让模型能判
+     * 「今天/明天/本周五」这类相对时间；以前模型看不到任何日期，due_window 基本靠猜。
+     */
+    fun windowText(nowMs: Long = System.currentTimeMillis()): String = messages.joinToString("\n") { msg ->
         val text = if (isGroup && msg.sender.isNotEmpty() && msg.sender != conversation) {
             "${msg.sender}: ${msg.text}"
         } else msg.text
         val speaker = if (msg.isSelf) "我" else "对方"
-        "$speaker: $text"
+        "${messageTimeLabel(msg.timestamp, nowMs)} $speaker: $text"
     }
+
+    /**
+     * openai 协议各路径（云端/端侧 S1、S2）统一的 user 内容：
+     * 第一行给当前时间基准，再给逐行带发送时间的窗口。
+     */
+    fun analysisUserPrompt(nowMs: Long = System.currentTimeMillis()): String =
+        "${currentTimeHeader(nowMs)}\n" +
+            "会话「$conversation」最近消息（每行方括号内是该消息的发送时间）：\n" +
+            windowText(nowMs)
 
     companion object {
         /** 会话窗口大小：对齐 JEV build_state 取最近 10 条的惯例 */
@@ -118,9 +137,30 @@ data class AnalysisCase(
                 .filter { it.timestamp <= windowEnd }
                 .takeLast(messageCount.coerceAtLeast(0))
 
-        /** 窗口原文拼接：每行「发送者: 内容」；空窗口返回空串。 */
-        fun formatWindowSource(window: List<ChatMessage>): String =
-            window.joinToString("\n") { "${it.sender}: ${it.text}" }
+        /** 窗口原文拼接：每行「[发送时间] 发送者: 内容」；空窗口返回空串。 */
+        fun formatWindowSource(
+            window: List<ChatMessage>,
+            nowMs: Long = System.currentTimeMillis()
+        ): String =
+            window.joinToString("\n") { "${messageTimeLabel(it.timestamp, nowMs)} ${it.sender}: ${it.text}" }
+
+        /**
+         * 当前时间基准（M22）：模型本身没有时钟，判 today/tomorrow/本周五
+         * 这类相对时间必须显式喂给它。用中文星期（系统语言中文的设备显示「周日」）。
+         */
+        fun currentTimeHeader(nowMs: Long): String =
+            "当前时间：" + SimpleDateFormat("yyyy-MM-dd E HH:mm", Locale.CHINESE)
+                .format(Date(nowMs))
+
+        /**
+         * 单条消息时间标签：同年省略年份 [MM-dd HH:mm]，跨年带全年份
+         * [yyyy-MM-dd HH:mm]（SimpleDateFormat 非线程安全，每次现建；窗口 ≤10 条）。
+         */
+        fun messageTimeLabel(timestamp: Long, nowMs: Long): String {
+            val yearOf = { ms: Long -> SimpleDateFormat("yyyy", Locale.US).format(Date(ms)) }
+            val pattern = if (yearOf(timestamp) == yearOf(nowMs)) "MM-dd HH:mm" else "yyyy-MM-dd HH:mm"
+            return "[" + SimpleDateFormat(pattern, Locale.US).format(Date(timestamp)) + "]"
+        }
 
         fun fromMessages(pkg: String, conversation: String, messages: List<ChatMessage>): AnalysisCase? {
             if (messages.isEmpty()) return null
@@ -155,7 +195,12 @@ data class AnalysisCase(
          * 硬规则（对齐 JEV TASK.md 口径）：instructions/criteria 一律英文，
          * 题型互斥不互相矛盾；聊天内容保留中文。
          */
-        fun buildS1QuestionsJson(): JSONObject = JSONObject().apply {
+        /**
+         * @param nowMs 当前时间（毫秒）：>0 时在 due_window 题面注入英文参考时间。
+         *   必须英文——题集硬规则要求 instructions/criteria 一律英文；时间串本身无 CJK。
+         *   =0（缺省，测试/旧调用）时题面保持原样。
+         */
+        fun buildS1QuestionsJson(nowMs: Long = 0L): JSONObject = JSONObject().apply {
             put(Q_NEED_ACTION, JSONObject().apply {
                 put("type", "noul")
                 put(
@@ -200,11 +245,17 @@ data class AnalysisCase(
             })
             put(Q_DUE_WINDOW, JSONObject().apply {
                 put("type", "choice")
-                put(
-                    "instructions",
+                val dueInstructions =
                     "Pick the bucket that best matches the nearest deadline mentioned in " +
-                        "the conversation window."
-                )
+                        "the conversation window. Each message text is prefixed with its " +
+                        "sent time in [MM-dd HH:mm] brackets." +
+                        if (nowMs > 0L) {
+                            " The user's current time is " +
+                                SimpleDateFormat("EEEE yyyy-MM-dd HH:mm", Locale.US)
+                                    .format(Date(nowMs)) +
+                                "; the buckets today/tomorrow/this_week are relative to that time."
+                        } else ""
+                put("instructions", dueInstructions)
                 put("criteria", JSONObject().apply {
                     put("none", "No deadline is mentioned anywhere in the window")
                     put("today", "The nearest deadline is today")
@@ -238,7 +289,10 @@ data class AnalysisCase(
                 "The user gives you one conversation window (recent lines, Chinese). " +
                 "Lines prefixed \"我: \" are the USER'S OWN sent messages; other lines are from " +
                 "the conversation partner. Only count obligations the USER still has to fulfill " +
-                "(their own sent messages create none). " +
+                "(their own sent messages create none). The user message's first line is the " +
+                "current time (当前时间), and every conversation line starts with its sent time " +
+                "in [MM-dd HH:mm] brackets (full year prefix when older); resolve relative " +
+                "deadlines like 今天/明天/本周五 against that current time. " +
                 "Judge the window as a whole and output ONLY a JSON object, no other text:\n" +
                 "{\"need_action_prob\": 0.0-1.0 (probability that the window contains a task, " +
                 "request or deadline the user must act on), " +
@@ -266,12 +320,14 @@ data class AnalysisCase(
         const val S1_LOCAL_SYSTEM_PROMPT =
             "你是微信工作消息的严格判定引擎。用户给出一个会话窗口（最近的中文消息）。\n" +
                 "以「我: 」开头的行是用户自己发出的消息；其它行是对方的。\n" +
+                "用户消息第一行是当前时间，每行消息方括号里是该消息的发送时间；\n" +
+                "「今天/明天/本周五」等相对时间一律按第一行的当前时间换算。\n" +
                 "只统计用户还欠对方的事项（用户自己说过的话不构成待办）。\n" +
                 "看整个会话窗口，只输出一个 JSON 对象，禁止任何其它文字：\n" +
                 "{\"need_action_prob\": 数字0.0到1.0, \"importance\": 数字0到9, \"due_window\": \"none|today|tomorrow|this_week|later 五选一\", \"topic\": \"work_task|schedule|notice|smalltalk|risk 五选一\", \"confidence\": 数字0.0到1.0}\n" +
                 "必须填真实判断出来的数值，不要把上面说明里的占位文字抄进答案。\n" +
-                "示例一：\n用户消息：\n会话「老板」最近消息：\n老板: 明天上午十点开会，材料你准备一下\n我的输出：\n{\"need_action_prob\": 0.9, \"importance\": 7.0, \"due_window\": \"tomorrow\", \"topic\": \"work_task\", \"confidence\": 0.9}\n" +
-                "示例二：\n用户消息：\n会话「朋友」最近消息：\n朋友: 哈哈哈昨天那个视频太搞笑了\n我的输出：\n{\"need_action_prob\": 0.05, \"importance\": 1.0, \"due_window\": \"none\", \"topic\": \"smalltalk\", \"confidence\": 0.85}"
+                "示例一：\n用户消息：\n当前时间：2026-03-09 周一 10:00\n会话「老板」最近消息（每行方括号内是该消息的发送时间）：\n[03-09 09:58] 对方: 明天上午十点开会，材料你准备一下\n我的输出：\n{\"need_action_prob\": 0.9, \"importance\": 7.0, \"due_window\": \"tomorrow\", \"topic\": \"work_task\", \"confidence\": 0.9}\n" +
+                "示例二：\n用户消息：\n当前时间：2026-03-09 周一 10:00\n会话「朋友」最近消息（每行方括号内是该消息的发送时间）：\n[03-08 21:12] 对方: 哈哈哈昨天那个视频太搞笑了\n我的输出：\n{\"need_action_prob\": 0.05, \"importance\": 1.0, \"due_window\": \"none\", \"topic\": \"smalltalk\", \"confidence\": 0.85}"
 
         /** S1（端侧小模型）system prompt：有自定义提示词时追加「背景信息」段。 */
         fun buildS1LocalSystemPrompt(background: String = ""): String =
@@ -320,7 +376,10 @@ data class AnalysisCase(
             val bgSection = if (background.isBlank()) "" else
                 "背景信息（分析该会话时必须纳入考量）：$background\n"
             return "你是微信会话深分析助手。窗口里「我:」开头是用户自己发出的消息，" +
-                "不要把它们当成用户待办。S1 快速判定的结论：${s1.toInjectText()}。\n" +
+                "不要把它们当成用户待办。用户消息第一行是当前时间，每行方括号里是" +
+                "该消息的发送时间；due_time 必须按这些真实日期把「明天/周五下午」等" +
+                "相对说法换算成绝对日期（如 2026-10-26 15:00），换算不了再退回简短中文描述。" +
+                "S1 快速判定的结论：${s1.toInjectText()}。\n" +
                 bgSection +
                 "请基于同一会话窗口做深度分析，只输出一个 JSON 对象，不要输出任何其他文字：\n" +
                 "{\"summary\": \"≤20字的会话摘要\", " +
@@ -336,7 +395,8 @@ data class AnalysisCase(
         fun buildAdvisorSystemPrompt(): String =
             "你是通知分析结果的评审顾问（advisor）。你只做评审，不重写结论：" +
                 "指出误判风险、遗漏的待办、时间理解错误，或确认结论可靠。" +
-                "窗口里「我:」开头是用户自己发出的消息，不产生待办。" +
+                "窗口里「我:」开头是用户自己发出的消息，不产生待办；" +
+                "每行方括号内是发送时间、用户内容首行是当前时间，重点核对相对时间换算。" +
                 "输出不超过 80 字的中文评审意见；结论可靠时只回答「结论可靠」。"
 
         /**

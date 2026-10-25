@@ -56,9 +56,15 @@ class AnalysisWindowSourceTest {
     }
 
     @Test
-    fun `原文拼接为每行发送者冒号内容`() {
+    fun `原文拼接为每行时间加发送者冒号内容（M22 含日期）`() {
+        val now = 86_400_000L // 1970 年内，省略年份
+        fun label(ts: Long) = "[" + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US)
+            .format(java.util.Date(ts)) + "]"
         val window = listOf(msg("张三", "报价单发我", 1000L), msg("我", "好的", 2000L))
-        assertEquals("张三: 报价单发我\n我: 好的", AnalysisCase.formatWindowSource(window))
-        assertEquals("", AnalysisCase.formatWindowSource(emptyList()))
+        assertEquals(
+            "${label(1000L)} 张三: 报价单发我\n${label(2000L)} 我: 好的",
+            AnalysisCase.formatWindowSource(window, now)
+        )
+        assertEquals("", AnalysisCase.formatWindowSource(emptyList(), now))
     }
 }

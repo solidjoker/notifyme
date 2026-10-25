@@ -749,6 +749,17 @@ Git 提交身份（本仓库局部配置，未改全局）：
 - **M20**：控制台定时面板真机渲染正常：`每 15 分钟一轮 · 上次 20:22 · 下次约 20:37`、按会话定时 1 个（「小柿子」合唱团·班级群）、标签统计行、两按钮齐全。
 - **M18**：姜倩会话详情「📅 新建提醒」→ 内容 EditText **自动预填最近一条实质消息「这老师还是挺负责的」**，时间预填当天 21:00，提示「已按最近一条消息预填，可直接改」；点取消未保存（reminders.jsonl 仍 4 行）。
 - 注：手机 S1=laya_ondevice，force 单会话这轮实际跑出了 token 进度文本（读取上下文/端侧推理 n%），说明该路径下端侧阶段命名与进度复用正常。
+
+### 33. 分析输入含日期：每条消息带发送时间 + 当前时间基准（M22）（2026-10-25，**0.3.17/23**）
+
+用户需求（m03811）「数据获取需要含日期」。根因：`ChatMessage.timestamp` 一直有真实时间戳（通知捕获真实、a11y 为估算），但送给所有分析路径的内容里日期被全部丢掉——`windowText()` 只有「对方: 文本」、systemone state 只有 from/text；模型没有时钟，due_window 的 today/tomorrow、S2 的 due_time 基本靠猜。
+
+- **`AnalysisCase.kt`**：① `windowText(nowMs)` 每行加发送时间前缀 `[MM-dd HH:mm]`（与当前时间跨年时 `[yyyy-MM-dd HH:mm]`，SimpleDateFormat 每次现建非线程安全，窗口 ≤10 条）；② 新增 `analysisUserPrompt(nowMs)`：首行 `当前时间：yyyy-MM-dd 周X HH:mm`（`Locale.CHINESE` 星期）+「每行方括号内是该消息的发送时间」说明 + 逐行带时间的窗口，云端/端侧 S1、S2 四条 openai 类路径统一用它；③ `buildStateJson(background, nowMs)`（systemone：JEV/laya 云端）**不能新增 time 字段**（线上 api.typesafe.ai 未知字段 400），时间只能并进每条 text；④ `buildS1QuestionsJson(nowMs)` 传 >0 时在 due_window 题 instructions 注入英文参考时间（`The user's current time is EEEE yyyy-MM-dd HH:mm; buckets relative to that time`），题集英文硬规则不破（时间串无 CJK，有测试钉）；⑤ 三套 system prompt 加时间换算规则：S1 openai/端侧（端侧两个 few-shot 样例同步改成带「当前时间」+方括号发送时间的形态）、S2 要求 due_time 按真实日期把「明天/周五下午」换算成绝对日期、advisor 重点核对相对时间换算。
+- **`AnalysisWorker.kt`** 六条路径全部接通：systemone（题集+state 同用一个 nowMs，background 降级重试也带时间）、S1 openai、S1 端侧 llama、S1 laya（`currentTimeHeader + windowText(nowMs)` 作 stateText，题集注入参考时间）、S2 openai、S2 端侧；两个 advisor fork 的 windowDigest 经 `windowText()` 默认参数自动带时间。
+- **回看原文**（`AnalysisListActivity`）：`formatWindowSource(window, nowMs)` 同样带时间前缀，人工回看 case 依据时能看到每条消息的日期。
+- 测试：`AnalysisCaseTest` 既有 buildStateJson/windowText 断言改为含时间（固定参考时间 refNow=86400000ms + 同 JVM 时区 formatter 算期望，不写死时区），新增 4 例（currentTimeHeader 格式、同年省略/跨年带年份、题集英文参考时间注入且无中文、analysisUserPrompt 结构）；`AnalysisWindowSourceTest` 原文拼接断言同步。
+- 验证：门禁 `:app:testOpenDebugUnitTest :lintOpenDebug :assembleOpenDebug :assembleBetaDebug` 全绿（仅既有 warning）；emulator-5554 装 0.3.17/23 后 force 分析「猫眼专业版票房预测」，实际走 laya 路径（litert 1809 节点图加载 + 四题推理），`入选 1 → SUCCESS`、新记录 protocol=laya 正常落库，FGS/4711 通知保活不受影响；测试后 analysis.jsonl 从 11 行裁回 10 行、自动旋转恢复。**小米17 未连接，真机回归待插机。**
+
 ## 四、构建与运行
 
 ```powershell
@@ -812,7 +823,7 @@ ADB/设备要点（踩过的坑）：
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
-> 当前状态（2026-10-23 更新 4）：**M18/M19/M20/M21 已全部在小米17 真机回归通过（0.3.16/22 已装机）**——M21 HOME 后 8 分钟保活 + id=4711 通知跨 token/百分比/重连态实时更新、结束自动撤；M19 五档标签弹窗/徽标/prefs 往返（已还原）；M20 定时面板真机正常；M18 新建提醒自动预填最近实质消息。三个提交仍**未推送**（be58a24 M18 / d13d53a M19+M20 / 734008c M21）。
+> 当前状态（2026-10-25 更新 5）：**M22 分析输入含日期（0.3.17/23）已提交未推送**——每条消息带 `[MM-dd HH:mm]` 发送时间、user prompt 首行给当前时间基准、due_window 题面注入英文参考时间、S2 要求绝对日期，云端 S1/S2、端侧 llama、Laya、advisor 六条路径全接通；门禁全绿 + 模拟器 laya 走查通过，**小米17 真机回归待插机**。此前 M18/M19/M20/M21 已真机回归通过（0.3.16/22）。未推送提交：be58a24 / d13d53a / 734008c / e9ac8a9 / M22。
 > 当前状态（2026-10-23 更新 2）：**M18（0.3.14/20，be58a24）已提交**；**M19 会话标签体系 + M20 控制台定时分析面板（0.3.15/21）已交付**（379 单测全绿、lint 0 Error、模拟器走查通过），**未推送、小米17 未回归**（手机未连）。本地 main 领先 origin：be58a24 + M19/M20 待提交。新增待办：①标签是否再加「等待回复 / 仅提醒」两档待拍板；②会话去重三口径待拍板（§三.26 前后画像）；③结果页可点空态（已提议未确认）；④真机陈旧 prefs 键 `collapsed_conversations`（72 条）要不要清。
 > 当前状态（2026-10-23 更新）：**0.3.13/19 已推送且 CI 全绿**（run 39868475598），M17 已在小米17 真机走查通过（L1 直写小米日历、「不提前」档、长按建提醒、删除联动；测试事件已全部清理）。待办：①会话去重三口径待用户拍板（重复画像见 §三.26 前后记录）；②结果页「本会话 0 条 · 全部会话 N 条 →」可点空态（已提议未确认）；③M13 遗留的陈旧 prefs 键 `collapsed_conversations`（真机上仍留 72 条）要不要顺手清。
 > 当前状态（2026-10-22 更新）：§三.29 M17 会话内自建提醒并关联日历（**0.3.13/19**）已交付，模拟器全链路走查通过（含 L1 真写日历、去重、删除二次确认），**真机未验**（本轮手机未连）；本地 main 领先 origin 三个提交（98d13e8 Laya 进度 / ff91f5c M16 / bd72b60 docs）+ M17 待提交，均未推送。

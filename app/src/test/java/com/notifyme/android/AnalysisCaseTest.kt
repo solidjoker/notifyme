@@ -51,6 +51,13 @@ class AnalysisCaseTest {
         confidence = confidence
     )
 
+    // M22：固定参考时间（1970-01-01 00:00:00Z 附近），与 msg() 的小时间戳同年，
+    // 触发「同年省略年份」格式；期望值用同样的 formatter 在同一 JVM 时区算出，不写死时区。
+    private val refNow = 86_400_000L
+    private fun label(ts: Long): String =
+        "[" + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US)
+            .format(java.util.Date(ts)) + "]"
+
     // ---------------- fromMessages ----------------
 
     @Test
@@ -165,13 +172,13 @@ class AnalysisCaseTest {
             listOf(msg("第一条", 1_000L), msg("第二条", 2_000L))
         )!!
 
-        val arr = kase.buildStateJson().getJSONObject("chat").getJSONArray("messages")
+        val arr = kase.buildStateJson(nowMs = refNow).getJSONObject("chat").getJSONArray("messages")
 
         assertEquals(2, arr.length())
         assertEquals("other", arr.getJSONObject(0).getString("from"))
-        assertEquals("第一条", arr.getJSONObject(0).getString("text"))
+        assertEquals("${label(1_000L)} 第一条", arr.getJSONObject(0).getString("text"))
         assertEquals("other", arr.getJSONObject(1).getString("from"))
-        assertEquals("第二条", arr.getJSONObject(1).getString("text"))
+        assertEquals("${label(2_000L)} 第二条", arr.getJSONObject(1).getString("text"))
     }
 
     @Test
@@ -186,10 +193,10 @@ class AnalysisCaseTest {
             )
         )!!
 
-        val arr = kase.buildStateJson().getJSONObject("chat").getJSONArray("messages")
+        val arr = kase.buildStateJson(nowMs = refNow).getJSONObject("chat").getJSONArray("messages")
 
-        assertEquals("李四: 评审改到三点", arr.getJSONObject(0).getString("text"))
-        assertEquals("王五: 收到", arr.getJSONObject(1).getString("text"))
+        assertEquals("${label(1_000L)} 李四: 评审改到三点", arr.getJSONObject(0).getString("text"))
+        assertEquals("${label(2_000L)} 王五: 收到", arr.getJSONObject(1).getString("text"))
     }
 
     @Test
@@ -203,10 +210,10 @@ class AnalysisCaseTest {
             )
         )!!
 
-        val chat = kase.buildStateJson().getJSONObject("chat")
+        val chat = kase.buildStateJson(nowMs = refNow).getJSONObject("chat")
         val arr = chat.getJSONArray("messages")
         assertEquals("me", arr.getJSONObject(0).getString("from"))
-        assertEquals("好的我来处理", arr.getJSONObject(0).getString("text"))
+        assertEquals("${label(1_000L)} 好的我来处理", arr.getJSONObject(0).getString("text"))
         assertEquals("other", arr.getJSONObject(1).getString("from"))
         assertEquals("末条是对方消息", "other", chat.getString("latest_from"))
     }
@@ -234,10 +241,10 @@ class AnalysisCaseTest {
                     sender = ChatMessage.SENDER_SELF, isGroup = true)
             )
         )!!
-        val row = kase.buildStateJson().getJSONObject("chat")
+        val row = kase.buildStateJson(nowMs = refNow).getJSONObject("chat")
             .getJSONArray("messages").getJSONObject(0)
         assertEquals("me", row.getString("from"))
-        assertEquals("我: 我来发版", row.getString("text"))
+        assertEquals("${label(1_000L)} 我: 我来发版", row.getString("text"))
     }
 
     @Test
@@ -247,8 +254,8 @@ class AnalysisCaseTest {
             "张三",
             listOf(msg("在吗", 1_000L, conversation = "张三", sender = "张三"))
         )!!
-        val arr = kase.buildStateJson().getJSONObject("chat").getJSONArray("messages")
-        assertEquals("在吗", arr.getJSONObject(0).getString("text"))
+        val arr = kase.buildStateJson(nowMs = refNow).getJSONObject("chat").getJSONArray("messages")
+        assertEquals("${label(1_000L)} 在吗", arr.getJSONObject(0).getString("text"))
     }
 
     @Test
@@ -258,8 +265,8 @@ class AnalysisCaseTest {
             "张三",
             listOf(msg("在吗", 1_000L, conversation = "张三", sender = "张三", isGroup = true))
         )!!
-        val arr = kase.buildStateJson().getJSONObject("chat").getJSONArray("messages")
-        assertEquals("在吗", arr.getJSONObject(0).getString("text"))
+        val arr = kase.buildStateJson(nowMs = refNow).getJSONObject("chat").getJSONArray("messages")
+        assertEquals("${label(1_000L)} 在吗", arr.getJSONObject(0).getString("text"))
     }
 
     @Test
@@ -283,7 +290,10 @@ class AnalysisCaseTest {
             listOf(msg("在吗", 1_000L), msg("有个事想确认", 2_000L))
         )!!
 
-        assertEquals("对方: 在吗\n对方: 有个事想确认", kase.windowText())
+        assertEquals(
+            "${label(1_000L)} 对方: 在吗\n${label(2_000L)} 对方: 有个事想确认",
+            kase.windowText(refNow)
+        )
     }
 
     @Test
@@ -293,7 +303,7 @@ class AnalysisCaseTest {
             "项目群",
             listOf(msg("评审改到三点", 1_000L, conversation = "项目群", sender = "李四", isGroup = true))
         )!!
-        assertEquals("对方: 李四: 评审改到三点", kase.windowText())
+        assertEquals("${label(1_000L)} 对方: 李四: 评审改到三点", kase.windowText(refNow))
     }
 
     @Test
@@ -306,8 +316,68 @@ class AnalysisCaseTest {
                 msg("可以", 2_000L, sender = ChatMessage.SENDER_SELF)
             )
         )!!
-        assertEquals("对方: 明天能交吗\n我: 可以", kase.windowText())
+        assertEquals(
+            "${label(1_000L)} 对方: 明天能交吗\n${label(2_000L)} 我: 可以",
+            kase.windowText(refNow)
+        )
     }
+
+    // ---------------- M22：日期注入 ----------------
+
+    @Test
+    fun `currentTimeHeader 含年月日时分与中文星期`() {
+        // 2026-10-25 是周日
+        val header = AnalysisCase.currentTimeHeader(
+            java.util.Calendar.getInstance().apply {
+                clear(); set(2026, java.util.Calendar.OCTOBER, 25, 12, 14)
+            }.timeInMillis
+        )
+        assertTrue(header, Regex("""当前时间：2026-10-25 周\S \d{2}:\d{2}""").containsMatchIn(header))
+    }
+
+    @Test
+    fun `messageTimeLabel 同年省略年份 跨年带全年份`() {
+        val sameYear = 86_400_000L * 30
+        // 同年：月日时分格式（具体时分随 JVM 时区，只钉格式不钉时钟值）
+        val short = AnalysisCase.messageTimeLabel(2 * 86_400_000L, sameYear)
+        assertTrue(short, Regex("""\[\d{2}-\d{2} \d{2}:\d{2}]""").matches(short))
+        assertFalse(short.contains("1970"))
+        val ts2025 = java.util.Calendar.getInstance().apply {
+            clear(); set(2025, java.util.Calendar.DECEMBER, 31, 23, 59)
+        }.timeInMillis
+        val label = AnalysisCase.messageTimeLabel(ts2025, refNow2026)
+        assertTrue(label, Regex("""\[2025-12-31 \d{2}:\d{2}]""").matches(label))
+    }
+
+    @Test
+    fun `题集传入当前时间时 due_window 题面注入英文参考时间`() {
+        val without = AnalysisCase.buildS1QuestionsJson()
+            .getJSONObject("due_window").getString("instructions")
+        assertFalse(without.contains("current time"))
+
+        val with = AnalysisCase.buildS1QuestionsJson(refNow2026)
+            .getJSONObject("due_window").getString("instructions")
+        assertTrue(with, with.contains("current time is"))
+        assertTrue(with, with.contains("2026"))
+        // 英文硬规则不破：时间串里不能有中文
+        assertFalse(Regex("[\u4e00-\u9fff]").containsMatchIn(with))
+    }
+
+    @Test
+    fun `analysisUserPrompt 首行是当前时间且每行带发送时间`() {
+        val kase = AnalysisCase.fromMessages(
+            AppSourceRegistry.PKG_WECHAT, "张三",
+            listOf(msg("在吗", 1_000L), msg("有个事", 2_000L))
+        )!!
+        val prompt = kase.analysisUserPrompt(refNow)
+        assertTrue(prompt, prompt.startsWith("当前时间："))
+        assertTrue(prompt, prompt.contains("${label(1_000L)} 对方: 在吗"))
+        assertTrue(prompt, prompt.contains("${label(2_000L)} 对方: 有个事"))
+    }
+
+    private val refNow2026 = java.util.Calendar.getInstance().apply {
+        clear(); set(2026, java.util.Calendar.OCTOBER, 25, 12, 14)
+    }.timeInMillis
 
     // ---------------- S1 题集 ----------------
 
