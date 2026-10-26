@@ -787,7 +787,7 @@ M22/M23 小米17 真机回归（laya S1→S2 minicpm2b 全链路）发现并修�
 - 测试：AnalysisParsingTest 新增 4 例（完整骨架照抄命中、answer 层包裹+字段空格命中、正常输出与 null/缺字段兜底不误伤、reject 抛/静默）；AnalysisCaseTest 新增 prompt 加固 1 例。
 - 验证：门禁 `:app:testOpenDebugUnitTest :app:lintOpenDebug :app:assembleOpenDebug :app:assembleBetaDebug` 全绿（注意任务名必须带 `:app:` 前缀）。- **真机复测（10-26 22:04 装第二版 0.3.19/25，force 姜倩）**：JNI 修复再次确认（`gen_limit=3432 asked max=4096`，prefill 664 token 正常收尾）；模型这一轮**仍然照抄**（先输出 `<think>` 复述整个 user prompt 再吐骨架 JSON），22:08:34 日志 `S2 输出照抄 prompt 字段说明（占位文案），判定无效，回退 S1`，落库记录 escalated=false、raw_json 只含 S1 laya 原文、UI 垃圾区消失——**解析层防护按设计生效**（提交时手机物理掉线，本次为插回后补测；首版 0.3.19 曾于 10-25 验证 JNI 修复两轮通过）。
 - **照抄率画像（analysis.jsonl 全量 153 条复盘）**：escalated=true 共 73 条，其中照抄垃圾 **13 条（≈18%）**、真实 S2 输出 60 条——照抄是**概率性**而非确定性（同一 case c678f824a3d26770 在 21:17 出真实摘要、22:06 出照抄），prompt 加固只降低发生率没根除；13 条垃圾里 3 条早于 M22（10-22/23/24），其余为 M22 后定时轮与测试轮产生。垃圾记录已批量降级（escalated→false、删 s2 字段，其余 140 行逐字节不动）推回真机。
-- **连带风险确认（未遂）**：`AnalysisWorker:330-343` 自动日历提醒用 `s2DueTime/s2Summary`，而 `CalendarHelper.tryParseDueTime` 是 find 式正则——照抄 due_time 里「（如 今天下午3点、明天上午9点、10月5日14:00）」会被解析成 **2027-10-05 15:00** 的日历事件（标题「任务：≤20字的会话摘要…」）。真机 `reminders.jsonl` 为 0 字节（reminderEnabled 未开），13 条垃圾无一建提醒；解析层防线把 escalated 打成 false 后 s2 字段为空，此路径今后被自动堵死。悬浮卡文案（`AnalysisWorker:322`）同理只在旧版暴露。
+- **连带风险确认（1 条真实中招，已清理）**：`AnalysisWorker:330-343` 自动日历提醒用 `s2DueTime/s2Summary`，而 `CalendarHelper.tryParseDueTime` 是 find 式正则——照抄 due_time 里「（如 今天下午3点、明天上午9点、10月5日14:00）」会被解析成 **2027-10-05 15:00** 的日历事件（标题「任务：≤20字的会话摘要…」）。首轮复盘判「reminders.jsonl 为 0 字节、无一建提醒」——**那是 pwsh 重定向吞掉 run-as 权限错误的误读**（见 §四 坑条目）。复核后真相：reminderEnabled 一直是开的，13 条照抄里 16:13 姜倩那条（s1NeedAction=true）真的建了提醒：`dedup_key=3595c5d8548f91f1`（即该照抄 case）、`calendar_event_id=1990`、event_time=1822719600000=**2027-10-05 15:00**——正则误判预言逐字命中；其余 12 条因 s1NeedAction=false 未建。10-26 22:50 已走 UI 删除（姜倩详情→提醒管理→删除，确认框「删除这条提醒？已写入的日历事件会一并删除。」），账本 6→5 条、`content query` 证 events._id=1990 `deleted=1`（软删，日历 UI 不再显示）；剩余 5 条为真实/手工数据未动。解析层防线把 escalated 打成 false 后 s2 字段为空，此路径今后被自动堵死。悬浮卡文案（`AnalysisWorker:322`）同理只在旧版暴露。
 ## 四、构建与运行
 
 ```powershell
@@ -851,11 +851,13 @@ ADB/设备要点（踩过的坑）：
 - uiautomator dump 在真机偶发返回**同名陈旧文件**（pull 下来是旧帧）：dump 前先 `rm -f /sdcard/x.xml`，pull 后校验内容含期望 resource-id；容器节点是非自闭合标签，抓全部开标签用 `/<node\b[^>]*?>/g`
 - 小米17 USB 掉线 kill-server/start-server 后仍 `not found` = 物理掉线（线/口/锁屏），只能等重新插机；插回后序列号仍是 `ebb079b5`
 - Gradle 任务名必须带项目前缀：`:lintOpenDebug` 会被当成根项目任务报 `task not found`，正确写法 `:app:lintOpenDebug`（`testOpenDebugUnitTest` 等同理）
+- **pwsh 里 `adb shell "run-as <pkg> cat files/x" > out` 会把非空文件读成 0 字节**：pwsh 自己做重定向（UTF-16），而 run-as 的权限错误留在设备侧 stderr 不回流，静默产出空文件——本轮「提醒链未受害」的错误结论即源于此。可靠写法 `cmd /c "adb -s <s> exec-out run-as <pkg> cat files/x.jsonl > out 2>&1"`，并先用 `run-as <pkg> ls -la files/` 对照字节数
+- `content query` 的 `--projection` 多列用**冒号**分隔（`_id:title:deleted`），逗号会报 `Invalid column`；日历事件删除是软删，判据=行内 `deleted=1`（行仍在，日历 UI 不显示）
 
 ## 五、下一步计划（路线图，对应 README）
 
 > **已展开为可执行计划：[`docs/ROADMAP.md`](docs/ROADMAP.md)**（M0–M9 里程碑 + 任务清单 + 验收口径 + 决策门 D1–D6，均已拍板）。
-> 当前状态（2026-10-26 更新 8）：**M24 照抄防护真机复测通过（防护生效：照抄被拦、回退 S1、UI 垃圾区消失）**；复盘发现照抄为概率性（73 条升级记录里 13 条≈18% 是垃圾、60 条真实），真机 analysis.jsonl 的 13 条垃圾已批量降级清理；自动日历提醒链确认未受害（reminderEnabled 关 + 防线堵死路径）。详见 §三.35 追加段。M24 提交 6def15e 已推送且 CI run 40253013413 绿。
+> 当前状态（2026-10-26 更新 8）：**M24 照抄防护真机复测通过（防护生效：照抄被拦、回退 S1、UI 垃圾区消失）**；复盘发现照抄为概率性（73 条升级记录里 13 条≈18% 是垃圾、60 条真实），真机 analysis.jsonl 的 13 条垃圾已批量降级清理；自动日历提醒链实际中招 1 条（16:13 照抄 case 建成 2027-10-05 15:00 日历事件 1990），10-26 22:50 已走 UI 删除（软删 deleted=1，账本 6→5）；其余 12 条因 s1NeedAction=false 未建，防线今后堵死此路径。详见 §三.35 追加段。M24 提交 6def15e 已推送且 CI run 40253013413 绿。
 > 当前状态（2026-10-25 更新 7）：**M22/M23 小米17 真机回归完成，回归中发现的两个真问题已修复（M24，0.3.19/25，本地已提交未推送）**——①llama_jni.cpp 生成循环无 n_ctx 钳制，M22 逐行时间把 S2 prefill 撑到 561 token 后到窗口边界必崩「生成过程中解码失败」，改 `gen_limit=min(max_tokens,n_ctx-prompt_total)`，真机两轮验证通过；②MiniCPM2B 确定性照抄 S2 prompt 骨架字段说明并被当成功升级落库，已加 prompt 禁止照抄+正确示例，解析层六指纹检测 placeholderEcho→判 S2 无效回退 S1（4+1 新单测）。M24 门禁全绿；**占位照抄防护的真机复测待插机**（提交时手机物理掉线，第二版 APK 已构建未安装，真机 analysis.jsonl 还多 5 条测试记录待插回后裁回 145 行）。M22(0aea7cb)/M23(6448828) 等六个提交已推送且 CI run 40170916846 绿。
 > 当前状态（2026-10-23 更新 2）：**M18（0.3.14/20，be58a24）已提交**；**M19 会话标签体系 + M20 控制台定时分析面板（0.3.15/21）已交付**（379 单测全绿、lint 0 Error、模拟器走查通过），**未推送、小米17 未回归**（手机未连）。本地 main 领先 origin：be58a24 + M19/M20 待提交。新增待办：①标签是否再加「等待回复 / 仅提醒」两档待拍板；②会话去重三口径待拍板（§三.26 前后画像）；③结果页可点空态（已提议未确认）；④真机陈旧 prefs 键 `collapsed_conversations`（72 条）要不要清。
 > 当前状态（2026-10-23 更新）：**0.3.13/19 已推送且 CI 全绿**（run 39868475598），M17 已在小米17 真机走查通过（L1 直写小米日历、「不提前」档、长按建提醒、删除联动；测试事件已全部清理）。待办：①会话去重三口径待用户拍板（重复画像见 §三.26 前后记录）；②结果页「本会话 0 条 · 全部会话 N 条 →」可点空态（已提议未确认）；③M13 遗留的陈旧 prefs 键 `collapsed_conversations`（真机上仍留 72 条）要不要顺手清。
