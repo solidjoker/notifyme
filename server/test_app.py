@@ -33,3 +33,12 @@ def client():
     # 清理
     import shutil
     shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_health(client):
+    """GET /health 返回 200，且 JSON 的 status 字段为 ok。"""
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data is not None
+    assert data.get("status") == "ok"
