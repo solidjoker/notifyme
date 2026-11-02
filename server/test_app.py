@@ -33,3 +33,31 @@ def client():
     # 清理
     import shutil
     shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_health(client):
+    """GET /health 返回 200，且 JSON 的 status 字段为 ok。"""
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data is not None
+    assert data.get("status") == "ok"
+
+
+def test_health_without_token(client, monkeypatch):
+    """服务端开启鉴权（TOKEN 非空）时，不带 X-Token 访问 /health 仍返回
+    200，且 body 为 {"status": "ok"}——探活接口不校验令牌，见 app.py 注释。
+    """
+    import app as m
+    monkeypatch.setattr(m, "TOKEN", "unit-test-token")
+
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.get_json() == {"status": "ok"}
+
+
+def test_health_content_type(client):
+    """GET /health 响应的 Content-Type 是 application/json。"""
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.headers["Content-Type"].startswith("application/json")
