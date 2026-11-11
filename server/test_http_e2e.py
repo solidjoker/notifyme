@@ -23,6 +23,7 @@ import json
 import os
 import shutil
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -96,6 +97,17 @@ def live_server():
         flask_app.config["MAX_CONTENT_LENGTH"] = original_limit
 
 
+def _reset_extract_state():
+    """复位提取任务的内存态（running / last），用例之间必须清干净。
+
+    提取是「HTTP 触发 + 后台线程执行」的组合：后台线程把 running 置 True，
+    跑完在 finally 里复位。上一条用例的线程若没跑完就退场，残留的
+    running=True 会让下一条用例的 POST /admin/extract 直接 409（误报）。
+    """
+    app_module._extract_status["running"] = False
+    app_module._extract_status["last"] = None
+
+
 @pytest.fixture()
 def isolated_store():
     """把服务端数据目录指到临时目录，并在用例之间清掉鉴权失败计数。"""
@@ -117,6 +129,7 @@ def isolated_store():
     app_module._db_ready = False
     with app_module._auth_fail_lock:
         app_module._auth_fail_events.clear()
+    _reset_extract_state()
     app_module.init_db()
     try:
         yield tmp
@@ -126,6 +139,7 @@ def isolated_store():
         app_module._db_ready = False
         with app_module._auth_fail_lock:
             app_module._auth_fail_events.clear()
+        _reset_extract_state()
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -483,3 +497,267 @@ def test_console_manifest_and_service_worker(api):
     status, text, _ = _request(api, "GET", "/sw.js?token=" + TOKEN, token=None)
     assert status == 200
     assert text.strip(), "service worker 不能是空文件"
+
+
+# ------------------------------------------------------------------
+# /admin/extract 后台抽取（真实 HTTP 端到端）
+# ------------------------------------------------------------------
+
+
+class _FakeExtractModule:
+    """假的提取模块：run_extract(full=...) 按预设返回结果 / 抛预设异常。
+
+    真实实现是 server/android_db_extract.py 与 server/pc_db_extract.py，
+    它们会去读本机微信数据库。端到端用例里换成这个假模块：只验证
+    「HTTP 契约 + 后台线程编排」，不碰任何真实数据与真实路径。
+    """
+
+    def __init__(self, result=None, error=None, gate=None):
+        self.result = {"ok": True, "messages": 0} if result is None else result
+        self.error = error
+        self.gate = gate
+        self.calls = []
+
+    def run_extract(self, full=False):
+        """与真实提取脚本同签名：只认 full 关键字参数。"""
+        self.calls.append({"full": full})
+        if self.gate is not None:
+            # 并发用例用：把后台线程卡在这里，由测试决定何时放行
+            self.gate.wait(timeout=10)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+def _fake_extract_importer(modules, calls):
+    """构造假的 _import_extract_module：按 leg 返回对应的假模块。
+
+    calls[leg] 记录该 leg 被加载了几次（source=all 时应是 android/pc 各 1）。
+    """
+
+    def _import(leg):
+        calls[leg] = calls.get(leg, 0) + 1
+        mod = modules.get(leg)
+        if mod is None:
+            raise ImportError("fake extract module not found: %s" % leg)
+        return mod
+
+    return _import
+
+
+def _wait_extract_done(api, timeout=5.0, interval=0.05):
+    """轮询 GET /admin/extract/status 直到 running 变 False，返回响应体。"""
+    deadline = time.time() + timeout
+    body = None
+    while time.time() < deadline:
+        status, text, _ = _request(api, "GET", "/admin/extract/status")
+        assert status == 200, "状态页应返回 200，实际 %s：%s" % (status, text[:200])
+        body = json.loads(text)
+        if not body["running"]:
+            return body
+        time.sleep(interval)
+    raise AssertionError("提取任务在 %.1f 秒内没有结束：%r" % (timeout, body))
+
+
+def test_admin_extract_requires_token(api):
+    """POST /admin/extract 缺令牌 → 401（真实 HTTP 链路下同样要拦住）。"""
+    status, text, _ = _request(api, "POST", "/admin/extract", token=None)
+    assert status == 401
+    body = json.loads(text)
+    assert body["ok"] is False
+    assert body["error"] == "unauthorized"
+
+
+def test_admin_extract_rejects_unknown_source(api):
+    """source 只认 android / pc / all，非法值 → 400 且回告可选值。"""
+    status, text, _ = _request(api, "POST", "/admin/extract?source=xx")
+    assert status == 400
+    body = json.loads(text)
+    assert body["ok"] is False
+    assert body["error"] == "source must be one of: android / pc / all"
+
+
+def test_admin_extract_starts_background_and_reports_result(api, monkeypatch):
+    """正常触发：200 + started，随后状态页给出最近一次的统计。"""
+    fake = _FakeExtractModule(result={"ok": True, "messages": 3})
+    calls = {}
+    monkeypatch.setattr(app_module, "_import_extract_module",
+                        _fake_extract_importer({"android": fake}, calls))
+
+    status, text, _ = _request(api, "POST", "/admin/extract?source=android")
+    assert status == 200
+    body = json.loads(text)
+    assert body["ok"] is True
+    assert body["started"] is True
+    assert body["full"] is False
+    assert body["source"] == "android"
+
+    state = _wait_extract_done(api)
+    assert state["running"] is False
+    last = state["last"]
+    assert last["ok"] is True
+    assert last["source"] == "android"
+    assert last["android"]["messages"] == 3
+    assert fake.calls == [{"full": False}]
+    assert calls == {"android": 1}
+
+
+def test_admin_extract_second_request_while_running_returns_409(api, monkeypatch):
+    """任务在跑时再点一次 → 409 extract already running（不排队、不并发跑）。"""
+    gate = threading.Event()
+    fake = _FakeExtractModule(result={"ok": True, "messages": 1}, gate=gate)
+    calls = {}
+    monkeypatch.setattr(app_module, "_import_extract_module",
+                        _fake_extract_importer({"android": fake}, calls))
+
+    status, text, _ = _request(api, "POST", "/admin/extract?source=android")
+    assert status == 200
+    assert json.loads(text)["started"] is True
+
+    # 后台线程被 gate 卡住，running 仍是 True
+    status2, text2, _ = _request(api, "POST", "/admin/extract?source=android")
+    assert status2 == 409
+    body2 = json.loads(text2)
+    assert body2["ok"] is False
+    assert body2["error"] == "extract already running"
+
+    gate.set()
+    state = _wait_extract_done(api)
+    assert state["running"] is False
+    assert state["last"]["ok"] is True
+
+
+def test_admin_extract_returns_503_when_main_db_is_busy(api, monkeypatch):
+    """主库被占用 → 503 + Retry-After: 5，提取压根不启动。"""
+    monkeypatch.setattr(app_module, "_probe_main_db_writable",
+                        lambda timeout=0.5: ("busy", "database is locked"))
+    status, text, headers = _request(api, "POST", "/admin/extract")
+    assert status == 503
+    assert headers.get("Retry-After") == "5"
+    body = json.loads(text)
+    assert body["ok"] is False
+    assert body["error"] == "main database is busy, retry later"
+    assert body["detail"] == "database is locked"
+
+    # 没起后台任务：状态页仍然是「没在跑、没结果」
+    state = json.loads(_request(api, "GET", "/admin/extract/status")[1])
+    assert state["running"] is False
+    assert state["last"] is None
+
+
+def test_admin_extract_returns_500_when_main_db_not_writable(api, monkeypatch):
+    """主库彻底不可写（不是忙）→ 500 + detail。"""
+    monkeypatch.setattr(app_module, "_probe_main_db_writable",
+                        lambda timeout=0.5: ("error", "boom"))
+    status, text, _ = _request(api, "POST", "/admin/extract")
+    assert status == 500
+    body = json.loads(text)
+    assert body["ok"] is False
+    assert body["error"] == "main database is not writable"
+    assert body["detail"] == "boom"
+
+
+def test_admin_extract_source_pc_runs_only_pc_leg(api, monkeypatch):
+    """source=pc：只跑 pc 一路；full=1 会原样透传给提取脚本。"""
+    fake = _FakeExtractModule(result={"ok": True, "messages": 5})
+    calls = {}
+    monkeypatch.setattr(app_module, "_import_extract_module",
+                        _fake_extract_importer({"pc": fake}, calls))
+
+    status, text, _ = _request(api, "POST", "/admin/extract?source=pc&full=1")
+    assert status == 200
+    body = json.loads(text)
+    assert body["source"] == "pc"
+    assert body["full"] is True
+
+    state = _wait_extract_done(api)
+    last = state["last"]
+    assert last["ok"] is True
+    assert last["source"] == "pc"
+    assert last["pc"]["messages"] == 5
+    assert "android" not in last
+    assert fake.calls == [{"full": True}]
+    assert calls == {"pc": 1}
+
+
+def test_admin_extract_source_all_runs_both_legs(api, monkeypatch):
+    """source=all：android 与 pc 各跑一路，last 里两条腿都在。"""
+    android_fake = _FakeExtractModule(result={"ok": True, "messages": 2})
+    pc_fake = _FakeExtractModule(result={"ok": True, "messages": 4})
+    calls = {}
+    monkeypatch.setattr(app_module, "_import_extract_module",
+                        _fake_extract_importer({"android": android_fake,
+                                                "pc": pc_fake}, calls))
+
+    status, text, _ = _request(api, "POST", "/admin/extract?source=all")
+    assert status == 200
+    assert json.loads(text)["source"] == "all"
+
+    state = _wait_extract_done(api)
+    last = state["last"]
+    assert last["ok"] is True
+    assert last["source"] == "all"
+    assert last["android"]["messages"] == 2
+    assert last["pc"]["messages"] == 4
+    assert calls == {"android": 1, "pc": 1}
+
+
+def test_admin_extract_one_leg_failure_keeps_other_leg_ok(api, monkeypatch):
+    """一路失败不拖垮另一路：整体 ok=True，失败那路带 error。"""
+    android_fake = _FakeExtractModule(error=RuntimeError("android leg failed"))
+    pc_fake = _FakeExtractModule(result={"ok": True, "messages": 6})
+    calls = {}
+    monkeypatch.setattr(app_module, "_import_extract_module",
+                        _fake_extract_importer({"android": android_fake,
+                                                "pc": pc_fake}, calls))
+
+    status, _text, _ = _request(api, "POST", "/admin/extract?source=all")
+    assert status == 200
+
+    state = _wait_extract_done(api)
+    last = state["last"]
+    assert last["ok"] is True
+    assert last["android"]["ok"] is False
+    assert last["android"]["error"] == "android leg failed"
+    assert last["pc"]["ok"] is True
+    assert last["pc"]["messages"] == 6
+
+
+def test_admin_extract_sqlite_operational_error_is_marked_busy(api, monkeypatch):
+    """提取脚本报 sqlite3.OperationalError → error_kind=busy（提示稍后重试）。"""
+    android_fake = _FakeExtractModule(
+        error=sqlite3.OperationalError("database is locked"))
+    pc_fake = _FakeExtractModule(result={"ok": True, "messages": 1})
+    calls = {}
+    monkeypatch.setattr(app_module, "_import_extract_module",
+                        _fake_extract_importer({"android": android_fake,
+                                                "pc": pc_fake}, calls))
+
+    status, _text, _ = _request(api, "POST", "/admin/extract?source=all")
+    assert status == 200
+
+    state = _wait_extract_done(api)
+    last = state["last"]
+    assert last["android"]["ok"] is False
+    assert last["android"]["error_kind"] == "busy"
+    assert last["ok"] is True, "pc 那路成功，整体仍算成功"
+    assert last["pc"]["ok"] is True
+
+
+def test_admin_extract_status_requires_token(api):
+    """状态页同样要令牌：缺令牌 → 401。"""
+    status, text, _ = _request(api, "GET", "/admin/extract/status", token=None)
+    assert status == 401
+    assert json.loads(text)["error"] == "unauthorized"
+
+
+def test_admin_extract_status_reports_running_and_last(api):
+    """状态页返回 ok / running / last 三个键。"""
+    status, text, _ = _request(api, "GET", "/admin/extract/status")
+    assert status == 200
+    body = json.loads(text)
+    assert body["ok"] is True
+    assert "running" in body
+    assert "last" in body
+    assert body["running"] is False
+    assert body["last"] is None
