@@ -235,6 +235,13 @@ python docs\scripts\version_check.py --expect-tag v0.3.19
 │       │   └── java/com/notifyme/android/  # Kotlin 主源码（87 个 .kt）
 │       └── test/java/com/notifyme/android/  # 纯 JVM 单元测试（28 个 .kt）
 ├── server/                     # 可选配套 Flask 服务端（见 server/README.md）
+│   ├── app.py                  # Flask 壳：鉴权、错误处理、/console 与落地页、create_app 工厂
+│   ├── util.py                 # 纯函数工具层（数值归一、时间格式化、文本转义）
+│   ├── storage.py              # 存储层（SQLite、JSONL 存档、顾问存档、抽库后台）
+│   ├── routes.py               # 数据面路由（/weixin、/messages、/analysis、/advisor、/admin/extract）
+│   ├── console_ui.py           # 内嵌 PWA 控制台前端（HTML/CSS/JS，无外部依赖）
+│   ├── android_db_extract.py / pc_db_extract.py / gen_icons.py  # 本地库提取与图标脚本
+│   └── test_*.py               # 服务端 pytest 用例
 ├── docs/
 │   ├── BUILD.md                # 本文件
 │   ├── ROADMAP.md              # 里程碑 M0–M8、工作量、风险与决策门

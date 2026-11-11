@@ -2,6 +2,22 @@
 
 配合 notifyme Android 端使用：安卓端监听微信通知，定时把消息以 JSON 数组的形式 POST 到本服务；本服务负责存档（jsonl）、入库（SQLite）、去重，并提供查询接口和一个极简网页查看页。
 
+## 目录结构
+
+服务端已从单文件拆成 4 个模块 + 控制台前端：
+
+| 文件 | 职责 |
+|---|---|
+| `app.py` | 启动入口与 Flask 壳：鉴权（`check_token`）、错误处理（404/413/500）、`/console` 与落地页、`create_app()` 工厂 |
+| `util.py` | 纯函数工具层：数值归一、时间戳格式化、文本转义、来源包名映射 |
+| `storage.py` | 存储层：SQLite 连接与建库、JSONL 存档与轮转、顾问存档读写、抽库后台任务 |
+| `routes.py` | 数据面路由：`/weixin`、`/messages`、`/analysis`、`/advisor`、`/admin/extract`，由 `register(app)` 挂载 |
+| `console_ui.py` | 内嵌 PWA 控制台前端（HTML/CSS/JS，无外部依赖） |
+| `android_db_extract.py` / `pc_db_extract.py` / `gen_icons.py` | 安卓 / PC 本地库解密提取与图标生成脚本 |
+| `test_*.py` | pytest 用例（`python -m pytest server/` 全量跑） |
+
+运行期配置（`WEIXIN_TOKEN`、数据目录、各项限额）只在 `app.py` 一处定义，其余模块在函数体内动态读取，因此测试里的 `monkeypatch` 立即生效。
+
 ## 快速开始
 
 以下命令均在本目录（`server/`）下执行，使用本目录的 `.venv` 虚拟环境（首次使用请先创建，见根目录 [README.md](../README.md) §服务端部署）。

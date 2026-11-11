@@ -13,7 +13,7 @@ notifyme = 微信通知本地智能分析助手（本地优先，通知原文留
 | 目录 | 内容 |
 |---|---|
 | `app/` | Android 客户端（Kotlin；传统 View + RecyclerView，**无 Compose**；JSON 用 `org.json`，**无 Gson/Moshi**） |
-| `server/` | 可选自托管 Flask 服务端（跨设备查看 / 历史回填 / PWA 控制台） |
+| `server/` | 可选自托管 Flask 服务端（跨设备查看 / 历史回填 / PWA 控制台）；已拆成 4 个模块：`app.py`（Flask 壳 + 鉴权 + 控制台/落地页）、`util.py`（纯函数工具层）、`storage.py`（SQLite / JSONL / 顾问存档）、`routes.py`（数据面路由） |
 | `docs/` | `BUILD.md`（构建）、`ROADMAP.md`（里程碑）、`architecture/`（9 张架构图） |
 | `third_party/llama.cpp` | M4 端侧推理依赖，CI 里 clone v0.5.0，**不入库** |
 
@@ -34,7 +34,7 @@ $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
 .\gradlew.bat lintOpenDebug                                # Android Lint + ktlint
 .\gradlew.bat assembleOpenRelease                           # 发布包（R8 混淆 + 资源压缩）
 python -m pytest server/ -v --tb=short                     # 服务端全部用例
-python -m py_compile server/app.py server/android_db_extract.py server/pc_db_extract.py server/gen_icons.py
+python -m compileall -q server                              # 服务端语法检查（目录级，与 CI 一致）
 python docs/scripts/privacy_guard.py                        # 隐私守卫自查
 python docs/scripts/version_check.py                       # 版本号自查（--expect-tag v0.3.19）
 ```

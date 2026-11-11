@@ -20,7 +20,7 @@
 | 04 | [分析决策流水线](#04-分析决策流水线) | 一条消息如何变成一条待办？ | 1010 × 4995 |
 | 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1999 × 3051 |
 | 06 | [功能全景脑图](#06-功能全景脑图) | 这个 App 到底有哪些功能？ | 2738 × 1357 |
-| 07 | [服务端架构](#07-服务端架构) | Flask 单文件里装了什么？ | 3819 × 3254 |
+| 07 | [服务端架构](#07-服务端架构) | 服务端模块里装了什么？（图仍是 M2 前单文件基线） | 3819 × 3254 |
 | 08 | [构建与部署](#08-构建与部署) | 从源码到手机、从手机到公网的完整链路 | 4387 × 2753 |
 | 09 | [同步时序](#09-同步时序) | 冷启动回填与三通道上报的精确行为 | 4148 × 6143 |
 
@@ -176,7 +176,7 @@ prefs app_state                 OnboardingActivity.kt:29 向导完成标记
 
 ## 07 服务端架构
 
-`server/app.py` 单文件 1491 行 Flask，依赖只有 `flask==3.1.3`。
+服务端已从单文件拆成 4 个模块，依赖仍然只有 `flask==3.1.3`：`app.py`（Flask 壳：鉴权、错误处理、`/console` 与落地页、`create_app`）、`util.py`（纯函数工具层）、`storage.py`（SQLite / JSONL 存档 / 顾问存档 / 抽库后台）、`routes.py`（数据面路由，`register(app)` 挂载）。下面表格的行号对应拆分后的新位置（旧的 M2 单文件行号见图 04–09）。
 
 ![服务端架构图](diagrams/07-server-architecture.png)
 
@@ -184,23 +184,23 @@ prefs app_state                 OnboardingActivity.kt:29 向导完成标记
 
 | 方法 | 路径 | 处理函数 | 说明 |
 |---|---|---|---|
-| POST | `/weixin` | `receive_weixin` @174 | 接收消息数组，返回 `{ok, received, duplicated, invalid}` |
-| GET | `/messages` | `query_messages` @277 | `conversation` 模糊 / `date` / `limit`≤1000，timestamp DESC |
-| POST | `/analysis` | `receive_analysis` @349 | `case_id` 唯一键去重 |
-| GET | `/analysis` | `query_analysis` @439 | `todo_only=1` 只看待办，s1/s2 反解析为对象 |
-| POST | `/advisor` | `receive_advisor` @530 | `report_id` 去重 |
-| GET | `/advisor` | `query_advisor` @585 | |
-| POST | `/admin/extract` | `admin_extract` @649 | `full=1` + `source ∈ android\|pc\|all`，409 = 已在跑 |
-| GET | `/admin/extract/status` | `admin_extract_status` @680 | `{ok, running, last}` |
-| GET | `/console` | `console_page` @1345 | PWA 单页，HTML/CSS/JS 全内联在 `CONSOLE_HTML` @705 |
-| GET | `/console/manifest.json` | @1355 | 免鉴权 |
-| GET | `/console/icons/<path>` | @1361 | |
-| GET | `/sw.js` | `console_sw` @1370 | 免鉴权；骨架 cache-first，API 永远走网络 |
-| GET | `/` | `index` @1382 | 极简网页，最近 100 条倒序 |
+| POST | `/weixin` | `receive_weixin` @routes.py:20 | 接收消息数组，返回 `{ok, received, duplicated, invalid}` |
+| GET | `/messages` | `query_messages` @routes.py:169 | `conversation` 模糊 / `date` / `limit`≤1000，timestamp DESC |
+| POST | `/analysis` | `receive_analysis` @routes.py:322 | `case_id` 唯一键去重 |
+| GET | `/analysis` | `query_analysis` @routes.py:548 | `todo_only=1` 只看待办，s1/s2 反解析为对象 |
+| POST | `/advisor` | `receive_advisor` @routes.py:718 | `report_id` 去重 |
+| GET | `/advisor` | `query_advisor` @routes.py:807 | |
+| POST | `/admin/extract` | `admin_extract` @routes.py:844 | `full=1` + `source ∈ android\|pc\|all`，409 = 已在跑 |
+| GET | `/admin/extract/status` | `admin_extract_status` @routes.py:889 | `{ok, running, last}` |
+| GET | `/console` | `console_page` @app.py:470 | PWA 单页，HTML/CSS/JS 全在 `console_ui.py` 的 `CONSOLE_HTML` @console_ui.py:13 |
+| GET | `/console/manifest.json` | @app.py:484 | 免鉴权 |
+| GET | `/console/icons/<path>` | @app.py:490 | |
+| GET | `/sw.js` | `console_sw` @app.py:498 | 免鉴权；骨架 cache-first，API 永远走网络 |
+| GET | `/` | `index` @app.py:510 | 极简网页，最近 100 条倒序 |
 
-**鉴权**：`check_token()` @152 接受 Header `X-Token` **或** Query `?token=`。设置 `WEIXIN_TOKEN` 后除 `/console/manifest.json` 与 `/sw.js` 外全部需要鉴权。
+**鉴权**：`check_token()` @app.py:268 接受 Header `X-Token` **或** Query `?token=`。设置 `WEIXIN_TOKEN` 后除 `/console/manifest.json` 与 `/sw.js` 外全部需要鉴权。
 
-**数据库 schema**（`init_db` @74）
+**数据库 schema**（`init_db` @storage.py:57）
 
 ```sql
 CREATE TABLE messages (
