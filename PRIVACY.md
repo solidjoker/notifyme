@@ -19,13 +19,30 @@ App **不**捕获通讯录、通话、位置、相册或其他应用的通知。
 
 ## 存在哪里
 
-所有消息以 JSON Lines 格式保存在**应用私有目录**：
+**App 端**（应用私有目录 `files/`；不 root、不经过 adb 备份时其他应用无法读取）：
 
-- `files/messages.jsonl` —— 消息记录
-- `files/analysis.jsonl` —— AI 分析结果
-- `files/reminders.jsonl` —— 提醒记录
+| 文件 | 内容 |
+|---|---|
+| `files/messages.jsonl` | 消息记录（JSON Lines） |
+| `files/analysis.jsonl` | AI 分析结果 |
+| `files/reminders.jsonl` | 提醒记录 |
+| `files/advisor_reports.jsonl` | AI 顾问复盘报告 |
+| `files/pending.jsonl` | 待上报队列（恢复联网后补发） |
+| `files/models/<模型ID>/<文件名>` | 下载到本机的端侧模型 |
+| `files/smoke.gguf` | 端侧推理冒烟测试用的小模型 |
 
-不 root、不经过 adb 备份时其他应用无法读取。卸载 App 时系统自动删除全部数据。
+**服务端**（自托管 Flask，数据落在 `server/data/`，已写进 .gitignore）：
+
+| 文件 | 内容 |
+|---|---|
+| `server/data/messages.jsonl` | 消息原文存档（与 App 端同格式） |
+| `server/data/messages.db` | SQLite 查询库（检索 / 分页 / 时区过滤走它） |
+| `server/data/advisor_reports.jsonl` | 顾问报告存档（上限 1000 条） |
+| `server/data/advisor_reports.json` | 顾问报告的 JSON 快照 |
+
+只有你在 App 里启用「服务器上报」后，消息才会写到服务端这四个文件里；
+不上报就一个字节都不落。卸载 App 时系统自动删除 App 端全部数据，
+服务端数据需要你自己删（整个删掉 `server/data/` 目录即可）。
 
 ## 什么时候会联网
 
@@ -43,7 +60,11 @@ App 完全离线运行，数据不出手机。
 - API 地址、密钥等仅存在 App 内用户配置或本机构建配置中；
 - 发布 APK 内不包含任何密钥字符串；
 - 密钥的构建期注入文件（`secrets.local.properties` / `secrets.local.bat`）
-  已被 gitignore，从不进入公开仓库。
+  已被 gitignore，从不进入公开仓库；
+- **服务端鉴权令牌**：服务端从环境变量 `WEIXIN_TOKEN` 读（Windows 一键启动脚本里写在
+  `secrets.local.bat`），App 端存在本机 SharedPreferences 里，上报时只放进
+  `X-Token` 请求头；令牌不会写进消息正文，也不会出现在 `server/data/` 的落盘文件中。
+  服务端没配令牌且未显式放行时，数据接口一律返回 503，不会以空鉴权对外服务。
 
 ## 脱敏（M3）
 
@@ -93,6 +114,13 @@ App 完全离线运行，数据不出手机。
   **从不保存被替换的原文片段**；
 - 切换到「出设备脱敏」之前已经落库的未脱敏旧分析记录，上报时会被
   隔离在本机，不会以原文补发到服务端。
+- 「出设备脱敏」只约束**出设备**那一刻的文本：服务端若在**脱敏关闭期间**
+  已经存有原文，那批原文会在历史回填时被重新拉回本机。它仍然只落在本机、
+  不会因此外发；但服务端存档里的历史原文**不会**因为后来开启脱敏而自动消失，
+  要清就自己删 `server/data/` 里的对应文件；
+- 切换隐私模式会重置分析同步水位与扫描游标：此前被「洞」（被服务端拒绝但未隔离 /
+  当时未脱敏）卡在水位之前的记录会重新进入扫描范围，不会永久漏报；
+  「出设备脱敏」下未脱敏的记录仍然不会被上传。
 
 「预览脱敏效果」页对最近消息逐行展示「原文 → 将发送文本」，发送前即可核对。
 

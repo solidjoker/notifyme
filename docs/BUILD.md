@@ -12,15 +12,26 @@
 | JDK | 17（`sourceCompatibility` / `jvmTarget` 均为 17） |
 | Android SDK | compileSdk 34，minSdk 26（Android 8.0+），targetSdk 34 |
 | Android Gradle Plugin | 8.5.2 |
-| Kotlin | 2.0.20 |
+| Kotlin | 2.2.21（必须 ≥ 2.1：端侧依赖 `com.google.ai.edge.litert:litert` 的 kotlin_module 是 2.3.0） |
 | Gradle | 8.9（由仓库内置 Wrapper 自动下载，无需手动安装） |
 
 仓库已内置 `gradlew` / `gradlew.bat` 与 `gradle/wrapper/`，首次构建会自动拉取 Gradle 8.9。
 
-依赖（见 `app/build.gradle.kts`）：`androidx.core:core-ktx:1.13.1`、
-`androidx.recyclerview:recyclerview:1.3.2`、`androidx.work:work-runtime-ktx:2.9.1`、
-`com.squareup.okhttp3:okhttp:4.12.0`。UI 用传统 View + RecyclerView，未引入 Compose；
-JSON 用 Android 平台内置 `org.json`，未引入 Gson/Moshi。
+依赖（见 `app/build.gradle.kts`）：
+
+| 依赖 | 版本 | 用途 |
+|---|---|---|
+| `androidx.core:core-ktx` | 1.13.1 | Kotlin 基础库 |
+| `androidx.recyclerview:recyclerview` | 1.3.2 | 列表 |
+| `androidx.work:work-runtime-ktx` | 2.9.1 | 周期任务（分析 / 同步） |
+| `com.squareup.okhttp3:okhttp` | 4.12.0 | 网络上报与模型下载 |
+| `com.google.ai.edge.litert:litert` | 2.2.0 | 端侧轻量推理（Laya / JEV 评分） |
+| `junit:junit`（`testImplementation`） | 4.13.2 | 单元测试 |
+| `org.json:json`（`testImplementation`） | 20250107 | 纯 JVM 环境下跑 `org.json` 逻辑 |
+
+UI 用传统 View + RecyclerView，未引入 Compose；App 端 JSON 用 Android 平台内置
+`org.json`（未引入 Gson/Moshi），纯 JVM 单测里的 `org.json` 由上面的
+`testImplementation` 提供。
 
 ---
 
@@ -50,7 +61,7 @@ export ANDROID_HOME=/path/to/android-sdk
 | **beta** | `com.notifyme.android.test` | 内部测试版，与主包共存同机 | 本机 `secrets.local.properties` 注入 | `notifyme-test.apk` |
 
 - **open（发布版）**：所有 `DEFAULT_*` 字段注入空串，保证发布包不含任何服务器地址与密钥。未配置即完全离线。
-- **beta（测试版）**：`applicationIdSuffix = ".test"`、`versionNameSuffix = "-test"`，桌面名为「微信分析助手·测试」，两个图标一眼可辨。默认值从本机 `secrets.local.properties` 读取。
+- **beta（测试版）**：`applicationIdSuffix = ".test"`、`versionNameSuffix = "-test"`，桌面名为「notifyme·测试」（`resValue app_name`），两个图标一眼可辨。默认值从本机 `secrets.local.properties` 读取。
 
 > 命名说明：AGP 禁止 flavor 名以 `test` 开头，故内部 flavor 名为 `beta`，但产物 APK 与对外口径仍叫 `test`。
 
@@ -125,6 +136,10 @@ adb install -r app\build\outputs\apk\open\debug\notifyme-open.apk
 
 **环境变量 > 仓库根目录 `keystore.properties` > 都没有（降级为不签名）**
 
+> 本地构建走最后一级：没有密钥时 `assembleOpenRelease` 仍会成功，只打印一行警告，产出未签名 APK。
+> CI 发布流水线用 `-PrequireReleaseSigning=true` 打开强制校验——签名缺失时构建直接失败，
+> 不会再出现「以为发布成功、其实是未签名包」的情况。
+
 | 配置项 | `keystore.properties` 键 | 环境变量 |
 |---|---|---|
 | 密钥库文件 | `storeFile`（绝对路径，或相对仓库根的路径） | `NOTIFYME_KEYSTORE_FILE` |
@@ -165,10 +180,40 @@ copy keystore.properties.example keystore.properties
 `NOTIFYME_KEYSTORE_BASE64`（`[Convert]::ToBase64String([IO.File]::ReadAllBytes("notifyme-release.jks"))`）、
 `NOTIFYME_KEYSTORE_PASSWORD`、`NOTIFYME_KEY_ALIAS`、`NOTIFYME_KEY_PASSWORD`。
 
-推送 `main` 或开 PR 会触发 [.github/workflows/android.yml](../.github/workflows/android.yml)：
-单元测试 + `assembleOpenDebug` / `assembleBetaDebug` + server Python 语法检查 +
-隐私守卫（拒绝密钥文件入库、拒绝私有命名与个人用户目录残留），并上传 debug APK 产物。
-CI 不签名（debug 包用 Android 默认 debug 密钥）。
+推送 `main` 或开 PR 会触发 [.github/workflows/android.yml](../.github/workflows/android.yml)，依次跑：
+
+1. `lintOpenDebug`——Android Lint（失败即红；不再被 `| tail` 管道吞掉退出码）
+2. `testOpenDebugUnitTest` + `assembleOpenDebug` + `assembleBetaDebug`（单测全量发现，不用点用例名）
+3. 服务端 Python 语法检查：`python3 -m compileall -q server`（目录级，新增 `.py` 自动纳入）
+4. 服务端测试：`python3 -m pytest server/ -v --tb=short`（目录级发现；依赖装自 `server/requirements.txt`）
+5. 隐私守卫：`python3 docs/scripts/privacy_guard.py --forbid-local-secrets`
+6. 版本校验：`python3 docs/scripts/version_check.py`
+7. 上传两个 debug APK 产物
+
+CI 不签名（debug 包用 Android 默认 debug 密钥）。Gradle 依赖与 pip 包都有缓存；
+同一个 PR 上连续推送会取消上一次没跑完的构建；整条流水线超时 60 分钟（release 流水线 30 分钟），
+卡死会被判失败而不是一直挂着。
+
+### 守卫脚本本地自查
+
+两个脚本都在 `docs/scripts/` 下，CI 与本地跑的是同一份实现：
+
+```powershell
+# 隐私守卫：拒绝密钥文件入库、拒绝私有母仓库旧命名、拒绝真实用户目录、
+# 拒绝 APK / keystore / 用户 JSONL 入库，并校验 open flavor 仍是零密钥
+python docs\scripts\privacy_guard.py
+
+# CI 同口径：额外禁止工作区里存在 secrets.local.* / keystore.properties
+python docs\scripts\privacy_guard.py --forbid-local-secrets
+
+# 版本号自检（打 tag 前确认版本号与 tag 一致）
+python docs\scripts\version_check.py
+python docs\scripts\version_check.py --expect-tag v0.3.19
+```
+
+> 本地跑 `--forbid-local-secrets` 会命中你本机的 `secrets.local.properties` / `secrets.local.bat`
+> （它们本就该存在，且已被 `.gitignore` 忽略）——这是预期行为；CI 的 checkout 是干净的，不会命中。
+
 
 ---
 
@@ -182,14 +227,18 @@ CI 不签名（debug 包用 Android 默认 debug 密钥）。
 │   └── pull_request_template.md
 ├── app/                        # Android 应用模块
 │   ├── build.gradle.kts        # flavor（open/beta）、密钥注入、发布签名、依赖
-│   └── src/main/
-│       ├── AndroidManifest.xml # 服务/权限/Activity 声明
-│       ├── res/                # 布局、图标、主题、服务配置 XML
-│       └── java/com/notifyme/android/   # Kotlin 源码（41 个文件）
+│   └── src/
+│       ├── main/
+│       │   ├── AndroidManifest.xml      # 服务/权限/Activity 声明
+│       │   ├── res/                     # 布局、图标、主题、服务配置 XML
+│       │   ├── cpp/                     # M4 端侧推理 JNI（llama.cpp）
+│       │   └── java/com/notifyme/android/  # Kotlin 主源码（87 个 .kt）
+│       └── test/java/com/notifyme/android/  # 纯 JVM 单元测试（28 个 .kt）
 ├── server/                     # 可选配套 Flask 服务端（见 server/README.md）
 ├── docs/
 │   ├── BUILD.md                # 本文件
 │   ├── ROADMAP.md              # 里程碑 M0–M8、工作量、风险与决策门
+│   ├── scripts/                # 隐私守卫与版本校验脚本（CI 直接跑这两个）
 │   └── architecture/           # 架构文档与 9 张图源
 ├── gradle/wrapper/             # Gradle Wrapper（8.9）
 ├── gradlew / gradlew.bat       # Wrapper 启动脚本
