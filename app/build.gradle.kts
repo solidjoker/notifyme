@@ -1,6 +1,7 @@
 import java.io.File
 import java.io.StringReader
 import java.util.Properties
+import org.gradle.api.tasks.testing.Test
 
 plugins {
     id("com.android.application")
@@ -61,6 +62,21 @@ val releaseKeyPassword = signProp("keyPassword", "NOTIFYME_KEY_PASSWORD")
 val hasReleaseSigning = releaseStoreFile?.exists() == true &&
     releaseStorePassword.isNotBlank() && releaseKeyAlias.isNotBlank() && releaseKeyPassword.isNotBlank()
 
+// CI 发布流程用 -PrequireReleaseSigning=true 打开「缺签名就失败」。
+// 本地默认关闭：保证任何人 clone 仓库后 assembleOpenRelease 都能跑通（拿到未签名 APK，自行签名才能装）。
+val requireReleaseSigning =
+    (project.findProperty("requireReleaseSigning") as String?)?.toBoolean() ?: false
+
+// 发布包 ABI 清单：默认只打 arm64-v8a（真机），去掉 x86_64 可省约 20MB 体积。
+// 需要在 x86_64 模拟器上装发布包时：.\gradlew.bat assembleOpenRelease -PreleaseAbis=arm64-v8a,x86_64
+val releaseAbis: List<String> =
+    (project.findProperty("releaseAbis") as String?)
+        ?.split(",")
+        ?.map { it.trim() }
+        ?.filter { it.isNotEmpty() }
+        ?.takeIf { it.isNotEmpty() }
+        ?: listOf("arm64-v8a")
+
 android {
     namespace = "com.notifyme.android"
     compileSdk = 34
@@ -73,10 +89,8 @@ android {
         versionCode = 25
         versionName = "0.3.19"
 
-        ndk {
-            // 真机 arm64 + MuMu 模拟器 x86_64；不含 32 位与其它 ABI
-            abiFilters += listOf("arm64-v8a", "x86_64")
-        }
+        // ABI 清单放在 buildTypes 里：debug/beta 走 arm64-v8a + x86_64（真机 + 模拟器），
+        // release 只打 arm64-v8a（去掉 x86_64 约省 20MB 体积）。
         externalNativeBuild {
             cmake {
                 arguments += "-DCMAKE_BUILD_TYPE=Release"
@@ -140,15 +154,32 @@ android {
     }
 
     buildTypes {
+        debug {
+            // 真机 arm64 + MuMu 模拟器 x86_64；不含 32 位与其它 ABI
+            ndk {
+                abiFilters += listOf("arm64-v8a", "x86_64")
+            }
+        }
         release {
+            // 发布包只带 arm64-v8a；要在 x86_64 模拟器上装，用 -PreleaseAbis=arm64-v8a,x86_64 临时构建
+            ndk {
+                abiFilters += releaseAbis
+            }
             isMinifyEnabled = true
-        isShrinkResources = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
+            } else if (requireReleaseSigning) {
+                // 发布流水线里缺签名必须直接失败：否则会悄悄产出一个装不上的 APK 拿去发版
+                throw GradleException(
+                    "release 签名缺失：请设置 NOTIFYME_KEYSTORE_FILE / NOTIFYME_KEYSTORE_PASSWORD / " +
+                        "NOTIFYME_KEY_ALIAS / NOTIFYME_KEY_PASSWORD 环境变量，" +
+                        "或在仓库根目录放 keystore.properties（模板见 keystore.properties.example）"
+                )
             } else {
                 // 说清「为什么没签上」，否则用户只看到未签名 APK 却不知配置错在哪
                 val reason = when {
@@ -193,6 +224,25 @@ android {
         // 单测里碰到未 mock 的 Android API（如 Log.w）返回默认值而不是抛
         // "Method ... not mocked"，让纯逻辑测试不必为一次日志调用引入 Robolectric
         unitTests.isReturnDefaultValues = true
+    }
+
+    lint {
+        // 有 error 就失败（默认行为，显式写出来是为了让 CI 期望可读）
+        abortOnError = true
+        // warning 不阻断构建：第三方依赖的告警不该卡住发版
+        warningsAsErrors = false
+        // 报告落在 app/build/reports/ 下，CI 失败时可直接下载
+        htmlReport = true
+        xmlReport = true
+    }
+}
+
+// 单测日志：逐个用例打印 passed / skipped / failed，CI 红了能直接看出是哪个用例
+tasks.withType<Test>().configureEach {
+    testLogging {
+        events("passed", "skipped", "failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showStandardStreams = false
     }
 }
 

@@ -9,7 +9,6 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -42,8 +41,8 @@ object OverlayManager {
         val caseId: String = ""
     )
 
-    fun canDrawOverlays(context: Context): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
+    // minSdk 26（> M），无需再判断系统版本
+    fun canDrawOverlays(context: Context): Boolean = Settings.canDrawOverlays(context)
 
     fun show(context: Context, card: Card) {
         if (!canDrawOverlays(context)) {

@@ -82,7 +82,7 @@
             android:paddingEnd="5dp"
             android:paddingBottom="2dp"
             android:singleLine="true"
-            android:text="🏷"
+            android:text="@string/conv_tag_icon"
             android:textColor="@color/status_gray"
             android:textSize="11sp" />
         <!-- 日历提醒标记：该会话存在提醒记录时显示，点击进该会话的提醒列表 -->
@@ -93,7 +93,7 @@
             android:layout_marginStart="6dp"
             android:paddingStart="4dp"
             android:paddingEnd="4dp"
-            android:text="📅"
+            android:text="@string/conv_reminder_icon"
             android:textSize="13sp"
             android:visibility="gone" />
 

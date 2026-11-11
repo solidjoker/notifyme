@@ -370,7 +370,7 @@ class MainActivity : Activity() {
         adapter.selectionActive = batchActionMode != null
         adapter.selectedConversations = selectedConversations.toSet()
         batchActionMode?.title = getString(R.string.batch_selected_n, selectedConversations.size)
-        adapter.notifyDataSetChanged()
+        adapter.refreshSelectionState()
     }
 
     private val batchActionCallback = object : android.view.ActionMode.Callback {
@@ -1104,6 +1104,13 @@ class MainActivity : Activity() {
         /** 批量选择态：由 MainActivity 在 ActionMode 开关时同步 */
         var selectionActive: Boolean = false
         var selectedConversations: Set<ConvKey> = emptySet()
+
+        /** 选择态只影响会话头（勾选视觉 + chips 屏蔽），只刷新会话头行，避免整表重绘。 */
+        fun refreshSelectionState() {
+            for (i in items.indices) {
+                if (items[i] is FeedItem.Header) notifyItemChanged(i)
+            }
+        }
 
         /** 供 SwipeDeleteCallback 按位置取原始 item。 */
         fun feedItemAt(position: Int): FeedItem = items[position]

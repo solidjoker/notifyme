@@ -11,6 +11,7 @@ import android.view.ViewGroup
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.text.SimpleDateFormat
@@ -136,12 +137,27 @@ class AnalysisListActivity : Activity() {
         private val expanded = mutableSetOf<String>()
         private val timeFormat = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
 
+        /** 用 DiffUtil 做增量刷新：避免整表 notifyDataSetChanged 造成的重绘与动画抖动。 */
         fun submit(records: List<AnalysisCaseRecord>, sources: Map<String, String>) {
+            val old = items.toList()
+            val oldSources = this.sources
+            val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
+                override fun getOldListSize(): Int = old.size
+                override fun getNewListSize(): Int = records.size
+                override fun areItemsTheSame(oldPos: Int, newPos: Int): Boolean =
+                    old[oldPos].caseId == records[newPos].caseId
+                override fun areContentsTheSame(oldPos: Int, newPos: Int): Boolean =
+                    old[oldPos] == records[newPos]
+            })
             items.clear()
             items.addAll(records)
             this.sources = sources
             expanded.retainAll(records.map { it.caseId }.toSet())
-            notifyDataSetChanged()
+            diff.dispatchUpdatesTo(this)
+            // 窗口原文（sources）不在记录本身里，来源文本变了也要重画对应行
+            if (oldSources != sources) {
+                notifyItemRangeChanged(0, items.size)
+            }
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
