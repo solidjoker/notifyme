@@ -110,14 +110,105 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 
-# 鉴权令牌（可选但强烈建议）：写入手动创建的 secrets.local.bat
-#   set WEIXIN_TOKEN=你的长随机令牌
+# 鉴权令牌（必填）：服务端只读环境变量 WEIXIN_TOKEN
+$env:WEIXIN_TOKEN = "你的长随机令牌"
 python app.py
 ```
 
-局域网内把 App 服务器地址填为 `http://<电脑IP>:8000/weixin`；
-如需公网访问，请自行加 HTTPS 反代（仓库文档中的域名均为示例）。
-详见 [server/README.md](server/README.md)。
+Windows 一键启动：双击 `server\启动服务.bat`，它会先 `call` 同目录的
+`secrets.local.bat`（格式 `set WEIXIN_TOKEN=你的长随机令牌`），再拉起 `app.py` 并自动
+`adb reverse`。`app.py` 本身**不读** `secrets.local.bat`——直接
+`python app.py` 时必须自己设好环境变量。
+
+#### 监听地址（由是否鉴权自动决定）
+
+| 运行方式 | 监听地址 | 外部可达性 |
+|---|---|---|
+| 设了 `WEIXIN_TOKEN` | `0.0.0.0:8000` | 局域网可访问；App 服务器地址填 `http://<电脑IP>:8000/weixin` |
+| 只设 `WEIXIN_ALLOW_NO_AUTH=1` | `127.0.0.1:8000` | 仅本机；App 需先 `adb reverse tcp:8000 tcp:8000` |
+| 两者都没设 | 不启动 | 打印错误并退出（`sys.exit(1)`），不会带着空鉴权上线 |
+| 额外设 `WEIXIN_ALLOW_INSECURE_BIND=1` | `0.0.0.0:8000` | 显式要求无令牌对外网暴露 |
+
+端口用 `PORT` 环境变量改（默认 8000）。
+
+#### 鉴权令牌怎么给
+
+服务端配了 `WEIXIN_TOKEN` 后，所有数据接口都要带令牌，二选一：
+
+- 请求头 `X-Token: <令牌>`（App 上报、PWA 控制台用这个）
+- URL 参数 `?token=<令牌>`（兼容 iPhone Safari 等不能带自定义头的浏览器；服务端会记一条 deprecation 日志）
+
+App 端的令牌存在本机 SharedPreferences（首次可用 beta flavor 的默认值预填），上报时自动带上
+`X-Token` 头。令牌不对返回 **401**；服务端根本没配令牌且未放行时返回 **503**；
+同一 IP 60 秒内失败 10 次后返回 **429** 并附 `Retry-After`。
+
+#### 接口速查
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/health` | 健康检查，不需要令牌 |
+| POST | `/weixin` | 上报消息数组（逐条校验，坏条目单独拒不影响好条目） |
+| GET | `/messages` | 查消息：`pkg` / `conversation` / `date` / `tz` / `limit` / `before` |
+| POST | `/analysis` | 上报分析结果 |
+| GET | `/analysis` | 查分析结果：`todo_only=1` 只看需要行动的 |
+| POST | `/advisor` | 上报 AI 顾问复盘报告（`report_id` 是去重键） |
+| GET | `/advisor` | 查顾问报告，最新在前；`limit` 默认 20、上限 100 |
+| GET | `/console` | PWA 控制台（iPhone 用 Safari 打开这个地址） |
+
+#### 游标翻页（`next_before`）
+
+`/messages` 与 `/analysis` 用同一套游标：
+
+1. 首次请求不带 `before`，取第一页；
+2. 响应里的 `next_before` 形如 `<毫秒时间戳>_<rowid>`，**只有真的有下一页时才给**，末页为 `null`；
+3. 下一页把 `next_before` 原样回传给 `before` 即可（按时间倒序，不重不漏）。
+
+#### 字段表
+
+**POST `/weixin`（JSON 数组，每条一个消息）**
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `sender` | string | 是 | 发送者名，最长 512 字符 |
+| `text` | string | 是 | 正文，最长 64 KiB |
+| `timestamp` | number | 是 | 毫秒时间戳，范围 0 ~ 2100-01-01 |
+| `conversation` | string | 是 | 会话名，最长 512 字符 |
+| `is_group` | bool | 是 | 是否群聊 |
+| `source` | string | 否 | 来源标记，缺省 `android-notification` |
+| `pkg` | string | 否 | 来源 App 包名，缺省按微信 `com.tencent.mm` 回填 |
+
+响应：全部有效回 200 `{"ok":true,"received":n,"duplicated":m,"invalid":0}`；
+有条目被拒回 207，并带 `rejected`（被拒条目在数组里的下标）。
+
+**GET `/messages` 每条消息**：`sender` / `text` / `timestamp` /
+`conversation` / `is_group` / `received_at` / `source` / `pkg`。
+
+**GET `/analysis` 每条结果**：`case_id` / `conversation` / `window_end` /
+`message_count` / `s1` / `s2` / `escalated` / `need_action`(bool) /
+`importance` / `analyzed_at` / `protocol` / `received_at` /
+`forks` / `filtered` / `pkg` / `redacted` / `redaction_rules` /
+`redaction_hits` / `todo_text` / `todo_due`。
+
+> `importance` 已归一：端上传的是 0–9 数值（≥6 → `high`，≥3 → `mid`，其余 `low`），
+> 老数据里的字符串原样保留。注意标签是 `mid` 而不是 `medium`。
+
+**POST `/advisor`（JSON 数组，每条一份报告）**：`report_id`（去重键，必填）/
+`created_at` / `period_days` / `case_count` / `summary` /
+`suggestions`（元素为 `{type,title,detail}`，`type` 取
+`prompt`/`watchlist`/`threshold`/`other`） / `model_used`。
+响应 200 返回 `inserted`/`duplicated`/`invalid`；有条目被拒回 207，
+带 `rejected` 与 `rejected_ids`（客户端据此把被拒的报告留到下一轮重报，不会当成功）。
+
+#### 服务端数据文件（都在 `server/data/`，已写进 .gitignore）
+
+| 文件 | 内容 |
+|---|---|
+| `messages.jsonl` | 消息原文存档（与安卓端同格式），超过 64 MiB 轮转一份 `.jsonl.1` |
+| `messages.db` | SQLite 查询库（控制台检索、分页、时区过滤都走它） |
+| `advisor_reports.jsonl` | 顾问报告主存储，最多 1000 条，超出裁剪最旧的 |
+| `advisor_reports.json` | 顾问报告的 JSON 快照（兼容读取用） |
+
+安卓端自己落盘的文件清单见 [PRIVACY.md](PRIVACY.md)。
 
 ---
 
@@ -130,8 +221,10 @@ python app.py
 
 ```powershell
 $env:JAVA_HOME = "你的 JDK 17 路径"
-.\gradlew.bat assembleOpenDebug
-# 产物：app/build/outputs/apk/open/debug/notifyme-open.apk
+
+.\gradlew.bat assembleOpenDebug       # 产物：app/build/outputs/apk/open/debug/notifyme-open.apk
+.\gradlew.bat testOpenDebugUnitTest   # 单元测试（app/src/test 下全量发现）
+.\gradlew.bat lintOpenDebug           # Android Lint
 ```
 
 ---

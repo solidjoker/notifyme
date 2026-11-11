@@ -13,7 +13,7 @@ import java.net.URI
  *
  * 放行规则：
  *  - debug 构建整体放行（方便连局域网自建服务联调）；
- *  - 非 http scheme（即 https 或未填 scheme 的空串）放行；
+ *  - 非 http scheme（https 等加密连接）放行——**只拦明文 http，不拦 https**；
  *  - http scheme 时的本机回环地址（localhost / 127.0.0.1 / 10.0.2.2 模拟器宿主）放行。
  */
 object NetworkPolicy {
@@ -27,7 +27,10 @@ object NetworkPolicy {
         if (url.isBlank()) return false // 未配置服务器地址走别的校验
         if (!url.contains("://")) return true // 没有 scheme 视为 http（OkHttp 也会拒绝）
         val scheme = url.substringBefore("://").lowercase()
-        if (scheme != "http") return true // https / ftp 等非 http scheme 视为安全
+        // 明文策略只针对 http。https 等加密 scheme 一律放行——
+        // 旧代码在这里 return true，与本文件 KDoc 自相矛盾，
+        // 结果 release 版连 https 服务器地址都存不下来（C7）。
+        if (scheme != "http") return false
         val host = runCatching { URI(url).host }.getOrNull() ?: return true
         return host !in CLEARTEXT_HOSTS
     }

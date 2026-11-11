@@ -9,6 +9,17 @@ import org.json.JSONObject
 import java.io.File
 
 /**
+ * 非有限数（NaN / ±Inf）会让 org.json 的 put 直接抛
+ * "JSON does not allow non-finite numbers"——落库与上报双双炸掉。
+ *
+ * 根因（上一轮报告外发现第 1 条）：org.json 的**单参** optDouble(name) 在字段缺失时
+ * 返回 **NaN**（默认缺省值就是 NaN），所以「缺 s1 块」的旧记录读进来就带着 NaN，
+ * 再 toJson 就抛异常。现在双管齐下：读入用 0.0 缺省，写出前再过一道有限性闸。
+ */
+private fun finiteOrZero(value: Double): Double =
+    if (value.isNaN() || value.isInfinite()) 0.0 else value
+
+/**
  * 一条会话级分析结果（case 记录）。
  *
  * 分析单位从「单条消息」升级为「会话窗口」后的落库结构：
@@ -64,7 +75,14 @@ data class AnalysisCaseRecord(
     /** 用户编辑的待办内容；非空时显示/日历优先用它（取代 S2 概括与 S1 话题） */
     val todoText: String = "",
     /** 用户编辑的截止时间文本；非空时日历解析优先用它 */
-    val todoDue: String = ""
+    val todoDue: String = "",
+    // ---- 第四轮：被拒计数与隔离（分析通道防饥饿） ----
+    /** 累计被服务端拒绝次数（207 部分被拒）；0 = 从未被拒 */
+    val rejectedCount: Int = 0,
+    /** 首次被拒时间（毫秒）；0 = 从未被拒；后续被拒不续期 */
+    val firstRejectedAt: Long = 0L,
+    /** true = 已隔离：记录仍留在文件里可人工查看，但不再上报、不再阻塞水位 */
+    val quarantined: Boolean = false
 ) {
     /** 会话复合键（M2）：分析结果归属哪个 App 的哪个会话。 */
     val convKey: ConvKey get() = ConvKey(pkg, conversation)
@@ -90,7 +108,7 @@ data class AnalysisCaseRecord(
     ) {
         fun toJson(): JSONObject = JSONObject().apply {
             put("fork", fork)
-            put("prob", prob)
+            put("prob", finiteOrZero(prob))
             put("verdict", verdict)
             put("note", note)
         }
@@ -98,7 +116,8 @@ data class AnalysisCaseRecord(
         companion object {
             fun fromJson(obj: JSONObject): ForkRecord = ForkRecord(
                 fork = obj.optString("fork"),
-                prob = obj.optDouble("prob"),
+                // 缺省 0.0 而不是 NaN：NaN 写回 JSON 会抛 JSONException
+                prob = finiteOrZero(obj.optDouble("prob", 0.0)),
                 verdict = obj.optString("verdict"),
                 note = obj.optString("note")
             )
@@ -135,12 +154,12 @@ data class AnalysisCaseRecord(
         put("s1", JSONObject().apply {
             put("need_action", JSONObject().apply {
                 put("value", s1NeedAction)
-                put("prob", s1NeedActionProb)
+                put("prob", finiteOrZero(s1NeedActionProb))
             })
-            put("importance", s1Importance)
+            put("importance", finiteOrZero(s1Importance))
             put("due_window", s1DueWindow)
             put("topic", s1Topic)
-            put("confidence", s1Confidence)
+            put("confidence", finiteOrZero(s1Confidence))
         })
         put("escalated", escalated)
         if (escalated) {
@@ -166,6 +185,10 @@ data class AnalysisCaseRecord(
         // M12 手动覆盖字段仅在非空时写出，老记录格式不变（缺键即未编辑）
         if (todoText.isNotEmpty()) put("todo_text", todoText)
         if (todoDue.isNotEmpty()) put("todo_due", todoDue)
+        // 第四轮：被拒计数与隔离（仅非默认值时写出，老记录格式完全不变）
+        if (rejectedCount > 0) put("rejected_count", rejectedCount)
+        if (firstRejectedAt > 0L) put("first_rejected_at", firstRejectedAt)
+        if (quarantined) put("quarantined", true)
     }
 
     companion object {
@@ -201,11 +224,12 @@ data class AnalysisCaseRecord(
                 rawJson = obj.optString("raw_json"),
                 pkg = obj.optString("pkg").ifEmpty { AppSourceRegistry.PKG_WECHAT },
                 s1NeedAction = needAction.optBoolean("value"),
-                s1NeedActionProb = needAction.optDouble("prob"),
-                s1Importance = s1.optDouble("importance"),
+                // 缺省一律 0.0：org.json 单参 optDouble 缺省是 NaN，会在 toJson 时炸掉
+                s1NeedActionProb = finiteOrZero(needAction.optDouble("prob", 0.0)),
+                s1Importance = finiteOrZero(s1.optDouble("importance", 0.0)),
                 s1DueWindow = s1.optString("due_window"),
                 s1Topic = s1.optString("topic"),
-                s1Confidence = s1.optDouble("confidence"),
+                s1Confidence = finiteOrZero(s1.optDouble("confidence", 0.0)),
                 escalated = obj.optBoolean("escalated"),
                 s2Summary = s2?.optString("summary").orEmpty(),
                 s2DueTime = s2?.optString("due_time").orEmpty(),
@@ -222,7 +246,11 @@ data class AnalysisCaseRecord(
                     }.orEmpty(),
                 redactionHits = obj.optInt("redaction_hits"),
                 todoText = obj.optString("todo_text"),
-                todoDue = obj.optString("todo_due")
+                todoDue = obj.optString("todo_due"),
+                // 老记录没有这三个键：缺省 0 / 0 / false（读写兼容）
+                rejectedCount = obj.optInt("rejected_count", 0),
+                firstRejectedAt = obj.optLong("first_rejected_at", 0L),
+                quarantined = obj.optBoolean("quarantined", false)
             )
         }
     }
@@ -245,11 +273,54 @@ object AnalysisStore {
     private const val SYNC_PREFS_NAME = "analysis_sync"
     private const val KEY_LAST_SYNCED_AT = "last_synced_analyzed_at"
 
+    // ---- 第四轮：增量扫描游标 + 隔离索引 ----
+    /** 文件被整体重写的次数（generation）：字节游标失效的判据 */
+    private const val KEY_FILE_GENERATION = "file_generation"
+    /** 扫描游标：下一轮的起始字节偏移 */
+    private const val KEY_SCAN_OFFSET = "scan_offset"
+    /** 扫描游标所属的文件 generation（与 KEY_FILE_GENERATION 不一致即游标失效） */
+    private const val KEY_SCAN_GENERATION = "scan_generation"
+    /** 上次「从头全量扫」的时间（毫秒）：到期后环形重扫一次 */
+    private const val KEY_SCAN_LAST_FULL_PASS_AT = "scan_last_full_pass_at"
+    /** 隔离索引：case_id -> 首次被拒时间（毫秒）；只记已隔离的记录 */
+    private const val KEY_QUARANTINE_INDEX = "quarantine_index"
+    /** 上次上报时看到的隐私模式；模式一变就重置水位与扫描偏移 */
+    private const val KEY_PRIVACY_MODE = "last_privacy_mode"
+
     private fun syncPrefs(context: Context) = context.applicationContext
         .getSharedPreferences(SYNC_PREFS_NAME, Context.MODE_PRIVATE)
 
     private fun storeFile(context: Context): File =
         File(context.filesDir, FILE_NAME)
+
+    /**
+     * 文件被整体重写后调用：字节游标失效（generation 变了下一轮就从头扫）。
+     */
+    private fun bumpGeneration(context: Context) {
+        val prefs = syncPrefs(context)
+        val next = prefs.getInt(KEY_FILE_GENERATION, 0) + 1
+        prefs.edit().putInt(KEY_FILE_GENERATION, next).apply()
+    }
+
+    /** 读隔离索引（case_id -> 首次被拒时间）；损坏时当作空，不打断上报。 */
+    private fun loadQuarantineIndex(context: Context): MutableMap<String, Long> {
+        val raw = syncPrefs(context).getString(KEY_QUARANTINE_INDEX, null) ?: return mutableMapOf()
+        return try {
+            val obj = JSONObject(raw)
+            val out = mutableMapOf<String, Long>()
+            obj.keys().forEach { key -> out[key] = obj.optLong(key) }
+            out
+        } catch (e: Exception) {
+            mutableMapOf()
+        }
+    }
+
+    /** 写隔离索引。 */
+    private fun saveQuarantineIndex(context: Context, index: Map<String, Long>) {
+        val obj = JSONObject()
+        index.forEach { (caseId, firstAt) -> obj.put(caseId, firstAt) }
+        syncPrefs(context).edit().putString(KEY_QUARANTINE_INDEX, obj.toString()).apply()
+    }
 
     /** 追加一条 case 分析结果。 */
     @Synchronized
@@ -304,10 +375,14 @@ object AnalysisStore {
      * 重新分析，删除不影响 caseId 去重成本。返回删除条数。
      */
     @Synchronized
-    fun pruneOlderThan(context: Context, cutoffMs: Long): Int =
-        JsonlStore(storeFile(context)).rewriteRaw { line ->
+    fun pruneOlderThan(context: Context, cutoffMs: Long): Int {
+        val removed = JsonlStore(storeFile(context)).rewriteRaw { line ->
             AnalysisRetentionCore.shouldKeep(line, cutoffMs)
         }
+        // 文件被重写 -> 字节游标失效
+        if (removed > 0) bumpGeneration(context)
+        return removed
+    }
 
     /** [ConvKey] 口径的最新记录：M2 起同名会话在不同 App 里分别给角标。 */
     fun latestByConvKey(context: Context): Map<ConvKey, AnalysisCaseRecord> =
@@ -353,7 +428,11 @@ object AnalysisStore {
             }
             out += line
         }
-        if (patched) JsonlStore.atomicWrite(file, out)
+        if (patched) {
+            JsonlStore.atomicWrite(file, out)
+            // 文件被重写 -> 字节游标失效
+            bumpGeneration(context)
+        }
         return patched
     }
 
@@ -387,6 +466,8 @@ object AnalysisStore {
         if (removed > 0) {
             // 原子重写：writeText 会先截断原文件，重写中途被杀会丢掉整份分析历史
             JsonlStore.atomicWrite(file, keptLines)
+            // 文件被重写 -> 字节游标失效
+            bumpGeneration(context)
         }
         return removed
     }
@@ -394,12 +475,104 @@ object AnalysisStore {
     /**
      * 读取尚未同步到服务器的 case 记录（analyzedAt 大于已同步水位），按分析时间正序。
      * 服务端按 case_id 去重，水位线只是减少重复传输的优化，重复上报无害。
+     *
+     * **增量扫描（第四轮任务 B）**：上一轮为修「只读最近 500 条」改成了每轮
+     * 从文件头顺序扫到文件尾，记录一多就是每轮 O(文件大小) 的 IO。现在维护一个
+     * **持久化字节游标**（[KEY_SCAN_OFFSET]）：
+     *  - 游标指向「首个待上报记录」：已同步前缀被跳过；水位没前进（上报失败）
+     *    时下一轮一定还会读到这批记录，不会漏报；
+     *  - 已隔离（被拒超限）的记录被跳过，不再上报、不再阻塞水位；
+     *  - 扫到文件末尾后按 [AnalysisScanCursor.FULL_PASS_INTERVAL_MS] 环形从头
+     *    重扫一次，长期不漏任何记录；
+     *  - 文件被重写（generation 变了）-> 旧偏移失效，自动从头开始，异常不外抛。
+     *
+     * **requireRedacted（第五轮审计）**：CLOUD_REDACT 模式下只放行脱敏态产出的记录。
+     * 未脱敏的旧记录被跳过（不返回、不上报），但**不钉住游标** —— 否则队首那条
+     * 未脱敏记录会把游标永久钉住，它后面新追加的记录永远读不到、永远不上报。
+     * 它们切回 OFF 模式后的补报靠 [syncPrivacyMode] 重置水位 + 扫描偏移来实现。
+     *
+     * 内存上限不变：单轮最多 PAGE_SIZE * MAX_PAGES = 1000 条进内存。
      */
-    fun readUnsynced(context: Context): List<AnalysisCaseRecord> {
-        val lastSynced = syncPrefs(context).getLong(KEY_LAST_SYNCED_AT, 0L)
-        return readRecent(context, 500)
-            .filter { it.analyzedAt > lastSynced }
-            .sortedBy { it.analyzedAt }
+    @Synchronized
+    fun readPending(context: Context, requireRedacted: Boolean): PendingAnalysis {
+        val file = storeFile(context)
+        if (!file.exists()) return PendingAnalysis(emptyList(), 0, 0)
+        val prefs = syncPrefs(context)
+        val now = System.currentTimeMillis()
+
+        // 隔离到期复活：解除隔离 + 清零计数 + **下调水位**（否则复活记录
+        // analyzedAt <= 水位会被扫描直接跳过，等于「复活」只是个空标记）
+        reviveExpired(context, now)
+
+        val lastSynced = prefs.getLong(KEY_LAST_SYNCED_AT, 0L)
+        val generation = prefs.getInt(KEY_FILE_GENERATION, 0)
+        val scanGeneration = prefs.getInt(KEY_SCAN_GENERATION, -1)
+        val storedOffset = prefs.getLong(KEY_SCAN_OFFSET, 0L)
+        val lastFullPassAt = prefs.getLong(KEY_SCAN_LAST_FULL_PASS_AT, 0L)
+        // 文件被整体重写过 -> 旧偏移失效，从头开始
+        val base = if (generation == scanGeneration) storedOffset else 0L
+        // 游标已到文件末尾（上一轮没有待上报记录）-> 到期后环形从头重扫
+        val reachedEnd = base >= file.length()
+        val start = AnalysisScanCursor.nextStartOffset(
+            reachedEnd = reachedEnd,
+            offset = base,
+            lastFullPassAt = lastFullPassAt,
+            nowMs = now
+        )
+        val result = AnalysisScanCore(file).scan(
+            startOffset = start,
+            lastSyncedAt = lastSynced,
+            maxRecords = AnalysisSyncCore.PAGE_SIZE * AnalysisSyncCore.MAX_PAGES,
+            requireRedacted = requireRedacted
+        )
+        prefs.edit()
+            .putLong(KEY_SCAN_OFFSET, result.nextOffset)
+            .putInt(KEY_SCAN_GENERATION, generation)
+            .putLong(
+                KEY_SCAN_LAST_FULL_PASS_AT,
+                if (start == 0L) now else lastFullPassAt
+            )
+            .apply()
+        return PendingAnalysis(
+            records = result.records.sortedBy { it.analyzedAt },
+            skippedUnredacted = result.skippedUnredacted,
+            skippedQuarantined = result.skippedQuarantined
+        )
+    }
+
+    /**
+     * 本轮待上报内容（记录 + 跳过统计）。
+     *
+     * skippedUnredacted：CLOUD_REDACT 模式下被跳过的未脱敏记录条数（留本机不上云）；
+     * skippedQuarantined：被拒超限而隔离的记录条数（留本机不再上报）。
+     */
+    data class PendingAnalysis(
+        val records: List<AnalysisCaseRecord>,
+        val skippedUnredacted: Int,
+        val skippedQuarantined: Int
+    )
+
+    /**
+     * 隐私模式切换检测：模式一变就**重置水位与扫描偏移**（下一轮全量重扫）。
+     *
+     * 为什么必须重置：CLOUD_REDACT 期间未脱敏的旧记录被跳过（不上云），但它们
+     * 仍留在文件里；用户把模式切回 OFF 后，这些记录必须**重新变成待上报**，
+     * 否则它们永远躺在本机（analyzedAt <= 水位，扫描直接跳过）。
+     *
+     * @return true = 模式发生了变化（本次已重置）
+     */
+    @Synchronized
+    fun syncPrivacyMode(context: Context, mode: String): Boolean {
+        val prefs = syncPrefs(context)
+        val last = prefs.getString(KEY_PRIVACY_MODE, null)
+        if (last == mode) return false
+        prefs.edit()
+            .putString(KEY_PRIVACY_MODE, mode)
+            .putLong(KEY_LAST_SYNCED_AT, 0L)
+            .putLong(KEY_SCAN_OFFSET, 0L)
+            .putInt(KEY_SCAN_GENERATION, -1)
+            .apply()
+        return true
     }
 
     /**
@@ -414,5 +587,140 @@ object AnalysisStore {
         if (timestamp > current) {
             prefs.edit().putLong(KEY_LAST_SYNCED_AT, timestamp).apply()
         }
+    }
+
+    /**
+     * 隔离到期复活：解除隔离 + 清零被拒计数 + 清除文件里的 quarantined 标记，
+     * 记录重新获得上报机会。返回实际复活的 case_id 集合。
+     *
+     * 索引里的条目 7 天（[AnalysisRejectCore.REJECT_TTL_MS]）后到期，
+     * 过期即「重新给一次机会」：服务端若不再拒绝，case 会重新被上报。
+     */
+    @Synchronized
+    fun reviveExpired(context: Context, nowMs: Long): Set<String> {
+        val index = loadQuarantineIndex(context)
+        if (index.isEmpty()) return emptySet()
+        val expired = index.filterValues { AnalysisRejectCore.isExpired(it, nowMs) }.keys.toSet()
+        if (expired.isEmpty()) return emptySet()
+        val file = storeFile(context)
+        val revived = if (file.exists()) AnalysisRejectFile(file).revive(expired) else emptySet()
+        // 文件里已经没有的 case（被用户删了）也一并从索引摘掉
+        index.keys.removeAll(expired)
+        saveQuarantineIndex(context, index)
+        if (revived.isNotEmpty()) {
+            // 文件被重写 -> 字节游标失效
+            bumpGeneration(context)
+            // 水位必须下调到复活记录之前：水位只前进不后退，不下调的话复活记录
+            // analyzedAt <= 水位，扫描会直接跳过 —— 「复活」等于没复活。
+            val earliest = minAnalyzedAtOf(context, revived)
+            if (earliest > 0L) {
+                lowerSyncedWatermark(context, earliest - 1)
+                // 扫描偏移也回到文件头：复活记录可能落在游标之前
+                syncPrefs(context).edit().putLong(KEY_SCAN_OFFSET, 0L).apply()
+            }
+        }
+        return revived
+    }
+
+    /**
+     * 下调已同步水位（只用于隔离复活：让复活记录重新变成待上报）。
+     * 常规路径的水位仍然只前进不后退。
+     */
+    @Synchronized
+    private fun lowerSyncedWatermark(context: Context, timestamp: Long) {
+        val prefs = syncPrefs(context)
+        val current = prefs.getLong(KEY_LAST_SYNCED_AT, 0L)
+        if (timestamp < current) {
+            prefs.edit().putLong(KEY_LAST_SYNCED_AT, timestamp).apply()
+        }
+    }
+
+    /** 取指定 case_id 集合里最小的 analyzedAt（没有则 0）。 */
+    private fun minAnalyzedAtOf(context: Context, caseIds: Set<String>): Long {
+        val file = storeFile(context)
+        if (!file.exists() || caseIds.isEmpty()) return 0L
+        var min = Long.MAX_VALUE
+        try {
+            file.forEachLine { line ->
+                if (line.isBlank() || min == 0L) return@forEachLine
+                try {
+                    val record = AnalysisCaseRecord.fromJson(JSONObject(line)) ?: return@forEachLine
+                    if (record.caseId in caseIds && record.analyzedAt > 0L) {
+                        if (record.analyzedAt < min) min = record.analyzedAt
+                    }
+                } catch (e: Exception) {
+                    // 损坏行跳过，不影响其它记录
+                }
+            }
+        } catch (e: Exception) {
+            return 0L
+        }
+        return if (min == Long.MAX_VALUE) 0L else min
+    }
+
+    /**
+     * 记一批 case 被服务端拒绝（207 部分被拒）：累计被拒次数，达到上限即**隔离**。
+     *
+     * 分析记录是已经生成的复盘，**不能删**（消息队列是「待发消息」，超限可以丢；
+     * 分析记录是用户资产），所以这里用「隔离」代替「丢弃」：记录仍留在
+     * analysis.jsonl 里可人工查看，只是不再上报、不再阻塞水位。
+     *
+     * @return 本次**新**被隔离的 case_id 集合（调用方据此判断「还有没有 case 阻塞水位」）
+     */
+    @Synchronized
+    fun markRejected(context: Context, caseIds: Set<String>, nowMs: Long): Set<String> {
+        if (caseIds.isEmpty()) return emptySet()
+        val file = storeFile(context)
+        if (!file.exists()) return emptySet()
+        val outcome = AnalysisRejectFile(file).markRejected(caseIds, nowMs)
+        if (!outcome.rewritten) return emptySet()
+        // 文件被重写 -> 字节游标失效（下一轮自动从头扫）
+        bumpGeneration(context)
+        val index = loadQuarantineIndex(context)
+        outcome.newlyQuarantined.forEach { (caseId, firstAt) -> index[caseId] = firstAt }
+        saveQuarantineIndex(context, index)
+        return outcome.newlyQuarantined.keys.toSet()
+    }
+
+    /**
+     * 强制隔离：立即把这些 case 标记为不再上报（**413 毒丸条目**专用）。
+     *
+     * 413 的语义是「这条记录单独就超过服务端上限」，重试多少次都不会成功 ——
+     * 立刻隔离，别再每轮把几 MiB 往上传。记录仍留在 analysis.jsonl 里可人工查看。
+     * 隔离同样计入索引，7 天 TTL 到期自动复活（重新获得一次上报机会）。
+     *
+     * @return 是否确实改动了文件
+     */
+    @Synchronized
+    fun quarantineNow(context: Context, caseIds: Set<String>, nowMs: Long): Boolean {
+        if (caseIds.isEmpty()) return false
+        val file = storeFile(context)
+        if (!file.exists()) return false
+        val changed = AnalysisRejectFile(file).quarantine(caseIds, nowMs)
+        if (!changed) return false
+        // 文件被重写 -> 字节游标失效（下一轮自动从头扫）
+        bumpGeneration(context)
+        val index = loadQuarantineIndex(context)
+        caseIds.forEach { caseId ->
+            if (!index.containsKey(caseId)) index[caseId] = nowMs
+        }
+        saveQuarantineIndex(context, index)
+        return true
+    }
+
+    /** 当前被隔离的 case_id 集合（记录仍在文件里，只是不再上报）。 */
+    @Synchronized
+    fun quarantinedCaseIds(context: Context): Set<String> {
+        val file = storeFile(context)
+        if (!file.exists()) return emptySet()
+        return AnalysisRejectFile(file).quarantinedCaseIds()
+    }
+
+    /** 被隔离的 case 条数。 */
+    @Synchronized
+    fun quarantinedCount(context: Context): Int {
+        val file = storeFile(context)
+        if (!file.exists()) return 0
+        return AnalysisRejectFile(file).quarantinedCount()
     }
 }

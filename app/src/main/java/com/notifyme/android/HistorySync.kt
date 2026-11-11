@@ -19,8 +19,13 @@ import kotlin.concurrent.thread
  * 启动时自动提取已有微信聊天记录（沿用服务端 /admin/extract 链路）：
  *
  * 流程：POST /admin/extract 触发服务端直读安卓微信库 -> 轮询 /admin/extract/status
- * 直到跑完 -> GET /messages?limit=1000 拉全量（含 android-db 来源）->
+ * 直到跑完 -> GET /messages?limit=1000 翻页拉全量（含 android-db 来源）->
  * MessageStore.merge 秒级去重回填本地会话存储，首页/会话页随之可见。
+ *
+ * 隐私门控（评审 C8，与 SyncWorker 口径一致）：
+ *  - LOCAL_ONLY（仅端侧）：整条链路停用，不触发服务端直读也不拉历史；
+ *  - CLOUD_REDACT（云端脱敏）：不触发服务端直读（原文入库端上无法脱敏），
+ *    但仍回填服务端已有的历史。
  *
  * 降级策略（全部静默，不阻塞 UI、不崩）：
  *  - 开关关闭 / 冷却期内（6 小时）/ 未配置服务器地址 -> 直接跳过并记录状态；
@@ -75,6 +80,14 @@ object HistorySync {
             Log.i(TAG, "自动提取开关关闭，跳过")
             return
         }
+        // M3 隐私门控（评审 C8）：历史同步原先完全没接 PrivacyConfig，
+        // LOCAL_ONLY 下照样触发服务端直读微信库 + 拉历史，隐私开关等于被架空。
+        val privacy = PrivacyConfig.get(app)
+        if (!HistorySyncCore.allowFetch(privacy)) {
+            record(app, "跳过：仅端侧模式，云端提取与历史回填已停用")
+            Log.i(TAG, "仅端侧模式，跳过历史提取")
+            return
+        }
         val lastRun = prefs(app).getLong(KEY_LAST_RUN_AT, 0L)
         if (System.currentTimeMillis() - lastRun < COOLDOWN_MS) {
             Log.i(TAG, "冷却期内（6h），跳过自动提取")
@@ -87,43 +100,19 @@ object HistorySync {
         }
         // 先占位再跑，防止多入口并发触发两轮
         prefs(app).edit().putLong(KEY_LAST_RUN_AT, System.currentTimeMillis()).apply()
-        thread(name = "history-sync", isDaemon = true) { run(app, syncConfig) }
+        thread(name = "history-sync", isDaemon = true) { run(app, syncConfig, privacy) }
     }
 
-    private fun run(context: Context, syncConfig: SyncConfig) {
+    private fun run(context: Context, syncConfig: SyncConfig, privacy: PrivacyModeState) {
         try {
-            // 1) 触发提取（409 = 服务端正在跑，同样转轮询）
-            val trigger = request(syncConfig, endpoint(syncConfig, "admin/extract"))
-                .post(FormBody.Builder().build()).build()
-            client.newCall(trigger).execute().use { resp ->
-                if (!resp.isSuccessful && resp.code != 409) {
-                    record(context, "失败：触发提取 HTTP ${resp.code}")
-                    return
-                }
-            }
-
-            // 2) 轮询直到跑完
-            val deadline = System.currentTimeMillis() + POLL_TIMEOUT_MS
-            var last: JSONObject? = null
-            while (System.currentTimeMillis() < deadline) {
-                Thread.sleep(POLL_INTERVAL_MS)
-                val status = fetchStatus(syncConfig) ?: continue // 网络抖动继续等
-                if (!status.optBoolean("running", true)) {
-                    last = status.optJSONObject("last")
-                    break
-                }
-            }
-            if (last == null) {
-                record(context, "失败：等待提取结果超时")
-                return
-            }
-            if (!last.optBoolean("ok")) {
-                // 服务端侧失败（无 root / 微信未装 / 库解密失败等），原样透传
-                record(context, "失败：" + last.optString("error", "未知错误"))
+            // 1) 触发提取并等结果。CLOUD_REDACT 下不触发：服务端直读会把**原文**
+            //    写进云端，端上没法脱敏（隐私门控口径与 SyncWorker 一致）。
+            //    触发/轮询失败时状态行已写好，直接结束。
+            if (HistorySyncCore.allowExtract(privacy) && !extractAndWait(context, syncConfig)) {
                 return
             }
 
-            // 3) 拉全量消息回填本地（秒级去重）
+            // 2) 拉全量消息回填本地（秒级去重，翻页直到服务端不再给 next_before）
             val messages = fetchMessages(syncConfig)
                 ?: run { record(context, "失败：拉取历史消息网络错误"); return }
             val incoming = messages.mapNotNull { obj ->
@@ -145,6 +134,45 @@ object HistorySync {
             Log.w(TAG, "自动提取失败", e)
             record(context, "失败：" + (e.message ?: "未知错误"))
         }
+    }
+
+    /**
+     * 触发服务端提取并轮询到结束。
+     *
+     * @return true = 提取成功，可以继续拉历史；false = 失败（状态行已写）
+     */
+    private fun extractAndWait(context: Context, syncConfig: SyncConfig): Boolean {
+        // 1) 触发提取（409 = 服务端正在跑，同样转轮询）
+        val trigger = request(syncConfig, endpoint(syncConfig, "admin/extract"))
+            .post(FormBody.Builder().build()).build()
+        client.newCall(trigger).execute().use { resp ->
+            if (!resp.isSuccessful && resp.code != 409) {
+                record(context, "失败：触发提取 HTTP ${resp.code}")
+                return false
+            }
+        }
+
+        // 2) 轮询直到跑完
+        val deadline = System.currentTimeMillis() + POLL_TIMEOUT_MS
+        var last: JSONObject? = null
+        while (System.currentTimeMillis() < deadline) {
+            Thread.sleep(POLL_INTERVAL_MS)
+            val status = fetchStatus(syncConfig) ?: continue // 网络抖动继续等
+            if (!status.optBoolean("running", true)) {
+                last = status.optJSONObject("last")
+                break
+            }
+        }
+        if (last == null) {
+            record(context, "失败：等待提取结果超时")
+            return false
+        }
+        if (!last.optBoolean("ok")) {
+            // 服务端侧失败（无 root / 微信未装 / 库解密失败等），原样透传
+            record(context, "失败：" + last.optString("error", "未知错误"))
+            return false
+        }
+        return true
     }
 
     // ---------- 内部工具 ----------
@@ -189,17 +217,45 @@ object HistorySync {
         }
     }
 
-    /** GET /messages?limit=1000，网络/解析失败返回 null。 */
+    /** 一页历史消息 + 服务端给的下页游标。 */
+    private class MessagePage(val messages: List<JSONObject>, val nextBefore: String?)
+
+    /**
+     * 拉历史消息：按服务端 next_before 游标一直翻页。
+     *
+     * 服务端 /messages 的 next_before 是 `<毫秒>_<rowid>` 复合游标；
+     * 原实现只取第一页 limit=1000 条，历史超过一页就永远补不齐（评审 C8）。
+     * 终止条件见 [HistorySyncCore.shouldFetchNext]：本页为空 / 游标没变 / 超过页数上限。
+     */
     private fun fetchMessages(syncConfig: SyncConfig): List<JSONObject>? {
+        val all = mutableListOf<JSONObject>()
+        var cursor: String? = null
+        var pages = 0
+        while (true) {
+            val page = fetchMessagePage(syncConfig, cursor) ?: return null
+            pages++
+            all += page.messages
+            val next = page.nextBefore
+            if (!HistorySyncCore.shouldFetchNext(next, page.messages.size, cursor, pages)) break
+            cursor = next
+        }
+        return all
+    }
+
+    /** GET /messages?limit=N[&before=<毫秒>_<rowid>]，网络/解析失败返回 null。 */
+    private fun fetchMessagePage(syncConfig: SyncConfig, nextBefore: String?): MessagePage? {
         return try {
             client.newCall(
-                request(syncConfig, endpoint(syncConfig, "messages?limit=$FETCH_LIMIT"))
-                    .get().build()
+                request(
+                    syncConfig,
+                    endpoint(syncConfig, HistorySyncCore.messagesPath(nextBefore, FETCH_LIMIT))
+                ).get().build()
             ).execute().use { resp ->
                 if (!resp.isSuccessful) return null
-                val arr = JSONObject(resp.body?.string().orEmpty())
-                    .optJSONArray("messages") ?: return null
-                (0 until arr.length()).map { arr.getJSONObject(it) }
+                val obj = JSONObject(resp.body?.string().orEmpty())
+                val arr = obj.optJSONArray("messages") ?: return null
+                val list = (0 until arr.length()).map { arr.getJSONObject(it) }
+                MessagePage(list, obj.optString("next_before").takeIf { it.isNotBlank() })
             }
         } catch (e: Exception) {
             Log.w(TAG, "拉取历史消息失败", e)

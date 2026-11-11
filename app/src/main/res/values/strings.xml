@@ -6,8 +6,6 @@
     <string name="permission_granted">通知监听权限已授予</string>
     <string name="permission_missing">通知监听权限未授予，点击去系统设置开启</string>
     <string name="btn_open_settings">打开通知监听设置</string>
-    <string name="btn_refresh">刷新列表</string>
-    <string name="btn_clear">清除记录</string>
     <string name="empty_hint">暂无捕获到的微信消息</string>
     <string name="clear_done">已清除全部记录</string>
     <string name="chat_truncated">仅显示最近 %1$d 条（共 %2$d 条）</string>
@@ -17,7 +15,6 @@
 
     <!-- 分析结果联动与列表页 -->
     <string name="analysis_label_todo">⚡ 待办</string>
-    <string name="analysis_label_done">已分析</string>
     <string name="analysis_due_prefix">截止：</string>
     <string name="analysis_list_title">分析结果</string>
     <string name="btn_open_analysis">查看分析结果</string>
@@ -81,7 +78,6 @@
     <string name="btn_battery_whitelisted">已在白名单</string>
 
     <!-- 控制台入口 -->
-    <string name="btn_console">控制台</string>
 
     <!-- 初次使用向导 -->
     <string name="onboarding_welcome_title">欢迎使用 notifyme</string>
@@ -323,7 +319,6 @@
     <string name="model_cancel_toast">已取消下载，已下载部分保留可续传</string>
     <string name="model_no_space">存储空间不足：需要约 %1$s，当前可用 %2$s</string>
     <string name="model_engine_note">说明：端侧推理引擎（llama.cpp / LiteRT）已内置进 App，对应模型下载校验通过后即可端侧分析（S1 本地快筛、S2 深度分析、AI 评审本地模式）；云端服务（JEV / GLM）不受影响，可正常分析。</string>
-    <string name="analysis_preset_label">服务预设</string>
     <string name="analysis_baseurl_hint">分析服务地址，如 http://127.0.0.1:8124</string>
     <string name="analysis_user_hint">Basic 账号（公网入口用，可空）</string>
     <string name="analysis_pass_hint">Basic 密码（可空）</string>
@@ -342,32 +337,19 @@
     <string name="conv_schedule_interval">分析周期</string>
     <string name="conv_schedule_on">已开启定时分析</string>
     <string name="conv_schedule_off">已关闭定时分析</string>
-    <string name="conv_schedule_hint">开启后按周期自动分析本会话（窗口有变化时）；取消关注会话会自动停用。</string>
 
     <!-- M11 通知来源白名单 -->
     <string name="sources_whitelist_mode">只监控勾选的应用（白名单）</string>
     <string name="sources_add_apps">＋ 添加应用</string>
     <string name="sources_pick_title">选择要监控的应用</string>
-    <string name="sources_whitelist_hint">白名单模式：只入库勾选 App 的通知，未勾选的一律忽略。</string>
     <string name="btn_test_connection">测试连接</string>
     <string name="btn_analysis_now">立即分析一次</string>
     <string name="analysis_status_none">尚未分析</string>
     <string name="analysis_saved">分析配置已保存</string>
     <string name="analysis_testing">正在测试连接…</string>
     <string name="analysis_enqueued">已加入分析队列，稍后刷新查看状态</string>
-    <string name="analysis_preset_labels_hint">切换预设会回填该预设上次保存的值</string>
-    <string name="analysis_protocol_label">协议</string>
     <string name="analysis_apikey_hint">API 密钥（Bearer；Laya 直连 JEV 时用，可空）</string>
-    <string-array name="analysis_preset_labels">
-        <item>systemone（Laya 决策模型）</item>
-        <item>glm（OpenAI 兼容）</item>
-        <item>custom</item>
-    </string-array>
     <!-- 与 AnalysisConfig.PROTOCOL_VALUES 一一对应 -->
-    <string-array name="analysis_protocol_labels">
-        <item>laya（System One 决策模型）</item>
-        <item>openai（OpenAI 兼容对话）</item>
-    </string-array>
 
     <!-- 顾问复盘（Fable 层） -->
     <string name="advisor_section_title">🧭 顾问复盘</string>
@@ -409,7 +391,6 @@
   <string name="reminder_manual_prefill_analysis">已按分析结果预填，可直接改</string>
   <string name="reminder_manual_prefill_message">已按最近一条消息预填，可直接改</string>
     <string name="reminder_manual_created">已存入日历：%1$s</string>
-    <string name="reminder_manual_fallback">未写入日历（降级）：%1$s</string>
     <string name="reminder_manual_no_permission">未给日历权限，将走降级方式</string>
     <string name="reminder_conv_count">📅 本会话已设 %1$d 条提醒 · 点击管理</string>
     <string name="reminder_menu_action">建提醒</string>
@@ -444,11 +425,8 @@
     <string name="conv_tag_keep">继续分析</string>
     <string name="conv_tag_stop">不再自动分析</string>
     <string name="conv_tag_follow">跟随关注名单</string>
-    <string name="quick_tag">🏷 标签</string>
     <string name="conv_tag_dialog_title">会话标签</string>
     <string name="conv_tag_dialog_desc">待办、跟踪会继续进入后续定时分析；已办结、无关之后不再自动分析（点「🔍 分析」仍可手动跑一次）。未标记 = 按关注名单处理。</string>
-    <string name="conv_tag_changed">已标记为「%1$s」</string>
-    <string name="conv_tag_removed">已取消标签，恢复跟随关注名单</string>
     <string name="conv_tag_row">🏷 标签：%1$s · 点击修改</string>
     <string name="reminder_delete_confirm">删除这条提醒？已写入的日历事件会一并删除。</string>
     <string-array name="reminder_lead_labels">
@@ -526,7 +504,6 @@
     <string name="header_badge_analyzed">●</string>
 
     <!-- 会话详情页 -->
-    <string name="conversation_title">会话详情</string>
     <string name="analysis_panel_title">🧠 会话分析</string>
     <string name="analysis_none_hint">本会话尚未分析，点击下方按钮立即分析</string>
     <string name="btn_analyze_this">立即分析本会话</string>
@@ -576,7 +553,6 @@
     <string name="todo_gone">该待办已不在记录中</string>
     <string name="todo_meta_format">%1$s · %2$s</string>
     <string name="todo_due_prefix">截止 %1$s</string>
-    <string name="todo_calendar_perm">已申请日历权限：允许后再点一次「日历」即可直接写入系统日历</string>
     <string name="todo_calendar_lead">%1$s，默认提前 %2$d 分钟提醒</string>
     <string name="analysis_source_prefix">原文：</string>
     <string name="analysis_times_suffix">等%1$d次分析</string>
@@ -592,7 +568,6 @@
     <string name="analysis_progress_elapsed">%1$s · 已用 %2$s</string>
     <string name="analysis_progress_prefill">%1$s %2$d/%3$d token · 已用 %4$s</string>
     <string name="analysis_progress_decode">%1$s %2$d%% · 已生成 %3$d token · 已用 %4$s</string>
-    <string name="analysis_progress_queued">已加入分析队列…</string>
     <string name="analysis_stage_questions">端侧判定</string>
     <string name="analysis_progress_questions">%1$s %2$d/%3$d 题 · 已用 %4$s</string>
     <!-- M21 后台分析进度常驻通知 -->
@@ -601,4 +576,10 @@
     <string name="analysis_notif_title">正在分析消息</string>
     <string name="analysis_notif_title_round">正在分析会话（%1$d/%2$d）</string>
     <string name="analysis_notif_title_conv">正在分析：%1$s</string>
+    <string name="ui_arrow_back">←</string>
+    <string name="onboarding_icon_wave">👋</string>
+    <string name="onboarding_icon_link">🔗</string>
+    <string name="onboarding_icon_party">🎉</string>
+    <string name="conv_tag_icon">🏷</string>
+    <string name="conv_reminder_icon">📅</string>
 </resources>

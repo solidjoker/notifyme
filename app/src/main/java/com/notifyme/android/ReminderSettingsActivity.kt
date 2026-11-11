@@ -6,7 +6,6 @@ package com.notifyme.android
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.AdapterView
@@ -87,15 +86,14 @@ class ReminderSettingsActivity : Activity() {
     }
 
     private fun requestCalendarPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            requestPermissions(
-                arrayOf(
-                    android.Manifest.permission.READ_CALENDAR,
-                    android.Manifest.permission.WRITE_CALENDAR
-                ),
-                REQ_CALENDAR
-            )
-        }
+        // minSdk 26（> M），日历权限可直接申请
+        requestPermissions(
+            arrayOf(
+                android.Manifest.permission.READ_CALENDAR,
+                android.Manifest.permission.WRITE_CALENDAR
+            ),
+            REQ_CALENDAR
+        )
     }
 
     override fun onRequestPermissionsResult(

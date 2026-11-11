@@ -384,9 +384,8 @@ class OverlayService : Service() {
 
 
     private fun baseOverlayParams(width: Int, height: Int): WindowManager.LayoutParams {
-        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+        // minSdk 26（= O），TYPE_APPLICATION_OVERLAY 恒可用
+        val type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         return WindowManager.LayoutParams(
             width, height, type,
             // 不抢输入焦点；按钮仍可点击

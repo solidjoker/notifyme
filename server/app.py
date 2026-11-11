@@ -22,29 +22,101 @@
         pkg          str    可选，来源 App 包名；缺省按微信处理
 
 启动：
-    python app.py            # 默认监听 0.0.0.0:8000
+    python app.py            # 默认监听 127.0.0.1:8000
     set PORT=9000 && python app.py    # 自定义端口（Windows cmd）
+    未设 WEIXIN_TOKEN 时：只听本机 + 所有数据接口返回 503（拒绝无鉴权运行）
 
 安全提示：
     公网部署时务必设置环境变量 WEIXIN_TOKEN 开启鉴权，
     并放在 caddy / nginx 等反向代理后面启用 HTTPS，不要裸奔！
+    确实要在无令牌下本机自测时，显式设置 WEIXIN_ALLOW_NO_AUTH=1。
 """
 
 import hmac
+import importlib.util
 import json
+import logging
 import os
+import re
 import sqlite3
+import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from flask import Flask, request, jsonify, Response, send_from_directory
+
+logger = logging.getLogger("notifyme.server")
+if not logger.handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(levelname)s %(name)s %(message)s")
 
 app = Flask(__name__)
 
 # 单次请求体上限：上报接口只收 JSON 数组，8 MiB 足够几十万条消息，
 # 但没有上限时一个超大 body 就能把进程内存打满。
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
+
+# WSGI 部署（waitress / gunicorn / uwsgi）不会走 __main__，
+# 原来 init_db() 只写在 __main__ 里 → WSGI 启动后数据库根本没建，
+# 第一个请求直接 500 "unable to open database file"。
+# 改成：第一次请求前惰性初始化（幂等），任何启动方式都覆盖到。
+_db_ready = False
+_db_lock = threading.Lock()
+
+
+@app.before_request
+def _ensure_db_ready():
+    """首次请求前建表建索引；已初始化则直接放行（开销可忽略）。"""
+    global _db_ready
+    if _db_ready:
+        return None
+    with _db_lock:
+        if not _db_ready:
+            init_db()
+            _db_ready = True
+    return None
+
+
+@app.after_request
+def _security_headers(resp):
+    # token 允许走 query（浏览器场景），Referer 带出去等于把 token 泄给第三方
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    # 控制台 / 落地页被 iframe 套一层就能做点击劫持（点一下就是替攻击者
+    # 的页面发消息）。本服务没有任何需要被嵌套的页面，一律 DENY。
+    # 注意：不要加 CSP —— 控制台是内联 JS，上了 CSP 页面直接白屏。
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    return resp
+
+
+# ------------------------------------------------------------------
+# 统一错误响应
+# ------------------------------------------------------------------
+# Flask 默认的 404 / 413 / 500 返回的是 HTML 文本，Android 端和控制台 JS
+# 都按 JSON 解析 -> 直接抛解析异常，看起来像服务端挂了。
+# 这里统一成 {"ok": false, "error": "..."}，并且不回传异常栈
+# （栈里可能带本地路径、查询串、令牌片段）。
+
+@app.errorhandler(404)
+def _handle_not_found(err):
+    """未知路径：JSON 404（不返回 Flask 默认的 HTML 页面）。"""
+    return jsonify({"ok": False, "error": "not found"}), 404
+
+
+@app.errorhandler(413)
+def _handle_too_large(err):
+    """请求体超过 MAX_CONTENT_LENGTH：JSON 413。"""
+    return jsonify({"ok": False, "error": "request body too large"}), 413
+
+
+@app.errorhandler(500)
+def _handle_internal_error(err):
+    """未捕获异常：JSON 500 + 服务端日志，绝不把异常栈回给客户端。"""
+    logger.error("internal server error: %s", err,
+                 exc_info=getattr(err, "original_exception", None))
+    return jsonify({"ok": False, "error": "internal server error"}), 500
 
 # ------------------------------------------------------------------
 # 配置
@@ -58,6 +130,11 @@ TOKEN = os.environ.get("WEIXIN_TOKEN", "").strip()
 # 默认禁止：无鉴权 + 全网监听等于把全部消息（含明文正文）对局域网/公网开放。
 # 确实要在家用局域网裸跑时显式设 WEIXIN_ALLOW_INSECURE_BIND=1 承担风险。
 ALLOW_INSECURE_BIND = os.environ.get("WEIXIN_ALLOW_INSECURE_BIND", "").strip() == "1"
+
+# 未设置令牌时是否允许「完全无鉴权」运行。
+# 默认拒绝：空令牌 = 任何能访问到本服务的人都能读全部消息正文（明文）。
+# 只有显式设 WEIXIN_ALLOW_NO_AUTH=1 才放行（仅限本机自用）。
+ALLOW_NO_AUTH = os.environ.get("WEIXIN_ALLOW_NO_AUTH", "").strip() == "1"
 
 # 监听端口：从环境变量 PORT 读取，默认 8000
 PORT = int(os.environ.get("PORT", "8000"))
@@ -94,8 +171,11 @@ def _connect():
     （threaded=True），控制台查询与 App 上报一并发就会出现
     "database is locked"。WAL 让读不阻塞写，busy_timeout 让偶发争用重试而不是直接报错。
     """
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    conn.execute("PRAGMA busy_timeout = 5000")
+    # timeout 与 busy_timeout 保持一致：sqlite3.connect 的 timeout 只是
+    # 首次取锁的默认等待，真正的等待由 busy_timeout 决定，两者不一致会让
+    # 等待行为难以推断（评审 P3）。15s 覆盖提取脚本分批提交时的持锁窗口。
+    conn = sqlite3.connect(DB_PATH, timeout=15)
+    conn.execute("PRAGMA busy_timeout = 15000")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
     return conn
@@ -109,10 +189,41 @@ REQUIRED_FIELDS = {
     "is_group": bool,
 }
 
+# ---- 字段长度与数值边界（防毒丸：一条越界数据能让整页 500 或撑爆内存）----
+MAX_TEXT_LEN = 65536           # 正文最长 64 KiB
+MAX_NAME_LEN = 512             # 发送者 / 会话名最长
+MAX_TS_MS = 4102444800000      # 时间戳上界：2100-01-01（毫秒）
+MIN_TS_MS = 0                  # 时间戳下界
+MAX_MESSAGE_COUNT = 1000000    # 分析窗口内消息数上界
+MAX_ROWID = 9223372036854775807  # SQLite int64 上界（rowid 未知时的游标兜底）
+JSONL_MAX_BYTES = 64 * 1024 * 1024   # jsonl 存档超过这个大小就轮转一份
+
 
 # ------------------------------------------------------------------
 # 数据库初始化
 # ------------------------------------------------------------------
+
+def _ensure_index(conn, name, ddl):
+    """按需建索引：已存在且定义一致就不动它。
+
+    原来每次启动都 DROP + CREATE 唯一索引（含全文 text），
+    几万行以上的库重建一次要几十秒，而且建索引全程持写锁
+    → 上报请求被 database is locked 挡住 5 秒后 500。
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
+        (name,)).fetchone()
+    if row and row[0]:
+        want = " ".join(ddl.replace(
+            "CREATE UNIQUE INDEX IF NOT EXISTS",
+            "CREATE UNIQUE INDEX").split()).lower()
+        have = " ".join(row[0].split()).lower()
+        if want == have:
+            return
+        # 定义变了才重建（索引名是本文件里的常量，不来自请求）
+        conn.execute("DROP INDEX IF EXISTS " + name)
+    conn.execute(ddl)
+
 
 def init_db():
     """初始化数据目录和 SQLite 表结构（含去重用的唯一索引）。"""
@@ -137,7 +248,8 @@ def init_db():
         #   android-notification = 通知监听上报（默认，历史数据）
         #   android-db           = 安卓数据库直读合并（android_db_extract.py）
         # 说明：跨来源去重不依赖此索引（毫秒时间戳不一致），
-        # 由 android_db_extract 按秒级归一键在 Python 侧完成；
+        # 由 android_db_extract 在 SQLite 侧按 (pkg, conversation, sender,
+        # 毫秒 timestamp, text) 归一键查询完成（不再在 Python 侧全表建集合）；
         # 此索引继续负责通知来源的重试去重和毫秒级完全相同时的兜底。
         cols = [r[1] for r in conn.execute("PRAGMA table_info(messages)")]
         if "source" not in cols:
@@ -152,13 +264,10 @@ def init_db():
         # 去重唯一索引（M2 版）：列补齐后再（重）建，去重维度含 pkg——
         # 不同 App 的同名会话里同发送者同毫秒同内容不再被误判为重复。
         # 老库的旧索引不含 pkg，先丢弃再建新索引（索引定义无法直接改）。
-        conn.execute("DROP INDEX IF EXISTS idx_messages_dedup")
-        conn.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_dedup
-            ON messages (pkg, conversation, sender, timestamp, text)
-            """
-        )
+        _ensure_index(
+            conn, "idx_messages_dedup",
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_dedup
+            ON messages (pkg, conversation, sender, timestamp, text)""")
         # 分析结果表：App 侧会话级分析（S1 轻量模型 + S2 深度分析）的上报存档
         # case_id 唯一：同一次分析重复上报直接跳过
         # s1 / s2 存 JSON 原文；need_action / importance 单独抽列方便过滤
@@ -197,6 +306,19 @@ def init_db():
             conn.execute(
                 "ALTER TABLE analyses ADD COLUMN pkg TEXT "
                 f"NOT NULL DEFAULT '{DEFAULT_PKG}'")
+        # 迁移：补齐客户端已经在上报、但服务端表里没有的列。
+        # 客户端 AnalysisStore 会带脱敏证据（redacted / redaction_rules /
+        # redaction_hits）与手动改写（todo_text / todo_due）；
+        # 老表没有这些列 → INSERT 直接报 no such column，
+        # 整批分析上报被拒（客户端当成失败重试，永远上不来）。
+        for _col, _ddl in (("redacted", "INTEGER"),
+                           ("redaction_rules", "TEXT"),
+                           ("redaction_hits", "TEXT"),
+                           ("todo_text", "TEXT"),
+                           ("todo_due", "TEXT")):
+            if _col not in acols:
+                conn.execute(
+                    "ALTER TABLE analyses ADD COLUMN " + _col + " " + _ddl)
         # 查询索引：/messages 与控制台都按时间倒序翻页并按会话/来源过滤，
         # 没有索引时每次查询都是全表扫描 + 排序（历史越大越慢）。
         conn.execute(
@@ -207,6 +329,14 @@ def init_db():
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_analyses_window_end "
             "ON analyses (window_end)")
+        # 控制台按接收时间倒序取分析结果，没有索引就是全表扫 + 临时排序
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_analyses_received_at "
+            "ON analyses (received_at)")
+        # 按会话过滤分析结果：conversation 前缀走范围比较才能用上这个索引
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_analyses_conv_ts "
+            "ON analyses (conversation, received_at)")
         conn.commit()
     finally:
         conn.close()
@@ -215,6 +345,56 @@ def init_db():
 # ------------------------------------------------------------------
 # 鉴权
 # ------------------------------------------------------------------
+
+# ------------------------------------------------------------------
+# 鉴权失败限流（E11）
+# ------------------------------------------------------------------
+# 原来 401 没有任何速率限制：拿不到令牌的一方可以无限次试探，
+# 顺带把服务端的日志和 CPU 刷满。这里加一个轻量的内存滑动窗口：
+# 同一客户端 IP 在 60 秒内失败超过 10 次就回 429 + Retry-After。
+# 纯内存 + threading.Lock，不引入任何外部依赖；进程重启即清零。
+
+AUTH_FAIL_LIMIT = 10          # 窗口内允许的鉴权失败次数（超过即 429）
+AUTH_FAIL_WINDOW = 60.0       # 滑动窗口长度（秒）
+_auth_fail_lock = threading.Lock()
+_auth_fail_events = {}        # 客户端 IP -> 失败时间戳列表
+
+
+def _client_ip():
+    """取客户端 IP：反代后面取 X-Forwarded-For 第一跳，否则用 remote_addr。"""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    return request.remote_addr or "-"
+
+
+def _auth_fail_record(ip):
+    """记一次鉴权失败，返回 (是否超限, Retry-After 秒数)。线程安全。"""
+    now = time.time()
+    with _auth_fail_lock:
+        hits = [t for t in _auth_fail_events.get(ip, ()) if now - t < AUTH_FAIL_WINDOW]
+        hits.append(now)
+        _auth_fail_events[ip] = hits
+        # 顺手清掉没有近期记录的 IP，避免字典无限增长
+        if len(_auth_fail_events) > 256:
+            stale = [k for k, v in _auth_fail_events.items()
+                     if not any(now - t < AUTH_FAIL_WINDOW for t in v)]
+            for k in stale:
+                _auth_fail_events.pop(k, None)
+        if len(hits) > AUTH_FAIL_LIMIT:
+            oldest = hits[0]
+            retry = int(AUTH_FAIL_WINDOW - (now - oldest)) + 1
+            return True, max(1, retry)
+    return False, 0
+
+
+def _auth_fail_reset(ip):
+    """鉴权通过：清掉该 IP 的失败计数。"""
+    with _auth_fail_lock:
+        _auth_fail_events.pop(ip, None)
+
 
 def check_token():
     """校验令牌。返回 None 表示通过，否则返回 401 响应。
@@ -226,11 +406,35 @@ def check_token():
          fetch 自动改用 X-Token 头）
     """
     if not TOKEN:
-        return None  # 未配置 token，不鉴权（危险：公网部署必须设置 WEIXIN_TOKEN）
+        if ALLOW_NO_AUTH:
+            return None
+        # 空令牌 = 谁访问到都能读全部消息正文。原来的实现直接 return None，
+        # 在 WSGI 部署（绑定地址不受 app.py 控制）下等于把库裸奔到网上。
+        return jsonify({
+            "ok": False,
+            "error": ("server token not configured: set WEIXIN_TOKEN "
+                      "(or WEIXIN_ALLOW_NO_AUTH=1 for local-only usage)"),
+        }), 503
+    ip = _client_ip()
     if _token_match(request.headers.get("X-Token", "")):
+        _auth_fail_reset(ip)
         return None
     if _token_match(request.args.get("token", "")):
+        # query 传令牌会进反向代理访问日志 / 浏览器历史 / Referer，
+        # 只为兼容 iPhone Safari 这类不能带自定义头的浏览器保留，打 deprecation 日志。
+        logger.warning("deprecated: token via query string (%s %s)",
+                       request.method, request.path)
+        _auth_fail_reset(ip)
         return None
+    limited, retry_after = _auth_fail_record(ip)
+    if limited:
+        logger.warning("too many failed auth attempts: %s %s from %s",
+                       request.method, request.path, ip)
+        return (jsonify({"ok": False,
+                         "error": "too many failed auth attempts"}),
+                429, {"Retry-After": str(retry_after)})
+    logger.warning("unauthorized: %s %s from %s",
+                   request.method, request.path, ip)
     return jsonify({"ok": False, "error": "unauthorized"}), 401
 
 
@@ -288,13 +492,13 @@ def receive_weixin():
     duplicated = 0  # 重复跳过条数
     invalid = 0     # 校验失败条数
     rejected = []   # 校验失败的原始下标，供客户端精确剔除/重试
+    archive_error = ""   # jsonl 存档写入失败的原因（库已提交，不回滚）
 
     now_ms = int(time.time() * 1000)  # 服务端接收时间（毫秒）
 
     with _write_lock:
         conn = _connect()
-        # 存档文件只开一次并复用：原来在循环里逐条 open/close，批量上报开销明显
-        archive = open(JSONL_PATH, "a", encoding="utf-8")
+        accepted = []   # 真正入库成功的原始条目（按入库顺序）
         try:
             for idx, item in enumerate(payload):
                 # 每条必须是对象且字段齐全、类型正确
@@ -303,10 +507,7 @@ def receive_weixin():
                     rejected.append(idx)
                     continue
 
-                # 1) 追加写入 jsonl 原文存档（与安卓端格式一致的原始字段）
-                archive.write(json.dumps(item, ensure_ascii=False) + "\n")
-
-                # 2) 写入 SQLite；唯一索引冲突说明是重复消息
+                # 写入 SQLite；唯一索引冲突说明是重复消息
                 # source 尊重客户端标记（a11y-extract / pc-db 等），
                 # 缺省才是 android-notification
                 source = item.get("source")
@@ -316,6 +517,9 @@ def receive_weixin():
                 pkg = item.get("pkg")
                 if not isinstance(pkg, str) or not pkg.strip():
                     pkg = DEFAULT_PKG
+                # 每条一个 SAVEPOINT：坏条目只回滚自己，不污染同批好条目，
+                # 也不会把整批拖成 500（客户端遇到 500 会永久重试毒丸，堵死队列）。
+                conn.execute("SAVEPOINT item_sp")
                 try:
                     conn.execute(
                         """
@@ -336,14 +540,61 @@ def receive_weixin():
                         ),
                     )
                     received += 1
+                    accepted.append(item)
+                    conn.execute("RELEASE item_sp")
                 except sqlite3.IntegrityError:
                     # 命中唯一索引：手机端重试造成的重复上报
+                    conn.execute("ROLLBACK TO item_sp")
+                    conn.execute("RELEASE item_sp")
                     duplicated += 1
-            archive.flush()
+                except sqlite3.OperationalError as e:
+                    conn.execute("ROLLBACK TO item_sp")
+                    conn.execute("RELEASE item_sp")
+                    if "locked" in str(e).lower() or "busy" in str(e).lower():
+                        # 主库被别的写入方占用（多半是提取脚本正在批量提交）：
+                        # 瞬时可重试故障，回 503 让客户端带退避重试，
+                        # 别把它伪装成「条目非法」丢进 rejected。
+                        conn.rollback()
+                        logger.warning("主库被占用，/weixin 返回 503: %s", e)
+                        resp = jsonify({
+                            "ok": False,
+                            "received": 0,
+                            "duplicated": 0,
+                            "invalid": 0,
+                            "error": "main database is busy, retry later",
+                        })
+                        resp.status_code = 503
+                        resp.headers["Retry-After"] = "5"
+                        return resp
+                    invalid += 1
+                    rejected.append(idx)
+                    logger.warning("第 %d 条入库失败（已隔离该条）: %s", idx, e)
+                except Exception as e:
+                    # 脏数据（超长、类型怪、SQLite 拒绝）隔离成 invalid，
+                    # 其余条目照常入库并回 207。
+                    conn.execute("ROLLBACK TO item_sp")
+                    conn.execute("RELEASE item_sp")
+                    invalid += 1
+                    rejected.append(idx)
+                    logger.warning("第 %d 条入库失败（已隔离该条）: %s", idx, e)
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
-            archive.close()
             conn.close()
+
+        # jsonl 原文存档必须在**库提交之后**写：
+        # 原来是「先写存档 → 整批最后一次 commit」，一旦中途抛异常，
+        # 存档里留下的是库里没有的条目；重复上报也被写进存档，
+        # 于是存档条数永久多于库内条数（实测 jsonl 2 行 / 库 1 行）。
+        if accepted:
+            try:
+                _append_jsonl(accepted)
+            except OSError as e:
+                # 库已提交：这里只丢存档副本，不丢数据，如实回报错误
+                logger.error("写入 jsonl 存档失败: %s", e)
+                archive_error = str(e)
 
     # 有校验失败就回 207：客户端据此只剔除被接受/重复的条目。
     # 原来无论 invalid 多少都恒返回 200，客户端会把被拒的消息也当成功删掉（永久丢失）。
@@ -355,12 +606,14 @@ def receive_weixin():
             "invalid": invalid,
             "rejected": rejected,
             "error": "some items were rejected",
+            "archive_error": archive_error,
         }), 207
     return jsonify({
         "ok": True,
         "received": received,
         "duplicated": duplicated,
         "invalid": 0,
+        "archive_error": archive_error,
     })
 
 
@@ -390,25 +643,249 @@ def _importance_label(value):
     return "low"
 
 
+def _safe_int(value, default=0, lo=None, hi=None):
+    """把任意上报值安全转成 int：非法或越界一律回落到 default。
+
+    原来 int(item["timestamp"]) / int(item.get("window_end")) 直接抛
+    ValueError / OverflowError → 整个批次 500，而且异常发生在写了一半的
+    时候（jsonl 已经写进去、库里没有）。
+    """
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        n = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if lo is not None and n < lo:
+        return default
+    if hi is not None and n > hi:
+        return default
+    return n
+
+
+def _clamp_int(value, lo=0, hi=None, default=0):
+    """把任意上报值收敛到 [lo, hi] 区间内的 int。
+
+    与 _safe_int 的区别：_safe_int 越界时回落到 default（值直接变 0），
+    这里改成夹紧到边界 —— 例如 case_count 报了 99999999，存 1000000
+    比存 0 更贴近事实（控制台显示的数字仍然有意义）。
+    """
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        n = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if n < lo:
+        return lo
+    if hi is not None and n > hi:
+        return hi
+    return n
+
+
+def _safe_bool(value, default=False):
+    """把任意来源的布尔值归一成 True/False。
+
+    客户端把 false 上报成字符串 "false" / "0" / "" 时，Python 的真值判断
+    会把它们全当成 True（非空字符串都是真值）-> 分析结果里 escalated /
+    filtered / redacted 被批量写成 1。
+    这里统一口径：布尔直接用；字符串按 true/1/yes/on 判真；数字按 != 0 判真；
+    认不出来的值一律按 default（默认 False）处理。
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ("true", "1", "yes", "on", "y", "t"):
+            return True
+        if text in ("false", "0", "no", "off", "n", "f", ""):
+            return False
+        return default
+    return default
+
+
+def _parse_tz_offset(raw_tz, raw_offset):
+    """解析时区参数，返回分钟偏移（东八区 = +480）或 None（未指定）。
+
+    支持 tz=+08:00 / tz=+0800 / tz=+8，以及 tz_offset=480（分钟偏移）。
+    非法值返回 ("error", 说明)，调用方据此回 400。
+
+    兼容 URL 里未编码的 '+'：查询串 "?tz=+08:00" 里的 '+' 会被解码成空格
+    （服务端收到的是 " 08:00"）。这是手写 curl / 浏览器地址栏最常见的写法，
+    按 '+' 处理，免得用户白挨一个 400。
+    """
+    raw = raw_tz or ""
+    tz = raw.strip()
+    if tz and raw[:1] == " " and tz[0] not in "+-":
+        tz = "+" + tz
+    off = (raw_offset or "").strip()
+    if tz and off:
+        return ("error", "use either tz or tz_offset, not both")
+    if off:
+        try:
+            minutes = int(off)
+        except ValueError:
+            return ("error", "tz_offset must be an integer number of minutes")
+        if not (-14 * 60 <= minutes <= 14 * 60):
+            return ("error", "tz_offset out of range")
+        return minutes
+    if not tz:
+        return None
+    matched = re.match(r"^([+-])(\d{1,2})(?::?(\d{2}))?$", tz)
+    if not matched:
+        return ("error", "tz must look like +08:00")
+    sign = -1 if matched.group(1) == "-" else 1
+    hours = int(matched.group(2))
+    minutes = int(matched.group(3) or 0)
+    if hours > 14 or minutes > 59:
+        return ("error", "tz out of range")
+    return sign * (hours * 60 + minutes)
+
+
+def _fmt_tz_offset(minutes):
+    """分钟偏移 -> "+08:00" 形式的字符串；None 原样返回。"""
+    if minutes is None:
+        return None
+    sign = "-" if minutes < 0 else "+"
+    minutes = abs(int(minutes))
+    return "%s%02d:%02d" % (sign, minutes // 60, minutes % 60)
+
+
+def _day_bounds_ms(date_str, tz_offset_min):
+    """把 YYYY-MM-DD 换算成当天 [00:00, 次日00:00) 的毫秒区间。
+
+    tz_offset_min 为 None 时用服务器本地时区（向后兼容的老行为）；
+    否则按该固定偏移时区算（固定偏移没有夏令时，加 24h 精确）。
+    """
+    day = datetime.strptime(date_str, "%Y-%m-%d")
+    if tz_offset_min is None:
+        day_start = int(day.timestamp() * 1000)
+    else:
+        day_start = int(day.replace(tzinfo=timezone.utc).timestamp() * 1000) \
+            - tz_offset_min * 60000
+    return day_start, day_start + 24 * 3600 * 1000
+
+
+def _fmt_ts(ms):
+    """毫秒时间戳 → 本地时间字符串；越界/非法返回「时间未知」。
+
+    datetime.fromtimestamp 对越界值抛 OSError / OverflowError，
+    落地页里一条坏数据就能把整页打挂（实测 10**18 → 500）。
+    """
+    n = _safe_int(ms, default=None, lo=MIN_TS_MS, hi=MAX_TS_MS)
+    if n is None:
+        return "时间未知"
+    try:
+        return datetime.fromtimestamp(n / 1000.0).strftime("%Y-%m-%d %H:%M:%S")
+    except (OSError, OverflowError, ValueError):
+        return "时间未知"
+
+
+def _safe_json(raw):
+    """解析库里存的 JSON 列；坏数据返回 None，而不是让整个查询 500。"""
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        logger.warning("analyses 表存在损坏的 JSON 列，已跳过解析")
+        return None
+
+
+def _like_escape(s):
+    """转义 LIKE 查询里的通配符（% 与 _）。
+
+    不转义时，会话名里带 _（单字符通配）会匹配到别人的会话，
+    带 % 则等于全表匹配。
+    """
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _prefix_upper(prefix):
+    """前缀匹配的字典序上界：conversation >= p AND conversation < u。
+
+    SQLite 对 TEXT 用 BINARY（UTF-8 字节序）比较，而 UTF-8 字节序与
+    Unicode 码点序一致，所以 p + U+10FFFF 就是「以 p 开头」的宽上界：
+        "项目组" <= c < "项目组\U0010FFFF"
+    用范围比较而不是 LIKE '%x%'，是因为前导通配符会让
+    idx_messages_conv_ts / idx_analyses_conv_ts 失效 → 每次查询全表扫。
+
+    这里刻意用宽上界，而不是「最后一个码点 +1」的紧上界：紧上界会把
+    「前缀 + 下一个码点」开头的会话一起排除（查 "项目组" 时漏掉 "项目组细"），
+    属于误杀。
+    """
+    if not prefix:
+        return None
+    return prefix + "\U0010FFFF"
+
+
+def _esc_html(s):
+    """HTML 转义（落地页用；控制台内联 JS 自带 esc）。
+
+    None / 空值一律渲染成空串：messages.conversation / sender 这类列
+    允许为 NULL，原来 str(None) 会把字面量 None 显示给用户，
+    None.replace() 还会直接抛 AttributeError 让整页 500。
+    """
+    if s is None:
+        return ""
+    text = str(s)
+    if not text:
+        return ""
+    return (text.replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;")
+            .replace("'", "&#39;"))
+
+
+def _append_jsonl(items):
+    """把入库成功的原始条目追加到 jsonl 存档。
+
+    - 先建目录（数据目录可能被清过）
+    - 超过阈值就轮转一份（messages.jsonl.1），避免单文件无限膨胀
+    """
+    os.makedirs(DATA_DIR, exist_ok=True)
+    try:
+        if (os.path.exists(JSONL_PATH)
+                and os.path.getsize(JSONL_PATH) > JSONL_MAX_BYTES):
+            os.replace(JSONL_PATH, JSONL_PATH + ".1")
+    except OSError:
+        pass
+    with open(JSONL_PATH, "a", encoding="utf-8") as f:
+        for item in items:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        f.flush()
+
+
 def _analyzed_at_text(value):
     """analyzed_at 列是 TEXT，但 App 上报的是毫秒整数。
 
     原实现只接受 str，数值上报会永远写成 NULL（控制台"分析于"始终为空）。
     数值统一转成本地时间字符串，字符串原样保留。
+    越界的数值（如 10**18）原来会让 fromtimestamp 抛 OSError → 整批 500，
+    现在越界值按「无法解释的时间」处理（返回 None），不拖垮整批。
     """
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        ms = int(value)
+        ms = _safe_int(value, default=None, lo=MIN_TS_MS, hi=MAX_TS_MS)
+        if ms is None:
+            return None
         if ms > 100_000_000_000:  # >10^11 视为毫秒（10^11 ≈ 1973 年）
-            return datetime.fromtimestamp(ms / 1000.0).strftime("%Y-%m-%d %H:%M:%S")
+            return _fmt_ts(ms)
         return str(ms)
     text = str(value).strip()
     return text or None
 
 
 def _validate_item(item):
-    """校验单条消息的必备字段及类型。"""
+    """校验单条消息的必备字段、类型、长度与数值边界。
+
+    越界数据必须在这里被挡下来：正文 1 MB 会把内存撑爆，
+    timestamp 越界会让查询与落地页整页 500。
+    """
     for field, expected_type in REQUIRED_FIELDS.items():
         if field not in item:
             return False
@@ -420,8 +897,19 @@ def _validate_item(item):
         elif field == "timestamp":
             if isinstance(value, bool) or not isinstance(value, expected_type):
                 return False
+            # 时间戳必须落在 [1970, 2100) 毫秒区间内
+            if _safe_int(value, default=None,
+                         lo=MIN_TS_MS, hi=MAX_TS_MS) is None:
+                return False
         elif not isinstance(value, expected_type):
             return False
+    # 长度上限：正文 64 KiB，发送者 / 会话名 512
+    if len(item["text"]) > MAX_TEXT_LEN:
+        return False
+    if len(item["sender"]) > MAX_NAME_LEN:
+        return False
+    if len(item["conversation"]) > MAX_NAME_LEN:
+        return False
     return True
 
 
@@ -437,6 +925,9 @@ def query_messages():
         pkg           来源 App 包名（精确匹配）；缺省不按 App 过滤
         conversation  会话名（模糊匹配）
         date          YYYY-MM-DD，按消息 timestamp 过滤当天
+        tz            可选时区（+08:00 / +0800 / +8）：显式给出时按该时区
+                      算当天起止；不给则用服务器本地时区（老行为）
+        tz_offset     可选时区（分钟偏移，480 = 东八区），与 tz 二选一
         limit         返回条数，默认 100，上限 1000
         before        游标分页：上一页返回的 next_before 原样回传
                       （形如 <毫秒>_<rowid>，也可只给毫秒）
@@ -451,6 +942,15 @@ def query_messages():
     conversation = request.args.get("conversation", "").strip()
     date_str = request.args.get("date", "").strip()
     before_str = request.args.get("before", "").strip()
+    # 时区（B5）：显式给出时按该时区算当天起止；不给就用服务器本地时区
+    # （保持老行为，Android 端不用改）。
+    # 注意：tz 不能提前 strip —— query 里未编码的 '+' 会被解码成空格，
+    # _parse_tz_offset 需要看到原始的 " 08:00" 才能还原成 "+08:00"。
+    tz_parsed = _parse_tz_offset(request.args.get("tz", ""),
+                                 request.args.get("tz_offset", "").strip())
+    if isinstance(tz_parsed, tuple):
+        return jsonify({"ok": False, "error": tz_parsed[1]}), 400
+    tz_offset_min = tz_parsed
     try:
         limit = min(int(request.args.get("limit", "100")), 1000)
         if limit <= 0:
@@ -468,20 +968,28 @@ def query_messages():
         conditions.append("pkg = ?")
         params.append(pkg)
 
-    # 会话名模糊过滤
+    # 会话名过滤：默认前缀匹配（范围比较，能用上 idx_messages_conv_ts）；
+    # conversation_match=contains 退回旧的「包含」模糊匹配（老口径兼容）。
+    # 前缀匹配避免 LIKE '%x%' 的前导通配符 → 索引失效 → 全表扫描。
     if conversation:
-        conditions.append("conversation LIKE ?")
-        params.append(f"%{conversation}%")
+        if (request.args.get("conversation_match", "") or "").strip().lower() \
+                == "contains":
+            # 转义 LIKE 通配符：会话名里带 _（单字符通配）会匹配到别人的会话，
+            # 带 % 则等于全表匹配。
+            conditions.append("conversation LIKE ? ESCAPE '\\'")
+            params.append(f"%{_like_escape(conversation)}%")
+        else:
+            conditions.append("conversation >= ? AND conversation < ?")
+            params.extend([conversation, _prefix_upper(conversation)])
 
     # 按日期过滤（timestamp 落在当天 [00:00, 次日00:00) 区间）
     if date_str:
         try:
-            day_start = int(datetime.strptime(date_str, "%Y-%m-%d").timestamp() * 1000)
-            day_end = day_start + 24 * 3600 * 1000
-            conditions.append("timestamp >= ? AND timestamp < ?")
-            params.extend([day_start, day_end])
+            day_start, day_end = _day_bounds_ms(date_str, tz_offset_min)
         except ValueError:
             return jsonify({"ok": False, "error": "date must be YYYY-MM-DD"}), 400
+        conditions.append("timestamp >= ? AND timestamp < ?")
+        params.extend([day_start, day_end])
 
     # 游标分页：按 (timestamp, rowid) 往前翻，避免 LIMIT/OFFSET 深翻页全表扫描。
     # 只按 timestamp 比较会漏掉「同一毫秒但排序靠后」的多条消息，
@@ -496,19 +1004,33 @@ def query_messages():
                 "ok": False,
                 "error": "before must be <ms> or <ms>_<rowid>",
             }), 400
-        if before_rid is None:
-            conditions.append("timestamp < ?")
-            params.append(before_ms)
+        # 游标必须是合法毫秒时间戳：越界值（如 9*10**22）传给 sqlite
+        # 会抛 OverflowError → 整个查询 500
+        if not (MIN_TS_MS <= before_ms <= MAX_TS_MS):
+            return jsonify({
+                "ok": False,
+                "error": "before out of range",
+            }), 400
+        # 行值比较 (timestamp, rowid) < (?, ?)：
+        # 原来的 OR 谓词用不上索引（EXPLAIN 显示全表 SCAN），
+        # 行值比较能走索引。老客户端只发毫秒时用 int64 上界当 rowid，
+        # 顺带修掉「同一毫秒的多行被整批漏掉」的老问题。
+        rid = before_rid if before_rid is not None else MAX_ROWID
+        if sqlite3.sqlite_version_info >= (3, 15, 0):
+            conditions.append("(timestamp, rowid) < (?, ?)")
+            params.extend([before_ms, rid])
         else:
             conditions.append("(timestamp < ? OR (timestamp = ? AND rowid < ?))")
-            params.extend([before_ms, before_ms, before_rid])
+            params.extend([before_ms, before_ms, rid])
 
     if conditions:
         sql += " WHERE " + " AND ".join(conditions)
     # rowid 兜底：同一毫秒的多条消息在只按 timestamp 排序时顺序不稳定，
     # 会导致翻页丢条目或重复。
     sql += " ORDER BY timestamp DESC, rowid DESC LIMIT ?"
-    params.append(limit)
+    # 多取一条，用来判断「还有没有下一页」：
+    # 原来只看「满页」就发 next_before，前端会多请求一次必然为空的页
+    params.append(limit + 1)
 
     conn = _connect()
     try:
@@ -516,12 +1038,16 @@ def query_messages():
     finally:
         conn.close()
 
+    has_more = len(rows) > limit
+    rows = rows[:limit]
     messages = [
         {
-            "sender": r[0],
-            "text": r[1],
+            # conversation / sender / text 允许为 NULL：回 null 会让控制台
+            # 显示成字面量 null，这里统一成空串。
+            "sender": r[0] if r[0] is not None else "",
+            "text": r[1] if r[1] is not None else "",
             "timestamp": r[2],
-            "conversation": r[3],
+            "conversation": r[3] if r[3] is not None else "",
             "is_group": bool(r[4]),
             "received_at": r[5],
             "source": r[6],
@@ -530,13 +1056,18 @@ def query_messages():
         for r in rows
     ]
     next_before = None
-    if len(messages) == limit:
+    # 只有真的还有下一页时才给游标（原来满页就给 → 多一次空请求）
+    if has_more and rows:
         next_before = f"{rows[-1][2]}_{rows[-1][8]}"
     return jsonify({
         "ok": True,
         "count": len(messages),
         "messages": messages,
         "next_before": next_before,
+        # 实际用的时区：显式给了 tz / tz_offset 就回显偏移，
+        # 没给就是服务器本地时区（null）。
+        "tz": _fmt_tz_offset(tz_offset_min),
+        "tz_offset_minutes": tz_offset_min,
     })
 
 
@@ -571,70 +1102,192 @@ def receive_analysis():
 
     received = duplicated = invalid = 0
     rejected = []   # 校验失败的原始下标，供客户端精确剔除/重试
+    # 被拒条目的 case_id（能取到时）：客户端优先按 id 匹配，避免依赖
+    # 「请求体顺序 == 分批顺序」这个隐式前提（下标口径保留，兼容老客户端）。
+    rejected_ids = []
     now_ms = int(time.time() * 1000)
 
     with _write_lock:
         conn = _connect()
         try:
             for idx, item in enumerate(payload):
-                # 最小校验：必须是对象且带非空 case_id / conversation
-                if (not isinstance(item, dict)
-                        or not isinstance(item.get("case_id"), str)
-                        or not item["case_id"].strip()
-                        or not isinstance(item.get("conversation"), str)
-                        or not item["conversation"].strip()):
+                # 每条独立处理：任何一条脏数据都不能把整批拖成 500
+                # （客户端遇到 500 会永久重试这条毒丸，整条上报队列堵死）。
+                # SAVEPOINT 让坏条目只回滚自己，同批好条目照常入库。
+                sp = "analysis_item_sp"
+                sp_open = False
+                try:
+                    # 最小校验：必须是对象且带非空 case_id / conversation
+                    if (not isinstance(item, dict)
+                            or not isinstance(item.get("case_id"), str)
+                            or not item["case_id"].strip()
+                            or not isinstance(item.get("conversation"), str)
+                            or not item["conversation"].strip()):
+                        invalid += 1
+                        rejected.append(idx)
+                        if isinstance(item, dict):
+                            _cid = item.get("case_id")
+                            if isinstance(_cid, str) and _cid.strip():
+                                rejected_ids.append(_cid.strip())
+                        continue
+                    # 字段长度上限（与 /weixin 的 _validate_item 同口径）：
+                    # 超长标识判 invalid，不进库，也不占存档
+                    if (len(item["case_id"]) > MAX_NAME_LEN
+                            or len(item["conversation"]) > MAX_NAME_LEN):
+                        invalid += 1
+                        rejected.append(idx)
+                        rejected_ids.append(item["case_id"].strip())
+                        continue
+                    s1 = item.get("s1") if isinstance(item.get("s1"), dict) else None
+                    s2 = item.get("s2") if isinstance(item.get("s2"), dict) else None
+                    # 从 s1 抽出过滤用的标记列
+                    need_action = 0
+                    importance = None
+                    if s1:
+                        na = s1.get("need_action")
+                        if isinstance(na, dict) and _safe_bool(na.get("value")):
+                            need_action = 1
+                        importance = _importance_label(s1.get("importance"))
+                    forks = item.get("forks") if isinstance(
+                        item.get("forks"), list) else None
+                    # pkg：与消息表口径一致，老上报缺省按微信回填
+                    apkg = item.get("pkg")
+                    if not isinstance(apkg, str) or not apkg.strip():
+                        apkg = DEFAULT_PKG
+                    # 数值字段必须落在合法区间：原来 int("abc") 直接抛 ValueError
+                    # → 整批 500，而且异常时前面的条目已经进库
+                    _we = item.get("window_end")
+                    window_end = 0 if _we is None else _safe_int(
+                        _we, default=None, lo=MIN_TS_MS, hi=MAX_TS_MS)
+                    _mc = item.get("message_count")
+                    message_count = 0 if _mc is None else _safe_int(
+                        _mc, default=None, lo=0, hi=MAX_MESSAGE_COUNT)
+                    if window_end is None or message_count is None:
+                        invalid += 1
+                        rejected.append(idx)
+                        rejected_ids.append(item["case_id"])
+                        continue
+                    todo_text = item.get("todo_text")
+                    if not isinstance(todo_text, str):
+                        todo_text = None
+                    elif len(todo_text) > MAX_TEXT_LEN:
+                        todo_text = todo_text[:MAX_TEXT_LEN]
+                    todo_due = item.get("todo_due")
+                    if not isinstance(todo_due, str):
+                        todo_due = None
+                    elif len(todo_due) > MAX_NAME_LEN:
+                        todo_due = todo_due[:MAX_NAME_LEN]
+                    # JSON 列先序列化再判长度：不给超长载荷留落库的口子
+                    s1_text = json.dumps(s1, ensure_ascii=False) if s1 else None
+                    s2_text = json.dumps(s2, ensure_ascii=False) if s2 else None
+                    forks_text = (json.dumps(forks, ensure_ascii=False)
+                                  if forks is not None else None)
+                    rules_val = item.get("redaction_rules")
+                    rules_text = (json.dumps(rules_val, ensure_ascii=False)
+                                  if rules_val is not None else None)
+                    hits_val = item.get("redaction_hits")
+                    hits_text = (json.dumps(hits_val, ensure_ascii=False)
+                                 if hits_val is not None else None)
+                    if any(len(t) > MAX_TEXT_LEN
+                           for t in (s1_text, s2_text, forks_text,
+                                     rules_text, hits_text) if t):
+                        invalid += 1
+                        rejected.append(idx)
+                        rejected_ids.append(item["case_id"])
+                        continue
+                    conn.execute("SAVEPOINT " + sp)
+                    sp_open = True
+                    inserted = False
+                    try:
+                        conn.execute(
+                            """
+                            INSERT INTO analyses
+                                (case_id, conversation, window_end, message_count,
+                                 need_action, importance, escalated, s1, s2,
+                                 analyzed_at, protocol, received_at, forks, filtered,
+                                 pkg, redacted, redaction_rules, redaction_hits,
+                                 todo_text, todo_due)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                    ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                item["case_id"],
+                                item["conversation"],
+                                window_end,
+                                message_count,
+                                need_action,
+                                importance,
+                                1 if _safe_bool(item.get("escalated")) else 0,
+                                s1_text,
+                                s2_text,
+                                _analyzed_at_text(item.get("analyzed_at")),
+                                item.get("protocol") if isinstance(
+                                    item.get("protocol"), str) else None,
+                                now_ms,
+                                forks_text,
+                                1 if _safe_bool(item.get("filtered")) else 0,
+                                apkg.strip(),
+                                1 if _safe_bool(item.get("redacted")) else 0,
+                                rules_text,
+                                hits_text,
+                                todo_text,
+                                todo_due,
+                            ),
+                        )
+                        received += 1
+                        inserted = True
+                    except sqlite3.IntegrityError:
+                        duplicated += 1  # case_id 已存在：重复上报
+                    finally:
+                        if inserted:
+                            conn.execute("RELEASE " + sp)
+                        else:
+                            conn.execute("ROLLBACK TO " + sp)
+                            conn.execute("RELEASE " + sp)
+                        sp_open = False
+                except sqlite3.OperationalError as e:
+                    if sp_open:
+                        try:
+                            conn.execute("ROLLBACK TO " + sp)
+                            conn.execute("RELEASE " + sp)
+                        except sqlite3.Error:
+                            pass
+                        sp_open = False
+                    if "locked" in str(e).lower() or "busy" in str(e).lower():
+                        # 主库被别的写入方占用：瞬时可重试故障，回 503，
+                        # 别把它伪装成「条目非法」丢进 rejected
+                        conn.rollback()
+                        logger.warning("主库被占用，/analysis 返回 503: %s", e)
+                        resp = jsonify({
+                            "ok": False,
+                            "received": 0,
+                            "duplicated": 0,
+                            "invalid": 0,
+                            "error": "main database is busy, retry later",
+                        })
+                        resp.status_code = 503
+                        resp.headers["Retry-After"] = "5"
+                        return resp
                     invalid += 1
                     rejected.append(idx)
-                    continue
-                s1 = item.get("s1") if isinstance(item.get("s1"), dict) else None
-                s2 = item.get("s2") if isinstance(item.get("s2"), dict) else None
-                # 从 s1 抽出过滤用的标记列
-                need_action = 0
-                importance = None
-                if s1:
-                    na = s1.get("need_action")
-                    if isinstance(na, dict) and na.get("value") is True:
-                        need_action = 1
-                    importance = _importance_label(s1.get("importance"))
-                forks = item.get("forks") if isinstance(
-                    item.get("forks"), list) else None
-                # pkg：与消息表口径一致，老上报缺省按微信回填
-                apkg = item.get("pkg")
-                if not isinstance(apkg, str) or not apkg.strip():
-                    apkg = DEFAULT_PKG
-                try:
-                    conn.execute(
-                        """
-                        INSERT INTO analyses
-                            (case_id, conversation, window_end, message_count,
-                             need_action, importance, escalated, s1, s2,
-                             analyzed_at, protocol, received_at, forks, filtered,
-                             pkg)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            item["case_id"],
-                            item["conversation"],
-                            int(item.get("window_end") or 0),
-                            int(item.get("message_count") or 0),
-                            need_action,
-                            importance,
-                            1 if item.get("escalated") else 0,
-                            json.dumps(s1, ensure_ascii=False) if s1 else None,
-                            json.dumps(s2, ensure_ascii=False) if s2 else None,
-                            _analyzed_at_text(item.get("analyzed_at")),
-                            item.get("protocol") if isinstance(
-                                item.get("protocol"), str) else None,
-                            now_ms,
-                            json.dumps(forks, ensure_ascii=False)
-                                if forks else None,
-                            1 if item.get("filtered") else 0,
-                            apkg.strip(),
-                        ),
-                    )
-                    received += 1
-                except sqlite3.IntegrityError:
-                    duplicated += 1  # case_id 已存在：重复上报
+                    if isinstance(item, dict) and isinstance(
+                            item.get("case_id"), str) and item["case_id"].strip():
+                        rejected_ids.append(item["case_id"].strip())
+                    logger.warning("第 %d 条分析入库失败（已隔离该条）: %s", idx, e)
+                except Exception as e:
+                    if sp_open:
+                        try:
+                            conn.execute("ROLLBACK TO " + sp)
+                            conn.execute("RELEASE " + sp)
+                        except sqlite3.Error:
+                            pass
+                        sp_open = False
+                    invalid += 1
+                    rejected.append(idx)
+                    if isinstance(item, dict) and isinstance(
+                            item.get("case_id"), str) and item["case_id"].strip():
+                        rejected_ids.append(item["case_id"].strip())
+                    logger.warning("第 %d 条分析入库失败（已隔离该条）: %s", idx, e)
             conn.commit()
         finally:
             conn.close()
@@ -643,6 +1296,7 @@ def receive_analysis():
         return jsonify({"ok": False, "received": received,
                         "duplicated": duplicated, "invalid": invalid,
                         "rejected": rejected,
+                        "rejected_ids": rejected_ids,
                         "error": "some items were rejected"}), 207
     return jsonify({"ok": True, "received": received,
                     "duplicated": duplicated, "invalid": 0})
@@ -656,8 +1310,14 @@ def query_analysis():
         pkg           来源 App 包名（精确匹配）
         conversation  会话名（模糊匹配）
         todo_only     1/true 只看 need_action=true 的
+        date          YYYY-MM-DD，按 analyzed_at 当天过滤
+        tz            可选时区（+08:00 / +0800 / +8），影响 date 的当天边界
+        tz_offset     可选时区（分钟偏移，480 = 东八区），与 tz 二选一
         limit         默认 100，上限 1000
-    返回：{"ok": true, "count": n, "analyses": [...]}（s1/s2 已解析回对象）
+        before        游标分页：上一页返回的 next_before 原样回传
+                      （形如 <received_at毫秒>_<rowid>，也可只给毫秒）
+    返回：{"ok": true, "count": n, "analyses": [...], "next_before": ...}
+        next_before 只在真的有下一页时才给（与 /messages 同口径）。
     """
     auth_err = check_token()
     if auth_err:
@@ -665,7 +1325,16 @@ def query_analysis():
 
     pkg = request.args.get("pkg", "").strip()
     conversation = request.args.get("conversation", "").strip()
-    todo_only = request.args.get("todo_only", "").lower() in ("1", "true", "yes")
+    todo_only = _safe_bool(request.args.get("todo_only"))
+    date_str = request.args.get("date", "").strip()
+    before_str = request.args.get("before", "").strip()
+    # 注意：tz 不能提前 strip —— query 里未编码的 '+' 会被解码成空格，
+    # _parse_tz_offset 需要看到原始的 " 08:00" 才能还原成 "+08:00"。
+    tz_parsed = _parse_tz_offset(request.args.get("tz", ""),
+                                 request.args.get("tz_offset", "").strip())
+    if isinstance(tz_parsed, tuple):
+        return jsonify({"ok": False, "error": tz_parsed[1]}), 400
+    tz_offset_min = tz_parsed
     try:
         limit = min(int(request.args.get("limit", "100")), 1000)
         if limit <= 0:
@@ -675,20 +1344,72 @@ def query_analysis():
 
     sql = ("SELECT case_id, conversation, window_end, message_count, "
            "need_action, importance, escalated, s1, s2, analyzed_at, "
-           "protocol, received_at, forks, filtered, pkg FROM analyses")
+           "protocol, received_at, forks, filtered, pkg, "
+           "redacted, redaction_rules, redaction_hits, todo_text, todo_due, "
+           "rowid FROM analyses")
     conditions, params = [], []
     if pkg:
         conditions.append("pkg = ?")
         params.append(pkg)
     if conversation:
-        conditions.append("conversation LIKE ?")
-        params.append(f"%{conversation}%")
+        # 同 /messages：默认前缀匹配（走 idx_analyses_conv_ts 索引），
+        # conversation_match=contains 退回旧的「包含」匹配（老口径兼容）。
+        if (request.args.get("conversation_match", "") or "").strip().lower() \
+                == "contains":
+            conditions.append("conversation LIKE ? ESCAPE '\\'")
+            params.append(f"%{_like_escape(conversation)}%")
+        else:
+            conditions.append("conversation >= ? AND conversation < ?")
+            params.extend([conversation, _prefix_upper(conversation)])
     if todo_only:
         conditions.append("need_action = 1")
+    # 日期过滤（B7）：analyzed_at 有两种形态 —— 本地时间文本（多数）或
+    # 毫秒整数文本（老数据）。两种都覆盖：纯数字按毫秒比区间，
+    # 其余按日期前缀做字典序比较（'2026-11-10 08:00:00' 这类定长前缀可比）。
+    if date_str:
+        try:
+            day_start, day_end = _day_bounds_ms(date_str, tz_offset_min)
+        except ValueError:
+            return jsonify({"ok": False, "error": "date must be YYYY-MM-DD"}), 400
+        next_day = (datetime.strptime(date_str, "%Y-%m-%d")
+                    + timedelta(days=1)).strftime("%Y-%m-%d")
+        conditions.append(
+            "((analyzed_at <> '' AND analyzed_at NOT GLOB '*[^0-9]*' "
+            "  AND CAST(analyzed_at AS INTEGER) >= ? "
+            "  AND CAST(analyzed_at AS INTEGER) < ?) "
+            "OR (analyzed_at LIKE ? AND analyzed_at < ?))")
+        params.extend([day_start, day_end, date_str + "%", next_day])
+    # 游标分页（B7）：与 /messages 同款复合游标 before=<received_at>_<rowid>。
+    # 行值比较 (received_at, rowid) < (?, ?) 能走 idx_analyses_received_at
+    # （EXPLAIN：SEARCH analyses USING INDEX ... (received_at<?)），
+    # 原来那种 OR 谓词则是全表 SCAN。只给毫秒时用 int64 上界当 rowid。
+    if before_str:
+        parts = before_str.split("_")
+        try:
+            before_ms = int(parts[0])
+            before_rid = int(parts[1]) if len(parts) > 1 else None
+        except (ValueError, IndexError):
+            return jsonify({
+                "ok": False,
+                "error": "before must be <ms> or <ms>_<rowid>",
+            }), 400
+        if not (MIN_TS_MS <= before_ms <= MAX_TS_MS):
+            return jsonify({"ok": False, "error": "before out of range"}), 400
+        rid = before_rid if before_rid is not None else MAX_ROWID
+        if not (0 <= rid <= MAX_ROWID):
+            return jsonify({"ok": False, "error": "before out of range"}), 400
+        if sqlite3.sqlite_version_info >= (3, 15, 0):
+            conditions.append("(received_at, rowid) < (?, ?)")
+            params.extend([before_ms, rid])
+        else:
+            conditions.append(
+                "(received_at < ? OR (received_at = ? AND rowid < ?))")
+            params.extend([before_ms, before_ms, rid])
     if conditions:
         sql += " WHERE " + " AND ".join(conditions)
-    sql += " ORDER BY received_at DESC LIMIT ?"
-    params.append(limit)
+    sql += " ORDER BY received_at DESC, rowid DESC LIMIT ?"
+    # 多取一条，用来判断还有没有下一页（与 /messages 同口径）
+    params.append(limit + 1)
 
     conn = _connect()
     try:
@@ -696,26 +1417,60 @@ def query_analysis():
     finally:
         conn.close()
 
+    has_more = len(rows) > limit
+    rows = rows[:limit]
     analyses = []
+    skipped = 0
     for r in rows:
-        analyses.append({
-            "case_id": r[0],
-            "conversation": r[1],
-            "window_end": r[2],
-            "message_count": r[3],
-            # s1/s2 解析回对象，与上报结构一致
-            "s1": json.loads(r[7]) if r[7] else None,
-            "escalated": bool(r[6]),
-            "s2": json.loads(r[8]) if r[8] else None,
-            "analyzed_at": r[9],
-            "protocol": r[10],
-            "received_at": r[11],
-            # fork 层轨迹（App v0.1.2+；老数据为 None/False）
-            "forks": json.loads(r[12]) if r[12] else None,
-            "filtered": bool(r[13]),
-            "pkg": r[14],
-        })
-    return jsonify({"ok": True, "count": len(analyses), "analyses": analyses})
+        try:
+            analyses.append({
+                "case_id": r[0],
+                "conversation": r[1] if r[1] is not None else "",
+                # 数值列归一：脏行给 null，不把脏字符串直接吐给前端
+                "window_end": _safe_int(r[2], default=None),
+                "message_count": _safe_int(r[3], default=None),
+                # s1/s2 解析回对象，与上报结构一致；
+                # 坏 JSON 不能再让整个查询 500（原来一行脏数据就挂掉整个接口）
+                "s1": _safe_json(r[7]),
+                "escalated": bool(r[6]),
+                "s2": _safe_json(r[8]),
+                # 归一后的重要度 / 是否需要行动：
+                # 库里 importance 可能是 0-9 数值，也可能是 high/mid/low 文本，
+                # 统一归一成 high/mid/low 标签，前端不用再自己判类型。
+                "need_action": bool(r[4]),
+                "importance": _importance_label(r[5]),
+                "analyzed_at": r[9],
+                "protocol": r[10],
+                "received_at": r[11],
+                # fork 层轨迹（App v0.1.2+；老数据为 None/False）
+                "forks": _safe_json(r[12]),
+                "filtered": bool(r[13]),
+                "pkg": r[14],
+                # 脱敏证据与手动改写（客户端一直在上报，服务端以前直接丢掉）
+                "redacted": bool(r[15]),
+                "redaction_rules": _safe_json(r[16]),
+                "redaction_hits": _safe_json(r[17]),
+                "todo_text": r[18],
+                "todo_due": r[19],
+            })
+        except Exception as e:
+            # 单行脏数据只跳过这一行，不让整页查询失败
+            skipped += 1
+            logger.warning("analyses 表存在损坏行，已跳过该行: %s", e)
+    next_before = None
+    # 只有真的还有下一页时才给游标（原来满页就给 → 多一次空请求）
+    if has_more and rows:
+        next_before = f"{rows[-1][11]}_{rows[-1][20]}"
+    return jsonify({
+        "ok": True,
+        "count": len(analyses),
+        "analyses": analyses,
+        "next_before": next_before,
+        # 跳过的脏行数：调用方能看出「返回条数 < limit」不是分页漏数据
+        "skipped": skipped,
+        "tz": _fmt_tz_offset(tz_offset_min),
+        "tz_offset_minutes": tz_offset_min,
+    })
 
 
 # ------------------------------------------------------------------
@@ -725,24 +1480,226 @@ def query_analysis():
 # data/advisor_reports.json（JSON 数组，按接收顺序追加），
 # report_id 为去重键：重复上报跳过（duplicated）。
 
+# 顾问报告量小（每天至多几条），不走 SQLite，直接存
+# data/advisor_reports.jsonl（JSONL 追加，主存储）
+# + data/advisor_reports.json（JSON 数组快照，向后兼容的读法）
+# report_id 为去重键：重复上报跳过（duplicated）。
+#
+# B9：原来每收到一条就把整个 JSON 数组重写一遍（tmp + os.replace），
+# 存档越大写放大越厉害，写窗口里崩了还会丢历史。现在主存储改成 JSONL
+# 追加（O(1) 追加，不重写老内容），JSON 数组只作为兼容快照保留
+# （条数有上限，且只在内容有变化时写）。
+
+ADVISOR_MAX_REPORTS = 1000           # 存档条数上限（超出丢最旧的）
+ADVISOR_MAX_BYTES = 8 * 1024 * 1024  # JSONL 字节上限（超出轮转一份）
+
+
+def _advisor_jsonl_path():
+    """主存储路径（跟着 DATA_DIR 走，测试里改 DATA_DIR 就能一起隔离）。"""
+    return os.path.join(DATA_DIR, "advisor_reports.jsonl")
+
+
+class AdvisorArchiveError(RuntimeError):
+    """顾问存档损坏。
+
+    存档损坏时**拒绝写入**（不是静默当空列表后整份覆盖），
+    历史报告原样留在盘上，等人工修复。
+    """
+
+
+ADVISOR_MAX_SUGGESTIONS = 200    # 单份报告的 suggestions 条数上限
+ADVISOR_MAX_SUMMARY_LEN = 4096   # summary 字符上限
+ADVISOR_MAX_DETAIL_LEN = 2048    # suggestion.detail 字符上限
+ADVISOR_MAX_TITLE_LEN = 256      # suggestion.title 字符上限
+ADVISOR_MAX_MODEL_LEN = 128      # model_used 字符上限
+ADVISOR_MAX_CREATED_LEN = 64     # created_at 字符上限
+ADVISOR_MAX_PERIOD_DAYS = 3650   # period_days 上限（10 年）
+ADVISOR_MAX_CASE_COUNT = 1000000  # case_count 上限
+
+
+def _write_advisor_jsonl(reports):
+    """整份重写 JSONL 主存储（迁移 / 裁剪时用）。"""
+    path = _advisor_jsonl_path()
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for item in reports:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        f.flush()
+    os.replace(tmp, path)
+
+
+def _append_advisor_reports(items):
+    """追加写入 JSONL 主存储：O(1) 追加，不再整份重写。"""
+    if not items:
+        return
+    path = _advisor_jsonl_path()
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    # 容量上限：文件超阈值就轮转一份（只保留最近一份历史），避免无界增长
+    try:
+        if (os.path.exists(path)
+                and os.path.getsize(path) > ADVISOR_MAX_BYTES):
+            os.replace(path, path + ".1")
+    except OSError:
+        pass
+    with open(path, "a", encoding="utf-8") as f:
+        for item in items:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        f.flush()
+
+
+def _trim_advisor_jsonl(keep=ADVISOR_MAX_REPORTS):
+    """有界裁剪：JSONL 条数超上限时只保留最近 keep 条。"""
+    path = _advisor_jsonl_path()
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = [ln for ln in f if ln.strip()]
+    except OSError:
+        return
+    if len(lines) <= keep:
+        return
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.writelines(lines[-keep:])
+    os.replace(tmp, path)
+
+
 def _load_advisor_reports():
-    """读取顾问报告存档。文件不存在或损坏时返回空列表。"""
+    """读取顾问报告存档（主存储 JSONL；兼容旧的 JSON 数组并自动迁移）。
+
+    存档损坏时抛 AdvisorArchiveError，**拒绝写入**：
+    原来的实现在这里直接返回空列表，下一条上报就会拿「空列表 + 新条目」
+    整份覆盖写回去 -> 历史报告被无声抹掉。现在损坏的文件原样留在盘上，
+    写入路径直接回 5xx，等人工修复（修好或删掉损坏文件后自动恢复）。
+    """
+    jsonl_path = _advisor_jsonl_path()
+    if os.path.exists(jsonl_path):
+        items = []
+        try:
+            with open(jsonl_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    obj = json.loads(line)
+                    if isinstance(obj, dict):
+                        items.append(obj)
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            logger.error("顾问存档损坏，拒绝写入: %s（原因: %s）", jsonl_path, e)
+            raise AdvisorArchiveError(
+                f"advisor archive is corrupted: {jsonl_path}") from e
+        return items
+    # 没有 JSONL：读旧格式（JSON 数组）；读通就迁移成 JSONL
     if not os.path.exists(ADVISOR_PATH):
         return []
     try:
         with open(ADVISOR_PATH, encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, list) else []
-    except (json.JSONDecodeError, OSError):
-        return []
+        if not isinstance(data, list):
+            raise ValueError("advisor archive is not a JSON list")
+    except (json.JSONDecodeError, OSError, ValueError) as e:
+        logger.error("顾问存档损坏，拒绝写入: %s（原因: %s）", ADVISOR_PATH, e)
+        raise AdvisorArchiveError(
+            f"advisor archive is corrupted: {ADVISOR_PATH}") from e
+    records = [r for r in data if isinstance(r, dict)]
+    try:
+        _write_advisor_jsonl(records)
+    except OSError as e:
+        logger.error("顾问存档迁移到 JSONL 失败（原因: %s）", e)
+    return records
+
+
+def _write_advisor_snapshot(reports):
+    """写向后兼容的 JSON 数组快照（ADVISOR_PATH）。
+
+    只在内容有变化时写；内容没变直接跳过（原来每次上报都无条件整份重写）。
+    """
+    payload = json.dumps(reports, ensure_ascii=False, indent=2)
+    try:
+        with open(ADVISOR_PATH, encoding="utf-8") as f:
+            if f.read() == payload:
+                return
+    except OSError:
+        pass
+    tmp = ADVISOR_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(payload)
+    os.replace(tmp, ADVISOR_PATH)
 
 
 def _save_advisor_reports(reports):
-    """覆盖写顾问报告存档（先写临时文件再替换，避免写一半损坏）。"""
-    tmp = ADVISOR_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(reports, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, ADVISOR_PATH)
+    """整份覆盖写顾问存档（JSONL 主存储 + JSON 数组快照）。
+
+    正常上报走 _append_advisor_reports（O(1) 追加）；这个函数留给
+    迁移 / 裁剪 / 人工修复的整份重写场景。
+    """
+    records = [r for r in reports if isinstance(r, dict)]
+    _write_advisor_jsonl(records)
+    _write_advisor_snapshot(records)
+
+
+def _normalize_advisor_item(item):
+    """把一条顾问报告收敛成安全形状。
+
+    返回 (归一化后的 dict, None) 表示接受；(None, 原因) 表示拒绝。
+
+    原来整条 item 原样落盘：case_count / period_days 可能是字符串、null 或
+    浮点，控制台 parseInt 后显示 undefined；summary / suggestions 里的文本
+    长度不设上限，一份几 MB 的报告就能把存档撑爆。这里统一成
+    「数值字段收敛成 int、字符串字段截断、suggestions 只留 dict 且条数有上限」。
+    """
+    if not isinstance(item, dict):
+        return None, "item is not an object"
+    rid = item.get("report_id")
+    if not isinstance(rid, str) or not rid.strip():
+        return None, "missing report_id"
+    rid = rid.strip()
+    if len(rid) > MAX_NAME_LEN:
+        return None, "report_id too long"
+    out = {"report_id": rid}
+
+    def _clip(value, limit):
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            value = str(value)
+        return value[:limit]
+
+    created_at = _clip(item.get("created_at"), ADVISOR_MAX_CREATED_LEN)
+    if created_at is not None:
+        out["created_at"] = created_at
+    summary = _clip(item.get("summary"), ADVISOR_MAX_SUMMARY_LEN)
+    if summary is not None:
+        out["summary"] = summary
+    model_used = _clip(item.get("model_used"), ADVISOR_MAX_MODEL_LEN)
+    if model_used is not None:
+        out["model_used"] = model_used
+    # 数值字段统一成 int（脏值/越界回落到 0），控制台不用再 parseInt 兜底
+    out["period_days"] = _clamp_int(
+        item.get("period_days"), lo=0, hi=ADVISOR_MAX_PERIOD_DAYS)
+    out["case_count"] = _clamp_int(
+        item.get("case_count"), lo=0, hi=ADVISOR_MAX_CASE_COUNT)
+    sug = item.get("suggestions")
+    norm_sug = []
+    if isinstance(sug, list):
+        for s in sug[:ADVISOR_MAX_SUGGESTIONS]:
+            if not isinstance(s, dict):
+                continue
+            ns = {}
+            for key, limit in (("type", ADVISOR_MAX_TITLE_LEN),
+                               ("title", ADVISOR_MAX_TITLE_LEN),
+                               ("detail", ADVISOR_MAX_DETAIL_LEN)):
+                v = _clip(s.get(key), limit)
+                if v is not None:
+                    ns[key] = v
+            norm_sug.append(ns)
+    out["suggestions"] = norm_sug
+    # pkg 可选透传：客户端带上就存下来，控制台才能对顾问报告按来源过滤
+    # （与 /analysis、/messages 同口径）。缺省或非法则不带该键。
+    apkg = item.get("pkg")
+    if isinstance(apkg, str) and apkg.strip():
+        out["pkg"] = apkg.strip()[:MAX_NAME_LEN]
+    return out, None
 
 
 @app.route("/advisor", methods=["POST"])
@@ -759,7 +1716,10 @@ def receive_advisor():
                                  threshold=阈值调整 / other=其它
         model_used   str   生成报告的模型
     report_id 已存在的跳过（duplicated），缺 report_id 的跳过（invalid）。
-    返回：{"ok": true, "inserted": n, "duplicated": m, "invalid": k}
+    返回 200：{"ok": True, "inserted": n, "duplicated": m, "invalid": 0}
+    返回 207：{"ok": False, "inserted": n, "duplicated": m, "invalid": k,
+              "rejected": [下标...], "error": "some items were rejected"}
+          （与 /weixin、/analysis 同款语义：被拒的条目不推进客户端的已同步水位）
     """
     auth_err = check_token()
     if auth_err:
@@ -770,34 +1730,66 @@ def receive_advisor():
         return jsonify({"ok": False, "error": "body must be a JSON array"}), 400
 
     inserted = duplicated = invalid = 0
+    rejected = []
+    # 被拒条目的 report_id（能取到时）：客户端优先按 id 匹配，不依赖下标
+    rejected_ids = []
 
     with _write_lock:
-        reports = _load_advisor_reports()
+        # 存档损坏时**拒绝写入**：宁可这次上报失败（客户端保留、下轮重报），
+        # 也不要拿「空列表 + 新条目」整份覆盖写回去把历史报告抹掉。
+        try:
+            reports = _load_advisor_reports()
+        except AdvisorArchiveError as e:
+            logger.error("顾问存档损坏，拒绝本次上报: %s", e)
+            return jsonify({
+                "ok": False,
+                "inserted": 0,
+                "duplicated": 0,
+                "invalid": 0,
+                "error": "advisor archive is corrupted, refusing to overwrite it",
+                "detail": str(e),
+            }), 500
         seen = {r.get("report_id") for r in reports if isinstance(r, dict)}
-        for item in payload:
-            # 最小校验：必须是对象且带 report_id
-            if (not isinstance(item, dict)
-                    or not isinstance(item.get("report_id"), str)
-                    or not item["report_id"]):
+        new_items = []
+        for idx, item in enumerate(payload):
+            norm, why = _normalize_advisor_item(item)
+            if norm is None:
                 invalid += 1
+                rejected.append(idx)
+                if isinstance(item, dict):
+                    _rid = item.get("report_id")
+                    if isinstance(_rid, str) and _rid.strip():
+                        rejected_ids.append(_rid.strip()[:MAX_NAME_LEN])
+                logger.warning("第 %d 条顾问报告被拒: %s", idx, why)
                 continue
-            if item["report_id"] in seen:
+            if norm["report_id"] in seen:
                 duplicated += 1  # report_id 已存在：重复上报
                 continue
-            # suggestions 只保留合法对象条目，防脏数据
-            if not isinstance(item.get("suggestions"), list):
-                item["suggestions"] = []
-            item["suggestions"] = [
-                s for s in item["suggestions"] if isinstance(s, dict)]
-            item["received_at"] = int(time.time() * 1000)  # 服务端接收时间（毫秒）
-            reports.append(item)
-            seen.add(item["report_id"])
+            norm["received_at"] = int(time.time() * 1000)  # 服务端接收时间（毫秒）
+            new_items.append(norm)
+            seen.add(norm["report_id"])
             inserted += 1
         if inserted:
-            _save_advisor_reports(reports)
+            # 追加写主存储（O(1)），不再整份重写整个数组（B9）
+            _append_advisor_reports(new_items)
+            reports.extend(new_items)
+            # 有界裁剪：条数超上限时只保留最近的
+            if len(reports) > ADVISOR_MAX_REPORTS:
+                reports = reports[-ADVISOR_MAX_REPORTS:]
+                _trim_advisor_jsonl(ADVISOR_MAX_REPORTS)
+            # 兼容快照（JSON 数组）：只在有变化时写
+            _write_advisor_snapshot(reports)
 
+    # 有条目被拒就回 207：客户端据此把被拒的报告留到下一轮重报，而不是
+    # 把它当成已入库（原来恒返回 200，客户端会把被拒报告也标成已同步 → 永久丢失）。
+    if invalid:
+        return jsonify({"ok": False, "inserted": inserted,
+                        "duplicated": duplicated, "invalid": invalid,
+                        "rejected": rejected,
+                        "rejected_ids": rejected_ids,
+                        "error": "some items were rejected"}), 207
     return jsonify({"ok": True, "inserted": inserted,
-                    "duplicated": duplicated, "invalid": invalid})
+                    "duplicated": duplicated, "invalid": 0})
 
 
 @app.route("/advisor", methods=["GET"])
@@ -818,7 +1810,20 @@ def query_advisor():
     except ValueError:
         limit = 20
 
-    reports = _load_advisor_reports()
+    try:
+        reports = _load_advisor_reports()
+    except AdvisorArchiveError as e:
+        # 这里不返回 5xx：控制台一次并发拉 /messages、/analysis、/advisor 三个接口
+        # （Promise.all），任何一个 500 会让整页控制台都读不出数据。
+        # 改成 200 + ok:false + error，消息/分析照常显示，顾问页给出错误提示。
+        logger.error("顾问存档损坏，暂时无法读取: %s", e)
+        return jsonify({
+            "ok": False,
+            "count": 0,
+            "reports": [],
+            "error": "advisor archive is corrupted",
+            "detail": str(e),
+        })
     reports = [r for r in reports if isinstance(r, dict)]
     reports.sort(key=lambda r: r.get("received_at", 0), reverse=True)
     reports = reports[:limit]
@@ -838,6 +1843,28 @@ _extract_status = {
 _extract_lock = threading.Lock()
 
 
+def _import_extract_module(leg):
+    """按文件路径加载提取模块（android_db_extract / pc_db_extract）。
+
+    原来用 __import__("android_db_extract") 裸名导入：这只有在 app.py 所在
+    目录恰好是 sys.path[0] 时才成立。用 WSGI 启动器
+    （waitress-serve app:app / gunicorn app:app）时 sys.path 里没有 server/
+    → ModuleNotFoundError，提取功能整个报废（实测 POST /admin/extract
+    → "No module named android_db_extract"）。
+    """
+    path = os.path.join(BASE_DIR, f"{leg}_db_extract.py")
+    if not os.path.exists(path):
+        raise ImportError(f"extract module not found: {path}")
+    spec = importlib.util.spec_from_file_location(
+        f"notifyme_{leg}_db_extract", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load extract module: {path}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _run_extract_bg(full, source):
     """后台线程跑提取，结果写进 _extract_status。
 
@@ -851,17 +1878,33 @@ def _run_extract_bg(full, source):
         legs.append("android")
     if source in ("pc", "all"):
         legs.append("pc")
-    for leg in legs:
-        try:
-            mod = __import__(f"{leg}_db_extract")
-            result[leg] = mod.run_extract(full=full)
-        except Exception as e:  # 单路失败不拖垮服务与其它路
-            result[leg] = {"ok": False, "error": str(e)}
-    ok = any(isinstance(result[leg], dict) and result[leg].get("ok") is not False
-             for leg in legs)
-    with _extract_lock:
-        _extract_status["last"] = {"ok": ok, **result}
-        _extract_status["running"] = False
+    try:
+        for leg in legs:
+            try:
+                mod = _import_extract_module(leg)
+                result[leg] = mod.run_extract(full=full)
+            except Exception as e:  # 单路失败不拖垮服务与其它路
+                result[leg] = {"ok": False, "error": str(e)}
+                # 主库被占用是可重试的瞬时故障，单独标出来，
+                # 控制台/运维能一眼看出「等一会儿再试」而不是「数据坏了」
+                _etext = str(e).lower()
+                if (isinstance(e, sqlite3.OperationalError)
+                        or "locked" in _etext or "busy" in _etext
+                        or "占用" in str(e)):
+                    result[leg]["error_kind"] = "busy"
+        # 成功判定：必须明确是 True 才算成功（B11）。
+        # 原来写成 is not False：返回体里没有 ok 键时会被当成成功
+        # （两个提取脚本早期版本都没这个键）-> 状态页显示 ok 但其实没跑成。
+        ok = any(isinstance(result[leg], dict) and result[leg].get("ok") is True
+                 for leg in legs)
+        with _extract_lock:
+            _extract_status["last"] = {"ok": ok, **result}
+    finally:
+        # 无论成功失败都要复位 running：
+        # 原来只有走到最后一行才复位，中途抛异常 → running 永久为 True
+        # → 之后的 /admin/extract 一直返回 409，提取功能彻底卡死。
+        with _extract_lock:
+            _extract_status["running"] = False
 
 
 @app.route("/admin/extract", methods=["POST"])
@@ -884,6 +1927,21 @@ def admin_extract():
         return jsonify({
             "ok": False,
             "error": "source must be one of: android / pc / all"}), 400
+    # 主库被占用（另一个提取任务正在批量提交 / 有长事务没提交）时
+    # 直接回 503 + Retry-After：提取要往同一个库里写，硬启动只会让后台
+    # 线程默默跑一半再失败，用户还看到「已启动」。
+    state, detail = _probe_main_db_writable()
+    if state == "busy":
+        resp = jsonify({"ok": False,
+                        "error": "main database is busy, retry later",
+                        "detail": detail})
+        resp.status_code = 503
+        resp.headers["Retry-After"] = "5"
+        return resp
+    if state == "error":
+        logger.error("主库不可写，提取未启动: %s", detail)
+        return jsonify({"ok": False, "error": "main database is not writable",
+                        "detail": detail}), 500
     with _extract_lock:
         if _extract_status["running"]:
             return jsonify({"ok": False, "error": "extract already running"}), 409
@@ -921,718 +1979,82 @@ def admin_extract_status():
 # 打开，页面把 token 写进 localStorage，之后所有 fetch 自动带 X-Token 头，
 # 书签 / 主屏幕图标都不再需要 query。
 
-CONSOLE_HTML = """<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="微信分析助手">
-<meta name="theme-color" content="#07C160">
-<title>微信分析助手</title>
-<script>
-// 页面所在目录（域根绝对路径，兼容 /console、/mmonitor/console 及末尾斜杠）
-// /console          -> /
-// /mmonitor/console -> /mmonitor/
-// /mmonitor/console/-> /mmonitor/
-window.__WX_DIR = (function () {
-  var p = location.pathname;
-  while (p.length > 1 && p.charAt(p.length - 1) === '/') p = p.slice(0, -1);
-  return p.slice(0, p.lastIndexOf('/') + 1);
-})();
-// manifest / apple-touch-icon 链接用 JS 注入：静态相对 href 在页面带末尾
-// 斜杠时会解析错，域根绝对 href 又会丢掉 /mmonitor/ 前缀
-(function () {
-  var head = document.head;
-  function addLink(rel, href) {
-    var l = document.createElement('link');
-    l.rel = rel;
-    l.href = href;
-    head.appendChild(l);
-  }
-  addLink('manifest', window.__WX_DIR + 'console/manifest.json');
-  // iOS 主屏幕图标（只认 PNG，不认 SVG/data URI）
-  addLink('apple-touch-icon', window.__WX_DIR + 'console/icons/icon-180.png');
-})();
-</script>
-<style>
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { overscroll-behavior-y: contain; }
-  body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-         background: #f5f5f5; color: #333; font-size: 16px; }
-  header { position: sticky; top: 0; z-index: 10; background: #07C160; color: #fff;
-           padding: calc(env(safe-area-inset-top) + 12px) 16px 12px; }
-  header h1 { font-size: 19px; margin: 0; }
-  /* 同步状态行：最近刷新时间 / 数据量 / 失败提示 */
-  .sync-line { font-size: 12px; color: rgba(255,255,255,.85); margin-top: 4px; }
-  .sync-line.err { color: #ffe58f; }
-  /* 底部 tab 栏（iPhone 拇指可达区），高度含 Home 指示条安全区 */
-  .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
-            display: flex; background: #fff;
-            border-top: 1px solid #e5e5e5;
-            padding-bottom: env(safe-area-inset-bottom); }
-  .tabbar button { flex: 1; background: none; border: none; color: #999;
-                   font-size: 11px; padding: 6px 0 5px; line-height: 1.2; }
-  .tabbar button .t-ico { display: block; font-size: 22px; margin-bottom: 1px; }
-  .tabbar button.active { color: #07C160; font-weight: bold; }
-  /* 主区底部留白 = tab 栏内容高度 + 安全区，避免最后一屏被挡住 */
-  main { padding: 12px 12px calc(env(safe-area-inset-bottom) + 66px); }
-  /* 下拉刷新提示条 */
-  #ptr { position: fixed; top: 0; left: 0; right: 0; z-index: 30;
-         text-align: center; color: #07C160; font-size: 13px;
-         padding-top: calc(env(safe-area-inset-top) + 6px);
-         transform: translateY(-100%); transition: transform .18s ease;
-         pointer-events: none; }
-  #ptr.show { transform: translateY(0); }
-  #ptr .ptr-in { display: inline-block; background: #fff; border-radius: 14px;
-                 padding: 5px 14px; box-shadow: 0 2px 8px rgba(0,0,0,.18); }
-  .card { background: #fff; border-radius: 10px; padding: 12px 14px; margin-bottom: 10px;
-          box-shadow: 0 1px 2px rgba(0,0,0,.08); }
-  .conv-head { display: flex; align-items: center; gap: 8px; }
-  .conv-name { font-weight: bold; font-size: 17px; flex: 1; overflow: hidden;
-               text-overflow: ellipsis; white-space: nowrap; }
-  .conv-count { color: #999; font-size: 13px; }
-  .conv-preview { color: #888; font-size: 14px; margin-top: 4px; overflow: hidden;
-                  text-overflow: ellipsis; white-space: nowrap; }
-  .todo-flag { color: #ff5722; font-size: 15px; }
-  .msg-list { margin-top: 8px; border-top: 1px solid #f0f0f0; padding-top: 8px; display: none; }
-  .msg { padding: 6px 0; border-bottom: 1px solid #fafafa; }
-  .msg .m-meta { font-size: 12px; color: #999; }
-  .msg .m-text { font-size: 15px; white-space: pre-wrap; word-break: break-all; }
-  .badge { display: inline-block; border-radius: 4px; padding: 0 5px; font-size: 11px;
-           color: #fff; margin-right: 4px; vertical-align: 1px; }
-  .b-db { background: #1989fa; } .b-nt { background: #ff976a; }
-  .b-grp { background: #07c160; } .b-app { background: #3370ff; }
-  /* App 过滤行：全部 / 微信 / 飞书 / 钉钉 */
-  .app-filter { display: flex; gap: 6px; margin-bottom: 10px; }
-  .af-tab { font-size: 13px; padding: 4px 12px; border-radius: 14px;
-            background: #fff; color: #666; border: 1px solid #e0e0e0; }
-  .af-tab.active { background: #07C160; color: #fff; border-color: #07C160; }
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
-  .chip { background: #e8f7ef; color: #07C160; border-radius: 12px;
-          padding: 3px 10px; font-size: 12px; }
-  .chip.warn { background: #fff3e8; color: #ff5722; }
-  .s2 { border-top: 1px dashed #e0e0e0; margin-top: 8px; padding-top: 8px; font-size: 14px; }
-  .s2 .row { margin: 4px 0; }
-  .s2 .label { color: #999; font-size: 12px; }
-  .s2 ul { margin: 4px 0 4px 18px; padding: 0; }
-  .imp-high { color: #e6432d; font-weight: bold; }
-  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .stat-num { font-size: 26px; font-weight: bold; color: #07C160; }
-  .stat-label { font-size: 13px; color: #999; }
-  .empty { text-align: center; color: #999; padding: 48px 0; font-size: 15px; }
-  .auth-box { max-width: 320px; margin: 80px auto; text-align: center; }
-  .auth-box input { width: 100%; font-size: 16px; padding: 10px; border: 1px solid #ddd;
-                    border-radius: 8px; margin-bottom: 10px; }
-  .auth-box button { width: 100%; font-size: 16px; padding: 10px; border: none;
-                     border-radius: 8px; background: #07C160; color: #fff; }
-  .refresh-note { text-align: center; color: #bbb; font-size: 12px; padding: 6px; }
-  /* 会话 tab：搜索框 / 分区标题 / 分层折叠 */
-  .search-wrap { margin-bottom: 10px; }
-  .search-wrap input { width: 100%; font-size: 15px; padding: 9px 12px;
-                       border: 1px solid #ddd; border-radius: 8px; background: #fff; }
-  .sec-head { font-size: 13px; color: #999; margin: 12px 2px 8px; font-weight: bold; }
-  .sec-head.warn { color: #ff5722; }
-  .caret { color: #bbb; font-size: 14px; width: 16px; flex: none; }
-  .date-head { display: flex; align-items: center; gap: 6px; font-size: 13px;
-               color: #576b95; font-weight: bold; padding: 6px 0;
-               border-bottom: 1px solid #f0f0f0; }
-  .date-body { padding-left: 4px; }
-</style>
-</head>
-<body>
-<header>
-  <h1>💬 微信分析助手</h1>
-  <div class="sync-line" id="sync-line">正在同步…</div>
-</header>
-<div id="ptr"><span class="ptr-in" id="ptr-text">下拉刷新</span></div>
-<main id="main"><div class="empty">加载中…</div></main>
-<nav class="tabbar">
-  <button id="tab-conv" class="active" onclick="switchTab('conv')">
-    <span class="t-ico">💬</span>会话</button>
-  <button id="tab-todo" onclick="switchTab('todo')">
-    <span class="t-ico">⚡</span>待办</button>
-  <button id="tab-stat" onclick="switchTab('stat')">
-    <span class="t-ico">📊</span>统计</button>
-  <button id="tab-adv" onclick="switchTab('adv')">
-    <span class="t-ico">🧭</span>顾问</button>
-</nav>
 
-<script>
-// ---------- token 管理：query -> localStorage -> X-Token 头 ----------
-(function initToken() {
-  var q = new URLSearchParams(location.search).get('token');
-  if (q) {
-    localStorage.setItem('wx_token', q);
-    // 抹掉地址栏里的 token，防截图/分享泄露；
-    // 保持当前页面路径（站点可能挂在 /mmonitor/ 前缀下），不写死绝对路径
-    history.replaceState(null, '', location.pathname);
-  }
-})();
-var TOKEN = localStorage.getItem('wx_token') || '';
 
-function showAuth() {
-  document.getElementById('main').innerHTML =
-    '<div class="auth-box"><p>请输入访问令牌</p>' +
-    '<input id="tk" type="password" placeholder="X-Token">' +
-    '<button onclick="saveToken()">保存并进入</button></div>';
-}
-function saveToken() {
-  localStorage.setItem('wx_token', document.getElementById('tk').value);
-  location.reload();
-}
+def _import_console_ui_module():
+    """
+    按文件路径加载 console_ui.py（控制台前端资源：HTML / manifest / SW）。
 
-// ---------- API ----------
-// 用 __WX_DIR 拼域根绝对路径：页面挂在 /console 还是 /mmonitor/console
-// （甚至带末尾斜杠）都能正确指到同级接口，不写死挂载前缀
-async function api(path) {
-  var r = await fetch(window.__WX_DIR + path, { headers: { 'X-Token': TOKEN } });
-  if (r.status === 401) { showAuth(); throw new Error('unauthorized'); }
-  return r.json();
-}
+    为什么用 importlib 按路径加载，而不是普通 import：
+    - app.py 常常是被直接执行的脚本（python server/app.py），此时不存在包结构；
+    - WSGI 部署（waitress / gunicorn / uwsgi）时工作目录与 sys.path 都不可控。
+    两种场景下普通的 import console_ui 都可能 ImportError，按路径加载则都稳。
+    与 _import_extract_module 同一套路。
+    """
+    path = os.path.join(BASE_DIR, "console_ui.py")
+    try:
+        spec = importlib.util.spec_from_file_location("notifyme_console_ui", path)
+        if spec is None or spec.loader is None:
+            raise ImportError("cannot load console_ui from %s" % path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise RuntimeError("failed to load console_ui.py: %s" % exc)
+    for name in ("CONSOLE_HTML", "CONSOLE_MANIFEST", "CONSOLE_SW"):
+        if not hasattr(module, name):
+            raise RuntimeError("console_ui.py is missing %s" % name)
+    return module
+# ---- 控制台前端资源（HTML / manifest / service worker）已拆到 console_ui.py ----
+# 拆出来的原因：app.py 原本是「后端路由 + 存储层 + 控制台前端」三合一的上帝文件，
+# 前端资源占了近 700 行，改一个按钮得在路由代码里翻找。拆出后可独立单测。
+# 加载方式与 _import_extract_module 一致：按文件路径 importlib 加载，
+# 这样脚本直跑与 WSGI 部署都不依赖 sys.path 或包结构。
+_CONSOLE_UI = _import_console_ui_module()
+CONSOLE_HTML = _CONSOLE_UI.CONSOLE_HTML
+CONSOLE_MANIFEST = _CONSOLE_UI.CONSOLE_MANIFEST
+CONSOLE_SW = _CONSOLE_UI.CONSOLE_SW
 
-// ---------- 工具 ----------
-function esc(s) {
-  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-function fmtTime(ms) {
-  var d = new Date(ms);
-  function p(n) { return (n < 10 ? '0' : '') + n; }
-  return (d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
-}
-// 日期分组标签（二级折叠用）：如「10月3日」
-function fmtDate(ms) {
-  var d = new Date(ms);
-  return (d.getMonth() + 1) + '月' + d.getDate() + '日';
-}
+# manifest 图标：PNG 放 pwa_icons/（由 gen_icons.py 生成），经 /console/icons/<name> 提供。
+# manifest 里的 src 用相对路径，相对 manifest 自身 URL 解析
+# （/console/manifest.json -> /console/icons/...；
+#  /mmonitor/console/manifest.json -> /mmonitor/console/icons/...），
+# 两种挂载方式都正确。SVG data URI 保留作兜底（Android Chrome 可用）。
+_ICON_SVG = ('data:image/svg+xml,%3Csvg xmlns=' + chr(39) + 'http://www.w3.org/2000/svg' + chr(39) + ' '
+             'width=' + chr(39) + '512' + chr(39) + ' height=' + chr(39) + '512' + chr(39) + '%3E%3Crect width=' + chr(39) + '512' + chr(39) + ' height=' + chr(39) + '512' + chr(39) + ' '
+             'rx=' + chr(39) + '100' + chr(39) + ' fill=' + chr(39) + '%2307C160' + chr(39) + '/%3E%3Ctext x=' + chr(39) + '256' + chr(39) + ' y=' + chr(39) + '330' + chr(39) + ' '
+             'font-size=' + chr(39) + '260' + chr(39) + ' text-anchor=' + chr(39) + 'middle' + chr(39) + '%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E')
 
-// ---------- 状态 ----------
-var CUR_TAB = 'conv';
-var MSGS = [], ANALYSES = [], ADVISORS = [];
+PWA_ICON_DIR = os.path.join(BASE_DIR, 'pwa_icons')
 
-// 来源 App 口径（与服务端 PKG_LABELS 一致）：老数据没有 pkg，一律按微信
-var PKG_WX = 'com.tencent.mm';
-var PKG_LABELS = {
-  'com.tencent.mm': '微信',
-  'com.ss.android.lark': '飞书',
-  'com.alibaba.android.rimet': '钉钉'
-};
-function normPkg(p) { return p || PKG_WX; }
-function pkgLabel(p) { return PKG_LABELS[normPkg(p)] || normPkg(p); }
-// 会话复合身份（对齐安卓端 ConvKey）：pkg + U+0001 + 会话名
-function ckOf(o) { return normPkg(o.pkg) + '' + o.conversation; }
-// App 过滤：'' = 全部；否则只看该包名
-var APP_FILTER = '';
-
-// 复合会话键 -> 最新一条 need_action 分析（待办角标 / 会话内分析区用）
-var todoByConv = {};
-var LAST_SYNC = 0;   // 最近一次数据同步成功时间（毫秒）
-var LAST_ERR = '';   // 最近一次同步错误（空 = 正常）
-// 会话 tab：搜索关键词 + 折叠状态（key 形如 "c:会话名" / "c:会话名|10月3日"，
-// true = 展开，默认折叠；持久化到 localStorage）
-var CONV_QUERY = '';
-var COLLAPSE = {};
-try { COLLAPSE = JSON.parse(localStorage.getItem('wx_collapse_v1') || '{}'); }
-catch (e) { COLLAPSE = {}; }
-var CONV_NODES = [];  // 本次渲染的节点 index -> 折叠 key（供 onclick 反查）
-
-function switchTab(t) {
-  CUR_TAB = t;
-  ['conv', 'todo', 'stat', 'adv'].forEach(function (k) {
-    document.getElementById('tab-' + k).className = k === t ? 'active' : '';
-  });
-  render();
-}
-
-// 顶部同步状态行：时间 + 数据量 / 错误
-function renderSyncLine() {
-  var el = document.getElementById('sync-line');
-  if (LAST_ERR) {
-    el.className = 'sync-line err';
-    el.textContent = '⚠️ 同步失败：' + LAST_ERR + '（下拉重试）';
-    return;
-  }
-  el.className = 'sync-line';
-  if (!LAST_SYNC) { el.textContent = '正在同步…'; return; }
-  function p(n) { return (n < 10 ? '0' : '') + n; }
-  var d = new Date(LAST_SYNC);
-  el.textContent = '已同步 ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' +
-    p(d.getSeconds()) + ' · 消息 ' + MSGS.length + ' · 分析 ' + ANALYSES.length;
-}
-
-// ---------- 数据加载 ----------
-async function load() {
-  try {
-    var m = await api('messages?limit=1000');
-    var a = await api('analysis?limit=1000');
-    var adv = await api('advisor?limit=100');
-    MSGS = m.messages || [];
-    ANALYSES = a.analyses || [];
-    ADVISORS = adv.reports || [];
-    todoByConv = {};
-    ANALYSES.forEach(function (x) {
-      if (x.s1 && x.s1.need_action && x.s1.need_action.value) {
-        // 同一复合会话保留 received_at 最新的一条
-        var ck = ckOf(x);
-        if (!todoByConv[ck] ||
-            (x.received_at || 0) > (todoByConv[ck].received_at || 0)) {
-          todoByConv[ck] = x;
-        }
-      }
-    });
-    LAST_SYNC = Date.now();
-    LAST_ERR = '';
-    render();
-  } catch (e) {
-    // 401 已由 api() 弹鉴权框；其它错误显示在同步行，下轮自动重试
-    if (String(e.message || e) !== 'unauthorized') {
-      LAST_ERR = '网络异常';
-      renderSyncLine();
-    }
-  }
-}
-
-// ---------- 下拉刷新（iPhone Safari / PWA 通用触摸实现） ----------
-(function initPullToRefresh() {
-  var startY = 0, pulling = false, triggered = false;
-  var ptr = document.getElementById('ptr');
-  var ptrText = document.getElementById('ptr-text');
-  var THRESHOLD = 70;  // 下拉多少像素触发刷新
-  window.addEventListener('touchstart', function (e) {
-    if (window.scrollY <= 0) { startY = e.touches[0].clientY; pulling = true; }
-    else pulling = false;
-    triggered = false;
-  }, { passive: true });
-  window.addEventListener('touchmove', function (e) {
-    if (!pulling) return;
-    var dy = e.touches[0].clientY - startY;
-    if (dy > 20 && window.scrollY <= 0) {
-      ptr.classList.add('show');
-      ptrText.textContent = dy > THRESHOLD ? '松开刷新' : '下拉刷新';
-      if (dy > THRESHOLD) triggered = true;
-    }
-  }, { passive: true });
-  window.addEventListener('touchend', function () {
-    if (!pulling) return;
-    pulling = false;
-    if (triggered) {
-      ptrText.textContent = '刷新中…';
-      load().finally(function () {
-        ptrText.textContent = '已更新';
-        setTimeout(function () { ptr.classList.remove('show'); }, 600);
-      });
-    } else {
-      ptr.classList.remove('show');
-    }
-  }, { passive: true });
-})();
-
-// ---------- 渲染 ----------
-function render() {
-  renderSyncLine();
-  var el = document.getElementById('main');
-  if (CUR_TAB === 'conv') el.innerHTML = renderConvs();
-  else if (CUR_TAB === 'todo') el.innerHTML = renderTodos();
-  else if (CUR_TAB === 'adv') el.innerHTML = renderAdvisor();
-  else el.innerHTML = renderStats();
-}
-
-// ---------- 会话 tab：搜索 + 需关注分区 + 会话/日期分层折叠 ----------
-function renderConvs() {
-  CONV_NODES = [];
-  // 搜索框放在列表外层：输入时只重绘 #conv-list，输入框焦点不丢
-  var appTabs = [['', '全部'], [PKG_WX, '微信'],
-    ['com.ss.android.lark', '飞书'], ['com.alibaba.android.rimet', '钉钉']];
-  var filterHtml = '<div class="app-filter">' + appTabs.map(function (t) {
-    return '<span class="af-tab' + (APP_FILTER === t[0] ? ' active' : '') +
-      '" onclick="setAppFilter(\'' + t[0] + '\')">' + t[1] + '</span>';
-  }).join('') + '</div>';
-  var searchHtml = '<div class="search-wrap">' +
-    '<input id="conv-search" type="search" placeholder="搜索会话 / 发送者 / 消息内容" ' +
-    'value="' + esc(CONV_QUERY) + '" oninput="onConvSearch(this.value)"></div>';
-  if (!MSGS.length) return filterHtml + searchHtml + '<div class="empty">暂无消息</div>';
-  return filterHtml + searchHtml + '<div id="conv-list">' + renderConvList() + '</div>' +
-    '<div class="refresh-note">下拉可刷新 · 每 30 秒自动同步</div>';
-}
-
-function setAppFilter(p) {
-  APP_FILTER = p;
-  render();
-}
-
-function onConvSearch(v) {
-  CONV_QUERY = v;
-  var el = document.getElementById('conv-list');
-  if (el) el.innerHTML = renderConvList();
-}
-
-// 过滤（App + 搜索）+ 按复合会话分组 + 分区渲染（「⚡ 需关注」= 有 need_action 分析的会话）
-function renderConvList() {
-  var q = CONV_QUERY.trim().toLowerCase();
-  var groups = {}, order = [];
-  MSGS.forEach(function (m) {
-    if (APP_FILTER && normPkg(m.pkg) !== APP_FILTER) return;
-    var ck = ckOf(m);
-    if (!groups[ck]) { groups[ck] = []; order.push(ck); }
-    groups[ck].push(m);
-  });
-  var watchHtml = '', restHtml = '';
-  order.forEach(function (ck) {
-    var list = groups[ck];
-    var name = list[0].conversation;
-    if (q) {
-      // 会话名命中 -> 整组保留；否则只保留发送者/内容命中的消息
-      if (name.toLowerCase().indexOf(q) < 0) {
-        list = list.filter(function (m) {
-          return (m.sender || '').toLowerCase().indexOf(q) >= 0 ||
-                 (m.text || '').toLowerCase().indexOf(q) >= 0;
-        });
-        if (!list.length) return;
-      }
-    }
-    var card = renderConvCard(ck, name, list);
-    if (todoByConv[ck]) watchHtml += card; else restHtml += card;
-  });
-  var html = '';
-  if (watchHtml) html += '<div class="sec-head warn">⚡ 需关注</div>' + watchHtml;
-  if (restHtml) html += '<div class="sec-head">全部会话</div>' + restHtml;
-  if (!html) html = '<div class="empty">无匹配结果</div>';
-  return html;
-}
-
-// 一级折叠组：会话（默认折叠，显示名称+条数+最新摘要+时间）；
-// 展开后有 need_action 分析块 + 按日期的二级折叠组
-function renderConvCard(ck, name, list) {
-  var key = 'c:' + ck;
-  var idx = CONV_NODES.length; CONV_NODES.push(key);
-  var open = !!COLLAPSE[key];
-  var latest = list[0];
-  var todo = todoByConv[ck];
-  // App 角标：微信不显示（主场景），其它 App 显示中文名，防止同名会话混淆
-  var appBadge = normPkg(latest.pkg) === PKG_WX ? '' :
-    '<span class="badge b-app">' + esc(pkgLabel(latest.pkg)) + '</span>';
-  var html = '<div class="card">' +
-    '<div class="conv-head" onclick="toggleNode(' + idx + ')">' +
-    '<span class="caret" id="caret-' + idx + '">' + (open ? '▾' : '▸') + '</span>' +
-    appBadge +
-    '<span class="conv-name">' + esc(name) + '</span>' +
-    (todo ? '<span class="todo-flag">⚡</span>' : '') +
-    '<span class="conv-count">' + list.length + ' 条</span></div>' +
-    '<div class="conv-preview" onclick="toggleNode(' + idx + ')">' +
-    esc(latest.sender) + '：' + esc(latest.text) + ' · ' + fmtTime(latest.timestamp) + '</div>' +
-    '<div class="msg-list" id="node-' + idx + '" style="display:' +
-    (open ? 'block' : 'none') + '">';
-  if (todo) html += renderAnalysisBlock(todo);
-  // 二级折叠组：按日期分组（list 已按时间倒序，日期组同样倒序）
-  var byDate = {}, dOrder = [];
-  list.forEach(function (m) {
-    var d = fmtDate(m.timestamp);
-    if (!byDate[d]) { byDate[d] = []; dOrder.push(d); }
-    byDate[d].push(m);
-  });
-  dOrder.forEach(function (d) {
-    var dIdx = CONV_NODES.length; CONV_NODES.push(key + '|' + d);
-    var dOpen = !!COLLAPSE[key + '|' + d];
-    html += '<div class="date-head" onclick="toggleNode(' + dIdx + ')">' +
-      '<span class="caret" id="caret-' + dIdx + '">' + (dOpen ? '▾' : '▸') + '</span>' +
-      esc(d) + '<span class="conv-count" style="margin-left:auto;">' +
-      byDate[d].length + ' 条</span></div>' +
-      '<div class="date-body" id="node-' + dIdx + '" style="display:' +
-      (dOpen ? 'block' : 'none') + '">';
-    byDate[d].forEach(function (m) {
-      var badges = (m.is_group ? '<span class="badge b-grp">群</span>' : '') +
-        (normPkg(m.pkg) !== PKG_WX ? '<span class="badge b-app">' +
-          esc(pkgLabel(m.pkg)) + '</span>' : '') +
-        (m.source === 'android-db' ? '<span class="badge b-db">库</span>' : '');
-      html += '<div class="msg"><div class="m-meta">' + badges + esc(m.sender) +
-        ' · ' + fmtTime(m.timestamp) + '</div>' +
-        '<div class="m-text">' + esc(m.text) + '</div></div>';
-    });
-    html += '</div>';
-  });
-  return html + '</div></div>';
-}
-
-// 折叠/展开切换：更新状态、持久化、只动对应节点（不重绘整页）
-function toggleNode(i) {
-  var key = CONV_NODES[i];
-  if (key == null) return;
-  COLLAPSE[key] = !COLLAPSE[key];
-  localStorage.setItem('wx_collapse_v1', JSON.stringify(COLLAPSE));
-  var el = document.getElementById('node-' + i);
-  if (el) el.style.display = COLLAPSE[key] ? 'block' : 'none';
-  var caret = document.getElementById('caret-' + i);
-  if (caret) caret.textContent = COLLAPSE[key] ? '▾' : '▸';
-}
-
-// 分析结果块：S1 chips + S2 区（对齐 App 会话详情的结构）
-function impLabel(v) {
-  // S1 重要度可能是 0-9 数值（端上）或 high/mid/low（旧格式），统一成标签。
-  // 不归一的话数值重要度会被 impRank 当成未知值，永远排在待办列表最后。
-  if (v === null || v === undefined || v === '') return '';
-  var n = (typeof v === 'number') ? v :
-    (/^[0-9]+$/.test(String(v).trim()) ? parseInt(String(v).trim(), 10) : NaN);
-  if (!isNaN(n)) return n >= 6 ? 'high' : (n >= 3 ? 'mid' : 'low');
-  var s = String(v).trim().toLowerCase();
-  return (s === 'high' || s === 'mid' || s === 'low') ? s : s;
-}
-
-function renderAnalysisBlock(a) {
-  var html = '<div style="margin:8px 0;">';
-  if (a.s1) {
-    var s1 = a.s1, chips = '';
-    if (s1.need_action) chips += '<span class="chip warn">⚡待办 ' +
-      Math.round((s1.need_action.prob || 0) * 100) + '%</span>';
-    if (s1.importance) {
-      var imp = impLabel(s1.importance);
-      chips += '<span class="chip' + (imp === 'high' ? ' warn' : '') + '">重要度 ' + esc(s1.importance) + '</span>';
-    }
-    if (s1.due_window) chips += '<span class="chip">截止 ' + esc(s1.due_window) + '</span>';
-    if (s1.topic) chips += '<span class="chip">' + esc(s1.topic) + '</span>';
-    html += '<div class="chips">' + chips + '</div>';
-  }
-  if (a.s2) {
-    var s2 = a.s2;
-    html += '<div class="s2">';
-    if (s2.summary) html += '<div class="row"><span class="label">摘要</span><br>' + esc(s2.summary) + '</div>';
-    if (s2.due_time) html += '<div class="row"><span class="label">截止时间</span> ' + esc(s2.due_time) + '</div>';
-    if (s2.suggested_action) html += '<div class="row"><span class="label">建议动作</span><br>' + esc(s2.suggested_action) + '</div>';
-    if (s2.tasks && s2.tasks.length) {
-      html += '<div class="row"><span class="label">任务</span><ul>';
-      s2.tasks.forEach(function (t) {
-        html += '<li>' + esc(typeof t === 'string' ? t : (t.task || JSON.stringify(t))) + '</li>';
-      });
-      html += '</ul></div>';
-    }
-    html += '</div>';
-  }
-  return html + '</div>';
-}
-
-function renderTodos() {
-  var todos = ANALYSES.filter(function (a) {
-    return (!APP_FILTER || normPkg(a.pkg) === APP_FILTER) &&
-      a.s1 && a.s1.need_action && a.s1.need_action.value;
-  });
-  // 重要度 high 优先，同级按上报时间倒序（最新在前）
-  var impRank = { high: 0, mid: 1, low: 2 };
-  todos.sort(function (a, b) {
-    var ra = impRank[impLabel(a.s1 && a.s1.importance)];
-    var rb = impRank[impLabel(b.s1 && b.s1.importance)];
-    if (ra == null) ra = 3;
-    if (rb == null) rb = 3;
-    if (ra !== rb) return ra - rb;
-    return (b.received_at || 0) - (a.received_at || 0);
-  });
-  if (!todos.length) return '<div class="empty">🎉 暂无待办</div>';
-  var html = '';
-  todos.forEach(function (a) {
-    var impCls = (impLabel(a.s1 && a.s1.importance) === 'high') ? 'imp-high' : '';
-    var appBadge = normPkg(a.pkg) === PKG_WX ? '' :
-      '<span class="badge b-app">' + esc(pkgLabel(a.pkg)) + '</span>';
-    html += '<div class="card">' +
-      '<div class="conv-head">' + appBadge +
-      '<span class="conv-name">' + esc(a.conversation) + '</span>' +
-      '<span class="' + impCls + '">' + esc((a.s1 && a.s1.importance) || '') + '</span></div>' +
-      renderAnalysisBlock(a) +
-      '<div class="conv-preview">窗口消息 ' + (a.message_count || 0) +
-      ' 条 · 分析于 ' + esc(a.analyzed_at || '') + '</div></div>';
-  });
-  return html + '<div class="refresh-note">下拉可刷新 · 每 30 秒自动同步</div>';
-}
-
-function renderStats() {
-  var total = MSGS.length;
-  var bySrc = {};
-  var byApp = {};
-  var lastReport = 0;
-  MSGS.forEach(function (m) {
-    bySrc[m.source || 'unknown'] = (bySrc[m.source || 'unknown'] || 0) + 1;
-    var p = normPkg(m.pkg);
-    byApp[p] = (byApp[p] || 0) + 1;
-    if ((m.received_at || 0) > lastReport) lastReport = m.received_at;
-  });
-  var analyzedConvs = {};
-  ANALYSES.forEach(function (a) { analyzedConvs[ckOf(a)] = 1; });
-  function cell(num, label) {
-    return '<div class="card"><div class="stat-num">' + num + '</div>' +
-      '<div class="stat-label">' + label + '</div></div>';
-  }
-  var srcTxt = Object.keys(bySrc).map(function (k) {
-    return (k === 'android-db' ? '数据库' : k === 'android-notification' ? '通知' : k) +
-      ' ' + bySrc[k];
-  }).join(' / ');
-  var appTxt = Object.keys(byApp).map(function (k) {
-    return pkgLabel(k) + ' ' + byApp[k];
-  }).join(' / ');
-  return '<div class="stat-grid">' +
-    cell(total, '消息总数（最近 1000 条内）') +
-    cell(Object.keys(analyzedConvs).length, '已分析会话数') +
-    cell(ANALYSES.length, '分析结果数') +
-    cell(lastReport ? fmtTime(lastReport) : '—', '最近上报时间') +
-    '</div><div class="card"><div class="stat-label">应用分布</div>' +
-    '<div style="margin-top:6px;">' + esc(appTxt || '—') + '</div></div>' +
-    '<div class="card"><div class="stat-label">来源分布</div>' +
-    '<div style="margin-top:6px;">' + esc(srcTxt || '—') + '</div></div>' +
-    '<div class="refresh-note">下拉可刷新 · 每 30 秒自动同步</div>';
-}
-
-// ---------- 顾问层（Fable）复盘报告 ----------
-// 建议类型图标：prompt=提示词调优 watchlist=重点关注 threshold=阈值调整
-var ADV_TYPE_META = {
-  prompt:    { ico: '✏️', label: '提示词调优' },
-  watchlist: { ico: '👀', label: '重点关注' },
-  threshold: { ico: '🎚️', label: '阈值调整' },
-  other:     { ico: '💡', label: '其它建议' }
-};
-
-function renderAdvisor() {
-  if (!ADVISORS.length) return '<div class="empty">暂无顾问报告</div>';
-  var html = '';
-  ADVISORS.forEach(function (r) {
-    // 建议按 type 分组展示
-    var groups = {}, order = [];
-    (r.suggestions || []).forEach(function (s) {
-      var t = ADV_TYPE_META[s.type] ? s.type : 'other';
-      if (!groups[t]) { groups[t] = []; order.push(t); }
-      groups[t].push(s);
-    });
-    html += '<div class="card">' +
-      '<div class="conv-head"><span class="conv-name">🧭 复盘报告</span>' +
-      '<span class="conv-count">' + esc(r.created_at || '') + '</span></div>' +
-      '<div class="chips">' +
-      '<span class="chip">模型 ' + esc(r.model_used || '—') + '</span>' +
-      '<span class="chip">覆盖 ' + (r.case_count || 0) + ' 个 case</span>' +
-      (r.period_days ? '<span class="chip">近 ' + r.period_days + ' 天</span>' : '') +
-      '</div>';
-    if (r.summary) {
-      html += '<div class="s2"><div class="row"><span class="label">复盘摘要</span><br>' +
-        esc(r.summary) + '</div></div>';
-    }
-    order.forEach(function (t) {
-      var meta = ADV_TYPE_META[t];
-      html += '<div class="s2"><div class="row"><span class="label">' +
-        meta.ico + ' ' + meta.label + '</span><ul>';
-      groups[t].forEach(function (s) {
-        html += '<li><b>' + esc(s.title || '') + '</b>' +
-          (s.detail ? ' — ' + esc(s.detail) : '') + '</li>';
-      });
-      html += '</ul></div></div>';
-    });
-    html += '</div>';
-  });
-  return html + '<div class="refresh-note">下拉可刷新 · 每 30 秒自动同步</div>';
-}
-
-// ---------- 启动 ----------
-if (!TOKEN) showAuth();
-load();
-setInterval(load, 30000);  // 30 秒自动刷新
-
-// 注册 service worker（PWA 可安装 / 离线骨架）
-// 同样基于 __WX_DIR：/console -> /sw.js（scope /）；
-// /mmonitor/console -> /mmonitor/sw.js（scope /mmonitor/），均可控制本页
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register(window.__WX_DIR + 'sw.js').catch(function () {});
-}
-</script>
-</body>
-</html>"""
-
-# manifest 图标：PNG 文件放 pwa_icons/（由 gen_icons.py 生成），经
-# /console/icons/<name> 路由提供。manifest 里的 src 用相对路径，相对 manifest
-# 自身 URL 解析（/console/manifest.json -> /console/icons/...；
-# /mmonitor/console/manifest.json -> /mmonitor/console/icons/...），
-# 两种挂载方式都正确。SVG data URI 保留作兜底（Android Chrome 可用，
-# iOS apple-touch-icon 只认 PNG，见 CONSOLE_HTML 注入的 link）。
-_ICON_SVG = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' "
-             "width='512' height='512'%3E%3Crect width='512' height='512' "
-             "rx='100' fill='%2307C160'/%3E%3Ctext x='256' y='330' "
-             "font-size='260' text-anchor='middle'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E")
-
-CONSOLE_MANIFEST = {
-    "name": "微信分析助手",
-    "short_name": "微信分析助手",
-    "description": "微信消息监测与分析结果查看端",
-    # 相对路径：相对 manifest 自身 URL 解析（/console/manifest.json ->
-    # /console/；/mmonitor/console/manifest.json -> /mmonitor/console/），
-    # 两种挂载方式都正确
-    "start_url": "./",
-    "scope": "./",
-    "display": "standalone",
-    "background_color": "#f5f5f5",
-    "theme_color": "#07C160",
-    "icons": [
-        {"src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png",
-         "purpose": "any"},
-        {"src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png",
-         "purpose": "any"},
-        {"src": "icons/icon-512-maskable.png", "sizes": "512x512",
-         "type": "image/png", "purpose": "maskable"},
-        {"src": _ICON_SVG, "sizes": "any", "type": "image/svg+xml",
-         "purpose": "any"},
-    ],
-}
-
-PWA_ICON_DIR = os.path.join(BASE_DIR, "pwa_icons")
-
-# Service Worker：页面骨架 cache-first（离线/弱网可开），API 请求走网络。
-# 骨架缓存 key 用去掉 query 的实际请求路径（兼容 /console 与 /mmonitor/console
-# 两种挂载方式），匹配时 ignoreSearch 避开 ?token= 差异。
-CONSOLE_SW = """var CACHE = 'wx-console-v4';
-self.addEventListener('install', function (e) { self.skipWaiting(); });
-self.addEventListener('activate', function (e) {
-  e.waitUntil(caches.keys().then(function (keys) {
-    return Promise.all(keys.map(function (k) {
-      if (k !== CACHE) return caches.delete(k);
-    }));
-  }).then(function () { return self.clients.claim(); }));
-});
-self.addEventListener('fetch', function (e) {
-  var url = new URL(e.request.url);
-  // API 请求一律走网络（数据要新鲜；用 includes 兼容前缀挂载）
-  if (url.pathname.indexOf('/messages') >= 0 ||
-      url.pathname.indexOf('/analysis') >= 0 ||
-      url.pathname.indexOf('/advisor') >= 0 ||
-      url.pathname.indexOf('/weixin') >= 0 ||
-      url.pathname.indexOf('/admin') >= 0) {
-    return;  // 不拦截，默认网络
-  }
-  // 页面导航与静态骨架：cache-first，网络成功后回填
-  if (e.request.mode === 'navigate' || url.pathname.indexOf('/console') >= 0) {
-    var shellKey = url.pathname;  // 去 query 的实际路径作缓存 key
-    e.respondWith(
-      caches.open(CACHE).then(function (cache) {
-        return cache.match(shellKey, { ignoreSearch: true }).then(function (hit) {
-          var net = fetch(e.request).then(function (resp) {
-            if (resp.ok) cache.put(shellKey, resp.clone());
-            return resp;
-          }).catch(function () { return hit; });
-          return hit || net;
-        });
-      })
-    );
-    return;
-  }
-  // manifest / sw.js 等：网络优先，失败回缓存
-  e.respondWith(
-    fetch(e.request).catch(function () { return caches.match(e.request); })
-  );
-});
-"""
+# manifest 若缺 icons（前端资源没带），补齐默认四项，保证 PWA 可安装。
+_mc_icons = list(CONSOLE_MANIFEST.get('icons') or [])
+_mc_have = set(str(it.get('src', '')) for it in _mc_icons)
+if 'icons/icon-192.png' not in _mc_have:
+    _mc_icons.insert(0, {'src': 'icons/icon-192.png', 'sizes': '192x192',
+                     'type': 'image/png', 'purpose': 'any'})
+if 'icons/icon-512.png' not in _mc_have:
+    _mc_icons.insert(1, {'src': 'icons/icon-512.png', 'sizes': '512x512',
+                     'type': 'image/png', 'purpose': 'any'})
+if 'icons/icon-512-maskable.png' not in _mc_have:
+    _mc_icons.append({'src': 'icons/icon-512-maskable.png', 'sizes': '512x512',
+                     'type': 'image/png', 'purpose': 'maskable'})
+if not any(str(it.get('type', '')).startswith('image/svg') for it in _mc_icons):
+    _mc_icons.append({'src': _ICON_SVG, 'sizes': 'any',
+                     'type': 'image/svg+xml', 'purpose': 'any'})
+CONSOLE_MANIFEST['icons'] = _mc_icons
 
 
 # strict_slashes=False：同时匹配 /console 与 /console/，
 # 因为 manifest 的 start_url "./" 会解析成带末尾斜杠的地址
 @app.route("/console", methods=["GET"], strict_slashes=False)
 def console_page():
-    """移动端控制台单页（鉴权支持 ?token= query，见 check_token）。"""
-    auth_err = check_token()
-    if auth_err:
-        return auth_err
+    """移动端控制台单页。
+
+    骨架本身**不含任何用户数据**，所以不再强制鉴权：
+    原来强制鉴权 → PWA manifest 的 start_url 指向 "./"，
+    从桌面主屏启动直接撞上 401，用户看到的是一屏错误而不是控制台。
+    真正的数据接口（/messages、/analysis、/advisor）仍然走 X-Token 鉴权。
+    """
     # no-cache：让 SW 每次都能拿到最新骨架（SW 离线时回缓存）
     return Response(CONSOLE_HTML, mimetype="text/html",
                     headers={"Cache-Control": "no-cache"})
@@ -1690,13 +2112,13 @@ def index():
     last_extract = "从未提取"
     if os.path.exists(state_path):
         try:
-            last_extract = json.load(open(state_path, encoding="utf-8")).get(
-                "last_run", "未知")
+            with open(state_path, encoding="utf-8") as _sf:
+                last_extract = json.load(_sf).get("last_run", "未知")
         except (json.JSONDecodeError, OSError):
             pass
     stats_html = (
         f'<div class="stats">安卓库消息 <b>{db_count}</b> 条 ｜ '
-        f'最近提取：{last_extract}</div>')
+        f'最近提取：{_esc_html(last_extract)}</div>')
 
     # 来源徽标映射：通知上报 / 数据库直读
     SOURCE_BADGE = {
@@ -1707,24 +2129,27 @@ def index():
     # 拼接消息行
     items_html = ""
     for sender, text, ts, conversation, is_group, source, pkg in rows:
-        time_str = datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        # 越界时间戳不再打挂整页（原来一条 10**18 就让整页 500）
+        time_str = _fmt_ts(ts)
         group_badge = '<span class="badge">群聊</span>' if is_group else ""
         src_badge = SOURCE_BADGE.get(source, "")
-        # App 角标：微信不显示（主场景），其它 App 显示中文名（esc 定义在下方，先占位）
+        # App 角标：微信不显示（主场景），其它 App 显示中文名
         app_badge = None
-        # 简单转义防 XSS
-        esc = lambda s: (s.replace("&", "&amp;").replace("<", "&lt;")
-                          .replace(">", "&gt;").replace('"', "&quot;"))
         if app_badge is None and (pkg or DEFAULT_PKG) != DEFAULT_PKG:
             app_badge = (
-                f'<span class="badge badge-app">{esc(pkg_label(pkg))}</span>')
+                f'<span class="badge badge-app">'
+                f'{_esc_html(pkg_label(pkg))}</span>')
+        # 统一走模块级 _esc_html：NULL 字段渲染成空串
+        # （原来的局部 lambda 对 None 会抛 AttributeError，
+        #  一条脏数据就能让整页 500；局部 esc 也没转义单引号，
+        #  跟前端 esc 口径不一致）
         items_html += (
             f'<div class="msg">'
             f'<div class="meta">{group_badge}{src_badge}{app_badge or ""}'
-            f'<span class="conv">{esc(conversation)}</span>'
-            f'<span class="sender">{esc(sender)}</span>'
+            f'<span class="conv">{_esc_html(conversation)}</span>'
+            f'<span class="sender">{_esc_html(sender)}</span>'
             f'<span class="time">{time_str}</span></div>'
-            f'<div class="text">{esc(text)}</div>'
+            f'<div class="text">{_esc_html(text)}</div>'
             f'</div>'
         )
     if not items_html:
@@ -1764,19 +2189,94 @@ def index():
 {items_html}
 </body>
 </html>"""
-    return Response(html, mimetype="text/html")
+    # no-store：落地页内联了最近 100 条消息正文，
+    # 绝不能被浏览器或 SW 缓存下来（原来只靠 SW 规则兜底，很容易再被缓存住）
+    return Response(html, mimetype="text/html",
+                    headers={"Cache-Control": "no-store"})
 
 
 # ------------------------------------------------------------------
 # 启动入口
 # ------------------------------------------------------------------
 
-if __name__ == "__main__":
+def _require_token_configured():
+    """令牌没配好就拒绝启动。
+
+    WEIXIN_TOKEN 为空（或只有空白）时 check_token() 会放行一切请求
+    -> 消息正文、分析结果、顾问报告全部裸奔。这里让「启动」这一步就失败，
+    宁可起不来，也不要默默开一个无鉴权的服务。
+    显式设置 WEIXIN_ALLOW_NO_AUTH=1 表示「我知道我在干什么」，放行。
+    """
+    if TOKEN or ALLOW_NO_AUTH:
+        return
+    raise RuntimeError(
+        "未设置 WEIXIN_TOKEN：拒绝以无鉴权模式启动。"
+        "请设置环境变量 WEIXIN_TOKEN 后重启；"
+        "若仅想本机自测，可设 WEIXIN_ALLOW_NO_AUTH=1 显式放行。")
+
+
+def _probe_main_db_writable(timeout=0.5):
+    """探测主库现在能不能立刻拿到写锁。
+
+    返回 (state, detail)，state 取值：ok / busy / error。
+    提取任务与 /weixin、/analysis 都写同一个主库；被占用时（另一个提取任务
+    正在批量提交、或有长事务没提交）直接回 503 + Retry-After，
+    比让请求挂着等 30 秒 busy_timeout 再失败强。
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=timeout, isolation_level=None)
+    except sqlite3.Error as e:
+        return "error", str(e)
+    try:
+        conn.execute("PRAGMA busy_timeout=%d" % int(timeout * 1000))
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("ROLLBACK")
+        return "ok", ""
+    except sqlite3.OperationalError as e:
+        text = str(e).lower()
+        if "locked" in text or "busy" in text:
+            return "busy", str(e)
+        return "error", str(e)
+    finally:
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+
+
+def create_app(require_token=True):
+    """WSGI 应用工厂（部署统一入口）。
+
+    WSGI 部署（waitress-serve / gunicorn）**不会**执行下面的 __main__ 块，
+    原来那两件保命的事都丢了：
+      - init_db() 只在 __main__ 里跑 -> WSGI 起来后第一个请求就 500
+        （sqlite3.OperationalError: unable to open database file）
+      - 「令牌为空就退出」只在 __main__ 里检查 -> WSGI 起来就是无鉴权裸奔
+    现在把两件事收进工厂：
+      - 幂等 init_db()（重复调用安全，已建好就直接返回）
+      - 令牌未配置且未显式允许无鉴权 -> 直接抛 RuntimeError，启动失败
+
+    用法（server 目录下）：
+        waitress-serve --call app:create_app        # Windows
+        gunicorn "app:create_app()"                  # Linux
+    """
+    if require_token:
+        _require_token_configured()
     init_db()
+    return app
+
+
+if __name__ == "__main__":
+    try:
+        application = create_app()
+    except RuntimeError as e:
+        print(f"[错误] {e}")
+        sys.exit(1)
     if TOKEN:
         print(f"[信息] 已启用 X-Token 鉴权")
-    else:
-        print(f"[警告] 未设置 WEIXIN_TOKEN，接口无鉴权！公网部署务必设置。")
+    elif ALLOW_NO_AUTH:
+        print("[警告] 未设置 WEIXIN_TOKEN，且显式允许无鉴权运行"
+              "（WEIXIN_ALLOW_NO_AUTH=1）：任何人都能读取全部消息正文！")
     print(f"[信息] 数据目录: {DATA_DIR}")
     # 无鉴权时默认只听本机：局域网/公网可直接读到全部消息正文，必须先有令牌。
     host = "0.0.0.0" if (TOKEN or ALLOW_INSECURE_BIND) else "127.0.0.1"
@@ -1787,7 +2287,7 @@ if __name__ == "__main__":
     # 优先用 waitress（生产级 WSGI，支持 Windows）；不可用时降级 Flask 内置服务器
     try:
         from waitress import serve
-        serve(app, host=host, port=PORT, threads=4)
+        serve(application, host=host, port=PORT, threads=4)
     except ImportError:
         print("[提示] waitress 未安装，降级为 Flask 内置服务器（仅限开发/自用）")
-        app.run(host=host, port=PORT, threaded=True)
+        application.run(host=host, port=PORT, threaded=True)

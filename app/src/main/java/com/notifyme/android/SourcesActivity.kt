@@ -13,6 +13,7 @@ import android.view.ViewGroup
 import android.widget.CheckedTextView
 import android.widget.Switch
 import android.widget.TextView
+import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
@@ -161,10 +162,20 @@ class SourcesActivity : Activity() {
 
         private val items = mutableListOf<Row>()
 
+        /** 用 DiffUtil 做增量刷新：开关变化只重画那一行，不再整表重绘。 */
         fun submit(rows: List<Row>) {
+            val old = items.toList()
+            val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
+                override fun getOldListSize(): Int = old.size
+                override fun getNewListSize(): Int = rows.size
+                override fun areItemsTheSame(oldPos: Int, newPos: Int): Boolean =
+                    old[oldPos].pkg == rows[newPos].pkg
+                override fun areContentsTheSame(oldPos: Int, newPos: Int): Boolean =
+                    old[oldPos] == rows[newPos]
+            })
             items.clear()
             items.addAll(rows)
-            notifyDataSetChanged()
+            diff.dispatchUpdatesTo(this)
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {

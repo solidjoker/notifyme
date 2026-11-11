@@ -17,11 +17,18 @@ on:
 permissions:
   contents: write
 
+# 同一个 tag 只允许一个发布流程在跑（重复推送 tag 时取消上一次）
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     name: 签名构建并发布 Release
     # 与 android.yml 同口径钉住 24.04：签名发布流程不该被 runner 镜像迁移打断
     runs-on: ubuntu-24.04
+    # 发布流程总体超时：签名构建 + 校验 + 上传，30 分钟足够；卡住就判失败
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -31,9 +38,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle (cache)
+      - name: Setup Gradle (缓存依赖)
         # 停在 v5：gradle/actions v6 起缓存组件不再开源（见 android.yml 同一处注释）
         uses: gradle/actions/setup-gradle@v5
+
+      - name: Set up Python (版本校验脚本)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Prepare wrapper for CI
         run: |
@@ -53,12 +65,19 @@ jobs:
 
       - name: Verify tag matches versionName
         run: |
+          set -euo pipefail
           TAG="${GITHUB_REF_NAME#v}"
-          VN=$(grep -m1 'versionName' app/build.gradle.kts | sed -E 's/.*"([^"]+)".*/\1/')
-          echo "tag=$TAG  versionName=$VN"
-          if [ "$TAG" != "$VN" ]; then
-            echo "::error::tag $GITHUB_REF_NAME 与 app/build.gradle.kts 的 versionName=$VN 不一致，请先升版本号"
-            exit 1
+          # 优先用仓库里的版本校验脚本（剥注释后精确匹配，不会命中注释行里的 versionName）
+          if [ -f docs/scripts/version_check.py ]; then
+            python3 docs/scripts/version_check.py --expect-tag "$GITHUB_REF_NAME"
+          else
+            # 脚本缺失时的兜底：先去掉行注释再取 versionName
+            VN=$(sed -E 's#//.*$##' app/build.gradle.kts | grep -E '^[[:space:]]*versionName[[:space:]]*=' | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
+            echo "tag=$TAG  versionName=$VN"
+            if [ "$TAG" != "$VN" ]; then
+              echo "::error::tag $GITHUB_REF_NAME 与 app/build.gradle.kts 的 versionName=$VN 不一致，请先升版本号"
+              exit 1
+            fi
           fi
 
       - name: Decode signing keystore
@@ -70,10 +89,12 @@ jobs:
             exit 1
           fi
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/notifyme-release.jks"
+          # 收紧权限：密钥库落盘后只允许当前 runner 用户读写
+          chmod 600 "$RUNNER_TEMP/notifyme-release.jks"
           echo "NOTIFYME_KEYSTORE_FILE=$RUNNER_TEMP/notifyme-release.jks" >> "$GITHUB_ENV"
 
       - name: Fetch llama.cpp v0.5.0 (M4 native source, not committed)
-        # 与 android.yml 同一步：third_party/ gitignore 不入库，release 构建同样要先拉源码
+        # 与 android.yml 同一步：third_party/ 已 gitignore，release 构建同样要先拉源码
         run: |
           git clone --depth 1 --branch v0.5.0 \
             https://github.com/ggml-org/llama.cpp third_party/llama.cpp
@@ -84,7 +105,9 @@ jobs:
           NOTIFYME_KEYSTORE_PASSWORD: ${{ secrets.NOTIFYME_KEYSTORE_PASSWORD }}
           NOTIFYME_KEY_ALIAS: ${{ secrets.NOTIFYME_KEY_ALIAS }}
           NOTIFYME_KEY_PASSWORD: ${{ secrets.NOTIFYME_KEY_PASSWORD }}
-        run: ./gradlew --stacktrace assembleOpenRelease
+        # -PrequireReleaseSigning=true：签名缺失时让 gradle 直接失败，
+        # 而不是只 warn 一句然后产出一个未签名的 APK。
+        run: ./gradlew --stacktrace assembleOpenRelease -PrequireReleaseSigning=true
 
       - name: Verify APK signature
         run: |
@@ -108,9 +131,9 @@ jobs:
             echo
             echo "## 校验"
             echo
-            echo '```'
+            echo '\`\`\`'
             cat app/build/outputs/apk/open/release/notifyme-open.apk.sha256
-            echo '```'
+            echo '\`\`\`'
           } > "$RUNNER_TEMP/notes-head.md"
 
       - name: Create GitHub Release

@@ -10,19 +10,33 @@ import java.io.File
 /**
  * 待上报队列里的一条消息：在 ChatMessage 基础上加一个自增 id。
  * id 用于上报成功后精确剔除已发送条目（避免 timestamp+text 撞键误删）。
+ *
+ * 另外挂两个**被拒计数**字段（上一轮报告外发现第 1 条）：
+ *  - [rejectedCount]：服务端「部分成功(207)」里被点名拒绝的累计次数；
+ *  - [firstRejectedAt]：首次被拒时间（毫秒，0 = 从未被拒）。
+ * 累计被拒达到 [PendingRejectCore.MAX_REJECT_COUNT] 次即丢弃该条，避免队列被
+ * 「服务端一直拒」的僵尸条目无限撑大。老数据没有这两个字段时按 0 处理，兼容。
  */
 data class PendingMessage(
     val id: Long,
-    val message: ChatMessage
+    val message: ChatMessage,
+    /** 累计被服务端拒绝次数；达到上限即丢弃（见 [PendingRejectCore]）。 */
+    val rejectedCount: Int = 0,
+    /** 首次被拒时间（毫秒）；0 = 从未被拒。 */
+    val firstRejectedAt: Long = 0L
 ) {
     fun toJson(): JSONObject = message.toJson().apply {
         put("id", id)
+        put("rejected_count", rejectedCount)
+        put("first_rejected_at", firstRejectedAt)
     }
 
     companion object {
         fun fromJson(obj: JSONObject): PendingMessage = PendingMessage(
             id = obj.optLong("id"),
-            message = ChatMessage.fromJson(obj)
+            message = ChatMessage.fromJson(obj),
+            rejectedCount = obj.optInt("rejected_count", 0),
+            firstRejectedAt = obj.optLong("first_rejected_at", 0L)
         )
     }
 }
@@ -47,6 +61,12 @@ data class PendingMessage(
 object PendingQueue {
 
     private const val FILE_NAME = "pending.jsonl"
+
+    /** 队列统计（丢弃计数）的 SharedPreferences 名。 */
+    private const val PREFS_NAME = "pending_queue"
+
+    /** 累计被拒后丢弃的条目数键（含超限丢弃 + 过期清理），只增不减。 */
+    private const val KEY_DROPPED_REJECTED = "dropped_rejected"
 
     /**
      * 每个数据目录缓存一个 core：[PendingQueueCore] 内部有自增 id 计数器，
@@ -78,6 +98,56 @@ object PendingQueue {
     /** 读取全部待上报消息，按 id 升序（先入队的先上报）。 */
     @Synchronized
     fun readAll(context: Context): List<PendingMessage> = core(context).readAll()
+
+    /**
+     * 读取队列 + **顺带清理**「被拒过且已过期」的条目。
+     *
+     * 清理放在读取路径上（而不是单独一轮任务），保证被服务端长期拒绝的僵尸条目
+     * 不会一直占着队列；从未被拒过的条目不受影响（它们本来就该继续排队上报）。
+     *
+     * @param nowMs 当前时间（毫秒）
+     */
+    @Synchronized
+    fun readAllAndPruneExpired(context: Context, nowMs: Long): ReadResult {
+        val expired = core(context).pruneExpiredRejected(nowMs)
+        if (expired.isNotEmpty()) bumpDropped(context, expired.size)
+        return ReadResult(core(context).readAll(), expired.size)
+    }
+
+    /**
+     * 记一次「被服务端拒绝」：累计被拒次数；累计到上限（默认
+     * [PendingRejectCore.MAX_REJECT_COUNT] 次）的条目直接丢弃。
+     *
+     * @return 被丢弃（超限）的条目 id 集合（空集 = 本次没有条目被丢弃）
+     */
+    @Synchronized
+    fun markRejected(context: Context, rejectedIds: Set<Long>, nowMs: Long): Set<Long> {
+        if (rejectedIds.isEmpty()) return emptySet()
+        val dropped = core(context).markRejected(rejectedIds, nowMs)
+        if (dropped.isNotEmpty()) bumpDropped(context, dropped.size)
+        return dropped
+    }
+
+    /** 累计被拒后丢弃的条目数（超限丢弃 + 过期清理），只增不减。 */
+    @Synchronized
+    fun droppedRejectedCount(context: Context): Long =
+        prefs(context).getLong(KEY_DROPPED_REJECTED, 0L)
+
+    private fun prefs(context: Context) =
+        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    private fun bumpDropped(context: Context, count: Int) {
+        if (count <= 0) return
+        prefs(context).edit()
+            .putLong(KEY_DROPPED_REJECTED, droppedRejectedCount(context) + count)
+            .apply()
+    }
+
+    /** 读取队列的结果：待发条目 + 顺带清理掉的过期被拒条数。 */
+    data class ReadResult(
+        val messages: List<PendingMessage>,
+        val prunedExpired: Int
+    )
 
     /**
      * 上报成功后剔除已发送条目：整体重写文件。
@@ -170,6 +240,68 @@ internal class PendingQueueCore(private val store: JsonlStore) {
     fun removeSent(sentIds: Set<Long>) {
         val remaining = readAll().filterNot { it.id in sentIds }
         store.overwrite(remaining.map { it.toJson().toString() })
+    }
+
+    /**
+     * 记一次「被服务端拒绝」：累计被拒次数 + 记录首次被拒时间；
+     * 累计达到 [PendingRejectCore.MAX_REJECT_COUNT] 次的条目直接丢弃。
+     *
+     * 整体重写文件（与 [removeSent] 同一口径；损坏行在重写时按既有差异丢弃）。
+     *
+     * @param rejectedIds 本次被拒的条目 id 集合
+     * @param nowMs 本次被拒时间（毫秒）
+     * @return 被丢弃（超限）的条目 id 集合
+     */
+    fun markRejected(rejectedIds: Set<Long>, nowMs: Long): Set<Long> {
+        if (rejectedIds.isEmpty()) return emptySet()
+        if (!store.exists()) return emptySet()
+        val entries = readAll()
+        if (entries.isEmpty()) return emptySet()
+        val dropped = LinkedHashSet<Long>()
+        val kept = mutableListOf<PendingMessage>()
+        var changed = false
+        for (entry in entries) {
+            if (entry.id !in rejectedIds) {
+                kept += entry
+                continue
+            }
+            val decision = PendingRejectCore.onRejected(
+                rejectedCount = entry.rejectedCount,
+                firstRejectedAt = entry.firstRejectedAt,
+                nowMs = nowMs
+            )
+            changed = true
+            if (decision.dropped) {
+                dropped += entry.id
+            } else {
+                kept += entry.copy(
+                    rejectedCount = decision.rejectedCount,
+                    firstRejectedAt = decision.firstRejectedAt
+                )
+            }
+        }
+        if (changed) {
+            store.overwrite(kept.map { it.toJson().toString() })
+        }
+        return dropped
+    }
+
+    /**
+     * 清理「被拒过且已过期」的条目（默认超过 [PendingRejectCore.REJECT_TTL_MS] = 7 天）。
+     * 从未被拒过的条目永不过期。
+     *
+     * @return 被清理掉的条目 id 集合
+     */
+    fun pruneExpiredRejected(nowMs: Long): Set<Long> {
+        if (!store.exists()) return emptySet()
+        val entries = readAll()
+        if (entries.isEmpty()) return emptySet()
+        val expired = entries.filter { PendingRejectCore.isExpired(it.firstRejectedAt, nowMs) }
+        if (expired.isEmpty()) return emptySet()
+        val expiredIds = expired.map { it.id }.toSet()
+        val kept = entries.filterNot { it.id in expiredIds }
+        store.overwrite(kept.map { it.toJson().toString() })
+        return expiredIds
     }
 
     /** 清空队列，并把 id 计数器归零（下次 append 会重新从文件恢复）。 */

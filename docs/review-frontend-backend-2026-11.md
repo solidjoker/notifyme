@@ -1,0 +1,548 @@
+# notifyme 前端与后端重新评审报告（2026-11）
+
+> **评审对象**：`server/app.py`（1780 行，含内嵌 PWA 控制台前端 + SQLite + JSONL 存档 + 顾问存档）、`server/android_db_extract.py`（556 行）、`server/pc_db_extract.py`（431 行）、`app/src/main/java/com/notifyme/android/*`（Android 客户端，与服务端构成契约）
+> **基线**：`revise.md`（基线 commit `62c2b4c` / 2026-10-07）与 `progress.md`（M24 / 2026-10-25）。当前 HEAD `edfee57`，工作区干净。
+> **评审方式**：lead 实读全部相关源码 + **运行时探针实测**（对 `server/app.py` 做进程内 Flask test client 探针，脚本见 `.tmp/review_probe.py`）+ 三路并行只读审查（backend-audit / frontend-audit / contract-audit）
+> **分级口径**：P0 = 安全越权 / 静默丢数据；P1 = 明确的正确性缺陷或永久性卡死；P2 = 体验 / 性能 / 可维护性；P3 = 细节打磨
+> **一句话结论**：服务端在 `revise.md` 之后的加固（207 语义、游标分页、参数化 SQL、令牌鉴权）方向正确，但**端上没接住 207 语义**（永久丢消息 + 永久丢分析）、**前端 PWA 的 SW 缓存把带鉴权的落地页写进 Cache**（无令牌可读最近 100 条消息正文），这两条是必须立刻修的阻断项；其余为一致性与体验债。
+
+---
+
+## 0. 缺陷统计
+
+| 域 | P0 | P1 | P2 | P3 | 备注 |
+|---|---|---|---|---|---|
+| 后端（`server/app.py`） | 3 | 8 | 20 | 11 | 数值边界、双写顺序、空令牌/WSGI 三条 P0；含 SW/落地页鉴权绕过（前端代码在同文件内） |
+| 前端（CONSOLE_HTML / manifest / SW / index） | 1 | 10 | 22 | 20 | 含存储型 XSS ×2、刷新失焦、分页未接 |
+| 提取脚本（`*_db_extract.py`） | 0 | 2 | 5 | 4 | 全表去重 + OOM、明文落盘、秒级去重口径 |
+| 端云契约（Android ↔ 服务端） | 2 | 5 | 8 | 6 | 207 死分支 ×2、隐私门控、413 死循环、脱敏证据丢失 |
+| 文档 / 测试 | 0 | 3 | 3 | 1 | README 与实现不符、启动脚本无鉴权、后端测试仅 7 例 |
+
+合计 **P0 × 6 / P1 × 24 / P2 × 57 / P3 × 42**（按报告正文计数；同一根因在多个域出现时只计一次）。
+
+### 必改 Top 13（按「修完能解掉最多下游症状」排序）
+
+| # | 改动 | 位置 | 解掉的症状 |
+|---|---|---|---|
+| 1 | `when` 分支把 207 提到 `isSuccessful` 之前 | `app/src/main/java/com/notifyme/android/SyncWorker.kt:181`、`:293` | 被拒消息 / 被拒分析**永久丢失**、水位误推进 |
+| 2 | SW 导航改「网络优先 + 只缓存 `/console` 壳」，落地页 `no-store` | `server/app.py:1590-1604`、`:1653-1753` | 无令牌可读最近 100 条消息正文（鉴权绕过） |
+| 3 | TOKEN 为空时拒绝启动；WSGI 也走同一入口（`create_app` + 幂等 `init_db`）；启动 bat 缺令牌直接退出 | `app.py:228-229`、`:1760-1779`、`server/启动服务.bat:7-12` | 空令牌 + WSGI = 公网裸奔；WSGI 部署全部接口 500 |
+| 4 | 数值字段边界校验（timestamp / analyzed_at / window_end / message_count）+ 捕获 ValueError / OSError | `app.py:316`、`:390`、`:604-605`、`:611`、`:1696` | 一条越界数据 500、落地页整页挂掉、存档半写 |
+| 5 | `/weixin` 改成「先入库 commit 再写存档」（或每条独立事务） | `app.py:280-332` | 存档与库永久不一致、重复上报让存档翻倍 |
+| 6 | 顾问渲染补 `esc()`，服务端收敛 `case_count/period_days` 类型 | `app.py:1494-1495`、`:763-780` | 存储型 XSS → localStorage 明文令牌被窃 |
+| 7 | `/analysis POST` 数值字段逐条隔离（不合格计入 invalid + rejected，返 207） | `app.py:604-605`、`:622` | 一条脏数据让**整条分析上报链路永久 500 卡死** |
+| 8 | `api()` 判 `r.ok`，错误可见；30s 刷新不重建鉴权框 | `app.py:1076-1080`、`:1062-1067`、`:1519` | 500 被渲染成「已同步 · 消息 0」、正在输入的令牌被清空 |
+| 9 | `/analysis GET` 返回归一后的 `importance/need_action`，并对脏行容错 | `app.py:687-703`、`:693/695/700` | 一行脏 JSON 让**全部历史分析不可回看**；前端 importance 口径二义 |
+| 10 | 顾问存档损坏时**拒绝写入**而不是静默覆盖 | `app.py:714-723`、`:782-783` | 存档损坏 → 一次 POST 抹掉全部历史报告 |
+| 11 | 队列分批上报（≤N 条/批）并单独处理 413 | `SyncWorker.kt:149-166`、`:215-219` | 超过 8 MiB → 413 → 无限重试，队列永不消化 |
+| 12 | 提取每 500 条 commit + 共享写锁 + busy_timeout 30s + 捕获 OperationalError 返 503 | `android_db_extract.py:434-473`、`app.py:97-98` | 提取期间上报被锁死 5s 后 500 |
+| 13 | `/messages` 的 `next_before` 真正接进控制台（加载更多） | `server/app.py:1155`（前端） | 控制台永远只能看到最近 1000 条历史 |
+
+---
+
+## 1. 运行时探针（可复现证据）
+
+脚本：`.tmp/review_probe.py`（把 `server/app.py` 复制到临时目录后 `import`，`DATA_DIR` 随之隔离，**不触碰仓库 server/data**）。
+运行：`python -X utf8 .tmp/review_probe.py > .tmp/probe_out.txt 2> .tmp/probe_err.txt`
+
+| 探针 | 实测输出 | 对应结论 |
+|---|---|---|
+| 只 import 不调 `init_db()` → `GET /messages` | **500**，stderr `sqlite3.OperationalError: unable to open database file` | E8（P1） |
+| 无令牌 / 错令牌 → `GET /messages` | 401 / 401 | 鉴权生效 |
+| `GET /messages?token=probe-token` | **200** | B14 令牌可走 URL（进访问日志 / Referer） |
+| `POST /weixin` 混合批（1 合法 + 1 缺字段） | **207** `{"received":1,"invalid":1,"rejected":[1],"ok":false}` | 服务端 207 语义正确；与 SyncWorker 分支顺序冲突 → P0-2 |
+| 同一条再发一次 | 200 `{"duplicated":1,"received":0}` | — |
+| 上一步后统计 | **JSONL 2 行 vs SQLite 1 行** | B3（P1）两份真相漂移 |
+| `POST /analysis` `window_end="abc"` | **500**，stderr `ValueError: invalid literal for int() with base 10: 'abc'` | B1 / C3（P1）毒丸条目 |
+| analyses 表插一行脏 s1 → `GET /analysis` | **500** `json.decoder.JSONDecodeError` @ `app.py:693` | B12（P2）一行脏数据毒死全部回看 |
+| 正常上报后查 DB vs GET | DB `importance='high', need_action=1`；GET 返回键里**没有** importance/need_action，`s1.importance=7`（原始数值） | E13（P2）前端二义根因 |
+| `analyzed_at` 上报 1700000000000 | 库里 `"2023-11-15 06:13:20"`（服务器本地时区） | C9 / F9 时间口径 |
+| 顾问存档 2 条 → 写坏文件 → POST 1 条 | 响应 `ok:true, inserted:1`；**文件只剩 ["r3"]** | B2（P1）静默清空 |
+| 3 条消息 `limit=3` | `next_before="1700000000000_2"`；下一页 `count=0` | B6（P2）多一次空请求 |
+| 1200 条 `limit=5000` / `limit=1000` | 1000 / 1000；第二页 200 | F1（P1）服务端支持翻页，前端不翻 |
+| 无令牌 `GET /console` / `/console/manifest.json` / `/sw.js` | 401 / **200** / **200** | FP0-2 / B15 |
+| 单条 text 1 MB | **200 接收** | B4（P2）字段无长度上限 |
+| `GET /analysis?date=1999-01-01` | 返回全部（count=1，date 被忽略） | B5 / B7（P2） |
+| 服务器时区 | `day_start(2026-11-10)=1794240000000` = 2026-11-09T16:00Z，tz=中国标准时间 | B5（P2）服务端本地日界 |
+| `POST /admin/extract` → 查状态 | `started:true`，1.5s 后 `running:false`，`last.error="No module named 'android_db_extract'"` | E18（新增 P2）WSGI 部署下提取功能静默失效 |
+
+---
+
+## 2. P0 缺陷（必须立刻修）
+
+### P0-1 SW 导航缓存越权：无令牌可读到最近 100 条消息正文 【前端 · lead 读码 + 队友交叉验证】
+
+**位置**：`server/app.py:1590-1604`（SW fetch 处理）、`:1653-1753`（`index()` 落地页，内联最近 100 条消息正文）、`:1627-1646`（manifest / icons / sw.js 不鉴权）
+
+```javascript
+// 1590-1604
+// 页面导航与静态骨架：cache-first，网络成功后回填
+if (e.request.mode === 'navigate' || url.pathname.indexOf('/console') >= 0) {
+  var shellKey = url.pathname;            // 去 query 的实际路径作缓存 key
+  e.respondWith(
+    caches.open(CACHE).then(function (cache) {
+      return cache.match(shellKey, { ignoreSearch: true }).then(function (hit) {
+        var net = fetch(e.request).then(function (resp) {
+          if (resp.ok) cache.put(shellKey, resp.clone());   // ← 落地页正文进缓存
+          return resp;
+        }).catch(function () { return hit; });
+        return hit || net;
+      });
+    })
+  );
+  return;
+}
+```
+
+**机制**：SW 拦截**所有** `mode === 'navigate'` 的导航请求，缓存 key 只取 `url.pathname`（`ignoreSearch: true`，token 不参与 key）。`index()`（1653-1758）虽然自己过 `check_token()`，但返回的 HTML 内联了**最近 100 条消息的完整正文**。于是：
+
+1. 用户用 `/?token=xxx` 打开过一次落地页 → SW 把 `/` 的响应体（100 条明文消息）写入 Cache Storage；
+2. 此后**任何不带令牌的导航请求 `/`** 都会 `cache.match('/')` 命中 → **服务端 `check_token()` 根本不执行** → 直接返回缓存的明文消息页；
+3. 同一浏览器 profile 下换人 / 换设备访问（或把缓存目录拷走）即可读到消息正文。
+
+**影响**：绕过令牌鉴权读取明文聊天记录，与 `app.py:219-234` 的鉴权模型直接冲突。探针侧证据：`GET /` 无令牌 → 401（服务端本身拦得住，泄露完全由 SW 缓存造成）。
+
+**修复**：
+- SW 只缓存 `/console` 壳（且壳内不含任何用户数据），导航请求改"网络优先、失败回缓存"；
+- `index()` 的响应加 `Cache-Control: no-store`，并在 SW 里显式不缓存 `/`；
+- 落地页改为"只提示 + 跳控制台"，不再内联消息正文（正文本来就有 `/messages` API）。
+
+### P0-2 消息通道：207 分支是死代码，被服务端拒绝的消息被端上永久删除 【契约 · lead 读码 + 队友交叉验证 + 探针佐证】
+
+**位置**：`app/src/main/java/com/notifyme/android/SyncWorker.kt:179-206`、`:118-135`（`parseRejected`）、服务端 `server/app.py:334-344`
+
+```kotlin
+// SyncWorker.kt:179-205
+client.newCall(request).execute().use { response ->
+    when {
+        response.isSuccessful -> {                                   // ← 207 也命中这里
+            PendingQueue.removeSent(applicationContext, pending.map { it.id }.toSet())
+            okParts += "消息 ${pending.size} 条"
+            Result.success()
+        }
+        response.code == 207 -> {                                   // ← 死代码，永远进不来
+            // 服务端部分条目被拒（ok=false + rejected 下标）：只剔除被接受/重复的，
+            // 被拒条目留在队列里下轮重试，绝不整体当成功删掉。
+            val rejected = parseRejected(response.body?.string())
+            ...
+        }
+```
+
+OkHttp 的 `Response.isSuccessful()` 定义为 `code in 200..299`，**207 属于成功区间**（探针实测服务端确实返回 207，见 §1）。于是：
+
+- 服务端 `/weixin` 在 `invalid > 0` 时返回 207 + `rejected` 下标（`app.py:336-344`）；
+- 客户端先命中 `isSuccessful` 分支 → `PendingQueue.removeSent(全部 pending.id)` → **整批（含被拒条目）从待发队列删除**；
+- 结果：被拒的那条消息**服务端没入库、端上也没了** → 永久丢失；
+- `parseRejected`（118-135）与 207 分支（188-205）整套逻辑从未被执行过，注释里写的"绝不整体当成功删掉"与实际行为完全相反。
+
+**触发条件**：服务端 `_validate_item`（`app.py:396-411`）要求 `sender/text/timestamp/conversation/is_group` 五字段齐全且类型正确。官方客户端 `SyncWorker.kt:158-166` 每次都写全五字段（`put("is_group", message.isGroup)`），所以**当前版本不会触发**；但任何一次协议漂移（新增来源 App 的消息结构不同、客户端裁剪字段、第三方调用）都会立刻造成批量静默丢消息——这是"一次改动毁掉全部历史消息"的典型脆弱点。
+
+**修复**：把 207 分支前置到 `isSuccessful` 之前，或把成功判定改为 `response.code in 200..206`；并在 207 分支里断言响应体 `ok == false`。
+
+### P0-3 分析通道：同一个 207 死分支，导致分析结果永久丢失且水位误推进 【契约 · lead 读码 + 队友交叉验证】
+
+**位置**：`SyncWorker.kt:290-313`、服务端 `server/app.py:628-632`
+
+```kotlin
+// SyncWorker.kt:292-300
+response.isSuccessful -> {                    // ← 207 也命中
+    AnalysisStore.markSynced(applicationContext, records.maxOf { it.analyzedAt })
+    okParts += "分析 ${records.size} 个"
+}
+```
+
+服务端 `/analysis` 在 `invalid > 0` 时返回 **207 + `ok:false` + `rejected`**（`app.py:628-632`），而客户端把 207 当成功 →
+
+- 被拒的 `case_id` 服务端没入库；
+- 端上 `markSynced(records.maxOf { analyzedAt })` 把**整批水位推到最大 analyzedAt** → 被拒记录被标记"已上报"，下轮不再发送 → **分析结果永久丢失**；
+- 该通道甚至没有 207 分支（304 之后直接 404 / else），服务端在 `app.py:628` 精心设计的 `rejected` 数组在分析通道上**完全没有接收方**。
+
+**修复**：分析通道同样前置 207 分支；只推进"连续被接受前缀"的水位，被拒子集单独重发；服务端补 `/analysis` 的 `rejected` 语义文档。
+
+### P0-4 数值字段无边界校验：越界时间戳让接口 500 且存档半写 【后端 · 第三路复核 + lead 复核源码】
+
+**位置**：`server/app.py:316`、`:390`、`:604-605`、`:611`、`:478`、`:1696`
+
+- `app.py:316` `int(item[\"timestamp\"])` 未做范围校验；
+- `app.py:389-390` `datetime.fromtimestamp(ms / 1000.0)` 对越界毫秒抛 OSError / OverflowError，未捕获；
+- `app.py:1695-1696` 落地页同名调用同样未捕获 → **一行越界数据打挂整页**（lead 已复核源码）；
+- `app.py:477-484` `before_ms = int(parts[0])` 越界值虽不致命，但会让游标语义错乱。
+
+**实测**（第三路探针，lead 已复核对应源码）：`POST /analysis window_end=\"abc\"` → 500（`app.py:604`）；`POST /analysis analyzed_at=10**18` → 500（`app.py:611` → `:390` OSError）；`POST /weixin timestamp=1e999` → 500（`app.py:316`）且 jsonl=1 / db=0；`GET /messages?before=9*22` → 500；`GET /` 一行 ts=10**18 → 整页 500。
+
+**影响**：单条脏数据即可 500；与 P0-5 的「先写存档后入库」叠加时产生半写存档。**修复**：`_validate_item` 增加 `0 < ts <= 4102444800000` 与长度上限；`/analysis` 数值字段 try/except 后计入 `invalid`+`rejected` 返回 207；两处 `fromtimestamp` 包 try/except 回退 `str(ts)`；`before` 游标越界返回 400。
+
+### P0-5 `/weixin` 双写顺序错误：存档先写、库后写、整批一次提交 【后端 · 第三路复核 + lead 复核源码】
+
+**位置**：`server/app.py:280-332`（`:293` 写存档 → `:306` INSERT → `:328-329` flush + 整批 commit → `:331` finally）。lead 已复核源码：存档行在 INSERT 之前落盘，而 `conn.commit()` 在整批循环结束后才执行。
+
+**实测**：持写事务场景下 jsonl=1 / db=0；重复上报时 jsonl=2 / db=1（半写与不一致同时发生）。**影响**：批次中途失败 → 存档永久多行、库永久缺行；重复上报让存档翻倍而库去重 → 两份「真相」持续漂移（与 §4.1 E1 叠加）。**修复**：先写库并 commit 再写存档；或每条独立事务 + 存档用同一去重键幂等。
+
+### P0-6 空令牌即完全不鉴权，且绑定与初始化只写在 `__main__` 分支 【后端 · 第三路复核 + lead 复核源码】
+
+**位置**：`server/app.py:228-229`、`:1760-1779`、`server/启动服务.bat:7-12`、`server/README.md` §2。lead 已复核源码：
+
+- `check_token()` 第 228-229 行 `if not TOKEN: return None` → 未配置令牌时**所有接口完全无鉴权**；
+- `启动服务.bat` 第 7-12 行：找不到 `secrets.local.bat` 时只 `echo` 警告，然后 `set WEIXIN_TOKEN=`（空值）继续启动 → **双击 bat 就是无鉴权服务**；
+- `init_db()` 与 host 决策（`0.0.0.0` vs `127.0.0.1`）都关在 `if __name__ == \"__main__\"` 里 → 任何 WSGI 方式启动（waitress-serve / gunicorn / import）都不初始化表，且绑定地址不受控（waitress-serve 默认绑 0.0.0.0）→ **空令牌 + WSGI = 公网裸奔**；
+- README §2 写「默认监听 0.0.0.0:8000」，与 `app.py:1768`「无令牌只听 127.0.0.1」矛盾（与 D1 同源，但这里还牵连默认暴露面）。
+
+**修复**：`create_app()` 工厂 + 幂等 `init_db`；唯一 serve 入口承载 token / host 决策；TOKEN 为空默认拒绝启动（除非显式 `WEIXIN_ALLOW_INSECURE_BIND=1`）；`启动服务.bat` 缺令牌 `exit /b 1`；README 改口。
+
+---
+
+## 3. P1 缺陷
+
+### 3.1 后端
+
+| 编号 | 问题 | 位置 | 影响 | 修复 |
+|---|---|---|---|---|
+| B1 | `/analysis POST` 的 `int(item.get("window_end") or 0)` / `message_count` 无类型校验，`except` 只捕获 `sqlite3.IntegrityError` | `app.py:604-605`、`:622` | 一条脏数据 → `ValueError` → 500 → 客户端 else 分支一律 `retry`（`SyncWorker.kt:309-312`）→ **队列永久不推进，后续所有分析被同一条毒丸堵死** | 先做 `isinstance(x, int)` 校验，不合格计入 `invalid`+`rejected`；`except Exception` 兜底并逐条隔离 |
+| B2 | 顾问存档损坏被静默当空，read-modify-write 覆盖全文件 | `app.py:714-723`（load）、`:761-783`（save） | 探针实测：存档 2 条 → 写坏 → POST 1 条 → **文件只剩新那一条，响应仍是 `ok:true`** → 历史报告被无声抹掉 | 载入失败时拒绝写入并返回 5xx；或把存档改为 SQLite / 追加式 JSONL |
+| B3 | `/weixin` 先写 JSONL 存档（293）后入库（305-327），命中唯一索引时 JSONL 不回滚 | `app.py:293`、`:325-327` | 探针实测：重发同一条 → **JSONL 2 行 vs SQLite 1 行**；两份「真相」长期漂移 | **已升级为 P0-5**（整批一次 commit 让半写成为常态） |
+| B4 | `_validate_item` 只校验类型，不校验长度 / 范围 | `app.py:396-411`、`:47` | 探针实测：单条 text 1 MB 直接入库成功；`timestamp` 负数 / 未来时间也可入库 | 加长度上限（sender 64 / text 4096 / conversation 128）与 timestamp 范围校验 |
+| E8 | `init_db()` 只在 `if __name__ == "__main__"` 里调用 | `app.py:1761` | 探针实测：只 import 不初始化 → `GET /messages` **500** `unable to open database file`。用 waitress / gunicorn / uwsgi 部署 → **所有接口 500** | **已升级为 P0-6**（WSGI 绑定不受控 + 空令牌裸奔） |
+| B14 | 令牌支持 `?token=` query | `app.py:232`（探针：`?token=…` → 200） | 令牌进反向代理访问日志 / 浏览器历史 / Referer | 控制台改用 `Authorization` 头或 fragment；query 仅保留兼容并打 deprecation 警告 |
+| FP0-2 | `console_page()` 强制 `check_token()`，而 `manifest.start_url="./"` | `app.py:1616-1624`、`:1549` | 探针实测：无令牌 `GET /console` → **401**。PWA 从主屏启动无法带 `X-Token` 头 → **启动即一屏 JSON 错误**；现在"能用"纯粹靠 P0-1 的 SW 缓存兜着，SW 一失效即不可用 | 外壳（不含任何用户数据）免鉴权下发，令牌走 localStorage / fragment；数据接口继续鉴权 |
+| N1 | 提取在 Flask 进程内持长写事务（整批一次 commit）+ busy_timeout 仅 5s | `android_db_extract.py:434-473` + `app.py:97-98`、`:877` | 实测：持写事务时 `POST /weixin` 阻塞 5.05s 后 500 `database is locked`（@ `:306`）且 jsonl 已写 | 提取每 500 条 commit；共享进程内写锁；busy_timeout 30s；捕获 OperationalError 返 503 + Retry-After |
+| N2 | 游标谓词 `(timestamp < ? OR (timestamp = ? AND rowid < ?))` 使索引失效 | `app.py:489-490` | EXPLAIN 实测：现写法 `SCAN messages USING INDEX idx_messages_ts`；改行值比较 `(timestamp,rowid) < (?,?)` 为 `SEARCH messages USING INDEX idx_messages_ts (timestamp<?)` | 换行值比较 + 新建 `idx_messages_ts_rid(timestamp,rowid)` |
+| N3 | `_run_extract_bg` 主体无 try/finally | `app.py:827-850`、`:873-879` | 异常（如 MemoryError / SystemExit）后 `_extract_status['running']` 永久 True → `POST /admin/extract` 恒 409，只能重启 | 整体 try/except BaseException + finally 复位（原 B10，已升级 P1） |
+| N4 | 提取把 `messages` 全表读进 Python set（聊天全文常驻内存），且提取跑在 Flask 主进程线程 | `android_db_extract.py:441-444`、`pc_db_extract.py:368-371`、`app.py:877` | 十万级消息即 OOM 拖垮 Web 服务（与 E2 同源，已升级 P1） | 只取窗口内键，或 `INSERT ... WHERE NOT EXISTS` 反连接 / 临时表 |
+
+### 3.2 前端
+
+| 编号 | 问题 | 位置 | 影响 | 修复 |
+|---|---|---|---|---|
+| FP1-a | `api()` 只判 401，不判 `r.ok` | `app.py:1076-1080` | 服务端 500 时 `r.json()` 抛异常 → 被当成"没有数据" → 页面显示"已同步 · 消息 0"，**故障被伪装成成功** | `if (!r.ok) throw new Error('HTTP ' + r.status)`，错误态显性呈现 |
+| FP1-b | `showAuth()` 整体替换 `#main.innerHTML`，每 30s 触发一次 | `app.py:1062-1067` + `:1519` | 401 时用户正在输入的令牌被清空，且没有任何"令牌错误"提示 | 鉴权框只创建一次；401 时在原位提示，不销毁输入 |
+| FP1-c | 30s 自动刷新 `render()` 整块 `innerHTML` 重绘 | `app.py:1220-1227` | 搜索框失焦、光标跳到末尾；正在看的内容被"抽走" | 只重绘数据区，不动输入框；或做增量 diff |
+| FP1-d | 顾问字段未转义 | `app.py:1494-1495`：`(r.case_count or 0)`、`r.period_days` | **存储型 XSS**：服务端 `/advisor`（`app.py:763-780`）只校验 `report_id` 与 `suggestions` 是对象，`case_count/period_days/summary/model_used` 原样落盘 → 可注入 `<img src=x onerror=…>` → 在控制台执行 → **偷走 localStorage 里的明文令牌** | 两处补 `esc()`；服务端收敛字段类型（数字转 int、字符串截长） |
+| FP1-e | `APP_FILTER` 只在会话 / 待办生效，统计与顾问不生效；待办页又没有过滤 UI | `app.py:1114`、`:1233-1238`、`:1401-1405`、`:1433-1466`、`:1478-1514` | 切到微信后看统计仍是全量 → **口径不一致导致误读**；待办被隐式过滤却无清除入口 | 过滤做成全局可见可清除的状态条，四个 tab 共用同一口径 |
+| FP1-f | 前端从不使用 `next_before` | `app.py:1155`（`api('messages?limit=1000')`） | 探针实测：服务端 1200 条时第二页 200 条可达，但控制台永远只有最近 1000 条 → **历史消息不可达**，统计页也自认"消息总数（最近 1000 条内）" | 接入游标翻页 + "加载更多 / 没有更多"显式状态 |
+| FP1-g | 折叠标题、会话头、App 过滤 tab 全是 `div/span onclick`，全站无 tabindex / role / aria-expanded / keydown | `app.py:1303-1327`、`:1236-1237`、`:1065` | 键盘用户**无法展开任何会话**；读屏无状态播报 | 改 `<button aria-expanded>` + 键盘事件 |
+| FP1-h | `initToken()` 无条件用 `?token=` 覆盖本地既有令牌 | `app.py:1051-1059` | 会话固定 + 令牌投毒：任何带 `?token=` 的链接 / 跳转都会改掉用户令牌 | 先校验后落盘；已存在有效令牌时不覆盖 |
+| FP1-i | `main` 无 `max-width`、无 media query（落地页却有 `max-width:720px`） | `app.py:967` vs `:1726` | 桌面端行长失控、无横屏 / 桌面适配 | `max-width:720px` + `margin:0 auto` + 断点 |
+
+### 3.3 契约与客户端
+
+| 编号 | 问题 | 位置 | 影响 | 修复 |
+|---|---|---|---|---|
+| C7 | `NetworkPolicy.isBlocked` 把 **https 判成"会被拦截"** | `NetworkPolicy.kt:30`（`if (scheme != "http") return true`）与自身 KDoc `:14-17`"非 http scheme 放行"矛盾 | 唯一调用点 `CaptureActivity.kt:210-213` → **release 构建下用户填 https 服务地址会被 Toast 拒绝且不保存**；等于"默认仅 HTTPS"的策略被反向实现，实际只剩"http 回环"可用 | `if (scheme != "http") return false`；补 `NetworkPolicyTest` |
+| C8 | `HistorySync` 完全没有 `PrivacyConfig` 门控 | `HistorySync.kt:72-91`（`maybeRunOnStartup` / `run`）→ `POST /admin/extract` + `GET /messages` | 全库 `PrivacyConfig` 使用点只有 AdvisorWorker / AnalysisWorker / PrivacySettingsActivity / RedactorPreviewActivity / SyncWorker，**不含 HistorySync** → LOCAL_ONLY 模式下仍会触发服务端提取与历史拉取 | 接入 `PrivacyConfig`，LOCAL_ONLY 时不触发 |
+| C9 | 全量待发队列拼成一个数组，无分批 | `SyncWorker.kt:149-166` vs `app.py:47`（`MAX_CONTENT_LENGTH=8MiB`） | 超 8 MiB → Flask 返回 **413** → 客户端 else 分支一律 `Result.retry()`（`:215-219`）→ **死循环，队列永不消化** | 按条数 / 字节分批；413 单独处理（拆分或丢弃超限项） |
+| C10 | 服务端 `analyses` 表没有 `redacted/redaction_rules/redaction_hits/todo_text/todo_due` 列 | 客户端 `AnalysisStore.kt:159-168` 确实上报这些字段；服务端 `app.py:167-183`、`:592-600` 的 INSERT 列表里没有 | **脱敏证据（规则与命中次数）与用户手动改写的待办文案在服务端被静默丢弃** → 无法统计脱敏覆盖率，控制台也看不到用户改写 | 补列 + 迁移；或在服务端显式拒收并在文档中说明 |
+| C11 | `/advisor` 没有 207 / `rejected` 语义 | `app.py:785-786` | 客户端无法区分"部分成功"，`AdvisorStore.markSynced` 会把无效报告一并标记已同步 | 与 `/weixin`、`/analysis` 对齐 |
+
+### 3.4 文档与测试
+
+| 编号 | 问题 | 位置 | 影响 |
+|---|---|---|---|
+| D4 | 后端测试只有 7 例 | `server/test_app.py`（36 行）+ `server/test_weixin.py`（75 行），实测 `7 passed in 0.38s` | **零覆盖**：`GET /messages`（含游标 / date）、`GET /analysis`、`/advisor`（GET+POST，含存档损坏）、`/admin/extract`、`/console`、`/sw.js`、query 鉴权、毒丸条目、207 语义。Android 侧 28 个测试类里**没有 SyncWorker 的 207 语义测试** → P0-2 / P0-3 至今没被发现 |
+| D1 | README 与实现不一致 | `server/README.md:33` 说默认监听 `0.0.0.0:8000`，实现是 `app.py:1768` 无 token 时只听 `127.0.0.1` | 部署者按文档裸奔的风险 |
+| D2 | README 缺 `/messages` 的 `next_before`、完全没有 `/advisor` 文档、`/analysis` 字段表缺 `escalated/forks/filtered/pkg`、数据文件表缺 `advisor_reports.json` | `server/README.md:318-341` | 接口契约只存在于代码里，接入方全靠猜 |
+
+---
+
+## 4. P2 缺陷
+
+### 4.1 后端
+
+| 编号 | 问题 | 位置 | 说明 |
+|---|---|---|---|
+| B5 | `/messages` 的 `date` 过滤按**服务器本地时区**切日界，固定 24h（不考虑 DST） | `app.py:462-468` | 探针实测 tz=中国标准时间，`2026-11-10` 的 `day_start=1794240000000`（= 2026-11-09T16:00Z）；客户端在别的时区看到的"今天"不是同一天 |
+| B6 | `next_before` 在"恰好取满 limit"时仍返回游标 | `app.py:518-520` | 探针实测 3/3 条 → `next_before="1700000000000_2"`，下一页 `count=0` → 前端必须多打一次空请求才知道到底 |
+| B7 | `/analysis GET` 无分页游标、无 date 过滤 | `app.py:662-677` | 历史分析超过 1000 条后控制台无法回看；`?date=1999-01-01` 被忽略（探针实测 count 不变） |
+| B8 | `conversation LIKE '%x%'` 前导通配 | `app.py:459-460`、`:670-671` | 必然全表扫描 + 索引失效；数据量上来后每次会话过滤都是全表 |
+| B9 | 顾问存档永不裁剪，每次 POST 全量重写 JSON | `app.py:726-731`、`:782-783` | O(n) 写放大；报告体积无上限 |
+| B10 | `/admin/extract` 的 `running` 标志 | `app.py:873-879` | 若 `threading.Thread.start()` 抛异常，`_extract_status['running']` 永远 True → 此后所有提取请求 409；修复：**已升级为 P1（N3）**：后台线程无 try/finally，异常后永久 409 |
+| B11 | `ok` 判定用 `result[leg].get('ok') is not False` | `app.py:846` | 模块返回缺 `ok` 键的 dict 时会被判为成功 |
+| B12 | `/analysis GET` 的 `json.loads` 未捕获 `JSONDecodeError` | `app.py:693`、`:695`、`:700` | 探针实测：插一行脏 s1 → **整个 /analysis GET 500** → 一行脏数据毒死全部历史回看 |
+| B13 | `escalated` / `filtered` 用真值判断 | `app.py:608`、`:617` | 字符串 `"false"` 也会判 True |
+| E9 | 每次启动 `DROP INDEX IF EXISTS idx_messages_dedup` 再重建含全文的唯一索引 | `app.py:155-161` | 大库重启分钟级；DROP 与 CREATE 之间存在"无唯一约束"窗口，并发写可插重复 |
+| E10 | 迁移语句 f-string 拼 SQL | `app.py:150-151` | 当前入参是硬编码常量（无注入），但与"SQL 全参数化"口径不一致 |
+| E11 | 401 / 403 不记日志、无速率限制 | `app.py:219-234` | 暴力猜令牌无从察觉 |
+| E12 | `open(JSONL_PATH, "a")` 不建目录；JSONL 无上限无轮转 | `app.py:283` | 目录缺失 → 500；文件无限增长 |
+| E18 | `/admin/extract` 用裸名 `__import__("android_db_extract")` | `app.py:842` | 探针实测（模块不在 sys.path 时）：`last.error="No module named 'android_db_extract'"` → **WSGI 部署下提取功能静默失效**（只有以 server/ 为 CWD 启动才可用） |
+| N5 | `analyses` 无 `received_at` 索引；`idx_analyses_window_end` 是死索引 | `app.py:676`、`:202-209` | EXPLAIN：SCAN analyses + USE TEMP B-TREE（分析列表随历史量线性变慢）；修复：加 `idx_analyses_received(received_at DESC)`、`idx_analyses_need_action_received` |
+| N6 | 纯毫秒游标用 `timestamp < ?`，同毫秒行全丢 | `app.py:485-487` | 实测：3 行同毫秒、`before=<ms>` → count=0，而代码注释声称「老客户端只发毫秒也兼容」；修复：拒纯毫秒（400）或改用 `<=`；`next_before` 恒带 rowid |
+| N7 | `conversation LIKE` 未转义 `%` / `_` | `app.py:459-460`、`:670-671` | 会话名含 `_` 时会越权匹配到他人会话（隐私侧交叉），也放大全表扫描；修复：转义并加 ESCAPE，或改用 `instr(conversation, ?) > 0` |
+| N8 | `index()` 的 `last_extract`（来自 `data/android_db/state.json`）未过 `esc()` | `app.py:1674-1685` | **第二个存储型 XSS 入口**：state.json 可被污染 → 落地页注入脚本；修复：统一 `html.escape(s, quote=True)` |
+| E13 | `/analysis GET` 不返回已归一化的 `importance` / `need_action` 列 | `app.py:173`、`:687-703` | 探针实测：库里 `importance='high'`、`need_action=1`，GET 却只回 `s1.importance=7`（端上原始数值）→ **前端必须二次归一**，是前端 importance 口径二义的根因 |
+
+### 4.2 前端（合并 lead 自查与 frontend-audit 报告）
+
+- **并发与时序**：`load()` 三接口串行 await（1155-1157）→ 改 Promise.all；30s setInterval 无 AbortController / 无请求序号 → 切页与刷新可叠加并发、旧响应后到覆盖新响应（1189 附近 / 1519）；setTimeout 未持句柄（1211）。
+- **重绘与状态**：切 tab 不复位滚动（1128-1134）；`COLLAPSE` 键无回收、`CONV_NODES` 每次搜索无限增长（1126 / 1252-1256）→ 内存泄漏（当前索引仍自洽）；搜索每敲一字整列表重绘（1252-1256）。
+- **存储与令牌**：令牌明文存 localStorage 且无清除入口；localStorage 不可用（隐私模式）时整脚本死（1054/1060/1069/1124/1350）；`?token=` 进访问日志 / Referer（1057）。
+- **错误与空态**：所有错误文案一律"网络异常"（1177-1180）；加载 / 错误 / 空态只有 header 一行 12px 文字（1141/1037/1242/1416/1479/1288）→ 故障不可见。
+- **排版与可读性**：时间格式三套且无时区（`fmtTime` 1087 只显示 M-D HH:mm、`fmtDate` 1093、待办卡 1428 直接显示服务端本地时间串、顾问 1491）；`word-break: break-all`（989/1743）把中文 / URL 断得很难看；`#ptr` 盖住 header（969-976 vs 951）；main 底部 66px 固定留白可能遮住末条（966-967）。
+- **可访问性**：无 aria-live / tab 语义 / label（1034/1038-1047/1240/1065）；tab 栏按钮 11px + 6px 内边距（962-963）→ 点击热区远低于 44px；正文 16px 与 15px 双基准（950/989）、无显式 line-height；辅助文字 `#999`（≈2.85:1）、`#bbb`（≈1.9:1）低于 AA 4.5:1；`esc()` 未转义单引号（1084-1085，但当前注入点都在双引号属性外，暂无实害）。
+- **安全响应头**：控制台缺 `X-Frame-Options` / `Content-Security-Policy` / `X-Content-Type-Options`（1623-1624）。
+- **PWA**：manifest 缺 id / lang / orientation / categories / shortcuts，short_name 与 name 相同（1542-1564）；SW 离线兜底 `return hit || net` 而 `net.catch` 返回 hit，既无缓存又离线时返回 undefined → 空响应、无离线提示页（1596-1600）；SW 注册静默吞错（1525）；无 TOKEN 时仍发注定 401 的请求（1517-1518）。
+- **数据契约**：`ckOf` 用裸 U+0001 作分隔符（1112）易被工具链吞掉导致会话键碰撞；`impLabel` 的无意义三元（1365-1366）导致排序与高亮口径不一致；统计页标签自相矛盾（1458-1459）；顾问 tab 无搜索 / 分页。
+
+### 4.3 提取脚本
+
+| 编号 | 问题 | 位置 | 说明 |
+|---|---|---|---|
+| E1 | 两脚本直写同一个 `MAIN_DB = data/messages.db`，但只有 `/weixin` 写 JSONL 存档 | `android_db_extract.py:78`、`pc_db_extract.py:62` | DB 直读来源的消息只进 SQLite、不进 `messages.jsonl` → "原文存档"并非全量真相（与 B3 合流） |
+| E2 | 每次提取都全表拉取做去重集合 | `android_db_extract.py:441-444`、`pc_db_extract.py:368-371` | O(全表) 时间与内存，10 万条消息每次提取全量搬运正文 |
+| E3 | 跨来源去重只做「秒级归一键」，且落在 Python 侧 | `android_db_extract.py:454-458`；唯一索引是毫秒级 | 通知来源与 DB 来源时间戳相差 ≥1 秒时同一消息仍双份入库；**第三路复核补充：提取去重键还缺 pkg，同 App 同秒同文会被误判重复 → 真实消息丢失，建议按 P1 处理**（README:284-285 已自认秒级口径） |
+| E4 | 解密后的完整微信库明文长期驻留本地磁盘 | `android_db_extract.py:76`（`DECRYPTED_DB`） | 虽然 try/finally 会在结束后删除（12.6 已修），但运行期间是完整明文库 |
+| E7 | `_parse_row` 异常时 `skipped += 1` 静默吞掉 | `android_db_extract.py:449-453` | 解析失败原因不可追溯 |
+| E5 / E6 | `root_sh(f"...")` 走 shell 拼接；脚本自带 busy_timeout 不走 app.py 的 `_write_lock` | `android_db_extract.py:146/149/165/220/232/260-265` | 入参全是模块常量 → **无命令注入**；但 shell=True 风格脆弱，且与 `/weixin` 并发写只靠 busy_timeout 兜底 |
+
+### 4.4 端云契约
+
+`/advisor` 无 207 语义（C11）；三个端点三套时间口径（`/messages` ms 整数、`/analysis` 服务器本地时间串、`/advisor` ms 整数，文档却写 `created_at` 是 ISO —— `app.py:739` vs `AdvisorStore.kt:53`）；`HistorySync` 回填丢 `pkg` / `source`（`HistorySync.kt:129-140`）；四处硬编码 `"/weixin"` 去后缀推导（`SyncWorker.kt:266/350`、`HistorySync.kt:163`、ConsoleActivity）；服务端先写存档后入库导致重复灌水；客户端不读 `received/duplicated/invalid` 计数；秒级去重键 vs 毫秒唯一索引。
+
+【队友报告、lead 未逐条复核】7 天保留策略会删掉未上报的待发消息（`Retention.kt:23/56` + `PendingQueue.kt:93`）；`AnalysisStore.readUnsynced` 只读最近 500 条（`AnalysisStore.kt:398-403`）；`appendText` 非原子（`AnalysisStore.kt:254-258`）。
+
+---
+
+## 5. P3 缺陷（摘要）
+
+后端：`GET /weixin` → 405（探针实测，行为正确）；失败审计缺失；`/messages` 的 `limit` 非法值静默回落 100（无提示）；`/analysis GET` 的 limit 同理。
+前端：11px 中文小字（963/990）；11 种灰阶无 token；`stat-num` 无 tabular-nums；来源分布 `join(' / ')` 密度低；touchend 未处理 touchcancel（1204）；`THRESHOLD=70` 固定（1189）；main 未加 safe-area 左右内边距（967）；落地页时间用服务器本地时区（1696）；两套设计系统并存（控制台浅色 946-1028 / 落地页浅灰 1725-1745 / 根目录 intro.html 深色）；反馈弱（caret 字符切换 1353-1354）。
+事实修正：根目录 `intro.html` 实为 GitHub Pages 深色宣传页，**不是 `index()` 的副本**（"落地页是 index 副本"的旧描述与代码事实不符）。
+提取脚本：shell=True 风格、无结构化日志、跨进程锁缺失。
+
+### 5.1 第三路复核补充的 P3（后端）
+
+- `app.py:281-283` `conn` / `archive` 在 try 外打开 → open 失败时连接泄漏；
+- `app.py:97-101` `timeout=10` 与 `busy_timeout=5000` 口径冲突；`journal_mode=WAL` 每连接都执行一次；
+- `app.py:155-161` 每次启动 DROP + CREATE 含全文的唯一索引（大库分钟级重建，见 E9）；
+- `app.py:1679` `open()` 不关句柄 + `UnicodeDecodeError` 未捕获 → 500；
+- `app.py:124-133` 表列可空，而 `:1702` 的 `esc()` 假定是字符串 → NULL 行触发 AttributeError；
+- 全篇无 `logging`、无 `@app.errorhandler` → 500 / 413 返回 HTML（实测 413 的 Content-Type 是 `text/html`），前端按 JSON 解析必然报错；
+- `app.py:151`、`:199` 与两个提取脚本用 f-string 拼 SQL（当前入参全为常量，无注入，但与「全参数化」口径不一致）；
+- `android_db_extract.py:417`、`pc_db_extract.py:122/243` 的 `file:`+`path`+`?mode=ro` 未做 URL 转义；
+- `android_db_extract.py:157-192` `get_uin()` 遇到首条坏记录即中断整轮搜索；
+- `android_db_extract.py:482-483` state.json 非原子写（PC 侧是原子的，两端口径不一）；
+- `pc_db_extract.py:251` `stats['self']` 自曝 wxid，并经 `/admin/extract/status` 返回；
+- `启动服务.bat:22/25/30` adb 不检查 errorlevel（失败被吞），且用 PATH 里的 python 而非 `.venv` 解释器（与 `requirements.txt` 固定版本脱节）。
+
+### 5.2 做得好的地方（三路复核共同确认，值得保留）
+
+1. 令牌恒定时间比较：`hmac.compare_digest`（`app.py:237-245`），杜绝时序侧信道；
+2. SQL 全参数化，无用户输入拼接（`app.py:306-323`、`:592-620`），复核未发现注入点；
+3. 复合游标 `(timestamp, rowid)` 分页方向正确（`app.py:472-490`、`:518-520`），问题在客户端未接；
+4. `_connect()` 统一 WAL + busy_timeout，路由层 finally 关连接（`app.py:90-101`）；
+5. `/weixin` 用 207 + `rejected[]` 精确告知被拒条目（`app.py:336-344`）——设计本身是对的，只是端上分支顺序把它的价值抵消了；
+6. 解密后的明文库在 finally 中清理（`android_db_extract.py:525-529`、`pc_db_extract.py:316-319`）；
+7. 唯一索引含 pkg（`app.py:158-159`），账号目录用 `re.fullmatch(r'[0-9a-f]{32}')` 挡路径穿越（`android_db_extract.py:144-154`）；
+8. `server/data/` 已被 `.gitignore:24` 覆盖（git check-ignore 实测命中），聊天原文不入版本库；
+9. 内嵌控制台 `CONSOLE_HTML` 不经 Jinja 渲染（`app.py:1616-1624` 原样输出），复核未发现服务端模板注入；
+10. `/console/manifest.json`、`/console/icons/*`、`/sw.js` 三处不鉴权，但实测不返回任何用户数据，可判为可接受（外壳鉴权问题另见 FP0-2）。
+
+---
+## 6. 前端设计评审（专章）
+
+### 6.1 信息架构
+
+| 编号 | 问题 | 证据 | 建议 |
+|---|---|---|---|
+| DESIGN-1 | **首屏不承担"今天要做什么"**：会话默认全折叠，header 同步行只有消息 / 分析数，四个 tab 无角标 | `app.py:1297`、`:1148-1149`、`:1038-1047` | 首屏加"需关注 N · 待办 N · 复盘 N"概览条 + tab 角标；默认展开当天高优先会话 |
+| DESIGN-2 | "需关注"分区无数量，仅靠符号与颜色区分 | `:1286`、`:985` | 加计数徽标 + 文案（不要只靠颜色） |
+| DESIGN-3 | 三套设计系统并存 | 控制台浅色 `:946-1028` / 落地页浅灰 `:1725-1745` / `intro.html` 深色 | 令牌化后合并为一套；落地页与控制台共用组件 |
+| DESIGN-4 | 无 CSS 变量 → 无法暗色模式 | `:946-1028` | 抽 `--bg/--fg/--muted/--brand/--radius/--space` |
+| DESIGN-5 | 字阶 11~26px 共 10 档 | `:963`、`:989`、`:950` | 收敛到 5 档（12/14/16/20/26）+ 明确行高 |
+| DESIGN-6 | 预览行挤掉时间、无相对时间 | `:1310-1311` | 时间列固定宽 + "3 分钟前 / 昨天" |
+| DESIGN-7 | 会话 → 日期两层折叠过深 | `:1297-1327` | 默认一层，日期作为组内小标题 |
+| DESIGN-8 | 搜索只在会话 tab，且"会话名命中 = 整组保留" | `:1239-1241`、`:1272-1281` | 搜索全局化，命中高亮到消息级 |
+| DESIGN-9 | 对比度普遍低于 AA | `#999`≈2.85:1、`#bbb`≈1.9:1、chip `#07c160`/`#e8f7ef`≈2.6:1、badge 白/`#ff976a`≈2.2:1、`.imp-high` `#e6432d`≈4.3:1 | 辅助文字提到 ≥4.5:1 |
+| DESIGN-10 | 加载 / 错误 / 空态只有 header 一行 12px 字 | `:1141`、`:1037`、`:1242`、`:1416`、`:1479`、`:1288` | 列表内骨架屏 + 空态说明 + 错误重试按钮 |
+| DESIGN-11 | 无桌面 / 横屏适配 | `:967` 无 media query | `max-width:720px` + `@media (min-width:900px)` 双栏 |
+| DESIGN-12 | 反馈弱（caret 字符切换、`.af-tab` 用 span） | `:1353-1354`、`:1236-1237` | 统一 icon / 按钮态 / 过渡 |
+
+### 6.2 移动端与可访问性
+
+- **热区**：tab 按钮 11px + padding 6px（962-963）、chip / 按钮多处 < 44px → 触控可用性差。
+- **语义**：全站 div / span onclick（1303-1327、1236-1237、1065）→ 键盘不可达；无 aria-live（状态更新不播报）；无 label 关联（1240）。
+- **对比度 / 字号**：见 DESIGN-5 / DESIGN-9。
+- **滚动与折叠**：切 tab 不复位滚动（1128-1134）；两层折叠过深（DESIGN-7）。
+- **暗色**：无令牌，无法暗色（DESIGN-4）。
+
+### 6.3 PWA
+
+- **必须先修**：SW 导航缓存越权（P0-1）与外壳强制鉴权（P0-2）—— 这两条不修，PWA 既不安全也不可用。
+- manifest 补 id / lang / orientation / categories / shortcuts，short_name 与 name 去重（1542-1564）；scope 与 SW scope 对齐。
+- SW：API 走网络的策略正确（1583-1589）；但离线兜底会返回 undefined（1596-1600）→ 需要一个离线提示页；注册失败要可见（1525）。
+
+### 6.4 事实核对
+
+- **无 XSS 的部分**：会话 / 发送者 / 正文 / 话题 / 待办 / 摘要 / 建议等注入点都走了 `esc()`（1083-1086）；`ckOf` 分隔符确为 U+0001（1112）。**但**顾问卡片的 `case_count` / `period_days` 是漏网的未转义注入点（FP1-d）—— 这是本轮唯一确认的存储型 XSS 入口。
+
+---
+
+## 7. 修复路线图
+
+### 阶段 0 · 止血（当天，4 处）
+
+1. `SyncWorker.kt`：207 分支前置到 `isSuccessful` 之前（消息 + 分析两条通道），并补 MockWebServer 用例锁死行为。
+2. `app.py:1590-1604`：SW 只缓存 `/console` 壳、导航改网络优先；`index()` 加 `no-store`，并去掉落地页内联的消息正文。
+3. `app.py:1494-1495`：补 `esc()`；`/advisor` 服务端收敛 `case_count` / `period_days` 类型。
+4. `app.py:604-605`：`window_end` / `message_count` 类型校验 + `except Exception` 逐条隔离，毒丸不再 500。
+
+### 阶段 1 · 可靠性（1~2 周）
+
+- `init_db()` 导入即执行 + 幂等锁（E8）；修 `idx_messages_dedup` 的 DROP / CREATE 窗口（E9）。
+- 顾问存档：损坏即拒绝写入 + 追加式或改 SQLite（B2、B9）；`/advisor` 补 207 语义（C11）。
+- `/analysis GET`：返回归一化 importance / need_action，脏行容错（E13、B12）；补游标与 date（B7）。
+- `/messages`：`next_before` 满页时才给、date 用显式时区参数（B6、B5）；`conversation` 前缀匹配 + 索引（B8）。
+- JSONL：先入库后存档 + 轮转（B3、E12）；字段长度 / 时间范围校验（B4）。
+- 客户端：队列分批 + 413 单独处理（C9）；`NetworkPolicy` https 反转（C7）；`HistorySync` 接隐私门控（C8）；服务端补脱敏证据列（C10）。
+- 测试：把 §1 探针脚本转成 pytest 用例（12 条断言），覆盖 207 / 413 / 毒丸 / 存档损坏 / 游标 / 脏行。
+
+### 阶段 2 · 前端与设计（2~4 周）
+
+- 设计系统令牌化（灰阶 / 间距 / 圆角 / 品牌色 / 字阶 / 行高）+ 暗色模式（DESIGN-3/4/5/9）。
+- 首屏改造：概览条 + tab 角标 + 默认展开（DESIGN-1/2）；空态 / 错误态 / 骨架屏（DESIGN-10）。
+- 数据层：Promise.all + 请求序号 + AbortController；接 `next_before` 游标与"没有更多"；全局过滤条（FP1-e/f）。
+- 重绘治理：只重绘数据区、鉴权框只建一次、切 tab 复位滚动（FP1-b/c）。
+- 可访问性：语义化按钮 + aria-expanded / aria-live + 44px 热区 + label（FP1-g）。
+- 响应式：`max-width:720px` + 桌面双栏（FP1-i）。
+- 后端拆分：`app.py` 1780 行上帝文件（路由 / SQL / 内嵌前端 / PWA 资源 / 静态页）→ 至少拆 `console/`（前端资源）、`storage.py`、`routes/`。
+
+### 阶段 3 · 工程化
+
+- CI 覆盖新增用例；服务端集成 MockWebServer 端到端；README 与实现对齐（监听地址、游标、`/advisor`、字段表、数据文件表）。
+- 提取脚本：增量游标替代全表去重集合（E2）、统一秒级 / 毫秒去重口径（E3）、结构化日志（E7）、WSGI 下的模块路径问题（E18）。
+
+---
+
+## 8. 与既有基线（revise.md / progress.md）的关系
+
+| 既往条目 | 现状 | 本轮对应 |
+|---|---|---|
+| P0-3（无 token 全接口无鉴权 + 默认 0.0.0.0） | **已修**（`app.py:1768` 无 token 只听 127.0.0.1） | 文档仍写旧口径（D1） |
+| P0-15（`/weixin` 全条目失败仍 200 → 端上整批剔队列） | **服务端已修（207+rejected）、端上未接住** | **P0-2**（分支顺序错误 → 仍然整批删） |
+| §12.6 游标分页已实现 | 服务端已实现且探针验证正确，**前端未使用** | FP1-f / C8'（客户端不翻页） |
+| §12.6 `_connect()` WAL + busy_timeout | 已在，探针未发现锁问题 | ✅ 已做得好 |
+| §12.8 待办：提取分批 + 进度上报、阶段 2 分包、waitress+TLS | **仍待处理**，且本轮新增两条部署级问题 | E8（init_db 不在 import 期）、E18（提取模块不可导入）、阶段 2 分包 |
+| 上帝类 `server/app.py` 1611 行 | **涨到 1780 行**，内嵌前端从 600 行涨到 620 行 | 阶段 2 拆分 |
+| 去重键三份 / 表结构迁移三份 | 仍在 | E3（秒级 vs 毫秒）、C10（字段清单两套） |
+| revise.md §12.7 "数据保留 1 周" | 仍在，但与"待发队列"存在冲突（队友报告，待复核） | §4.4 保留策略条目 |
+
+---
+
+## 9. 附录
+
+### 9.1 探针脚本
+
+- 位置：`.tmp/review_probe.py`（把 `server/app.py` 复制到临时目录后导入，`DATA_DIR` 隔离，不写仓库 `server/data`）。
+- 运行：`python -X utf8 .tmp/review_probe.py > .tmp/probe_out.txt 2> .tmp/probe_err.txt`（工作目录 C:/project/notifyme）。
+- 原始输出：`.tmp/probe_out.txt`（含全部探针 JSON），错误栈：`.tmp/probe_err.txt`。
+
+### 9.2 本轮覆盖与未覆盖
+
+**已覆盖**：`server/app.py` 全文（逐行）、两个提取脚本、Android 侧 `SyncWorker / HistorySync / NetworkPolicy / AnalysisStore / PrivacyConfig` 相关路径、前端 `CONSOLE_HTML / CONSOLE_MANIFEST / CONSOLE_SW / index()` 逐行、README 与实现比对、后端测试清点与运行、三份并行审查报告（frontend-audit 49.8KB / contract-audit 38.3KB，见 `.tmp/`）。
+
+
+- 三路复核补充覆盖：数值边界与越界时间戳 / JSONL 与 SQLite 双写顺序 / 空令牌与 WSGI 绑定 / 提取持长写事务 / 游标谓词的查询计划（EXPLAIN 对比 SCAN vs SEARCH）/ 纯毫秒游标丢行 / LIKE 通配转义 / state.json 注入 / 413 与错误处理返回 / gitignore 覆盖校验。
+**未覆盖（留待下一轮）**：
+- `app/` 其余 88 个 Kotlin 文件的完整复查（本轮只按契约相关路径抽查）；
+- `cpp/llama_jni.cpp` 原生推理层；
+- `server/pwa_icons/` 视觉资产与各尺寸适配；
+- 真实浏览器下的 PWA / SW 行为验证（缓存条目落盘、离线兜底、manifest 安装流程）—— 需要跑一次 server + DevTools；
+- 部署反代前缀 `/mmonitor/` 的 404 存疑项（frontend-audit P1-10）—— 需要真实域名环境；
+- 多用户 / 并发 / 长稳压测。
+
+### 9.3 三路并行审查产出
+
+| 报告 | 规模 | 结论 |
+|---|---|---|
+| `.tmp/frontend-audit-report.md` | 49.8 KB | P0×2 / P1×10 / P2×22 / P3×20 + DESIGN×12；本报告已并入 P0-1 与 P1 全部，P2/P3 取摘要 |
+| `.tmp/contract-audit-report.md` | 38.3 KB（469 行） | P0×2 / P1×4 / P2×10 / P3×7 + "契约一致但脆弱"8 条；本报告已并入 P0-2、P0-3、C7~C11 |
+| `.tmp/backend-audit-report.md` | 37 KB / 411 行 | P0×3 / P1×6 / P2×9 / P3×12，全部为已确认缺陷（读码可证 + 运行时探针复现）；本报告已并入 P0-4/5/6、N1~N4、N5~N8 与 §5.1 / §5.2 |
+
+*（本报告只收录"能回源码或回探针复现"的条目；未能复现的一律进 §9.2 未覆盖清单或标为存疑。）*
+
+---
+
+## 10. 修复状态（自动优化执行记录）
+
+> 本节由 AI 自动优化执行方追加，**§0–§9 原文一字未改**。
+> 三位执行方（前端 / 后端 / 工程化）各自填自己那一栏，最后由维护者统一校对。
+>
+> 状态口径只有三档，填表时不要自由发挥：
+>
+> - **已修复**：代码改完且行为符合本报告描述，但本次没有专门的回归用例锁死；
+> - **已修复并有测试**：改完且有用例（单测 / pytest / CI 步骤）能证明「改前坏、改后好」；
+> - **待修**：还没动，或只做了一半。
+>
+> 「验证方式」写可复制的命令或用例名（例：app/src/test/...、server/test_*.py::test_*、CI 步骤名）；
+> 「证据」写 commit / PR 号，或关键输出片段（命令 + 退出码 + 关键行）。
+
+### 10.1 §0 必改 Top 13
+
+| # | 改动（§0 原文摘要） | 状态 | 验证方式 | 证据 |
+|---|---|---|---|---|
+|  | 1 | 已修复并有测试 | app/src/test/java/com/notifyme/android/SyncOutcomeCoreTest.kt「207 判定为部分成功而不是整批成功」；SyncWorker.postJson 统一走 SyncOutcomeCore.classify | app/src/main/java/com/notifyme/android/SyncOutcome.kt（classify 先判 207 再判 2xx）、SyncWorker.kt |
+|  | 2 | 已修复并有测试 | server/test_console.py::test_console_sw_navigation_is_network_first_for_shell_only 等 7 条 SW 用例 | server/console_ui.py |
+|  | 3 | 已修复并有测试 | server/test_hardening.py::test_create_app_refuses_to_start_without_token、test_module_level_app_serves_without_manual_init；server/test_regression.py::test_wsgi_lazy_init_creates_db | server/app.py（create_app 工厂 + 模块级 app） |
+|  | 4 | 已修复并有测试 | server/test_hardening.py::test_analysis_rejects_out_of_range_message_count、test_analysis_rejects_oversized_identifiers；server/test_regression.py::test_out_of_range_timestamp_rejected | server/app.py（_safe_int / _analyzed_at_text） |
+|  | 5 | 已修复并有测试 | server/test_regression.py::test_jsonl_archive_matches_db_rows、test_rejected_item_not_written_to_archive | server/app.py（/weixin 先入库后写存档） |
+|  | 6 | 已修复并有测试 | server/test_console.py::test_advisor_render_escapes_server_data；server/test_hardening.py::test_advisor_normalizes_fields、test_advisor_clamps_out_of_range_numbers | server/console_ui.py、server/app.py |
+|  | 7 | 已修复并有测试 | server/test_hardening.py::test_analysis_isolates_unencodable_item、test_analysis_rejects_oversized_identifiers | server/app.py（/analysis 逐条隔离） |
+|  | 8 | 已修复并有测试 | server/test_console.py::test_console_api_rejects_non_2xx | server/console_ui.py（api() 判 r.ok） |
+|  | 9 | 已修复并有测试 | server/test_regression.py::test_analysis_returns_normalized_importance；server/test_hardening.py::test_analysis_get_normalizes_raw_numeric_columns | server/app.py（/analysis GET 归一化） |
+|  | 10 | 已修复并有测试 | server/test_hardening.py::test_advisor_corrupt_archive_refuses_to_write | server/app.py（顾问存档损坏即拒写） |
+|  | 11 | 已修复并有测试 | app/src/test/java/com/notifyme/android/SyncBatchCoreTest.kt、SyncOutcomeCoreTest.kt「413 单独判定为载荷过大而不是普通失败」 | SyncBatchCore.splitBatches/bisect、SyncOutcome.PAYLOAD_TOO_LARGE、SyncWorker 三通道 413 分支 |
+|  | 12 | 已修复并有测试 | server/test_extract.py::test_batch_writer_commits_per_batch、test_merge_messages_commits_in_batches；server/test_hardening.py::test_extract_returns_503_when_main_db_is_busy | server/android_db_extract.py、server/pc_db_extract.py、server/app.py |
+|  | 13 | 已修复并有测试 | server/test_regression.py::test_next_before_only_when_more_pages | server/app.py、server/console_ui.py |
+
+### 10.2 §7 阶段 0 · 止血（4 处）
+
+| # | 条目 | 状态 | 验证方式 | 证据 |
+|---|---|---|---|---|
+|  | 0-1 | 已修复（纯函数单测，未引入 MockWebServer） | app/src/test/java/com/notifyme/android/SyncOutcomeCoreTest.kt、SyncWorker 三通道统一走 classify | app/src/main/java/com/notifyme/android/SyncOutcome.kt、SyncWorker.kt |
+|  | 0-2 | 已修复并有测试 | server/test_console.py::test_console_sw_only_caches_console_shell、test_console_sw_respects_no_store_cache_control；server/test_regression.py::test_sw_does_not_cache_landing_page | server/console_ui.py、server/app.py |
+|  | 0-3 | 已修复并有测试 | server/test_console.py::test_advisor_render_escapes_server_data；server/test_hardening.py::test_advisor_normalizes_fields | server/console_ui.py、server/app.py |
+|  | 0-4 | 已修复并有测试 | server/test_hardening.py::test_analysis_rejects_out_of_range_message_count、test_weixin_isolates_unencodable_item | server/app.py |
+
+### 10.3 §7 阶段 1 · 可靠性
+
+| # | 条目 | 状态 | 验证方式 | 证据 |
+|---|---|---|---|---|
+|  | 1-1 | 已修复并有测试 | server/test_hardening.py::test_create_app_initializes_db_idempotently；server/test_extract.py::test_merge_messages_creates_dedup_index_if_missing | server/app.py（init_db 幂等）、server/android_db_extract.py |
+|  | 1-2 | 已修复并有测试 | server/test_regression.py::test_advisor_returns_207_with_rejected_indices、test_advisor_append_does_not_rewrite_archive、test_advisor_legacy_json_is_migrated；server/test_hardening.py::test_advisor_corrupt_archive_refuses_to_write | server/app.py |
+|  | 1-3 | 已修复并有测试 | server/test_regression.py::test_analysis_cursor_paginates_without_loss、test_analysis_date_filter_by_analyzed_at_day；server/test_hardening.py::test_analysis_get_tolerates_garbage_numeric_columns、test_analysis_get_skips_broken_row | server/app.py |
+|  | 1-4 | 已修复并有测试 | server/test_regression.py::test_next_before_only_when_more_pages、test_messages_tz_day_bounds；server/test_hardening.py::test_messages_conversation_prefix_match、test_messages_has_conversation_index | server/app.py |
+|  | 1-5 | 已修复并有测试 | server/test_regression.py::test_jsonl_archive_matches_db_rows、test_message_text_length_limit；server/test_hardening.py::test_jsonl_archive_rotates_when_too_large | server/app.py |
+|  | 1-6 | 已修复并有测试 | app/src/test/java/com/notifyme/android/SyncBatchCoreTest.kt、SyncOutcomeCoreTest.kt、NetworkPolicyTest.kt、HistorySyncCoreTest.kt；server/test_regression.py::test_analysis_redaction_columns_roundtrip | SyncBatchCore、SyncOutcome、NetworkPolicy、HistorySync、server/app.py |
+|  | 1-7 | 已修复并有测试（探针脚本整体换成 132 条 pytest） | python -m pytest server/ -v --tb=short → 132 passed | server/test_app.py、test_weixin.py、test_hardening.py、test_regression.py、test_extract.py、test_console.py |
+
+### 10.4 §7 阶段 2 · 前端与设计
+
+| # | 条目 | 状态 | 验证方式 | 证据 |
+|---|---|---|---|---|
+|  | 2-1 | 待修 | — | 控制台 UI 尚未做设计令牌化 / 暗色模式 |
+|  | 2-2 | 待修 | — | 首屏概览条 / tab 角标 / 骨架屏未做 |
+|  | 2-3 | 部分修复 | server/test_regression.py::test_next_before_only_when_more_pages（游标口径已接） | server/console_ui.py（next_before 游标）；前端数据层仍待重写 |
+|  | 2-4 | 待修 | — | 控制台重绘治理未做 |
+|  | 2-5 | 待修 | — | 控制台可访问性（aria / 44px 热区）未系统整改 |
+|  | 2-6 | 待修 | — | 控制台响应式布局未做 |
+|  | 2-7 | 待修 | — | server/app.py 仍是单文件（约 2280 行），拆分任务未完成 |
+
+### 10.5 §7 阶段 3 · 工程化
+
+| # | 条目 | 状态 | 验证方式 | 证据 |
+|---|---|---|---|---|
+|  | 3-1 | 已修复并有测试 | python3 -m pytest server/ -v --tb=short ；CI 步骤「Server tests」「Unit tests + assemble」 | .github/workflows/android.yml：语法检查改 compileall -q server、pytest 改 server/ 目录级、依赖装自 server/requirements.txt |
+|  | 3-2 | 待修 | — | 服务端用例走 Flask test client，未引入 MockWebServer 端到端 |
+|  | 3-3 | 已修复并有测试 | README.md「服务端部署」小节；docs/BUILD.md「CI 自动签名与发布」「守卫脚本本地自查」 | 以 server/app.py 现状为准改写：监听矩阵（0.0.0.0:8000 / 127.0.0.1:8000）、next_before 游标口径、两个字段表、server/data/ 四个数据文件；docs/BUILD.md 同步修正 Kotlin 2.2.21 / litert 2.2.0 / beta 桌面名 / 源码文件数 / CI 步骤 |
+|  | 3-4 | 待修 | — | 提取脚本仍是全表去重集合，未换成增量游标 |
+|  | 3-5 | 已修复并有测试 | server/test_extract.py::test_dedup_key_contains_pkg_and_millisecond、test_merge_messages_keeps_same_second_different_ms | server/android_db_extract.py、server/pc_db_extract.py |
+|  | 3-6 | 已修复并有测试 | server/test_extract.py::test_log_event_emits_key_value_pairs、test_log_event_flattens_newlines、test_merge_emits_structured_parse_error_event | server/android_db_extract.py、server/pc_db_extract.py |
+|  | 3-7 | 已修复并有测试 | server/test_regression.py::test_extract_module_loads_by_path、test_run_extract_bg_requires_explicit_ok_true | server/app.py（_import_extract_module） |
+
+### 10.6 工程化侧附带项（不在 §7 原文里，本次顺手做掉）
+
+| # | 条目 | 状态 | 验证方式 | 证据 |
+|---|---|---|---|---|
+|  | E-1 | 已修复并有测试 | 两份 workflow 用 yaml.safe_load 解析通过 + 步骤清单核对 | .github/workflows/android.yml、.github/workflows/release.yml |
+|  | E-2 | 已修复并有测试 | python docs/scripts/privacy_guard.py（负向用例见 PR 描述）；python docs/scripts/version_check.py --expect-tag v0.3.19 | docs/scripts/privacy_guard.py、docs/scripts/version_check.py |
+|  | E-3 | 已修复 | python3 docs/scripts/version_check.py --expect-tag v9.9.9 → 退出码 1 | .github/workflows/release.yml |
+|  | E-4 | 已修复 | .github/workflows/release.yml「Assemble signed open release」 | app/build.gradle.kts |
+

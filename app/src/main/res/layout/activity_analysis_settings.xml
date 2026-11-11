@@ -3,7 +3,6 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/page_bg"
     android:orientation="vertical">
 
     <!-- 标题栏：返回 ← + 标题 -->
@@ -128,6 +127,7 @@
 
                     <EditText
                         android:id="@+id/etBasicUser"
+                        android:inputType="text"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
@@ -157,6 +157,7 @@
 
                 <EditText
                     android:id="@+id/etModel"
+                    android:inputType="text"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:backgroundTint="@color/divider"
@@ -248,6 +249,7 @@
 
                 <EditText
                     android:id="@+id/etS2Model"
+                    android:inputType="text"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:backgroundTint="@color/divider"
@@ -345,6 +347,7 @@
 
                 <EditText
                     android:id="@+id/etAdvisorModel"
+                    android:inputType="text"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:backgroundTint="@color/divider"

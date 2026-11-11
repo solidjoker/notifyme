@@ -22,6 +22,9 @@ import java.io.File
  * @param summary    整体复盘摘要
  * @param suggestions 调优建议列表
  * @param modelUsed  生成报告所用模型名
+ * @param rejectedCount 累计被服务端拒绝次数（207 部分被拒；0 = 从未被拒）
+ * @param firstRejectedAt 首次被拒时间（毫秒；0 = 从未被拒）
+ * @param quarantined true = 已隔离：仍留在本地文件里人工查看，但不再上报、不再阻塞水位
  */
 data class AdvisorReport(
     val reportId: String,
@@ -30,7 +33,10 @@ data class AdvisorReport(
     val caseCount: Int,
     val summary: String,
     val suggestions: List<Suggestion>,
-    val modelUsed: String
+    val modelUsed: String,
+    val rejectedCount: Int = 0,
+    val firstRejectedAt: Long = 0L,
+    val quarantined: Boolean = false
 ) {
     /** 一条调优建议：type ∈ prompt / watchlist / threshold / other */
     data class Suggestion(val type: String, val title: String, val detail: String) {
@@ -57,6 +63,26 @@ data class AdvisorReport(
         put("summary", summary)
         put("suggestions", JSONArray().apply { suggestions.forEach { put(it.toJson()) } })
         put("model_used", modelUsed)
+        put("rejected_count", rejectedCount)
+        put("first_rejected_at", firstRejectedAt)
+        put("quarantined", quarantined)
+    }
+
+    /**
+     * **上传口径**的 JSON：只含服务端认识的字段。
+     *
+     * 本地存档（[toJson]）带 rejected_count / first_rejected_at / quarantined
+     * 三个内部字段，服务端并不需要 —— 上传时用这个方法剥离，避免把内部
+     * 计数写进云端库里（污染服务端 schema）。
+     */
+    fun toUploadJson(): JSONObject = JSONObject().apply {
+        put("report_id", reportId)
+        put("created_at", createdAt)
+        put("period_days", periodDays)
+        put("case_count", caseCount)
+        put("summary", summary)
+        put("suggestions", JSONArray().apply { suggestions.forEach { put(it.toJson()) } })
+        put("model_used", modelUsed)
     }
 
     companion object {
@@ -76,7 +102,10 @@ data class AdvisorReport(
                 caseCount = obj.optInt("case_count"),
                 summary = obj.optString("summary"),
                 suggestions = suggestions,
-                modelUsed = obj.optString("model_used")
+                modelUsed = obj.optString("model_used"),
+                rejectedCount = obj.optInt("rejected_count", 0),
+                firstRejectedAt = obj.optLong("first_rejected_at", 0L),
+                quarantined = obj.optBoolean("quarantined", false)
             )
         }
     }
@@ -146,10 +175,75 @@ object AdvisorStore {
      * 服务端按 report_id 去重，重复上报无害。
      */
     fun readUnsynced(context: Context): List<AdvisorReport> {
+        // 先把到期的隔离复活（否则被隔离过的报告永远拿不回上报机会）
+        reviveExpired(context, System.currentTimeMillis())
         val lastSynced = prefs(context).getLong(KEY_LAST_SYNCED_AT, 0L)
         return readAll(context)
-            .filter { it.createdAt > lastSynced }
+            .filter { it.createdAt > lastSynced && !it.quarantined }
             .sortedBy { it.createdAt }
+    }
+
+    /**
+     * 记一批被服务端拒绝的报告：累计被拒次数，达上限即隔离。
+     *
+     * 背景：顾问通道原先只有「水位不动」这一招——一条被持续拒绝的报告会把水位
+     * 永久钉死，此后每轮全量重传所有顾问报告。现在与分析通道同一把尺子
+     * （[AdvisorRejectCore]）：被拒 3 次即隔离，隔离后照常推进水位，
+     * 队列不会再被单条毒丸拖死。
+     *
+     * @return 本次**新**被隔离的 report_id 集合
+     */
+    @Synchronized
+    fun markRejected(context: Context, reportIds: Set<String>, nowMs: Long): Set<String> {
+        if (reportIds.isEmpty()) return emptySet()
+        val file = storeFile(context)
+        if (!file.exists()) return emptySet()
+        return AdvisorRejectFile(file).markRejected(reportIds, nowMs).newlyQuarantined
+    }
+
+    /**
+     * 强制隔离：立即把这些报告标记为不再上报（**413 毒丸报告**专用）。
+     * 重试无用（单条就超服务端上限），立刻隔离并保留报告本体。
+     */
+    @Synchronized
+    fun quarantineNow(context: Context, reportIds: Set<String>, nowMs: Long): Boolean {
+        if (reportIds.isEmpty()) return false
+        val file = storeFile(context)
+        if (!file.exists()) return false
+        return AdvisorRejectFile(file).quarantine(reportIds, nowMs)
+    }
+
+    /** 当前被隔离的报告 id 集合（诊断面板用）。 */
+    @Synchronized
+    fun quarantinedReportIds(context: Context): Set<String> {
+        val file = storeFile(context)
+        if (!file.exists()) return emptySet()
+        return AdvisorRejectFile(file).quarantinedReportIds()
+    }
+
+    /**
+     * 隔离到期（7 天）复活：解除隔离 + 清零计数。
+     *
+     * 复活时必须**下调水位**：水位只前进不后退（[markSynced]），
+     * 而被隔离的报告 created_at 早已落在水位之下 —— 不下调的话它复活后
+     * 依然被 createdAt > lastSynced 过滤掉，等于白复活。
+     */
+    @Synchronized
+    fun reviveExpired(context: Context, nowMs: Long): Set<String> {
+        val file = storeFile(context)
+        if (!file.exists()) return emptySet()
+        val revived = AdvisorRejectFile(file).reviveExpired(nowMs)
+        if (revived.isEmpty()) return revived
+        val earliest = readAll(context)
+            .filter { it.reportId in revived }
+            .minOfOrNull { it.createdAt }
+        if (earliest != null) {
+            val p = prefs(context)
+            if (p.getLong(KEY_LAST_SYNCED_AT, 0L) >= earliest) {
+                p.edit().putLong(KEY_LAST_SYNCED_AT, earliest - 1).apply()
+            }
+        }
+        return revived
     }
 
     /** 推进已同步水位（只前进不后退；传本次实际上报记录的最大 createdAt）。 */

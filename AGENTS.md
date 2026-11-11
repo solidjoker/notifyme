@@ -17,7 +17,7 @@ notifyme = 微信通知本地智能分析助手（本地优先，通知原文留
 | `docs/` | `BUILD.md`（构建）、`ROADMAP.md`（里程碑）、`architecture/`（9 张架构图） |
 | `third_party/llama.cpp` | M4 端侧推理依赖，CI 里 clone v0.5.0，**不入库** |
 
-技术底座：compileSdk / targetSdk **34**，minSdk **26**，JDK **17**，AGP **8.5.2**，Kotlin **2.0.20**，Gradle **8.9**（wrapper 自带，无需手装）。
+技术底座：compileSdk / targetSdk **34**，minSdk **26**，JDK **17**，AGP **8.5.2**，Kotlin **2.2.21**（必须 ≥2.1：litert-api 2.2.0 的元数据是 2.3.0，2.0.x 编译器直接报 incompatible version），Gradle **8.9**（wrapper 自带，无需手装）。
 
 ---
 
@@ -32,14 +32,21 @@ $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
 .\gradlew.bat testOpenDebugUnitTest                        # 单元测试（app/src/test，纯 JVM，无 Robolectric）
 .\gradlew.bat assembleOpenDebug assembleBetaDebug          # 双 flavor 构建
 .\gradlew.bat lintOpenDebug                                # Android Lint + ktlint
-python -m pytest server/test_weixin.py -v --tb=short        # 服务端测试
+.\gradlew.bat assembleOpenRelease                           # 发布包（R8 混淆 + 资源压缩）
+python -m pytest server/ -v --tb=short                     # 服务端全部用例
 python -m py_compile server/app.py server/android_db_extract.py server/pc_db_extract.py server/gen_icons.py
+python docs/scripts/privacy_guard.py                        # 隐私守卫自查
+python docs/scripts/version_check.py                       # 版本号自查（--expect-tag v0.3.19）
 ```
 
 产物：
 
 - `app/build/outputs/apk/open/debug/notifyme-open.apk`（发布版，零密钥）
 - `app/build/outputs/apk/beta/debug/notifyme-test.apk`（内部测试版，读本机 `secrets.local.properties`）
+- `app/build/outputs/apk/open/release/notifyme-open.apk`（发布包：arm64-v8a + R8 混淆 + 资源压缩）
+
+ABI 约定：debug/beta 打 `arm64-v8a` + `x86_64`（真机 + 模拟器），**release 只打 `arm64-v8a`**（少带一套 x86_64 原生库，约省 20MB）。
+要在 x86_64 模拟器上装发布包：`.\gradlew.bat assembleOpenRelease -PreleaseAbis=arm64-v8a,x86_64`。
 
 ### CI（`.github/workflows/android.yml`，ubuntu-24.04 + temurin 17）
 
@@ -47,7 +54,8 @@ python -m py_compile server/app.py server/android_db_extract.py server/pc_db_ext
 ./gradlew --stacktrace testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug
 ```
 
-CI 额外跑：Python 语法检查、pytest、**隐私守卫**（见 §4）。CI 不签名。
+CI 额外跑：Android Lint（`lintOpenDebug`，**退出码直接参与判定**，不再被管道吞掉）、Python 语法检查（`compileall server`）、pytest（`server/` 目录级）、**隐私守卫**（`docs/scripts/privacy_guard.py --forbid-local-secrets`，见 §4）、版本号校验（`docs/scripts/version_check.py`）。
+CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60 / 发布 30）、`concurrency`（PR 上重复推送自动取消上一次）。CI 不签名。
 
 ### 发布
 
@@ -83,7 +91,12 @@ CI 额外跑：Python 语法检查、pytest、**隐私守卫**（见 §4）。CI
 ## 4. 硬红线（CI 会拦，PR 里同样适用）
 
 1. 仓库内不得出现 `secrets.local.properties` / `keystore.properties` / `secrets.local.bat`。
-2. 不得出现私有母仓库旧命名（企微系的 4 个旧标识，规则本体见 `.github/workflows/android.yml` 的 Guard 步骤，`.github/` 自身除外）。自查命令（方括号写法是为了让本文件本身不被守卫命中）：
+2. 不得出现私有母仓库旧命名（企微系的 4 个旧标识，`.github/` 自身除外）。**规则本体已收敛到 `docs/scripts/privacy_guard.py`（CI 与本地同源）**，自查命令：
+   ```bash
+   python docs/scripts/privacy_guard.py                                # 默认：扫已跟踪 + 未跟踪未忽略文件
+   python docs/scripts/privacy_guard.py --forbid-local-secrets        # CI 同款；本机有 secrets.local.* 时报错属预期
+   ```
+   只想快速 grep 时（方括号写法是为了让本文件本身不被守卫命中）：
    ```bash
    git grep -InE '[q]iyeweixin|[w]eixin_android|[W]eixinAndroid|[w]eixin-monitor' -- . ':(exclude).github'
    ```
@@ -99,6 +112,8 @@ CI 额外跑：Python 语法检查、pytest、**隐私守卫**（见 §4）。CI
 - [ ] `\.\gradlew.bat testOpenDebugUnitTest` 绿
 - [ ] `\.\gradlew.bat assembleOpenDebug assembleBetaDebug` 绿
 - [ ] `\.\gradlew.bat lintOpenDebug` 无新增 error
+- [ ] `python -m pytest server/ -v --tb=short` 绿
+- [ ] `python docs/scripts/privacy_guard.py` 绿（本机有 `secrets.local.*` 时用默认模式，别加 `--forbid-local-secrets`）
 - [ ] 新行为有对应单测（放 `app/src/test/`）
 - [ ] 文档同步更新（README / docs/ / PRIVACY.md 按影响面判断）
 - [ ] `git status` 里没有密钥、APK、用户数据
@@ -114,3 +129,12 @@ CI 额外跑：Python 语法检查、pytest、**隐私守卫**（见 §4）。CI
 - 单测是纯 JVM（`unitTests.isReturnDefaultValues = true`），只有不依赖 Android 框架的逻辑才放得进 `app/src/test/`。
 - 通知监听 + 无障碍双通道会拿到同一批消息，去重靠 `dedup_key` / 消息指纹，改动去重逻辑时务必补回归用例。
 - 提醒链是三级降级：系统日历事件 → 日历插入 Intent → 本地闹钟；改链路时三种终态都要验。
+- `lintOpenDebug` 输出里的 `e: ... Module was compiled with an incompatible version of Kotlin` 是 **AGP 8.5.2 自带 lint 内嵌的 Kotlin 编译器（2.0.x）**在解析 2.2.21 stdlib / litert-api 元数据时的噪音，**不影响编译**（单独重跑 `compileOpenDebugKotlin` 是干净的）；看到它别去动 Kotlin 版本。
+- **同步水位口径＝「已结算前缀」**：水位只推进到「本轮被接受 ∪ 本轮新被隔离」的连续前缀；
+  中间存在「被拒未隔离 / 未脱敏 / 本轮结论不明（207 清单读不出来）」的洞时，
+  水位**停在洞前，绝不越过** —— 越过的记录 `analyzedAt <= 水位`，扫描会当已同步跳过，
+  **永远补报不了**。改 `SyncWorker` / `AnalysisStore` 的水位逻辑时，
+  必须同步看 `SyncWatermarkCore` 的单测。
+- **413 单独处置**：服务端单条请求体上限 8 MiB，超限的那一条是「毒丸」，重试无用。
+  端上先把批次二分重试，拆到单条仍 413 才单独隔离该条并继续下一批，
+  **不触发整轮 retry**（否则一条毒丸会永久卡住它后面的整条队列）。

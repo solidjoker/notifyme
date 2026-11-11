@@ -12,6 +12,7 @@ import android.widget.Button
 import android.widget.CheckedTextView
 import android.widget.EditText
 import android.widget.TextView
+import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
@@ -135,12 +136,29 @@ class WatchlistActivity : Activity() {
         private var watched: Set<String> = emptySet()
         private var unwatched: Set<String> = emptySet()
 
+        /** 用 DiffUtil 做增量刷新：勾选态变化只重画受影响的行。 */
         fun submit(keys: List<ConvKey>, watchedSet: Set<String>, unwatchedSet: Set<String>) {
+            val old = items.toList()
+            val oldChecked = old.associateWith { k ->
+                WatchlistStore.isWatchedId(k.id, unwatched, watched)
+            }
+            val newChecked = keys.associateWith { k ->
+                WatchlistStore.isWatchedId(k.id, unwatchedSet, watchedSet)
+            }
+            val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
+                override fun getOldListSize(): Int = old.size
+                override fun getNewListSize(): Int = keys.size
+                override fun areItemsTheSame(oldPos: Int, newPos: Int): Boolean =
+                    old[oldPos].id == keys[newPos].id
+                override fun areContentsTheSame(oldPos: Int, newPos: Int): Boolean =
+                    old[oldPos] == keys[newPos] &&
+                        oldChecked[old[oldPos]] == newChecked[keys[newPos]]
+            })
             items.clear()
             items.addAll(keys)
             watched = watchedSet
             unwatched = unwatchedSet
-            notifyDataSetChanged()
+            diff.dispatchUpdatesTo(this)
         }
 
         /** 勾选态 = 完整关注判定（白名单/全部关注哨兵命中，且不在黑名单） */
