@@ -150,7 +150,18 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **413 单独处置**：服务端单条请求体上限 8 MiB，超限的那一条是「毒丸」，重试无用。
   端上先把批次二分重试，拆到单条仍 413 才单独隔离该条并继续下一批，
   **不触发整轮 retry**（否则一条毒丸会永久卡住它后面的整条队列）。
-- **`gh pr merge` / `PUT /pulls/{n}/merge` 会 403 `Resource not accessible by personal access token`**，但 `gh pr create`、写 label、写 issue comment 都通 —— 因为 fine-grained PAT 只有 Issues / Pull requests 写权限，**缺 `Contents: write`**（合并要往 base 分支写合并提交）。修法二选一：给该 PAT 加 `Contents: Read and write`（会一并覆盖 token 选中的其它仓库，范围由维护者定），或走已登录浏览器点合并。
+- **`gh pr merge` / `PUT /pulls/{n}/merge` 会 403 `Resource not accessible by personal access token`**，但 `gh pr create`、写 label、写 issue comment 都通 —— 因为 fine-grained PAT 只有 Issues / Pull requests 写权限，**缺 `Contents: write`**（合并要往 base 分支写合并提交）。修法三选一（按推荐顺序）：
+  - **① 用全权限 OAuth token 临时覆盖 `GH_TOKEN`（推荐，零改配置）**：本机 Windows 凭据管理器里通常还存着一个 `git:https://github.com` 条目的 OAuth token（scope = `gist, repo, workflow`），它对合并端点有写合并提交的权限；`gh` 优先读 `GH_TOKEN`。
+  - **② 给该 fine-grained PAT 加 `Contents: Read and write`**（会一并覆盖 token 选中的其它仓库，范围由维护者定）。
+  - **③ 走已登录浏览器点合并**（姿势见下一条，最麻烦，能不用就不用）。
+  - 取 token 并覆盖（**别把 token 打印进日志、提交或 CI**）：
+    ```powershell
+    $cred = "protocol=https`nhost=github.com`n`n" | git credential fill 2>$null
+    $env:GH_TOKEN = (($cred | Select-String '^password=' | Select-Object -First 1).ToString() -replace '^password=','')
+    gh pr merge 8 --squash --delete-branch
+    Remove-Item Env:\GH_TOKEN   # 用完立刻清掉，别留在会话里
+    ```
+  - 验证 scope：`gh api -i user | Select-String x-oauth-scopes`（fine-grained PAT 这行是空的，别拿它判断细粒度权限）。
 - **浏览器点合并的正确姿势**：合并框本体（`.mergePartialContainer__VUMolp`）里只有提交信息框 + `[data-dd-action-name="pull_requests.merge.confirm_merge"]`；**合并方式选择器不在这个容器里**，在主按钮旁的图标按钮 `[data-dd-action-name="pull_requests.merge.open_method"]` 里，弹层选项文案是 `Create a merge commit` / `Squash and merge` / `Rebase and merge`，选完再点主按钮 `[data-dd-action-name="pull_requests.merge.open"]`。
 - **Android 单测里起不了 JDK 自带的 HTTP 服务**：单测编译 classpath = `android.jar` + 显式依赖，Kotlin 走 `-no-jdk`，`com.sun.net.httpserver` 编译期直接报 `Unresolved reference 'sun'`。想在纯 JVM 单测里起本地服务，只能用 `java.net.ServerSocket` 自己写 HTTP/1.1（见 `app/src/test/java/com/notifyme/android/HttpEndToEndFixture.kt`），或引入 okhttp mockwebserver（会多一条外部依赖解析，CI 上要权衡）。
 - **服务端要写「真实 HTTP 端到端」用例**：用 `werkzeug.serving.make_server("127.0.0.1", 0, app, threaded=True)` 起真实 HTTP/1.1 服务器，客户端用 `urllib.request`（真 TCP）；数据隔离靠改模块属性 `app.DATA_DIR / DB_PATH / JSONL_PATH / ADVISOR_PATH` 指到临时目录（`server/storage.py` 每次请求都动态读这几个变量，改属性就够，不要 import 时拷贝）。两个坑：① 测 413 要把 `app.config["MAX_CONTENT_LENGTH"]` 调小（如 1024）再发几 KB —— 真按 8 MiB 阈值发，服务端会在读完 body 前就回 413 并断连接，客户端在 `sendall` 阶段撞连接重置，拿不到状态码；② 404 / 413 是 JSON，但 **405 目前仍是 Flask 默认 HTML**（没注册 errorhandler），断言别按 JSON 写。参考实现见 `server/test_http_e2e.py`（34 例）。
