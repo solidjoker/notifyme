@@ -18,8 +18,25 @@ EnMicroMsg.db 拉出来、解密、合并进监测库 messages.db。
     5. 纯 Python 页级解密（WCDB2/SQLCipher：pageSize=1024、PBKDF2-HMAC-SHA1、
        4000 迭代、HMAC 关闭、reserve=16 仅 IV），采用 SQLCipher4 纯 Python
     6. 读 message / rcontact / chatroom 三表，增量合并进 messages.db
-       （source='android-db'），按 (conversation, sender, 秒级时间戳, text) 归一去重
+       （source='android-db'），按 (pkg, conversation, sender, 毫秒时间戳, text)
+       去重——与主库唯一索引 idx_messages_dedup 同口径；跨来源近重复
+       （通知渠道 vs 数据库渠道时间戳略有偏差）另按时间差窗口单独判定
     7. 清理设备与本地的临时文件
+    8. 把真正入库的新消息按 /weixin 同格式追加进 data/messages.jsonl 原文存档
+
+写入策略：分批提交（每 EXTRACT_COMMIT_BATCH 条 / 每 EXTRACT_COMMIT_INTERVAL 秒
+提交一次），批与批之间释放 SQLite 写锁——整批一次提交会让提取期间主库的
+写锁一直不释放，服务端 /weixin 上报被 busy_timeout 挡住后返回 500。
+去重在 SQLite 侧用索引查，不再把整张表读进 Python set（内存与表大小解耦）。
+
+原文存档：真正入库的新消息按 server/app.py 的 _append_jsonl 同格式追加进
+data/messages.jsonl（被去重跳过的重复行不写，否则存档条数会多于库内条数）；
+O(1) 追加、超限轮转成 messages.jsonl.1；写入失败只计数 + stderr 告警，
+不让整轮提取崩掉。
+
+跨进程锁：写主库期间持一把跨进程文件锁（Windows 用 msvcrt.locking，
+POSIX 用 fcntl.flock，都不可用时退化成原子创建锁文件 + 超时），
+拿不到锁就明确报错退出，不静默并发写。
 
 CLI 用法：
     python android_db_extract.py          # 增量（state.json 记录上次最大 msgId）
@@ -40,8 +57,28 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
+from urllib.parse import quote as _url_quote
 
 from Crypto.Cipher import AES  # pycryptodome，.venv 已装
+
+# 跨进程锁：Windows 用 msvcrt.locking，POSIX 用 fcntl.flock，
+# 都不可用时退化成「原子创建锁文件」（见 _FileLock）
+try:
+    import msvcrt
+except ImportError:   # pragma: no cover - 非 Windows
+    msvcrt = None
+try:
+    import fcntl
+except ImportError:   # pragma: no cover - 非 POSIX
+    fcntl = None
+
+# Windows 控制台默认 GBK，中文输出前强制 utf-8，避免 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # ------------------------------------------------------------------
 # 可配置常量（环境变量优先）
@@ -82,6 +119,37 @@ SOURCE_TAG = "android-db"  # 本来源标记
 # （与 server/app.py 的 DEFAULT_PKG 保持一致，控制台按来源 App 过滤要用）
 PKG = "com.tencent.mm"
 
+# ------------------------------------------------------------------
+# 写入与去重参数（环境变量可覆盖）
+# ------------------------------------------------------------------
+
+# 分批提交：每 COMMIT_BATCH 条、或每 COMMIT_INTERVAL 秒提交一次，
+# 批与批之间释放 SQLite 写锁。整批一次提交时，提取全程占着写锁，
+# 服务端 /weixin 上报最多被 busy_timeout 挡 5 秒后 500（database is locked）。
+COMMIT_BATCH = int(os.environ.get("EXTRACT_COMMIT_BATCH", "500"))
+COMMIT_INTERVAL = float(os.environ.get("EXTRACT_COMMIT_INTERVAL", "2"))
+
+# 跨来源近重复的时间差窗口（毫秒）：通知渠道上报的是"通知发布时间"，
+# 数据库渠道是"消息创建时间"，同一条消息两者可能差几毫秒到几秒。
+# 只有两条记录来源不同、且时间差落在窗口内，才判为同一条消息；
+# 窗口设为 0 表示关掉这条宽松判定（只保留毫秒级精确去重）。
+CROSS_SOURCE_SKEW_MS = int(os.environ.get("EXTRACT_CROSS_SOURCE_SKEW_MS", "1000"))
+
+# 原文存档：与 server/app.py 的 _append_jsonl 写同一个文件
+# （/weixin 上报与数据库直读提取的消息都要进这个存档，否则「原文存档」
+#   只覆盖通知渠道，数据库直读来源的消息只剩库里的副本）
+# 轮转阈值必须与 server/app.py 的 JSONL_MAX_BYTES 一致：两个写入方轮转的是
+# 同一个 .1 文件，阈值不一致会互相覆盖（先轮转的一方冲掉对方还没轮转的内容）。
+# app.py 当前取值 64 MiB。
+JSONL_MAX_BYTES = 64 * 1024 * 1024
+
+# 跨进程写锁：两个提取脚本（或手工 CLI 与服务端后台提取）同时写主库时，
+# 会互相抢 SQLite 写锁，把对方的写入推迟到 busy_timeout 之外。
+# 写主库期间持锁，拿不到锁就明确报错退出，不静默并发写。
+# 存档与锁文件的具体路径见 _archive_path() / _lock_path()（运行时按主库位置解析）。
+LOCK_TIMEOUT = float(os.environ.get("EXTRACT_LOCK_TIMEOUT", "120"))      # 秒
+LOCK_STALE_SECONDS = float(os.environ.get("EXTRACT_LOCK_STALE", "3600"))  # 秒
+
 # WCDB2/SQLCipher 页加密参数（APK 逆向实证，见 .tmp_android_db/cipherspec.txt）
 PAGE_SIZE = 1024
 KDF_ITER = 4000
@@ -98,6 +166,365 @@ TYPE_PLACEHOLDER = {
 
 class ExtractError(RuntimeError):
     """提取流程的可读错误，CLI/HTTP 层直接展示 message。"""
+
+
+def _log_warn(msg):
+    """告警统一走 stderr：stdout 只留最终 JSON，脚本化调用不受影响。"""
+    print(f"[warn] {msg}", file=sys.stderr)
+
+
+def _log_event(event, **fields):
+    """结构化日志：event=<name> key=value ...（一行一条，走 stderr）。
+
+    stdout 只留最终 JSON 统计，脚本化调用不受影响；
+    字段顺序固定、值里的换行折成空格，方便 grep / 日志采集器按 key=value 解析。
+    """
+    parts = ["event=" + str(event)]
+    for key, value in fields.items():
+        if value is None:
+            continue
+        text = str(value).replace("\r", " ").replace("\n", " ")
+        parts.append("%s=%s" % (key, text))
+    print("[extract] " + " ".join(parts), file=sys.stderr)
+
+
+def _ro_uri(path):
+    """只读打开用的 file: URI（Windows 路径里的反斜杠/冒号要转义）。"""
+    return "file:" + _url_quote(str(Path(path).absolute())) + "?mode=ro"
+
+
+def _archive_path():
+    """原文存档路径：默认与主库同目录（生产环境即 server/data/messages.jsonl）。
+
+    运行时按 MAIN_DB 解析，而不是 import 时定死：主库被指到别处（临时目录、
+    测试夹具）时，存档跟着主库走，不会把别处的消息写进正式存档。
+    """
+    return os.path.join(os.path.dirname(os.path.abspath(MAIN_DB)), "messages.jsonl")
+
+
+def _lock_path():
+    """跨进程写锁文件路径：与主库同目录（生产环境即 server/data/extract.lock）。"""
+    return os.path.join(os.path.dirname(os.path.abspath(MAIN_DB)), "extract.lock")
+
+
+# ------------------------------------------------------------------
+# 原文存档（与 server/app.py 的 _append_jsonl 同口径）
+# ------------------------------------------------------------------
+
+def _archive_item(m, source=None, pkg=None):
+    """构造一条存档记录：字段与客户端上报（/weixin）完全一致。
+
+    app.py 的 _append_jsonl 写的是客户端上报的原始条目（蛇形 is_group），
+    这里用同一套字段名、同一个 json.dumps(..., ensure_ascii=False) 序列化，
+    保证两个写入方写出的存档行格式一致、可被同一套工具解析。
+    """
+    return {
+        "sender": str(m.get("sender", "")),
+        "text": str(m.get("text", "")),
+        "timestamp": int(m.get("timestamp", 0)),
+        "conversation": str(m.get("conversation", "")),
+        "is_group": bool(m.get("is_group")),
+        "pkg": str(pkg or m.get("pkg") or PKG),
+        "source": str(source or m.get("source") or SOURCE_TAG),
+    }
+
+
+def _archive_line(item):
+    """存档行：与 app.py _append_jsonl 一致（一行一条 JSON）。"""
+    return json.dumps(item, ensure_ascii=False) + "\n"
+
+
+class _JsonlArchiver:
+    """把真正入库的新消息追加进 data/messages.jsonl（原文存档）。
+
+    - 只追加写（O(1)），不重写整个文件；
+    - 目录不存在先建；
+    - 超过 JSONL_MAX_BYTES 轮转成 messages.jsonl.1（与 app.py 同口径：
+      同名 .1 直接覆盖旧档）；
+    - 只写真正 INSERT 成功的新消息，被去重跳过的重复行不写
+      （否则存档条数会多于库内条数）；
+    - 写失败只计数 + stderr 告警：库才是真相，存档写失败不该让整轮提取崩。
+    """
+
+    def __init__(self, path=None, max_bytes=None):
+        self.path = path or _archive_path()
+        self.max_bytes = int(JSONL_MAX_BYTES if max_bytes is None else max_bytes)
+        self.archived = 0     # 成功写入的条数
+        self.errors = 0       # 写入失败的条数
+        self.skipped = 0      # 因去重跳过、没写存档的条数
+        self._pending = []
+
+    def add(self, item):
+        """登记一条新消息（只有真正入库成功的才调）。"""
+        self._pending.append(_archive_line(item))
+
+    def skip(self, n=1):
+        """登记「被去重跳过、没写存档」的条数。"""
+        self.skipped += int(n)
+
+    def flush(self):
+        """把登记的条目追加落盘；写失败只计数 + 告警，返回写入条数。"""
+        if not self._pending:
+            return 0
+        pending, self._pending = self._pending, []
+        blob = "".join(pending)
+        try:
+            folder = os.path.dirname(os.path.abspath(self.path))
+            if folder:
+                os.makedirs(folder, exist_ok=True)
+            self._maybe_rotate()
+            with open(self.path, "a", encoding="utf-8") as f:
+                f.write(blob)
+        except OSError as e:
+            self.errors += len(pending)
+            _log_warn(f"写入 jsonl 存档失败（{len(pending)} 条未存档，"
+                      f"库内数据不受影响）: {e}")
+            return 0
+        self.archived += len(pending)
+        return len(pending)
+
+    def _maybe_rotate(self):
+        """超限轮转：messages.jsonl -> messages.jsonl.1（与 app.py 同口径）。"""
+        try:
+            if not os.path.exists(self.path):
+                return
+            if os.path.getsize(self.path) <= self.max_bytes:
+                return
+            os.replace(self.path, self.path + ".1")
+            _log_event("archive_rotated", path=self.path,
+                       max_bytes=self.max_bytes)
+        except OSError as e:
+            # 轮转失败不致命：app.py 那边同样是 OSError 直接忽略
+            _log_warn(f"jsonl 存档轮转失败（继续追加写）: {e}")
+
+
+# ------------------------------------------------------------------
+# 跨进程写锁
+# ------------------------------------------------------------------
+
+class _FileLock:
+    """跨进程互斥锁：两个提取进程（或 CLI 与服务端后台提取）不得同时写主库。
+
+    Windows 用 msvcrt.locking（字节区间锁，进程退出自动释放），
+    POSIX 用 fcntl.flock；两者都不可用时退化为「原子创建锁文件 + 超时」。
+    拿不到锁就抛 ExtractError：宁可明确失败，也不静默并发写主库。
+    """
+
+    def __init__(self, path=None, timeout=None):
+        self.path = path or _lock_path()
+        self.timeout = float(LOCK_TIMEOUT if timeout is None else timeout)
+        self._fh = None
+        self._excl = None      # 兜底路径创建的独占锁文件
+
+    def acquire(self):
+        """拿到锁返回 self；超时抛 ExtractError。"""
+        deadline = time.monotonic() + self.timeout
+        folder = os.path.dirname(os.path.abspath(self.path))
+        if folder:
+            os.makedirs(folder, exist_ok=True)
+        last_err = "锁被其它进程占用"
+        while True:
+            try:
+                if self._try_lock():
+                    _log_event("lock_acquired", path=self.path)
+                    return self
+            except OSError as e:
+                last_err = str(e)
+            if time.monotonic() >= deadline:
+                raise ExtractError(
+                    f"拿不到提取写锁（{self.path}，已等待 {self.timeout:.0f}s）："
+                    f"另一个提取进程可能正在写主库（{last_err}）")
+            time.sleep(0.2)
+
+    def release(self):
+        """释放锁（finally 里必须调用）。"""
+        if self._fh is not None:
+            try:
+                if msvcrt is not None:
+                    self._fh.seek(0)
+                    msvcrt.locking(self._fh.fileno(), msvcrt.LK_UNLCK, 1)
+                elif fcntl is not None:
+                    fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            finally:
+                try:
+                    self._fh.close()
+                except OSError:
+                    pass
+                self._fh = None
+        if self._excl is not None:
+            try:
+                os.unlink(self._excl)
+            except OSError:
+                pass
+            self._excl = None
+
+    def _try_lock(self):
+        """尝试拿锁，成功返回 True；被占用返回 False。"""
+        if msvcrt is not None:
+            fh = open(self.path, "a+b")
+            try:
+                if fh.seek(0, os.SEEK_END) == 0:
+                    fh.write(b"0")     # 保证至少有 1 字节可锁
+                    fh.flush()
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError:
+                fh.close()
+                return False
+            self._fh = fh
+            return True
+        if fcntl is not None:
+            fh = open(self.path, "a+b")
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                fh.close()
+                return False
+            self._fh = fh
+            return True
+        # 兜底：原子创建独占锁文件（O_CREAT|O_EXCL 是原子的）
+        excl = self.path + ".excl"
+        try:
+            fd = os.open(excl, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                age = time.time() - os.path.getmtime(excl)
+            except OSError:
+                age = 0
+            if age > LOCK_STALE_SECONDS:
+                try:
+                    os.unlink(excl)   # 上一个进程崩了留下的陈旧锁
+                except OSError:
+                    pass
+            return False
+        except OSError:
+            return False
+        try:
+            os.write(fd, str(os.getpid()).encode("ascii"))
+        finally:
+            os.close(fd)
+        self._excl = excl
+        return True
+
+
+class _Dedup:
+    """基于主库索引的有界去重（不再把整张表读进 Python set）。
+
+    去重键 = (pkg, conversation, sender, 毫秒时间戳, text)，与主库唯一索引
+    idx_messages_dedup (pkg, conversation, sender, timestamp, text) 完全一致：
+      * 同一来源同一条消息重复提取 -> 命中，重复插入被挡住；
+      * 同 App 同秒但毫秒不同的两条消息 -> 键不同，两条都保留
+        （旧的秒级归一键会把它们误判成重复，真的丢消息）；
+      * 不同 App 的同名会话 -> 键含 pkg，不会互相吞掉。
+
+    跨来源近重复（同一消息经通知渠道与数据库渠道各来一次，两边时间戳
+    略有偏差）走单独一条宽松判定：只有来源不同、且时间差落在
+    CROSS_SOURCE_SKEW_MS 窗口内，才算同一条消息。
+
+    内存占用：只保留"当前批次"的键（批大小有界），历史键全部留在 SQLite
+    索引里，内存占用与表大小解耦。
+    """
+
+    def __init__(self, conn, source, pkg, skew_ms=None):
+        self.conn = conn
+        self.source = source
+        self.pkg = pkg
+        self.skew_ms = (CROSS_SOURCE_SKEW_MS if skew_ms is None else skew_ms)
+        self._batch_keys = set()
+
+    def reset_batch(self):
+        """批次提交后清空批内键集合（这些行已经在库里，交给索引判重）。"""
+        self._batch_keys.clear()
+
+    @staticmethod
+    def _key(m):
+        return (m["pkg"], m["conversation"], m["sender"],
+                int(m["timestamp"]), m["text"])
+
+    def is_duplicate(self, m):
+        """True = 主库里已经有同一条消息，不应该再插入。"""
+        key = self._key(m)
+        if key in self._batch_keys:
+            return True
+        row = self.conn.execute(
+            "SELECT 1 FROM messages WHERE pkg=? AND conversation=? AND sender=? "
+            "AND timestamp=? AND text=? LIMIT 1", key).fetchone()
+        if row:
+            self._batch_keys.add(key)
+            return True
+        # 跨来源近重复：同一条消息经通知渠道与数据库渠道各来一次时，
+        # 两边时间戳可能差几毫秒。只在来源不同时才放宽到时间差窗口。
+        ts = int(m["timestamp"])
+        row = self.conn.execute(
+            "SELECT 1 FROM messages WHERE pkg=? AND conversation=? AND sender=? "
+            "AND text=? AND source<>? AND timestamp BETWEEN ? AND ? LIMIT 1",
+            (m["pkg"], m["conversation"], m["sender"], m["text"],
+             self.source, ts - self.skew_ms, ts + self.skew_ms)).fetchone()
+        if row:
+            return True
+        self._batch_keys.add(key)
+        return False
+
+
+class _BatchWriter:
+    """分批提交写入器：每 N 条 / 每 T 秒 commit 一次，批间释放写锁。
+
+    异常路径不留半截事务：异常时把已写入的批次提交掉（每条都是完整
+    消息、去重幂等），既不丢已写数据，也不会把写事务悬着不放。
+    """
+
+    def __init__(self, conn, batch=None, interval=None, on_commit=None):
+        self.conn = conn
+        self.batch = max(1, int(COMMIT_BATCH if batch is None else batch))
+        self.interval = max(0.0, float(
+            COMMIT_INTERVAL if interval is None else interval))
+        self.rows = 0
+        self.commits = 0
+        self._last = time.monotonic()
+        # on_commit：批次提交成功后的回调（存档写盘用）
+        self.on_commit = on_commit
+
+    def execute(self, sql, params):
+        self.conn.execute(sql, params)
+        self.rows += 1
+
+    def commit(self):
+        """提交当前批次；主库被占用时退避重试，连续失败才报错。"""
+        last_err = None
+        for attempt in range(5):
+            try:
+                self.conn.commit()
+            except sqlite3.OperationalError as e:
+                last_err = e
+                if "locked" not in str(e) and "busy" not in str(e):
+                    raise
+                time.sleep(0.2 * (attempt + 1))
+                continue
+            committed_rows = self.rows
+            self.commits += 1
+            self.rows = 0
+            self._last = time.monotonic()
+            _log_event("batch_committed", rows=committed_rows,
+                       commits=self.commits)
+            if self.on_commit:
+                # 提交成功之后才写存档：与 app.py「先提交库、后写存档」同口径，
+                # 库没提交的行不能先落存档（否则存档里有库里没有的消息）
+                self.on_commit()
+            return
+        raise ExtractError(f"提交批次失败（主库持续被占用）: {last_err}")
+
+    def maybe_commit(self):
+        """按条数或时间触发提交；时间间隔为 0 时只按条数。"""
+        if self.rows >= self.batch or (
+                self.interval and time.monotonic() - self._last >= self.interval):
+            self.commit()
+
+    def flush(self):
+        """收尾提交（有未提交内容才提交）。"""
+        if self.rows or self.conn.in_transaction:
+            self.commit()
 
 
 # ------------------------------------------------------------------
@@ -167,7 +594,11 @@ def get_uin():
     os.makedirs(ANDROID_DIR, exist_ok=True)
     try:
         adb("pull", DEVICE_TMP_PREF, local)
-        buf = open(local, "rb").read()
+        # adb 退出码为 0 不代表真的拉到了文件，按实际输出判断
+        if not os.path.exists(local) or os.path.getsize(local) == 0:
+            raise ExtractError(f"adb pull 之后本地文件为空或缺失: {local}")
+        with open(local, "rb") as f:
+            buf = f.read()
     finally:
         root_sh(f"rm -f {DEVICE_TMP_PREF}")
         if os.path.exists(local):
@@ -175,20 +606,37 @@ def get_uin():
 
     key = b"default_uin"
     p = 0
+    bad = 0                  # 坏记录数：这一条解析失败，但不影响其它记录
+    bad_samples = []
     while True:
         p = buf.find(key, p)
         if p < 0:
             break
         # keyLen 前缀必须恰好等于 len(key)，以此排除 "default_uin64" 等前缀命中
         if p >= 1 and buf[p - 1] == len(key):
-            q = p + len(key)
-            vlen, q = _read_varint(buf, q)      # 值长度
-            raw = buf[q:q + vlen]
-            val, _ = _read_varint(raw, 0)       # 值本体也是 varint（int64 编码）
+            try:
+                q = p + len(key)
+                vlen, q = _read_varint(buf, q)      # 值长度
+                raw = buf[q:q + vlen]
+                val, _ = _read_varint(raw, 0)       # 值本体也是 varint（int64 编码）
+            except ExtractError as e:
+                # 坏记录只跳过这一条，继续找后面的同键记录：原来遇首条坏记录
+                # 就中断整轮搜索，后面真正的 uin 也读不到了，整轮提取直接失败
+                bad += 1
+                if len(bad_samples) < 5:
+                    bad_samples.append(f"偏移 {p}: {e}")
+                p += 1
+                continue
             if val >= 1 << 63:                  # 转有符号
                 val -= 1 << 64
+            if bad:
+                _log_warn(f"MMKV 解析跳过 {bad} 条坏记录，示例: "
+                          + "；".join(bad_samples))
             return int(val)
         p += 1
+    if bad:
+        _log_warn(f"MMKV 解析跳过 {bad} 条坏记录（仍未找到 default_uin），示例: "
+                  + "；".join(bad_samples))
     raise ExtractError("MMKV 中未找到 default_uin，微信可能未登录")
 
 
@@ -263,7 +711,15 @@ def pull_db(account_dir):
         adb("pull", DEVICE_TMP_DB, LOCAL_DB, timeout=300)
     finally:
         root_sh(f"rm -f {DEVICE_TMP_DB}")
-    return int(size)
+    # adb 退出码为 0 不代表真的拉到了文件，按实际输出判断
+    if not os.path.exists(LOCAL_DB) or os.path.getsize(LOCAL_DB) == 0:
+        raise ExtractError(
+            f"adb pull 之后本地库为空或缺失: {LOCAL_DB}"
+            "（adb 退出码为 0 不代表拉到了文件）")
+    try:
+        return int(size)
+    except (TypeError, ValueError):
+        raise ExtractError(f"stat 取不到文件大小: {size!r}")
 
 
 def _derive_key(passphrase, salt):
@@ -388,6 +844,39 @@ def _parse_row(row, contact_name, chatroom_name):
     }
 
 
+def _ensure_dedup_index(dst):
+    """保证去重查询有索引可用。
+
+    去重改成在 SQLite 侧查之后，查询形如
+    "WHERE pkg=? AND conversation=? AND sender=? AND timestamp=? AND text=?"，
+    没有索引就是每行一次全表扫描（时间 O(n²)；内存虽不受影响但很慢）。
+    app.py 的 init_db() 会建唯一索引 idx_messages_dedup，但独立跑提取脚本时
+    主库可能还没建过它，这里补一个同列索引兜底。
+
+    用非唯一索引：老库里可能已经存在重复行，唯一索引会直接建失败。
+    """
+    try:
+        index_rows = dst.execute("PRAGMA index_list(messages)").fetchall()
+    except sqlite3.Error:
+        return
+    for row in index_rows:
+        name = row[1]
+        try:
+            cols = [r[2] for r in dst.execute(
+                f'PRAGMA index_info("{name}")').fetchall()]
+        except sqlite3.Error:
+            continue
+        if cols[:5] == ["pkg", "conversation", "sender", "timestamp", "text"]:
+            return   # 已有等价索引（多半是 app.py 建的 idx_messages_dedup）
+    try:
+        dst.execute(
+            "CREATE INDEX IF NOT EXISTS idx_extract_dedup_lookup "
+            "ON messages (pkg, conversation, sender, timestamp, text)")
+    except sqlite3.Error as e:
+        # 建不了索引不影响正确性（只是查询变慢），不因此中断提取
+        _log_warn(f"去重索引创建失败（查询会变慢，不影响正确性）: {e}")
+
+
 def _ensure_main_schema(dst):
     """确保监测主库有 source / pkg 列（与 app.py 的迁移逻辑一致，幂等）。"""
     cols = [r[1] for r in dst.execute("PRAGMA table_info(messages)")]
@@ -400,93 +889,172 @@ def _ensure_main_schema(dst):
         dst.execute(
             "ALTER TABLE messages ADD COLUMN pkg TEXT "
             f"NOT NULL DEFAULT '{PKG}'")
+    _ensure_dedup_index(dst)
     dst.commit()
 
 
+def _save_state(state):
+    """原子写增量状态：先写临时文件，再 os.replace 覆盖目标。
+
+    直接 open(STATE_PATH, "w") 写一半崩溃会留下损坏的 JSON，
+    服务端读 state.json 时只能退化成"未知"。os.replace 在同一文件系统内
+    是原子替换，读者要么看到旧文件、要么看到完整的新文件。
+    """
+    os.makedirs(ANDROID_DIR, exist_ok=True)
+    tmp = STATE_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, STATE_PATH)
+
+
 def merge_messages(full=False):
-    """读解密库，增量/全量合并进 messages.db，返回统计 dict。"""
+    """读解密库，增量/全量合并进 messages.db，返回统计 dict。
+
+    - 写入分批提交（每 COMMIT_BATCH 条 / 每 COMMIT_INTERVAL 秒提交一次），
+      批与批之间释放 SQLite 写锁，服务端 /weixin 上报不会被锁死；
+    - 去重在 SQLite 侧按唯一索引查（键含 pkg 与毫秒时间戳），
+      不再把整张表读进 Python set，内存占用与表大小解耦；
+    - 解析失败计数 + 记日志，不再静默吞掉。
+    """
     # 读增量状态
     state = {"last_msgId": 0}
     if os.path.exists(STATE_PATH) and not full:
         try:
-            state = json.load(open(STATE_PATH, encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
+            with open(STATE_PATH, encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                state = loaded
+        except (json.JSONDecodeError, OSError) as e:
+            _log_warn(f"增量状态读取失败（按全量重扫处理）: {e}")
+            state = {"last_msgId": 0}
     last_id = 0 if full else int(state.get("last_msgId", 0))
 
-    src = sqlite3.connect("file:" + DECRYPTED_DB + "?mode=ro", uri=True)
-    try:
-        contact_name, chatroom_name = _load_name_maps(src)
-        rows = src.execute(
-            """
-            SELECT msgId, msgSvrId, type, isSend, createTime, talker, content
-            FROM message WHERE msgId > ? ORDER BY msgId
-            """, (last_id,)).fetchall()
-    finally:
-        src.close()
-
     now_ms = int(time.time() * 1000)
-    inserted = duplicated = skipped = 0
+    inserted = duplicated = skipped = scanned = 0
     max_id = last_id
+    parse_errors = []
+    commits = 0
 
-    # 与服务端 app.py 同口径：主库可能正被上报/控制台写入，
-    # 不给 busy_timeout 时会直接抛 "database is locked"
-    dst = sqlite3.connect(MAIN_DB, timeout=10)
-    dst.execute("PRAGMA busy_timeout = 5000")
+    # 原文存档：只写真正入库的新消息（与 app.py 的 _append_jsonl 同格式）
+    archiver = _JsonlArchiver()
+
+    # 跨进程写锁：两个提取进程（或 CLI 与服务端后台提取）同时写主库会互相
+    # 抢 SQLite 写锁，把对方的写入推迟到 busy_timeout 之外。拿不到锁就明确
+    # 报错退出，不静默并发写。
+    lock = _FileLock()
+    lock.acquire()
+    src = None
+    dst = None
     try:
-        _ensure_main_schema(dst)  # 独立运行时主库可能还没迁移 source / pkg 列
-        # 建归一去重键集合：现有全部消息 + 本次批次
-        # 键 = (conversation, sender, 秒级时间戳, text)
-        # 秒级归一是因为通知来源与数据库来源对同一条消息的毫秒时间戳可能不同
-        existing = set()
-        for conv, sender, ts, text in dst.execute(
-                "SELECT conversation, sender, timestamp, text FROM messages"):
-            existing.add((conv, sender, ts // 1000, text))
-
-        batch_keys = set()
-        for row in rows:
-            max_id = max(max_id, row[0])
+        # 源库只读打开；行是流式取的，不把整表 fetchall 进内存
+        src = sqlite3.connect(_ro_uri(DECRYPTED_DB), uri=True)
+        # 与服务端 app.py 同口径：WAL 让读不阻塞写；busy_timeout 让偶发争用
+        # 重试而不是直接抛 "database is locked"。真正管用的是分批提交把
+        # 持锁时间压到秒级。
+        dst = sqlite3.connect(MAIN_DB, timeout=30)
+        dst.execute("PRAGMA busy_timeout = 30000")
+        try:
+            dst.execute("PRAGMA journal_mode = WAL")
+        except sqlite3.Error:
+            pass  # 别的连接正在切换日志模式时忽略
+        try:
+            contact_name, chatroom_name = _load_name_maps(src)
+            cur = src.execute(
+                """
+                SELECT msgId, msgSvrId, type, isSend, createTime, talker, content
+                FROM message WHERE msgId > ? ORDER BY msgId
+                """, (last_id,))
+            # 批次提交成功之后才把本批新消息写进原文存档（先提交库、后写存档）
+            writer = _BatchWriter(dst, on_commit=archiver.flush)
+            dedup = _Dedup(dst, SOURCE_TAG, PKG)
             try:
-                m = _parse_row(row, contact_name, chatroom_name)
-            except Exception:
-                skipped += 1
-                continue
-            key = (m["conversation"], m["sender"], m["timestamp"] // 1000, m["text"])
-            if key in existing or key in batch_keys:
-                duplicated += 1
-                continue
-            batch_keys.add(key)
-            try:
-                dst.execute(
-                    """
-                    INSERT INTO messages
-                        (sender, text, timestamp, conversation, is_group,
-                         received_at, source, pkg)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (m["sender"], m["text"], m["timestamp"], m["conversation"],
-                     m["is_group"], now_ms, SOURCE_TAG, PKG))
-                inserted += 1
-            except sqlite3.IntegrityError:
-                # 兜底：命中毫秒级唯一索引（两来源毫秒恰好相同的极端情况）
-                duplicated += 1
-        dst.commit()
+                _ensure_main_schema(dst)  # 独立运行时主库可能还没迁移 source / pkg 列
+                for row in cur:
+                    scanned += 1
+                    max_id = max(max_id, row[0])
+                    try:
+                        m = _parse_row(row, contact_name, chatroom_name)
+                    except Exception as e:
+                        # 解析失败不再静默吞：计数 + 记日志，数据缺失可追溯
+                        skipped += 1
+                        if len(parse_errors) < 5:
+                            parse_errors.append(
+                                f"msgId={row[0]}: {type(e).__name__}: {e}")
+                        continue
+                    m["pkg"] = PKG
+                    if dedup.is_duplicate(m):
+                        duplicated += 1
+                        # 库里已有 = 首次入库方（/weixin 或更早的提取轮次）
+                        # 已经写进存档，这里跳过，不再写第二份
+                        archiver.skip()
+                        continue
+                    try:
+                        writer.execute(
+                            """
+                            INSERT INTO messages
+                                (sender, text, timestamp, conversation, is_group,
+                                 received_at, source, pkg)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (m["sender"], m["text"], m["timestamp"], m["conversation"],
+                             m["is_group"], now_ms, SOURCE_TAG, PKG))
+                        inserted += 1
+                        archiver.add(_archive_item(m))   # 真正入库的新消息进存档
+                    except sqlite3.IntegrityError:
+                        # 兜底：命中毫秒级唯一索引（两来源毫秒恰好相同的极端情况）
+                        duplicated += 1
+                        archiver.skip()
+                    writer.maybe_commit()
+                    if writer.rows == 0:
+                        dedup.reset_batch()   # 已提交，批内键集合可以清空
+                writer.flush()
+                commits = writer.commits
+            except BaseException:
+                # 中途异常：把已写入但未提交的批次提交掉再把异常抛出去。每条都是
+                # 完整消息、去重幂等，所以既不留半截事务也不丢数据（state.json 不
+                # 更新，下次重跑会重扫，去重会挡住重复行）。
+                try:
+                    writer.flush()
+                except Exception:
+                    try:
+                        dst.rollback()
+                    except Exception:
+                        pass
+                raise
+        finally:
+            cur.close()
     finally:
-        dst.close()
+        if src is not None:
+            src.close()
+        if dst is not None:
+            dst.close()
+        lock.release()
 
-    # 更新增量状态
+    if parse_errors:
+        _log_warn(f"解析失败 {skipped} 条，示例: " + "；".join(parse_errors))
+        _log_event("parse_errors", count=skipped,
+                   samples="；".join(parse_errors))
+
+    # 更新增量状态（原子写）
     state.update({
         "last_msgId": max_id,
         "last_run": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     })
-    with open(STATE_PATH, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+    _save_state(state)
 
     return {
-        "scanned": len(rows),      # 本次扫描到的 message 行数
+        "ok": True,                # 明确成功标记（app.py 要求 ok 明确为 True）
+        "scanned": scanned,        # 本次扫描到的 message 行数
         "inserted": inserted,      # 新合并进监测库的条数
         "duplicated": duplicated,  # 归一去重跳过的条数
         "skipped": skipped,        # 解析失败的条数
+        "parse_error_samples": parse_errors,  # 解析失败样例（最多 5 条）
+        "commits": commits,        # 实际提交次数 = 写锁释放次数
+        "archived": archiver.archived,        # 写入原文存档（messages.jsonl）的条数
+        "archive_skipped": archiver.skipped,  # 去重跳过、未重复写存档的条数
+        "archive_errors": archiver.errors,    # 存档写失败的条数（库内数据不受影响）
         "last_msgId": max_id,
     }
 
@@ -528,6 +1096,9 @@ def run_extract(full=False, keep_files=False):
         if not keep_files and os.path.exists(DECRYPTED_DB):
             os.remove(DECRYPTED_DB)
 
+    # 明确告诉调用方（app.py 后台提取 / CLI）这次跑成功了：
+    # 服务端侧的成功判定要求 ok 明确为 True，缺键按失败处理（B11）。
+    stats["ok"] = True
     stats["elapsed_sec"] = round(time.time() - t0, 2)
     stats["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return stats
@@ -545,6 +1116,10 @@ def main():
         stats = run_extract(full=args.full, keep_files=args.keep_files)
     except ExtractError as e:
         print(f"[失败] {e}", file=sys.stderr)
+        sys.exit(1)
+    except (sqlite3.Error, OSError) as e:
+        # sqlite3 / 文件系统异常同样要以非零退出码收场，别让失败看起来像成功
+        print(f"[失败] {type(e).__name__}: {e}", file=sys.stderr)
         sys.exit(1)
 
     print("[成功] 提取合并完成")

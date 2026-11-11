@@ -25,6 +25,8 @@ def client():
     m.JSONL_PATH = os.path.join(tmp, "messages.jsonl")
     m.ADVISOR_PATH = os.path.join(tmp, "advisor.json")
     m.TOKEN = ""
+    m.ALLOW_NO_AUTH = "1"
+    m._db_ready = False
     m.init_db()
 
     with flask_app.test_client() as c:
