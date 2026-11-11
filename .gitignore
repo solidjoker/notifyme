@@ -50,3 +50,20 @@ tmp/
 
 # 本地分发包输出目录（APK 已被 *.apk 忽略，整目录不入库）
 dist/
+
+# ===== 补充（2026-11 CI 隐私守卫加固）=====
+# 其它私钥 / 证书格式（PFX / PKCS#12 / PEM / DER / CER）
+*.p12
+*.pfx
+*.pem
+*.key
+*.der
+*.cer
+# 真实用户数据（通知原文 / 分析结果 / 待办队列），一律不入库；
+# 文档与测试资源目录显式放行，避免误伤 app/src/test/resources 下的样例数据
+*.jsonl
+!app/src/test/resources/**/*.jsonl
+!docs/**/*.jsonl
+# 端侧运行时数据目录（消息原文 / 分析结果 / 提醒 / 顾问报告 / 端侧模型）
+/files/
+/app/files/

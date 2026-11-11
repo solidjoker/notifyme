@@ -11,8 +11,10 @@ on:
 permissions:
   contents: read
 
+# 同一个 PR 上连续推送时，取消上一次还没跑完的构建，避免排队浪费；
+# main 上的构建不取消——半截提交被跳过比多跑一次更麻烦。
 concurrency:
-  group: build-${{ github.ref }}
+  group: build-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -21,6 +23,9 @@ jobs:
     # 钉住 24.04 而不用 ubuntu-latest：后者将于 2026-10-19 迁到 Ubuntu 26，
     # 预装的 JDK / Android SDK 组合会变，而 CI 是这个仓库唯一的自动化护栏。
     runs-on: ubuntu-24.04
+    # 单 job 总超时：ndk + cmake 全量编译在冷缓存下约 15-25 分钟，
+    # 超过 60 分钟基本是卡死（等网络 / 等 Gradle 锁），判失败比挂一晚上好。
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
 
@@ -30,10 +35,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle (cache)
+      - name: Setup Gradle (缓存依赖)
         # 停在 v5：gradle/actions v6 起缓存组件不再开源，升级即接受 Gradle Terms of Use，
         # 并移除了 configuration-cache 支持。对本仓库（MIT）没有升级收益。
+        # 默认就缓存 ~/.gradle/caches（依赖 + 构建缓存），这里额外明确只读策略。
         uses: gradle/actions/setup-gradle@v5
+        with:
+          # fork 的 PR 不该能往主分支的缓存里写东西
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
 
       - name: Prepare wrapper for CI
         run: |
@@ -63,35 +72,43 @@ jobs:
             https://github.com/ggml-org/llama.cpp third_party/llama.cpp
           git -C third_party/llama.cpp describe --tags
 
-      - name: Lint (Android Lint + ktlint)
-        run: ./gradlew --offline --console=plain lintOpenDebug 2>&1 | tail -20
+      - name: Lint (Android Lint)
+        # 不再 `2>&1 | tail -20`：管道会吞掉 gradle 的退出码，lint 红了 CI 仍然是绿的。
+        # 也不加 --offline：冷缓存（首次跑 / 缓存被清）时 --offline 会因为缺依赖直接失败。
+        run: ./gradlew --console=plain --stacktrace lintOpenDebug
 
       - name: Unit tests + assemble (open & beta)
-        run: ./gradlew --stacktrace testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug
+        # 单元测试是全量发现（app/src/test 下所有用例），不需要点名字
+        run: ./gradlew --stacktrace --console=plain testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug
 
-      - name: Python syntax check (server)
-        run: python3 -m py_compile server/app.py server/android_db_extract.py server/pc_db_extract.py server/gen_icons.py
+      - name: Set up Python (pip 缓存)
+        # 用 v5：pip 缓存能力自 v4 起就有；大版本固定住，避免上游改默认行为。
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: server/requirements.txt
 
-      - name: Server tests (pytest)
+      - name: Python syntax check (server, 目录级)
+        # 目录级发现：server/ 下新增 .py 自动纳入，不用再维护一份点死的文件清单
+        run: python3 -m compileall -q server
+
+      - name: Server tests (pytest, 目录级发现)
         run: |
-          python3 -m pip install flask pytest --quiet
-          python3 -m pytest server/test_weixin.py -v --tb=short
+          python3 -m pip install --upgrade pip
+          # 装服务端真实依赖（flask / waitress / pycryptodome / Pillow），别只装 flask
+          python3 -m pip install -r server/requirements.txt
+          python3 -m pip install pytest
+          # 目录级发现：server/test_*.py 里新增的用例自动被跑到
+          python3 -m pytest server/ -v --tb=short
 
-      - name: Guard - no private naming or local secrets in repo
-        run: |
-          test ! -f secrets.local.properties || { echo "::error::secrets.local.properties 不得入库"; exit 1; }
-          test ! -f keystore.properties     || { echo "::error::keystore.properties 不得入库"; exit 1; }
-          test ! -f secrets.local.bat       || { echo "::error::secrets.local.bat 不得入库"; exit 1; }
-          # 会泄露私有母仓库的旧命名（代码与文档都不许出现；.github 自身含该正则，排除）
-          if git grep -InE 'qiyeweixin|weixin_android|WeixinAndroid|weixin-monitor' -- . ':(exclude).github'; then
-            echo "::error::发现会泄露私有母仓库的旧命名残留"
-            exit 1
-          fi
-          # 个人用户目录（占位符 C:\Users\<你> 除外）
-          if git grep -InF 'C:\Users\' -- . | grep -vF 'C:\Users\<' > /dev/null; then
-            echo "::error::发现真实个人用户目录路径，请改为占位符 C:\\Users\\<你>"
-            exit 1
-          fi
+      - name: Guard - 隐私与仓库卫生
+        # 规则正文只有一份：docs/scripts/privacy_guard.py（CI 与本地跑同一份实现）
+        # --forbid-local-secrets：CI 的 checkout 是干净的，工作区里出现 secrets.local.* 即事故
+        run: python3 docs/scripts/privacy_guard.py --forbid-local-secrets
+
+      - name: Version check (versionName / versionCode)
+        run: python3 docs/scripts/version_check.py
 
       - name: Upload debug APKs
         uses: actions/upload-artifact@v7
