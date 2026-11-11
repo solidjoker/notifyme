@@ -214,6 +214,27 @@ python docs\scripts\version_check.py --expect-tag v0.3.19
 > 本地跑 `--forbid-local-secrets` 会命中你本机的 `secrets.local.properties` / `secrets.local.bat`
 > （它们本就该存在，且已被 `.gitignore` 忽略）——这是预期行为；CI 的 checkout 是干净的，不会命中。
 
+### 一条命令自检（本地全量）
+
+CI 跑的那几步在本地有对应脚本，一条命令跑完，任何一步失败整体退出码为 1：
+
+```powershell
+# Windows（Windows PowerShell 5.1 也能跑；脚本以 UTF-8 + BOM 保存，否则中文会解析失败）
+powershell -ExecutionPolicy Bypass -File docs\scripts\local_check.ps1
+
+# 只跑服务端侧（改 Python 时用，秒级）
+powershell -ExecutionPolicy Bypass -File docs\scripts\local_check.ps1 -SkipAndroid
+```
+
+```bash
+# Linux / macOS
+bash docs/scripts/local_check.sh            # 全量
+bash docs/scripts/local_check.sh --skip-android
+```
+
+脚本依次执行：服务端 pytest → Python 语法检查 → 隐私守卫 → 版本校验 →
+Android 单测 + 双 flavor 构建 + Lint，并额外汇总 Lint 报告里的 issue / error 数量。
+每一步的完整输出写到 `%TEMP%\notifyme-local-check-<时间戳>\`（POSIX 下在 `$TMPDIR`）。
 
 ---
 
@@ -245,7 +266,7 @@ python docs\scripts\version_check.py --expect-tag v0.3.19
 ├── docs/
 │   ├── BUILD.md                # 本文件
 │   ├── ROADMAP.md              # 里程碑 M0–M8、工作量、风险与决策门
-│   ├── scripts/                # 隐私守卫与版本校验脚本（CI 直接跑这两个）
+│   ├── scripts/                # 隐私守卫 / 版本校验 / 本地一键自检（local_check.ps1、local_check.sh）
 │   └── architecture/           # 架构文档与 9 张图源
 ├── gradle/wrapper/             # Gradle Wrapper（8.9）
 ├── gradlew / gradlew.bat       # Wrapper 启动脚本

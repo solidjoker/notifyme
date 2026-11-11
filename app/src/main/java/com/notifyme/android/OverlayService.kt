@@ -4,6 +4,7 @@
 package com.notifyme.android
 
 import android.animation.ValueAnimator
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.Service
 import android.content.Intent
@@ -19,6 +20,7 @@ import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
@@ -32,6 +34,9 @@ import kotlin.math.abs
  * 窗口全部 TYPE_APPLICATION_OVERLAY；Android 14 起 FGS 类型 specialUse。
  * 触发与权限判定在 [OverlayManager]，无权限时不会走到这里（降级 heads-up）。
  */
+// 悬浮层的 View 全部通过 WindowManager.addView 直接挂到窗口，没有父 ViewGroup，
+// 所以 inflate 时传 null 是刻意为之（传 parent 会把父容器的 LayoutParams 带进来，污染悬浮窗参数）。
+@SuppressLint("InflateParams")
 class OverlayService : Service() {
 
     companion object {
@@ -123,9 +128,13 @@ class OverlayService : Service() {
 
         val appTag = appLabel.ifEmpty { AppSourceRegistry.displayLabel(pkg) }
         view.findViewById<TextView>(R.id.tvCardTitle).text =
-            "$appTag · $conversation"
+            getString(R.string.overlay_card_title, appTag, conversation)
         val contentView = view.findViewById<TextView>(R.id.tvCardContent)
-        contentView.text = if (sender.isNotEmpty()) "$sender: $text" else text
+        contentView.text = if (sender.isNotEmpty()) {
+            getString(R.string.overlay_card_content, sender, text)
+        } else {
+            text
+        }
 
         val params = baseOverlayParams(
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -261,6 +270,8 @@ class OverlayService : Service() {
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!moved) {
+                        // 走一次标准点击流程（无障碍服务依赖 performClick 的 click 事件）
+                        v.performClick()
                         togglePanel()
                     } else {
                         snapToEdge(view, params)
@@ -417,8 +428,16 @@ class OverlayService : Service() {
     private fun displayWidth(): Int = Resources.getSystem().displayMetrics.widthPixels
     private fun displayHeight(): Int = Resources.getSystem().displayMetrics.heightPixels
 
+    /**
+     * 状态栏高度：API 30+ 直接读窗口 insets（顺带覆盖刘海屏区域），
+     * 更低版本退回兜底尺寸，不再用 getIdentifier 反射系统资源。
+     */
     private fun statusBarHeight(): Int {
-        val id = resources.getIdentifier("status_bar_height", "dimen", "android")
-        return if (id > 0) resources.getDimensionPixelSize(id) else 0
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val insets = wm.currentWindowMetrics.windowInsets
+                .getInsets(WindowInsets.Type.statusBars())
+            if (insets.top > 0) return insets.top
+        }
+        return resources.getDimensionPixelSize(R.dimen.status_bar_height_fallback)
     }
 }

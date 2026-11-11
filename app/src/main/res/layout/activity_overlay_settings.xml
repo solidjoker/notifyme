@@ -43,11 +43,11 @@
         android:layout_height="0dp"
         android:layout_weight="1">
 
+        <!-- 页面内容容器：纵向 + 16dp 内边距（样式集中定义，见 res/values/styles.xml 的 PageContentContainer） -->
         <LinearLayout
+            style="@style/PageContentContainer"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
+            android:layout_height="wrap_content">
 
             <!-- 卡片 10：悬浮通知（M9） -->
             <LinearLayout
@@ -84,37 +84,34 @@
                     android:textSize="14sp" />
 
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnOverlayPermission"
                     android:layout_width="match_parent"
                     android:layout_height="44dp"
                     android:layout_marginTop="10dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/overlay_permission_btn"
-                    android:textColor="@color/text_primary"
                     android:textSize="13sp" />
 
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnOverlayDebugTest"
                     android:layout_width="match_parent"
                     android:layout_height="44dp"
                     android:layout_marginTop="8dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/overlay_debug_test"
-                    android:textColor="@color/text_primary"
                     android:textSize="13sp"
                     android:visibility="gone" />
 
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnEngineSmoke"
                     android:layout_width="match_parent"
                     android:layout_height="44dp"
                     android:layout_marginTop="8dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/btn_engine_smoke"
-                    android:textColor="@color/text_primary"
                     android:textSize="13sp"
                     android:visibility="gone" />
 

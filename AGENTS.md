@@ -39,6 +39,17 @@ python docs/scripts/privacy_guard.py                        # 隐私守卫自查
 python docs/scripts/version_check.py                       # 版本号自查（--expect-tag v0.3.19）
 ```
 
+### 一条命令自检（开 PR 前跑这个）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File docs/scripts/local_check.ps1                 # 全量：服务端用例 + 语法 + 守卫 + 版本 + Android 单测/双 flavor/Lint
+powershell -ExecutionPolicy Bypass -File docs/scripts/local_check.ps1 -SkipAndroid    # 只跑服务端侧（改 Python 时用，秒级）
+```
+
+Linux / macOS：`bash docs/scripts/local_check.sh`（同样支持 `--skip-android` / `--skip-server`）。
+脚本逐项打印退出码与日志目录，任一步失败整体退出码为 1，**别在它说“全部通过”之前开 PR**。
+（`local_check.ps1` 以 UTF-8 + BOM 保存，否则 Windows PowerShell 5.1 解析中文会报语法错。）
+
 产物：
 
 - `app/build/outputs/apk/open/debug/notifyme-open.apk`（发布版，零密钥）
@@ -109,11 +120,12 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 ## 5. 验收清单（开 PR 前逐条过）
 
 - [ ] 复现步骤已写进 PR（若不可复现，写明原因与替代验证方式）
-- [ ] `\.\gradlew.bat testOpenDebugUnitTest` 绿
-- [ ] `\.\gradlew.bat assembleOpenDebug assembleBetaDebug` 绿
-- [ ] `\.\gradlew.bat lintOpenDebug` 无新增 error
+- [ ] `.\gradlew.bat testOpenDebugUnitTest` 绿
+- [ ] `.\gradlew.bat assembleOpenDebug assembleBetaDebug` 绿
+- [ ] `.\gradlew.bat lintOpenDebug` 无新增 error
 - [ ] `python -m pytest server/ -v --tb=short` 绿
 - [ ] `python docs/scripts/privacy_guard.py` 绿（本机有 `secrets.local.*` 时用默认模式，别加 `--forbid-local-secrets`）
+- [ ] `powershell -ExecutionPolicy Bypass -File docs/scripts/local_check.ps1` 打印「全部通过，可以开 PR」
 - [ ] 新行为有对应单测（放 `app/src/test/`）
 - [ ] 文档同步更新（README / docs/ / PRIVACY.md 按影响面判断）
 - [ ] `git status` 里没有密钥、APK、用户数据
@@ -140,4 +152,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   **不触发整轮 retry**（否则一条毒丸会永久卡住它后面的整条队列）。
 - **`gh pr merge` / `PUT /pulls/{n}/merge` 会 403 `Resource not accessible by personal access token`**，但 `gh pr create`、写 label、写 issue comment 都通 —— 因为 fine-grained PAT 只有 Issues / Pull requests 写权限，**缺 `Contents: write`**（合并要往 base 分支写合并提交）。修法二选一：给该 PAT 加 `Contents: Read and write`（会一并覆盖 token 选中的其它仓库，范围由维护者定），或走已登录浏览器点合并。
 - **浏览器点合并的正确姿势**：合并框本体（`.mergePartialContainer__VUMolp`）里只有提交信息框 + `[data-dd-action-name="pull_requests.merge.confirm_merge"]`；**合并方式选择器不在这个容器里**，在主按钮旁的图标按钮 `[data-dd-action-name="pull_requests.merge.open_method"]` 里，弹层选项文案是 `Create a merge commit` / `Squash and merge` / `Rebase and merge`，选完再点主按钮 `[data-dd-action-name="pull_requests.merge.open"]`。
+- **Android 单测里起不了 JDK 自带的 HTTP 服务**：单测编译 classpath = `android.jar` + 显式依赖，Kotlin 走 `-no-jdk`，`com.sun.net.httpserver` 编译期直接报 `Unresolved reference 'sun'`。想在纯 JVM 单测里起本地服务，只能用 `java.net.ServerSocket` 自己写 HTTP/1.1（见 `app/src/test/java/com/notifyme/android/HttpEndToEndFixture.kt`），或引入 okhttp mockwebserver（会多一条外部依赖解析，CI 上要权衡）。
+- **`lintOpenDebug` 现在只剩 3 条 warning，都是刻意保留的，别去“修”**：① `ObsoleteLintCustomCheck` —— 来自依赖库 `lifecycle-livedata-core-2.10.0` 自带的 lint.jar，仓库代码改不了；② `OldTargetApi` —— `targetSdk 34` 是产品决定（Play 上架要求 ≥35 时再统一升，别单文件升）；③ `ChromeOsAbiSupport` —— release 只打 `arm64-v8a`（见 §1 ABI 约定），是体积取舍。基线口径：改动前 97 条 issue / 0 error → 现在 **3 条 / 0 error**。
+- **改 `docs/architecture/diagrams/*.mmd` 必须重渲并回写尺寸表**：mermaid-cli 11.17.0 的命令是 `mmdc -i X.mmd -o X.svg`，PNG 要给足页面宽度才能拿到原始像素 —— `-w <SVG viewBox 宽 + 20> -H <SVG viewBox 高 + 60>`；**脑图 06 的 viewBox 起点不是 `0 0`**，得单独用 `-w 3200 -H 1600`，否则会渲染出 14×7 的废图。**注意 mmdc 的 `-h` 是 help 不是高度**，高度用 `-H`。渲完用 `[System.Drawing.Image]::FromFile` 量实际像素，回写 `docs/architecture/README.md` 的索引表。
 - **本机起浏览器调试实例的两个坑**：Windows WinINET 代理指向 `127.0.0.1:18888`（该端口 CONNECT 隧道已挂，Edge 报 `ERR_TUNNEL_CONNECTION_FAILED`），必须显式带 `--proxy-server=http://127.0.0.1:7890`；默认 user-data-dir 不允许 `--remote-debugging-port`（Chrome/Edge 136+ 策略），要把 User Data 拷到独立目录再带 `--remote-debugging-port=9223` 启动。访问仓库设置 / token 页还会撞 **sudo mode**，要过一次 2FA。

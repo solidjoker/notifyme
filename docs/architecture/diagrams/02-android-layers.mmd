@@ -6,18 +6,26 @@ flowchart TB
     classDef dom  fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1.5px,color:#4a148c
     classDef st   fill:#eceff1,stroke:#455a64,stroke-width:1.5px,color:#263238
 
-    subgraph L1["① UI 层 · Activity（传统 View + RecyclerView，刻意不引 Compose）"]
+    subgraph L1["① UI 层 · Activity ×18（传统 View + RecyclerView，刻意不引 Compose）"]
         direction LR
         MAIN["MainActivity<br/>首页 · 会话分组 / 日期分层<br/>搜索 · 折叠 · 权限引导 · 保活状态"]:::ui
         CONSOLE["ConsoleActivity<br/>控制台 · 8 张配置卡片"]:::ui
         CONV["ConversationActivity<br/>会话详情 + 会话级分析面板"]:::ui
         ANALYSIS["AnalysisListActivity<br/>分析结果 · 只看待办"]:::ui
+        ANASET["AnalysisSettingsActivity<br/>S1/S2 槽位 · 协议 · 模型"]:::ui
         WATCH["WatchlistActivity<br/>重点关注会话名单"]:::ui
-        SOURCES["SourcesActivity<br/>通知来源勾选（M2 新增）"]:::ui
+        SOURCES["SourcesActivity<br/>通知来源勾选"]:::ui
         REMUI["ReminderListActivity<br/>提醒列表 · 再次唤起 / 重试"]:::ui
+        REMSET["ReminderSettingsActivity<br/>提醒开关 · 提前量"]:::ui
         PROMPT["PromptEditActivity<br/>会话级提示词 · 3 内置模板"]:::ui
         MODELS["ModelListActivity<br/>本地模型下载 / 进度 / 删除"]:::ui
         ONBOARD["OnboardingActivity<br/>首次三步向导"]:::ui
+        CAP["CaptureActivity<br/>采集状态与自检"]:::ui
+        CAPDIAG["CaptureDiagnosticsActivity<br/>采集链路诊断"]:::ui
+        ENGINE["EngineSmokeActivity<br/>端侧引擎冒烟测试"]:::ui
+        OVERLAY["OverlaySettingsActivity<br/>悬浮层开关"]:::ui
+        PRIV["PrivacySettingsActivity<br/>隐私模式 OFF/CLOUD_REDACT/LOCAL_ONLY"]:::ui
+        REDACT["RedactorPreviewActivity<br/>脱敏规则预览"]:::ui
     end
 
     subgraph L2["② 采集与常驻层 · 系统绑定组件"]
@@ -27,6 +35,8 @@ flowchart TB
         KA["KeepAliveService<br/>前台服务 dataSync<br/>60s 看门狗 requestRebind"]:::svc
         BOOT["BootReceiver<br/>BOOT_COMPLETED"]:::svc
         ALARMR["ReminderReceiver<br/>到点高优先级通知"]:::svc
+        OVS["OverlayService<br/>悬浮窗 · 会话级操作"]:::svc
+        OVR["OverlayActionReceiver<br/>悬浮窗动作回调"]:::svc
     end
 
     subgraph L3["③ 后台任务层 · WorkManager（UniqueWork + UPDATE）"]
@@ -38,7 +48,7 @@ flowchart TB
         SCHED["SyncScheduler · AnalysisScheduler · AdvisorScheduler<br/>周期 15/30/60/120 分钟 · NetworkType.CONNECTED"]:::work
     end
 
-    subgraph L4["④ 领域 / 决策层"]
+    subgraph L4["④ 领域 / 决策层 · 既有内核"]
         direction LR
         CASE["AnalysisCase<br/>会话窗口 case<br/>caseId = sha1(pkg|conversation|windowEnd)[:16]"]:::dom
         FORK["ForkPrefilter<br/>fork1 本地启发式预筛<br/>系统消息 / 纯表情 / 广告 / 窗口过小"]:::dom
@@ -46,18 +56,27 @@ flowchart TB
         ALARMH["AlarmHelper<br/>setAndAllowWhileIdle"]:::dom
         REPLY["MessageReplier<br/>RemoteInput 直接回复<br/>仅用户手动触发"]:::dom
         HIST["HistorySync<br/>启动回填 · 6 小时冷却"]:::dom
-        ENGINE["LocalLlmEngine<br/>端侧推理抽象<br/>当前 UnavailableLocalLlmEngine 占位"]:::dom
+        ENGINE2["LocalLlmEngine · LayaTfliteEngine<br/>端侧推理抽象 · LiteRT 2.2.0"]:::dom
+    end
+
+    subgraph L4B["④-2 本轮新增 Core 逻辑内核 ×15（纯 JVM · 无 Android 依赖 · app/src/test 43 个 .kt 覆盖）"]
+        direction LR
+        C1["同步与上报<br/>SyncOutcome.kt 192（207 先于 2xx）<br/>SyncBatchCore.kt 84（200 条 / 1 MiB · 二分）<br/>SyncWatermarkCore.kt 57（已结算前缀）<br/>AnalysisSyncCore.kt 60 · AdvisorSyncCore.kt 44<br/>HistorySyncCore.kt 62（隐私门控 · MAX_PAGES=20）"]:::dom
+        C2["拒绝与隔离<br/>AnalysisRejectCore.kt 238（被拒计数 + 隔离）<br/>AdvisorRejectCore.kt 213（复用 AnalysisRejectCore）<br/>PendingRejectCore.kt 66（被拒计数 + 丢弃上限）"]:::dom
+        C3["扫描与调度<br/>AnalysisScanCursor.kt 265（字节游标 + 环形重扫）<br/>AnalysisScheduleSummaryCore.kt 71（Health 自愈阈值）"]:::dom
+        C4["脱敏与标签<br/>RedactorCore.kt 250（ID_CARD/PHONE/NAME 规则）<br/>ConvTagCore.kt 47（NONE/TODO/TRACK/DONE/NOISE）"]:::dom
+        C5["交互与面板<br/>ManualReminderCore.kt 117（先解析成功再落库）<br/>TodoPanelCore.kt 27（DEFAULT_LIMIT=8 · 首页联动）"]:::dom
     end
 
     subgraph L5["⑤ 存储层 · app 私有目录（卸载即删）"]
         direction LR
-        F1[("messages.jsonl<br/>MessageStore")]:::st
-        F2[("pending.jsonl<br/>PendingQueue")]:::st
-        F3[("analysis.jsonl<br/>AnalysisStore")]:::st
-        F4[("reminders.jsonl<br/>ReminderStore")]:::st
-        F5[("advisor_reports.jsonl<br/>AdvisorStore")]:::st
-        F6[("files/models/{modelId}/<br/>LocalModelStore")]:::st
-        PREFS["SharedPreferences ×13<br/>analysis_config · sync_config · watchlist<br/>prompt_config · app_state · history_sync<br/>a11y_extract · keepalive_state · local_model_store<br/>analysis_sync · advisor_store · collapse_state · app_sources"]:::st
+        F1[("messages.jsonl<br/>MessageStore.kt:93")]:::st
+        F2[("pending.jsonl<br/>PendingQueue.kt:66")]:::st
+        F3[("analysis.jsonl<br/>AnalysisStore.kt:270")]:::st
+        F4[("reminders.jsonl<br/>ReminderStore.kt:98")]:::st
+        F5[("advisor_reports.jsonl<br/>AdvisorStore.kt:125")]:::st
+        F6[("files/models/{modelId}/<br/>LocalModelStore.kt:31")]:::st
+        PREFS["SharedPreferences ×19<br/>analysis_config · analysis_sync · sync_config · privacy_config<br/>prompt_config · watchlist · history_sync · a11y_extract<br/>advisor_store · app_sources · conv_analysis_schedule · conv_tags<br/>keepalive_state · local_model_store · collapse_state · app_state<br/>overlay_config · pending_queue · retention_state"]:::st
     end
 
     APPENTRY["MainApplication<br/>Application 入口 · 启动日志"]:::svc
@@ -67,9 +86,17 @@ flowchart TB
     CONSOLE --> WATCH
     CONSOLE --> SOURCES
     CONSOLE --> ANALYSIS
+    CONSOLE --> ANASET
     CONSOLE --> REMUI
     CONSOLE --> MODELS
+    CONSOLE --> CAP
+    CONSOLE --> CAPDIAG
+    CONSOLE --> ENGINE
+    CONSOLE --> OVERLAY
+    CONSOLE --> PRIV
+    CONSOLE --> REDACT
     CONV --> PROMPT
+    REMUI --> REMSET
     MAIN -.->|"首次启动自动弹出"| ONBOARD
 
     NL --> F1
@@ -77,6 +104,7 @@ flowchart TB
     A11Y -->|"mergeAndCollect"| F1
     KA -.->|"requestRebind"| NL
     BOOT -.->|"startForegroundService"| KA
+    OVS --> OVR
     APPENTRY -.-> KA
 
     SCHED --> SYNCW
@@ -90,7 +118,7 @@ flowchart TB
     SYNCW --> F5
     ANAW --> CASE
     CASE --> FORK
-    ANAW --> ENGINE
+    ANAW --> ENGINE2
     ANAW --> F3
     ANAW --> CAL
     CAL --> ALARMH
@@ -104,3 +132,9 @@ flowchart TB
     WATCH --> PREFS
     PROMPT --> PREFS
     CONV --> REPLY
+
+    C1 -.->|"SyncWorker / HistorySync 调用"| SYNCW
+    C2 -.->|"被拒隔离"| SYNCW
+    C3 -.->|"扫描游标 + 调度自愈"| ANAW
+    C4 -.->|"脱敏标记 + 会话标签"| ANAW
+    C5 -.->|"手动提醒 + 待办面板"| CONSOLE

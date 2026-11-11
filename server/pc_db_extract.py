@@ -23,6 +23,10 @@ PC 微信聊天记录数据库提取工具
 
 增量状态：data/pc_db/state.json 记录每账号每会话已合并的最大 create_time
 （秒），重复跑只拉新消息；--full 忽略状态全量重扫（去重兜底不重复入库）。
+状态文件带版本号（version=2：version / source / cursor_kind / accounts）与自愈口径：
+文件缺失、JSON 损坏、字段非法、版本不认识时一律退回全量重扫 + stderr 结构化告警，
+不会抛异常终止整轮提取；某个账号提取失败时该账号游标保持不变（不前进），
+全部账号失败时本轮不写状态文件（保留旧游标）。
 
 写入策略：分批提交（每 EXTRACT_COMMIT_BATCH 条 / 每 EXTRACT_COMMIT_INTERVAL 秒
 提交一次），批与批之间释放 SQLite 写锁——整批一次提交会让提取期间主库的写锁
@@ -91,6 +95,29 @@ MAIN_DB = os.path.join(DATA_DIR, "messages.db")       # 监测主库
 
 SOURCE_TAG = "pc-db"  # 本来源标记
 PKG = "com.tencent.mm"  # PC 微信包名（与安卓侧同口径，用于跨来源去重维度）
+
+# ------------------------------------------------------------------
+# 增量游标状态（state.json）
+# ------------------------------------------------------------------
+# PC 侧的游标粒度比安卓细：PC 微信按会话分表（Msg_<md5(username)>），
+# 同一账号下不同会话的消息时间互不单调，所以游标必须按
+# 「账号 -> 会话(username) -> 该会话最大 create_time(秒)」记录。
+# 文件路径：server/data/pc_db/state.json
+# version=2 格式：
+# {
+#   "version": 2,
+#   "source": "pc-db",
+#   "cursor_kind": "conversation_create_time",
+#   "last_run": "YYYY-MM-DD HH:MM:SS",
+#   "accounts": {
+#     "<账号>": {"conversations": {"<username>": 1700000000}}
+#   }
+# }
+# 兼容老格式（没有 version，只有 accounts）照常读取；版本不认识（更高版本 /
+# 非法类型）不猜语义，直接退回全量重扫。任意一层字段非法都只丢弃该节点
+# 并告警，不让整轮提取崩掉。
+CURSOR_STATE_VERSION = 2
+CURSOR_KIND = "conversation_create_time"
 
 # ------------------------------------------------------------------
 # 写入与去重参数（环境变量可覆盖）
@@ -611,19 +638,122 @@ def _parse_row(user, sid, ctime, ltype, content, name_of, id2name,
 # 增量状态
 # ------------------------------------------------------------------
 
-def _load_state(full=False):
-    """读增量状态：{accounts: {账号: {conversations: {username: 最大秒级时间戳}}}}。"""
-    if full or not os.path.exists(STATE_PATH):
-        return {"accounts": {}}
+def _cursor_int(value):
+    """把游标字段安全转成非负 int；非法值返回 None（由调用方退回全量）。
+
+    bool 是 int 的子类，必须先排除（True 会被当成游标 1）；
+    负数、浮点小数、空串、None、容器类型一律判非法。
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        return int(value) if value >= 0 and float(value).is_integer() else None
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("+"):
+            text = text[1:]
+        if not text.isdigit():
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    return None
+
+
+def _load_state(full=False, diag=None):
+    """读增量状态，返回 {accounts: {账号: {conversations: {username: 最大秒级时间戳}}}}。
+
+    diag 是可选的诊断输出字典，调用方可以拿到"这轮为什么退回全量"：
+      {"reset": bool, "reason": str, "origin": "state"|"full"|"missing"|"broken"}
+    任何异常路径都只打 stderr 告警并退回全量重扫，绝不抛异常——
+    状态文件坏了不该让整轮提取失败（去重兜底，重扫不会产生重复行）。
+    """
+    d = {"reset": False, "reason": "", "origin": "state"}
+
+    def _done(state):
+        if diag is not None:
+            diag.update(d)
+        return state
+
+    if full:
+        d.update(reset=True, reason="full_scan", origin="full")
+        _log_event("cursor_reset", reason="full_scan", path=STATE_PATH)
+        return _done({"accounts": {}})
+    if not os.path.exists(STATE_PATH):
+        d.update(reset=True, reason="state_missing", origin="missing")
+        _log_event("cursor_reset", reason="state_missing", path=STATE_PATH)
+        return _done({"accounts": {}})
     try:
         with open(STATE_PATH, encoding="utf-8") as f:
-            state = json.load(f)
-        if isinstance(state, dict) and isinstance(state.get("accounts"), dict):
-            return state
-        _log_warn(f"增量状态格式异常（忽略并全量重扫）: {STATE_PATH}")
-    except (json.JSONDecodeError, OSError) as e:
-        _log_warn(f"增量状态读取失败（忽略并全量重扫）: {e}")
-    return {"accounts": {}}
+            raw = json.load(f)
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+        d.update(reset=True, reason=f"state_unreadable: {e}", origin="broken")
+        _log_warn(f"增量状态读取失败（退回全量重扫）: {e}")
+        _log_event("cursor_reset", reason="unreadable", detail=str(e))
+        return _done({"accounts": {}})
+    if not isinstance(raw, dict):
+        d.update(reset=True, reason="state_not_object", origin="broken")
+        _log_warn("增量状态格式异常（不是 JSON 对象，退回全量重扫）")
+        _log_event("cursor_reset", reason="not_object")
+        return _done({"accounts": {}})
+    # 版本：没有 version = 老格式（v1，只有 accounts），照常读；
+    # 版本不认识（更高版本 / 非法类型）不猜语义，直接退回全量重扫。
+    if "version" in raw:
+        version = _cursor_int(raw.get("version"))
+        if version is None or version > CURSOR_STATE_VERSION:
+            d.update(reset=True, reason="state_version_unknown", origin="broken")
+            _log_warn("增量状态版本不认识（退回全量重扫）: "
+                      f"{raw.get('version')!r}")
+            _log_event("cursor_reset", reason="version_unknown",
+                       version=str(raw.get("version")))
+            return _done({"accounts": {}})
+    accounts = {}
+    accounts_raw = raw.get("accounts")
+    if accounts_raw is None:
+        accounts_raw = {}
+    if not isinstance(accounts_raw, dict):
+        d.update(reset=True, reason="accounts_invalid", origin="broken")
+        _log_warn("增量状态 accounts 字段异常（丢弃后退回全量重扫）")
+        _log_event("cursor_reset", reason="accounts_invalid")
+        accounts_raw = {}
+    for acct, node in accounts_raw.items():
+        if not isinstance(node, dict):
+            _log_warn(f"增量状态账号节点异常（丢弃该账号游标）: {acct!r}")
+            _log_event("cursor_reset", reason="account_node_invalid")
+            continue
+        node = dict(node)
+        conv_raw = node.get("conversations")
+        if conv_raw is None:
+            conv_raw = {}
+        if not isinstance(conv_raw, dict):
+            _log_warn(f"增量状态会话游标异常（丢弃该账号游标）: {acct!r}")
+            _log_event("cursor_reset", reason="conversations_invalid")
+            conv_raw = {}
+        conv = {}
+        for user, ts in conv_raw.items():
+            value = _cursor_int(ts)
+            if value is None:
+                _log_warn(f"增量状态会话游标非法（丢弃该会话）: {user!r}")
+                _log_event("cursor_reset", reason="conv_cursor_invalid")
+                continue
+            conv[user] = value
+        node["conversations"] = conv
+        accounts[acct] = node
+    return _done({"accounts": accounts})
+
+
+def _account_conversations(state, acct):
+    """取某账号已保存的会话游标副本（非 dict 一律当空处理）。"""
+    node = (state.get("accounts") or {}).get(acct)
+    if not isinstance(node, dict):
+        return {}
+    conv = node.get("conversations")
+    if not isinstance(conv, dict):
+        return {}
+    return dict(conv)
 
 
 def _save_state(state):
@@ -634,10 +764,17 @@ def _save_state(state):
     完整的新文件；fsync 保证内容先落盘再改名。
     """
     os.makedirs(PC_DIR, exist_ok=True)
+    if not isinstance(state, dict):
+        state = {}
+    if not isinstance(state.get("accounts"), dict):
+        state["accounts"] = {}
+    state["version"] = CURSOR_STATE_VERSION
+    state["source"] = SOURCE_TAG
+    state["cursor_kind"] = CURSOR_KIND
     state["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     tmp = STATE_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+        json.dump(state, f, ensure_ascii=False, indent=2, default=str)
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, STATE_PATH)
@@ -699,7 +836,12 @@ def extract_account(account, state_acct, dedup, dst, toolchain, writer=None,
         hash2user = {hashlib.md5(u.encode()).hexdigest(): u
                      for u in id2name.values()}
 
-        conv_state = state_acct.setdefault("conversations", {})
+        # 会话游标节点可能是脏数据（非 dict），一律当空处理：
+        # 游标坏了最多多扫一遍，不该让整轮提取崩掉
+        conv_state = state_acct.get("conversations")
+        if not isinstance(conv_state, dict):
+            conv_state = {}
+            state_acct["conversations"] = conv_state
         now_ms = int(time.time() * 1000)
 
         # 3. 遍历会话表，按每会话最大 create_time 增量拉取
@@ -710,7 +852,9 @@ def extract_account(account, state_acct, dedup, dst, toolchain, writer=None,
             user = hash2user.get(t[4:])
             if not user or user in SKIP_USERS or user.endswith("@openim"):
                 continue  # 反查不到 username 的表 / 系统会话 / openim 会话跳过
-            last_ts = int(conv_state.get(user, 0))
+            last_ts = _cursor_int(conv_state.get(user, 0))
+            if last_ts is None:
+                last_ts = 0   # 游标非法：按从头扫处理（去重兜底，不会重复入库）
             try:
                 # 流式取，不把整个会话 fetchall 进内存（内存与会话大小解耦）
                 cur = con.execute(
@@ -857,7 +1001,8 @@ def run_extract(full=False, account=None):
     if not accounts:
         raise ExtractError("xwechat_files 下没有找到任何账号，请先登录 PC 微信")
 
-    state = _load_state(full=full)
+    cursor_diag = {"reset": False, "reason": "", "origin": "state"}
+    state = _load_state(full=full, diag=cursor_diag)
     stats = {"full": bool(full), "accounts": {}, "errors": {}}
 
     # 原文存档：只写真正入库的新消息（与 app.py 的 _append_jsonl 同格式）
@@ -895,12 +1040,18 @@ def run_extract(full=False, account=None):
                     f"密钥文件不存在: {keys_file}（请先在该账号登录状态下"
                     "重新提取密钥）")
                 continue
+            # 会话游标用工作副本：账号提取失败时旧游标保持不变（不前进），
+            # 成功才把本轮的会话游标写回状态文件
+            acct_state = {"conversations": _account_conversations(state, acct)}
             try:
                 stats["accounts"][acct] = extract_account(
-                    acct, state["accounts"].setdefault(acct, {}),
-                    dedup, dst, toolchain, writer, archiver)
+                    acct, acct_state, dedup, dst, toolchain, writer, archiver)
             except ExtractError as e:
                 stats["errors"][acct] = str(e)
+                continue
+            node = dict(state["accounts"].get(acct) or {})
+            node["conversations"] = acct_state.get("conversations") or {}
+            state["accounts"][acct] = node
         writer.flush()          # 收尾提交剩余批次
         stats["commits"] = writer.commits   # 写锁释放次数
     finally:
@@ -908,8 +1059,14 @@ def run_extract(full=False, account=None):
             dst.close()
         lock.release()
 
-    # 3. 落增量状态
-    _save_state(state)
+    # 3. 落增量状态：只有至少一个账号成功才回写游标
+    #    （全部账号失败 = 这一轮什么都没读到，写状态会把旧游标抹成空，
+    #      下一轮反而从头重扫；这里直接保留旧游标）
+    if stats["accounts"]:
+        _save_state(state)
+    else:
+        _log_warn("本轮没有账号提取成功，保留原增量游标（不写状态文件）")
+        _log_event("cursor_keep", reason="all_accounts_failed")
 
     # 4. 全部账号都失败时整体报错（密钥失效等场景不静默吞）
     if stats["errors"] and not stats["accounts"]:
@@ -928,6 +1085,11 @@ def run_extract(full=False, account=None):
     # 明确告诉调用方（app.py 后台提取 / CLI）这次跑成功了：
     # 服务端侧的成功判定要求 ok 明确为 True，缺键按失败处理（B11）。
     stats["ok"] = True
+    # 游标诊断：本轮是否退回全量重扫、原因、游标口径与状态文件版本
+    stats["cursor_reset"] = bool(cursor_diag.get("reset"))
+    stats["cursor_reason"] = cursor_diag.get("reason", "")
+    stats["cursor_kind"] = CURSOR_KIND
+    stats["state_version"] = CURSOR_STATE_VERSION
     stats["elapsed_sec"] = round(time.time() - t0, 2)
     stats["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return stats

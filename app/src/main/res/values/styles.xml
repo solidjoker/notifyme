@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 共享 UI 样式：把按钮外观收口到一处，避免每个布局里各写一份 android:background / android:textColor。
+     AppButton 的父样式就是当前主题 Theme.Material.Light.NoActionBar 的 buttonStyle
+     （@android:style/Widget.Material.Light.Button），所以套用后外观与改前完全一致。 -->
+<resources>
+
+    <!-- 按钮基线：与主题 buttonStyle 一致（minHeight 48dp / minWidth 88dp / Material 涟漪） -->
+    <style name="AppButton" parent="@android:style/Widget.Material.Light.Button" />
+
+    <!-- 主按钮：品牌底色 + 反白文字 -->
+    <style name="AppButtonPrimary" parent="AppButton">
+        <item name="android:background">@drawable/btn_primary</item>
+        <item name="android:textColor">@color/card_bg</item>
+    </style>
+
+    <!-- 次按钮：浅底 + 主文字色 -->
+    <style name="AppButtonSecondary" parent="AppButton">
+        <item name="android:background">@drawable/btn_secondary</item>
+        <item name="android:textColor">@color/text_primary</item>
+    </style>
+
+    <!-- 次按钮 · 品牌绿文字（打开类操作） -->
+    <style name="AppButtonSecondaryBrand" parent="AppButton">
+        <item name="android:background">@drawable/btn_secondary</item>
+        <item name="android:textColor">@color/brand_green</item>
+    </style>
+
+    <!-- 次按钮 · 橙色文字（删除类操作） -->
+    <style name="AppButtonSecondaryAccent" parent="AppButton">
+        <item name="android:background">@drawable/btn_secondary</item>
+        <item name="android:textColor">@color/accent_orange</item>
+    </style>
+
+    <!-- 危险按钮：警示底色 + 反白文字 -->
+    <style name="AppButtonDanger" parent="AppButton">
+        <item name="android:background">@drawable/btn_danger</item>
+        <item name="android:textColor">@color/card_bg</item>
+    </style>
+
+    <!-- 默认按钮：沿用框架 Material 按钮外观（列表里的文字型操作） -->
+    <style name="AppButtonDefault" parent="AppButton" />
+
+    <!-- 页面内容容器：纵向 + 16dp 内边距（隐私/悬浮窗/提醒三页共用） -->
+    <style name="PageContentContainer">
+        <item name="android:orientation">vertical</item>
+        <item name="android:padding">16dp</item>
+    </style>
+
+</resources>

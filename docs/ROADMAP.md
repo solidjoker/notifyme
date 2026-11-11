@@ -18,7 +18,7 @@
 | release 签名 | 环境变量 > 仓库根 `keystore.properties` > 降级为不签名；CI 用 `-PrequireReleaseSigning=true` 让签名缺失直接失败 | `app/build.gradle.kts:131-169` |
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
-| 测试 | 纯 JVM 单测 28 个 `.kt`（`app/src/test`）+ 服务端 `server/test_*.py` | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 46 个 `.kt`（`app/src/test`）+ 服务端 `server/test_*.py` | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告 | `server/app.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
 

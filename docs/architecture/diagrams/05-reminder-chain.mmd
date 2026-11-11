@@ -1,4 +1,4 @@
-﻿%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'flowchart':{'htmlLabels':true}}}%%
 flowchart TB
     classDef in   fill:#e8f5e9,stroke:#2e7d32,stroke-width:1.5px,color:#1b5e20
     classDef dec  fill:#fff8e1,stroke:#f9a825,stroke-width:2px,color:#f57f17
@@ -35,13 +35,25 @@ flowchart TB
 
     L3 -->|"AlarmManager 也不可用"| ST4["STATUS_FAILED<br/>🔴 失败 + note 原因<br/>列表页可「重试」重跑三级链<br/>dedupKey 不变：先删旧记录再写新记录"]:::fail
 
-    ST1 --> FILE[("ReminderStore<br/>files/reminders.jsonl<br/>ReminderRecord: dedupKey/title/description<br/>/conversation/eventTime/calendarEventId<br/>/createdAt/status/note")]:::st
+    ST1 --> FILE[("ReminderStore<br/>files/reminders.jsonl · ReminderStore.kt:98<br/>ReminderRecord: dedupKey/title/description<br/>/conversation/eventTime/calendarEventId<br/>/createdAt/status/note")]:::st
     ST2 --> FILE
     ST3 --> FILE
     ST4 --> FILE
     DUP --> FILE
     DUP2 --> FILE
-    FILE --> UI["ReminderListActivity<br/>倒序展示 + 状态徽标<br/>🟢已建日历 / 🔵待保存 / 🟠App内 / 🔴失败"]:::st
+    FILE --> UI["ReminderListActivity<br/>倒序展示 + 状态徽标<br/>🟢已建日历 / 🔵待保存 / 🟠App内 / 🔴失败<br/>ReminderSettingsActivity 管开关与提前量"]:::st
 
     NOTE["天然去重设计：AlarmManager PendingIntent<br/>requestCode = dedupKey.hashCode()<br/>intent 不含变化 data + FLAG_UPDATE_CURRENT<br/>→ 同一 dedupKey 重复设置会覆盖旧闹钟"]:::st
     L3 -.-> NOTE
+
+    subgraph MANUAL["手动提醒（不经过分析链路）"]
+        direction TB
+        M1["用户在会话页手填提醒时间<br/>ManualReminderCore.kt 117<br/>EVENT_TIME_PATTERN = yyyy-MM-dd HH:mm"]:::in
+        M2{"解析成功？"}:::dec
+        M3["解析失败 → 不落库<br/>提示格式错误 · 不产生僵尸记录"]:::fail
+        M4["解析成功 → 写 reminders.jsonl<br/>dedupKey = 手动时间戳 + 会话名<br/>再走同一条三级降级链"]:::lv
+        M1 --> M2
+        M2 -->|"否"| M3
+        M2 -->|"是"| M4
+        M4 -.->|"同一 runReminderChain()"| CHAIN
+    end

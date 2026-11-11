@@ -30,20 +30,24 @@ flowchart LR
 
     subgraph CH3["通道 ③ 服务端数据库直读 · 完整历史（需 PC + root 通道）"]
         direction TB
-        H["HistorySync<br/>启动自动触发 · 6 小时冷却"]:::cap
-        S1["POST /admin/extract?source=android|pc|all<br/>后台线程异步执行"]:::srv
-        S2["android_db_extract.py<br/>MD5(IMEI+uin)[:7] 推导密钥<br/>AES-CBC 逐页解密 · pageSize=1024<br/>PBKDF2-HMAC-SHA1 · 4000 迭代"]:::srv
-        S3["pc_db_extract.py<br/>PC 微信 4.x message_0.db + contact.db"]:::srv
-        S4["轮询 GET /admin/extract/status<br/>→ GET /messages?limit=1000"]:::srv
-        H --> S1
+        H["HistorySync.maybeRunOnStartup<br/>启动自动触发 · 6 小时冷却"]:::cap
+        HG["隐私门控 HistorySyncCore<br/>LOCAL_ONLY → 整个云端回填停用<br/>CLOUD_REDACT → 不触发直读（原文无法端上脱敏）<br/>OFF → 全放行"]:::proc
+        S1["POST /admin/extract?source=android|pc|all<br/>routes.py:844 · 后台线程异步执行"]:::srv
+        S2["android_db_extract.py · 1260 行<br/>MD5(IMEI+uin)[:7] 推导密钥<br/>AES-CBC 逐页解密 · pageSize=1024<br/>PBKDF2-HMAC-SHA1 · 4000 迭代"]:::srv
+        S3["pc_db_extract.py · 1122 行<br/>PC 微信 4.x message_0.db + contact.db"]:::srv
+        S4["轮询 GET /admin/extract/status<br/>routes.py:889<br/>→ GET /messages?limit=1000"]:::srv
+        S5["翻页回填 next_before 复合游标 毫秒_rowid<br/>HistorySyncCore.shouldFetchNext<br/>MAX_PAGES=20 · 游标不变即停"]:::proc
+        H --> HG
+        HG --> S1
         S1 --> S2
         S1 --> S3
         S1 --> S4
+        S4 --> S5
     end
 
-    MSG[("MessageStore<br/>files/messages.jsonl<br/>ChatMessage: sender/text/timestamp<br/>/conversation/isGroup/source/pkg")]:::st
-    PEND[("PendingQueue<br/>files/pending.jsonl<br/>自增 id 便于精确剔除")]:::st
-    SRVDB[("服务端 messages.db<br/>UNIQUE(pkg,conversation,sender,timestamp,text)<br/>跨来源按秒级归一键去重")]:::st
+    MSG[("MessageStore<br/>files/messages.jsonl · MessageStore.kt:93<br/>ChatMessage: sender/text/timestamp<br/>/conversation/isGroup/source/pkg")]:::st
+    PEND[("PendingQueue<br/>files/pending.jsonl · PendingQueue.kt:66<br/>自增 id 便于精确剔除")]:::st
+    SRVDB[("服务端 messages.db<br/>init_db @storage.py:57<br/>UNIQUE(pkg,conversation,sender,timestamp,text)<br/>跨来源按秒级归一键去重")]:::st
 
     WX -->|"系统通知"| NL
     FS -->|"系统通知"| NL
@@ -53,7 +57,7 @@ flowchart LR
 
     NLD -->|"ChatMessage"| MSG
     A4 -->|"mergeAndCollect"| MSG
-    S4 -->|"MessageStore.merge 秒级去重回填"| MSG
+    S5 -->|"MessageStore.merge 秒级去重回填"| MSG
 
     MSG -->|"新增条目挂载"| PEND
     PEND -->|"SyncWorker 通道 1<br/>POST /weixin"| SRVDB

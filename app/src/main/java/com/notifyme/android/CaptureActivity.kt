@@ -166,10 +166,9 @@ class CaptureActivity : Activity() {
             .contains(packageName)
         val connected = NotifyMeListener.connected
         tvListenerStatus.text = getString(
-            if (granted) R.string.listener_granted else R.string.listener_missing
-        ) + "\n" + getString(
-            if (connected) R.string.listener_connected
-            else R.string.listener_disconnected
+            R.string.listener_status_line,
+            getString(if (granted) R.string.listener_granted else R.string.listener_missing),
+            getString(if (connected) R.string.listener_connected else R.string.listener_disconnected)
         )
         // 状态着色：权限+连接双正常绿，权限缺失红，其余灰
         tvListenerStatus.setTextColor(

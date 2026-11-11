@@ -617,7 +617,10 @@ class SyncWorker(
         // 批次条目：report_id 是服务端去重键，createdAt 供水位使用
         val entries = reports.map { report ->
             val json = if (reportCore == null) {
-                report.toJson()
+                // 不脱敏分支同样走「上传口径」：本地存档才带 rejected_count /
+                // first_rejected_at / quarantined 三个内部字段，服务端不需要，
+                // 写进云端库只会污染服务端 schema。
+                report.toUploadJson()
             } else {
                 JSONObject().apply {
                     put("report_id", report.reportId)

@@ -3,6 +3,7 @@
 
 package com.notifyme.android
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -36,7 +37,9 @@ class ConsoleActivity : Activity() {
         private const val REQ_POST_NOTIFICATIONS = 42
 
         /** 天组键（与主页 dayKeyFormat 同格式，折叠显式态的键成分） */
-        private val dayKeyFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        /** 每次取用新建实例：SimpleDateFormat 会固化默认 Locale 快照，类初始化时创建会触发 ConstantLocale */
+        private val dayKeyFmt: SimpleDateFormat
+            get() = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
     }
 
     // 保活状态相关视图
@@ -274,7 +277,7 @@ class ConsoleActivity : Activity() {
             return
         }
         tvRunProgress.visibility = View.VISIBLE
-        tvRunProgress.text = "🔄 " + AnalysisProgressUi.text(this, state)
+        tvRunProgress.text = getString(R.string.analysis_run_progress, AnalysisProgressUi.text(this, state))
         progressRun.visibility = View.VISIBLE
         val percent = state.percent()
         if (percent == null) {
@@ -286,6 +289,7 @@ class ConsoleActivity : Activity() {
     }
 
     /** 保活区初始化：电池优化白名单按钮 + 通知运行时权限请求。 */
+    @SuppressLint("BatteryLife") // 直跳白名单申请：应用不通过 Play 分发，为保活可靠性刻意保留
     private fun setupKeepAliveSection() {
         btnBatteryWhitelist = findViewById(R.id.btnBatteryWhitelist)
         tvKeepAliveStatus = findViewById(R.id.tvKeepAliveStatus)
@@ -320,11 +324,9 @@ class ConsoleActivity : Activity() {
         val ignoringBattery = pm.isIgnoringBatteryOptimizations(packageName)
 
         tvKeepAliveStatus.text = getString(
-            if (KeepAliveService.isAlive(this)) R.string.keepalive_running
-            else R.string.keepalive_stopped
-        ) + "\n" + getString(
-            if (ignoringBattery) R.string.battery_whitelisted
-            else R.string.battery_not_whitelisted
+            R.string.keepalive_status_line,
+            getString(if (KeepAliveService.isAlive(this)) R.string.keepalive_running else R.string.keepalive_stopped),
+            getString(if (ignoringBattery) R.string.battery_whitelisted else R.string.battery_not_whitelisted)
         )
 
         btnBatteryWhitelist.isEnabled = !ignoringBattery
@@ -341,8 +343,9 @@ class ConsoleActivity : Activity() {
 
     private val refreshKeepAliveOnce = Runnable {
         tvKeepAliveStatus.text = getString(
-            if (KeepAliveService.isAlive(this)) R.string.keepalive_running
-            else R.string.keepalive_stopped
-        ) + "\n" + tvKeepAliveStatus.text.toString().substringAfter("\n", "")
+            R.string.keepalive_status_line,
+            getString(if (KeepAliveService.isAlive(this)) R.string.keepalive_running else R.string.keepalive_stopped),
+            tvKeepAliveStatus.text.toString().substringAfter("\n", "")
+        )
     }
 }

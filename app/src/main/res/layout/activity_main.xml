@@ -174,14 +174,13 @@
                     android:textSize="14sp" />
 
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnOpenSettings"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="12dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/btn_open_settings"
-                    android:textColor="@color/text_primary"
                     android:textSize="13sp" />
             </LinearLayout>
 

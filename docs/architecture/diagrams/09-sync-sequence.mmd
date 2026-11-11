@@ -1,136 +1,181 @@
-﻿%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'sequence':{'mirrorActors':false,'actorMargin':40,'messageFontSize':13}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontSize':'14px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'},'sequence':{'mirrorActors':false,'actorMargin':40,'messageFontSize':13}}}%%
 sequenceDiagram
     autonumber
 
     participant APP as MainApplication<br/>冷启动入口
     participant HS as HistorySync<br/>prefs history_sync
+    participant HC as HistorySyncCore<br/>隐私门控与翻页判定
     participant MS as MessageStore<br/>files/messages.jsonl
     participant SW as SyncWorker<br/>CoroutineWorker
     participant SC as SyncConfig<br/>prefs sync_config
+    participant PC as PrivacyConfig<br/>prefs privacy_config
     participant PQ as PendingQueue<br/>files/pending.jsonl
     participant AS as AnalysisStore<br/>files/analysis.jsonl
+    participant AC as AnalysisScanCursor<br/>持久化字节游标
+    participant AW as SyncWatermarkCore<br/>已结算前缀
+    participant RC as AnalysisRejectCore<br/>被拒计数与隔离
     participant AV as AdvisorStore<br/>files/advisor_reports.jsonl
-    participant SV as server/app.py<br/>Flask :8000
+    participant SV as server/app.py + routes.py<br/>Flask :8000
     participant DB as messages.db<br/>SQLite
     participant EX as android_db_extract.py<br/>pc_db_extract.py
 
     rect rgb(232, 245, 233)
-    Note over APP,EX: 阶段一 · 冷启动历史回填（HistorySync.maybeRunOnStartup，MainApplication.onCreate:23 调用）
+    Note over APP,EX: 阶段一 · 冷启动历史回填（HistorySync.maybeRunOnStartup，MainApplication.onCreate 调用）
     APP->>HS: maybeRunOnStartup(context)
-    alt 开关 auto_enabled = false（默认 true）
-        HS-->>APP: 直接 return，不写状态
-    else 距 last_run_at 不足 6 小时（COOLDOWN_MS = 6L*3600*1000）
-        HS-->>APP: 冷却期内 return，不覆盖上次有效结果
-    else serverUrl 为空
-        HS->>HS: record「跳过：未配置服务器地址」
-        HS-->>APP: return
-    else 条件满足
-        HS->>HS: 先占位写 last_run_at，防多入口并发两轮
-        HS->>HS: thread(name="history-sync", isDaemon=true)
-        HS->>SV: POST /admin/extract  FormBody 空体  X-Token
-        Note right of SV: endpoint() 推导规则<br/>serverUrl 去末尾 / 再去末尾 /weixin 再拼路径<br/>与 ConsoleActivity.extractEndpoint 同款
-        SV->>EX: _run_extract_bg(full=false, source=all)<br/>daemon Thread，逐腿 __import__(leg+"_db_extract")
-        EX->>DB: 解密读取 message/rcontact/chatroom<br/>写 source='android-db'，秒级键去重
-        alt HTTP 非 2xx 且不是 409
-            HS->>HS: record「失败：触发提取 HTTP 状态码」并 return
-        else 2xx 或 409（服务端正在跑，视为正常，接管轮询）
-            loop 每 2s 一次，最多 90s（POLL_TIMEOUT_MS）
+    HS->>PC: PrivacyConfig.get(app)
+    HS->>HC: allowFetch(privacy)
+    alt LOCAL_ONLY 仅端侧模式
+        HS-->>APP: 记录「跳过：仅端侧模式，云端提取与历史回填已停用」并 return
+    else OFF 或 CLOUD_REDACT
+        alt 距 last_run_at 不足 6 小时（COOLDOWN_MS）
+            HS-->>APP: 冷却期内 return，不覆盖上次有效结果
+        else serverUrl 为空
+            HS->>HS: 记录「跳过：未配置服务器地址」
+            HS-->>APP: return
+        else 条件满足
+            HS->>HS: 先占位写 last_run_at，防多入口并发两轮
+            HS->>HS: thread(name="history-sync", isDaemon=true)
+            HS->>HC: allowExtract(privacy)
+            alt CLOUD_REDACT 云端脱敏模式
+                Note over HS: 服务端直读会把原文写进云端 端上无法脱敏 → 不触发 admin/extract
+                HS->>SV: GET /messages?limit=1000（只回填服务端已有的脱敏历史）
+            else OFF 全量放行
+                HS->>SV: POST /admin/extract  FormBody 空体  X-Token
+                Note right of SV: endpoint() 推导规则<br/>serverUrl 去末尾 / 再去末尾 /weixin 再拼路径<br/>与 ConsoleActivity.extractEndpoint 同款
+                SV->>EX: _run_extract_bg(full=false, source=all) @storage.py:414<br/>daemon Thread，逐腿 __import__(leg+"_db_extract")
+                EX->>DB: 解密读取 message/rcontact/chatroom<br/>写 source='android-db'，秒级键去重
                 HS->>SV: GET /admin/extract/status
                 SV-->>HS: {ok, running, last}
-                Note right of HS: fetchStatus 返回 null（网络抖动）→ continue 继续等
             end
-            alt 超时仍 running
-                HS->>HS: record「失败：等待提取结果超时」
-            else last.ok = false（无 root / 微信未装 / 解密失败）
-                HS->>HS: record「失败：」+ last.error 原样透传
-            else last.ok = true
-                HS->>SV: GET /messages?limit=1000
-                SV-->>HS: {ok, count, messages[]} 含 source=android-db
-                HS->>HS: mapNotNull 过滤 text/conversation 空白<br/>蛇形 is_group → ChatMessage
-                HS->>MS: MessageStore.merge(incoming) 秒级去重
-                MS-->>HS: added 新增条数
-                HS->>HS: record「成功：回填 N 条历史消息（服务端共 M 条）」
+            HS->>SV: GET /messages?limit=1000
+            SV-->>HS: {ok, count, messages[]} 含 source=android-db
+            loop 翻页直到游标终止（MAX_PAGES=20）
+                HS->>HC: shouldFetchNext(next_before, count, prevCursor, pages)
+                HS->>SV: GET /messages?limit=1000&before=毫秒_rowid
+                SV-->>HS: {ok, count, messages[], next_before}
             end
+            HS->>MS: MessageStore.merge(incoming) 秒级去重
+            MS-->>HS: added 新增条数
+            HS->>HS: 记录「成功：回填 N 条历史消息（服务端共 M 条）」
         end
     end
     Note over APP,DB: 全部降级路径静默，不阻塞 UI、不崩溃；状态行显示在控制台「📥 聊天记录提取」卡
     end
 
-    rect rgb(227, 242, 253)
-    Note over SW,DB: 阶段二 · 定时上报三通道（SyncScheduler unique "wechat_sync"，NetworkType.CONNECTED，周期下限 15 分钟）
+    rect rgb(255, 235, 238)
+    Note over SW,DB: 阶段二 · 隐私门控（先于任何通道）
     SW->>SC: SyncConfig(applicationContext) 读 serverUrl / pushEnabled / authToken
-    alt serverUrl 为空
-        SW-->>SW: Result.success()，不产生任何网络请求
-    else pushEnabled = false
+    alt pushEnabled = false
         SW->>SC: recordResult「已跳过：推送开关已关闭（消息继续累积）」
-        Note right of SW: pending.jsonl 与分析未同步水位都保持不动<br/>用户重开后下个周期一并补报
-        SW-->>SW: Result.success()
-    else 正常上报
-        Note over SW,PQ: 通道 1 · 消息（唯一决定 Worker 处置的通道）
-        SW->>PQ: PendingQueue.readAll()
-        alt 队列为空
-            PQ-->>SW: 空 → 不发请求，msgResult = success
-        else 有待报条目
-            SW->>SW: JSONArray，逐条 remove("isGroup") + put("is_group")<br/>驼峰转蛇形，对齐 PC 端 Python 习惯
-            SW->>SV: POST serverUrl  Content-Type application/json，charset=utf-8<br/>Header X-Token（authToken 非空时）
-            SV->>SV: check_token() @152 → _validate_item() @254
-            SV->>DB: INSERT messages，UNIQUE idx_messages_dedup<br/>(conversation, sender, timestamp, text)
-            SV-->>SW: {ok, received, duplicated, invalid}
-            alt 2xx
-                SW->>PQ: removeSent(本次实际发送的 id 集合)
-                Note right of PQ: 按自增 id 精确剔除，上报期间新入队的消息保留<br/>避免 timestamp+text 键碰撞
-                SW->>SW: okParts += "消息 N 条"，Result.success()
-            else 401 鉴权失败
-                SW->>SW: extraParts += "消息鉴权失败(401)，请检查令牌"<br/>Result.failure() 终止（重试无用）
-            else 其它非 2xx
-                SW->>SW: extraParts += "消息失败：HTTP 状态码"，Result.retry()
-            else IOException
-                SW->>SW: extraParts += "消息失败：网络错误 ..."，Result.retry()
-            end
-        end
-
-        Note over SW,AS: 通道 2 · 分析结果（独立通道，任何结果都不改通道 1 的处置）
-        SW->>AS: AnalysisStore.readUnsynced()
-        alt 无未同步记录
-            AS-->>SW: 空 → return，不发请求
-        else 有记录
-            SW->>SW: base = serverUrl.trim().trimEnd('/')<br/>if base.endsWith("/weixin") 去掉该后缀<br/>url = base + "/analysis"
-            SW->>SW: 逐条 remove("raw_json")（本地防御存档不上报）<br/>escalated=false 时显式 put("s2", JSONObject.NULL)
-            SW->>SV: POST base/analysis  X-Token
-            SV->>DB: INSERT analyses，case_id UNIQUE 去重（幂等）
-            SV-->>SW: {ok, received, duplicated}
-            alt 2xx
-                SW->>AS: markSynced(records.maxOf { analyzedAt })
-                Note right of AS: 水位推进到本次记录的最大 analyzedAt<br/>而非当前时间，避免误标上报期间新落库的记录
-                SW->>SW: okParts += "分析 N 个"
-            else 404（旧服务端无端点）
-                SW->>SW: extraParts += "分析：服务端未支持(404)，已跳过"，静默不重试
-            else 其它非 2xx / IOException
-                SW->>SW: 只记失败文案，水位不动、不触发 Worker 重试<br/>下个周期自然补报
-            end
-        end
-
-        Note over SW,AV: 通道 3 · 顾问复盘报告（语义与通道 2 一致）
-        SW->>AV: AdvisorStore.readUnsynced()
-        alt 无未同步报告
-            AV-->>SW: 空 → return
-        else 有报告
-            SW->>SV: POST base/advisor  body = [{report_id, created_at,<br/>period_days, case_count, summary, suggestions, model_used}]
-            SV-->>SW: {ok, ...} 服务端按 report_id 去重
-            alt 2xx
-                SW->>AV: markSynced(reports.maxOf { createdAt })
-                SW->>SW: okParts += "顾问报告 N 份"
-            else 404
-                SW->>SW: 仅 Log.i，不记 extraParts，静默跳过
-            else 其它失败
-                SW->>SW: extraParts += "顾问报告失败：..."，水位不动
-            end
-        end
-
-        SW->>SC: recordResult(lastSyncTime = now, lastSyncResult)
-        Note right of SC: parts = "成功：" + okParts.joinToString(" + ") + extraParts.joinToString("；")<br/>例「成功：消息 5 条 + 分析 2 个 + 顾问报告 1 份」<br/>三通道都无数据时写「成功：无新数据」<br/>否则用户点「立即同步」后控制台状态行像没点上
-        SW-->>SW: return msgResult（只有通道 1 能决定 success/retry/failure）
+        SW-->>SW: Result.success()，pending.jsonl 与分析水位都保持不动
+    else LOCAL_ONLY 仅端侧模式
+        SW->>PC: PrivacyConfig.get(applicationContext)
+        SW->>SC: recordResult「已跳过：仅端侧模式，云端上报整体停用（数据继续留在本机）」
+        SW-->>SW: Result.success()，三通道整体不发送
+    else 允许上报
+        SW-->>SW: 进入三条通道
     end
+    end
+
+    rect rgb(227, 242, 253)
+    Note over SW,DB: 阶段三 · 定时上报三通道（SyncScheduler unique "wechat_sync"，NetworkType.CONNECTED，周期下限 15 分钟）
+    Note over SW,PQ: 通道 1 · 消息（唯一决定 Worker 处置的通道）
+    SW->>PQ: PendingQueue.readAll()
+    SW->>PQ: SyncBatchCore.splitBatches（≤200 条 或 ≤1 MiB）
+    SW->>SV: POST serverUrl  Content-Type application/json，charset=utf-8<br/>Header X-Token（authToken 非空时）
+    SV->>SV: check_token() @app.py:268 → _validate_item() @util.py:257
+    SV->>DB: INSERT messages，UNIQUE idx_messages_dedup<br/>(conversation, sender, timestamp, text)
+    SV-->>SW: {ok, received, duplicated, invalid}
+    alt 2xx
+        SW->>PQ: removeSent(本次实际发送的 id 集合)
+        Note right of PQ: 按自增 id 精确剔除，上报期间新入队的消息保留<br/>避免 timestamp+text 键碰撞
+        SW->>SW: okParts += "消息 N 条"
+    else 207 部分拒绝
+        SW->>SW: SyncOutcomeCore.parseRejected 读 rejected 下标与 rejected_ids
+        SW->>PQ: 只剔除被明确接受的条目，被拒条目留在队列里下轮重试
+        SW->>PQ: PendingQueue.markRejected 累计被拒次数，超上限丢弃
+        Note right of SW: 207 先于 2xx 判定（SyncOutcomeCore.classify）<br/>207 不触发 retry，否则退化成无限重推刷屏
+    else 413 请求体超限
+        SW->>SW: SyncBatchCore.bisect 二分拆小，放回队首继续试
+        alt 二分后仍超限
+            SW->>PQ: 该条即毒丸 → markRejected 单独丢弃（累计到上限自然清出队列）
+            Note right of SW: 拆到单条仍 413 才单独处置该条并继续下一批<br/>不触发整轮 retry（否则一条毒丸卡住它后面整条队列）
+        else 二分成功
+            SW->>SW: 继续提交拆小的批次
+        end
+    else 401 鉴权失败
+        SW->>SW: extraParts += "消息鉴权失败(401)，请检查令牌"
+        Note right of SW: 周期任务绝不返回 failure（否则 WorkManager 永久取消注册）<br/>一次性任务才 Result.failure()
+    else 其它非 2xx 或 IOException
+        SW->>SW: extraParts += "消息失败：HTTP 状态码"，Result.retry()
+    end
+
+    Note over SW,AS: 通道 2 · 分析结果（独立通道，任何结果都不改通道 1 的处置）
+    SW->>AC: AnalysisScanCursor 读持久化字节游标
+    SW->>AS: AnalysisStore.readPending(requireRedacted = privacy.cloudRedact)
+    alt CLOUD_REDACT 且存在未脱敏记录
+        AS-->>SW: 未脱敏记录在扫描层被跳过，不钉住游标
+        Note right of AS: 关键：跳过的记录绝不能钉住游标<br/>否则队首那条未脱敏记录会把游标永久钉住<br/>它后面新追加的记录永远读不到、永远不上报
+        SW->>SW: extraParts += "分析：N 个未脱敏记录留本机"
+    end
+    SW->>SW: AnalysisSyncCore.splitBatches（按 case_id 去重）
+    SW->>SV: POST base/analysis  X-Token（去 raw_json，escalated=false 时 s2 置 null）
+    SV->>DB: INSERT analyses，case_id UNIQUE 去重（幂等）
+    SV-->>SW: {ok, received, duplicated} 或 207 {ok:false, rejected:[下标], rejected_ids}
+    alt 2xx 全量接受
+        SW->>AW: settled += 本批 caseId（已接受）
+    else 207 部分拒绝
+        SW->>SW: matchRejectedIndices 优先按 case_id 匹配，读不出清单则整批留待下轮
+        alt 被拒清单不可读（本轮结论不明）
+            SW->>SW: 一条都不标已同步、不计被拒、不隔离，整批留待下一轮
+            Note right of SW: 误判的代价是真丢消息，收益为零
+        else 清单可读
+            SW->>RC: AnalysisRejectCore.onRejected 累计被拒次数
+            alt 达到隔离上限
+                SW->>AS: AnalysisStore.markRejected 隔离该 case（记录留本机可人工查看）
+                SW->>AW: settled += 本轮新被隔离的 caseId
+            else 未达上限
+                SW->>AW: 该 case 记为洞（stillPending），水位停在洞前
+            end
+        end
+    else 413 请求体超限
+        SW->>SW: SyncBatchCore.bisect 二分拆小，放回队首继续试
+        alt 二分后仍超限
+            SW->>AS: AnalysisStore.quarantineNow 立即隔离该 case（不再每轮上传几 MiB）
+            SW->>AW: settled += 该 caseId
+            Note right of SW: 拆到单条仍 413 → 单独隔离该条并继续下一批<br/>不触发整轮 retry
+        else 二分成功
+            SW->>SW: 继续提交拆小的批次
+        end
+    else 404 旧服务端无分析端点
+        SW->>SW: extraParts += "分析：服务端未支持(404)，已跳过"，静默不重试
+    else 401 或其它失败
+        SW->>SW: 只记失败文案，水位不动、不触发 Worker 重试
+    end
+    SW->>AW: prefixWatermark(records 按 analyzedAt 排序, settled)
+    AW-->>SW: 只返回「已结算前缀」的最大时间戳
+    Note right of AW: 水位口径：只推进到「本轮被接受 ∪ 本轮新被隔离」的连续前缀<br/>中间有洞（被拒未隔离 / 未脱敏 / 本轮结论不明）就停在洞前，绝不越过<br/>越过就等于那些记录 analyzedAt ≤ 水位，永远补报不了
+    SW->>AS: AnalysisStore.markSynced(watermark)
+    SW->>SW: 有洞时记录「分析水位未推进：N 个被拒，下轮补报」
+
+    Note over SW,AV: 通道 3 · 顾问复盘报告（语义与通道 2 一致）
+    SW->>AV: AdvisorStore.readUnsynced()
+    SW->>SV: POST base/advisor  body = [{report_id, created_at, period_days,<br/>case_count, summary, suggestions, model_used}]
+    SV-->>SW: {ok, ...} 服务端按 report_id 去重
+    alt 2xx
+        SW->>AV: markSynced(reports.maxOf { createdAt })
+    else 207 部分拒绝
+        SW->>RC: AdvisorRejectCore 复用 AnalysisRejectCore.onRejected
+        SW->>SW: 被拒条目留待下轮，水位不动
+    else 404
+        SW->>SW: 仅 Log.i，不记 extraParts，静默跳过
+    else 其它失败
+        SW->>SW: extraParts += "顾问报告失败：..."，水位不动
+    end
+
+    SW->>SC: recordResult(lastSyncTime = now, lastSyncResult)
+    Note right of SC: parts = "成功：" + okParts.joinToString(" + ") + extraParts.joinToString("；")<br/>例「成功：消息 5 条 + 分析 2 个 + 顾问报告 1 份」<br/>三通道都无数据时写「成功：无新数据」
+    SW-->>SW: return msgResult（只有通道 1 能决定 success/retry/failure）
     end
 
     rect rgb(255, 243, 224)

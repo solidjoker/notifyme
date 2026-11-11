@@ -80,6 +80,7 @@
                 android:orientation="horizontal">
 
                 <Button
+                    style="@style/AppButtonDefault"
                     android:id="@+id/btnCollapseAll"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
@@ -90,6 +91,7 @@
                     android:textSize="12sp" />
 
                 <Button
+                    style="@style/AppButtonDefault"
                     android:id="@+id/btnExpandAll"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
@@ -101,6 +103,7 @@
                     android:textSize="12sp" />
 
                 <Button
+                    style="@style/AppButtonDefault"
                     android:id="@+id/btnGoHome"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
@@ -257,6 +260,7 @@
                     android:orientation="horizontal">
 
                     <Button
+                        style="@style/AppButtonDefault"
                         android:id="@+id/btnAnalyzeNow"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
@@ -267,6 +271,7 @@
                         android:textSize="12sp" />
 
                     <Button
+                        style="@style/AppButtonDefault"
                         android:id="@+id/btnScheduleSettings"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
@@ -397,14 +402,13 @@
                     android:textSize="13sp" />
 
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnBatteryWhitelist"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="12dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/btn_battery_whitelist"
-                    android:textColor="@color/text_primary"
                     android:textSize="13sp" />
             </LinearLayout>
         </LinearLayout>

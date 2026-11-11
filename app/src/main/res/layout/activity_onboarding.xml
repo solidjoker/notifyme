@@ -92,14 +92,13 @@
                 android:textSize="13sp" />
 
             <Button
+                style="@style/AppButtonSecondary"
                 android:id="@+id/btnOpenListenerSettings"
                 android:layout_width="match_parent"
                 android:layout_height="46dp"
                 android:layout_marginTop="16dp"
-                android:background="@drawable/btn_secondary"
                 android:minHeight="0dp"
                 android:text="@string/onboarding_btn_open_listener"
-                android:textColor="@color/text_primary"
                 android:textSize="14sp" />
         </LinearLayout>
 
@@ -166,14 +165,13 @@
         android:padding="12dp">
 
         <Button
+            style="@style/AppButtonSecondary"
             android:id="@+id/btnPrev"
             android:layout_width="0dp"
             android:layout_height="46dp"
             android:layout_weight="1"
-            android:background="@drawable/btn_secondary"
             android:minHeight="0dp"
             android:text="@string/btn_prev"
-            android:textColor="@color/text_primary"
             android:textSize="14sp" />
 
         <TextView
@@ -186,14 +184,13 @@
             android:textSize="14sp" />
 
         <Button
+            style="@style/AppButtonPrimary"
             android:id="@+id/btnNext"
             android:layout_width="0dp"
             android:layout_height="46dp"
             android:layout_weight="1"
-            android:background="@drawable/btn_primary"
             android:minHeight="0dp"
             android:text="@string/btn_next"
-            android:textColor="@color/card_bg"
             android:textSize="14sp" />
     </LinearLayout>
 

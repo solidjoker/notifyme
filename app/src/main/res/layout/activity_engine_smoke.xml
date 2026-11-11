@@ -38,14 +38,13 @@
         android:background="@color/divider" />
 
     <Button
+        style="@style/AppButtonPrimary"
         android:id="@+id/btnRunSmoke"
         android:layout_width="match_parent"
         android:layout_height="46dp"
         android:layout_margin="12dp"
-        android:background="@drawable/btn_primary"
         android:minHeight="0dp"
         android:text="@string/smoke_run"
-        android:textColor="@color/card_bg"
         android:textSize="14sp" />
 
     <TextView

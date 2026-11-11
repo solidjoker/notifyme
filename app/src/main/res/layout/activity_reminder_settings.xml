@@ -43,11 +43,11 @@
         android:layout_height="0dp"
         android:layout_weight="1">
 
+        <!-- 页面内容容器：纵向 + 16dp 内边距（样式集中定义，见 res/values/styles.xml 的 PageContentContainer） -->
         <LinearLayout
+            style="@style/PageContentContainer"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
+            android:layout_height="wrap_content">
 
             <!-- 卡片 5：日历提醒 -->
             <LinearLayout
@@ -92,6 +92,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:paddingStart="0dp"
                         android:paddingEnd="8dp"
                         android:text="@string/reminder_lead_label"
                         android:textColor="@color/text_secondary"
@@ -105,14 +106,13 @@
                 </LinearLayout>
 
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnOpenReminders"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="12dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/btn_open_reminders"
-                    android:textColor="@color/text_primary"
                     android:textSize="13sp" />
             </LinearLayout>
 

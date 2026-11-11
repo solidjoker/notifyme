@@ -19,8 +19,8 @@ CONSOLE_HTML = r"""<!DOCTYPE html>
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="微信分析助手">
-<meta name="theme-color" content="#07C160" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#1f9e5c" media="(prefers-color-scheme: dark)">
+<!-- theme-color 跟随当前主题：脚本按主题改写 content（颜色取自 CSS 变量，不在 JS 里写死） -->
+<meta name="theme-color" id="meta-theme-color" content="#07C160">
 <title>微信分析助手</title>
 <script>
 // 页面所在目录（域根绝对路径）：/console -> /，/mmonitor/console -> /mmonitor/
@@ -47,8 +47,10 @@ window.__WX_DIR = (function () {
   /* ===== 设计令牌（DESIGN-4 变量化 / DESIGN-5 字阶 / §6.2 暗色 / §6 对比度 AA）=====
      颜色、字阶、圆角、间距、热区全部走 CSS 变量；暗色只覆盖变量，
      组件样式不复制第二套。浅色下正文与辅助文字对比度均 >= 4.5:1。 */
+  /* ===== 设计令牌（颜色只出现在这两个变量块里，组件样式只引用 var()）===== */
   :root {
-    color-scheme: light dark;
+    /* 浅色（默认） */
+    color-scheme: light;
     --bg: #f2f4f5;
     --surface: #ffffff;
     --surface-2: #eef1f3;
@@ -60,6 +62,7 @@ window.__WX_DIR = (function () {
     --accent-strong: #0b7a43;
     --accent-weak: #e4f6ec;
     --on-accent: #ffffff;
+    --on-accent-soft: rgba(255, 255, 255, .14);
     --header-warn: #ffefbf;
     --danger: #c0261a;
     --danger-weak: #fdecea;
@@ -75,15 +78,18 @@ window.__WX_DIR = (function () {
     --on-badge: #ffffff;
     --sk-hi: #e9edf0;
     --shadow: 0 1px 2px rgba(16, 24, 40, .08);
+    --shadow-float: 0 2px 8px rgba(0, 0, 0, .18);
+    --theme-color: #07c160;
+    /* 尺寸 / 排版令牌 */
     --radius: 12px;
     --radius-sm: 8px;
     --tap: 44px;
     --fs-xs: 12px;
-    --fs-sm: 14px;
-    --fs-md: 16px;
-    --fs-lg: 20px;
-    --fs-xl: 24px;
-    --fs-2xl: 28px;
+    --fs-sm: clamp(13px, 3.2vw, 14px);
+    --fs-md: clamp(15px, 3.6vw, 16px);
+    --fs-lg: clamp(18px, 4.2vw, 20px);
+    --fs-xl: clamp(20px, 4.8vw, 24px);
+    --fs-2xl: clamp(23px, 5.4vw, 28px);
     --lh-tight: 1.25;
     --lh: 1.55;
     --sp-1: 4px;
@@ -92,38 +98,42 @@ window.__WX_DIR = (function () {
     --sp-4: 16px;
     --header-h: calc(env(safe-area-inset-top) + 64px);
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0f1317;
-      --surface: #171c22;
-      --surface-2: #1e242c;
-      --text: #e9edf1;
-      --muted: #a9b4c0;
-      --border: #2a323b;
-      --accent: #2fbf72;
-      --accent-text: #5cd992;
-      --accent-strong: #1f9e5c;
-      --accent-weak: #123324;
-      --on-accent: #06130b;
-      --header-warn: #05130c;
-      --danger: #ff8a80;
-      --danger-weak: #2a1512;
-      --on-danger: #2b0d08;
-      --warn: #ffb865;
-      --warn-weak: #2b1d0e;
-      --info: #7fb2ff;
-      --focus: #7fb2ff;
-      --badge-db: #1b4f8f;
-      --badge-nt: #7a3c12;
-      --badge-grp: #14532f;
-      --badge-app: #173d70;
-      --on-badge: #eef3f8;
-      --sk-hi: #262e37;
-      --shadow: 0 1px 2px rgba(0, 0, 0, .45);
-    }
+  /* 深色：同一套组件样式，只换变量值（组件不复制第二套规则） */
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0f1317;
+    --surface: #171c22;
+    --surface-2: #1e242c;
+    --text: #e9edf1;
+    --muted: #a9b4c0;
+    --border: #2a323b;
+    --accent: #2fbf72;
+    --accent-text: #5cd992;
+    --accent-strong: #1f9e5c;
+    --accent-weak: #123324;
+    --on-accent: #06130b;
+    --on-accent-soft: rgba(255, 255, 255, .18);
+    --header-warn: #05130c;
+    --danger: #ff8a80;
+    --danger-weak: #2a1512;
+    --on-danger: #2b0d08;
+    --warn: #ffb865;
+    --warn-weak: #2b1d0e;
+    --info: #7fb2ff;
+    --focus: #7fb2ff;
+    --badge-db: #1b4f8f;
+    --badge-nt: #7a3c12;
+    --badge-grp: #14532f;
+    --badge-app: #173d70;
+    --on-badge: #eef3f8;
+    --sk-hi: #262e37;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .45);
+    --shadow-float: 0 2px 8px rgba(0, 0, 0, .45);
+    --theme-color: #1f9e5c;
   }
 
   *, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  [hidden] { display: none !important; }
   html, body { overscroll-behavior-y: contain; }
   body {
     margin: 0;
@@ -138,7 +148,7 @@ window.__WX_DIR = (function () {
     position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
     overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
   }
-  a:focus, button:focus, input:focus, [tabindex]:focus { outline: 3px solid var(--focus); outline-offset: 2px; }
+  a:focus, button:focus, input:focus, select:focus, [tabindex]:focus { outline: 3px solid var(--focus); outline-offset: 2px; }
   :focus:not(:focus-visible) { outline: none; }
   :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 
@@ -153,10 +163,16 @@ window.__WX_DIR = (function () {
   .icon-btn {
     min-width: var(--tap); min-height: var(--tap);
     display: inline-flex; align-items: center; justify-content: center;
-    background: rgba(255, 255, 255, .14); border: none; border-radius: 10px;
+    background: var(--on-accent-soft); border: none; border-radius: 10px;
     color: var(--on-accent); font-size: var(--fs-lg); line-height: 1; cursor: pointer;
   }
   .icon-btn:active { transform: scale(.94); }
+  .theme-select {
+    flex: none; min-height: var(--tap); min-width: var(--tap);
+    padding: 0 var(--sp-2); font-size: var(--fs-sm);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    background: var(--surface); color: var(--text); cursor: pointer;
+  }
   .sync-line { font-size: var(--fs-xs); color: var(--on-accent); margin-top: 2px; }
   .sync-line.err { color: var(--header-warn); font-weight: 700; }
 
@@ -172,13 +188,13 @@ window.__WX_DIR = (function () {
   #ptr .ptr-in {
     display: inline-block; background: var(--surface); color: var(--text);
     border: 1px solid var(--border); border-radius: 14px;
-    padding: 6px 14px; box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+    padding: 6px 14px; box-shadow: var(--shadow-float);
   }
 
   /* ===== 主体布局（DESIGN-11：手机单栏 / >=900px 两栏）===== */
   .shell {
-    max-width: 720px; margin: 0 auto;
-    padding: var(--sp-3) var(--sp-3) calc(env(safe-area-inset-bottom) + 84px);
+    width: 100%; max-width: clamp(320px, 100%, 720px); margin: 0 auto;
+    padding: var(--sp-3) clamp(var(--sp-2), 3vw, var(--sp-3)) calc(env(safe-area-inset-bottom) + 84px);
   }
   /* 手机端 .side 不生成盒子：概览条与过滤条成为 .shell 的直接子元素，
      过滤条的 sticky 才能在整个 .shell 高度内持续生效 */
@@ -187,13 +203,15 @@ window.__WX_DIR = (function () {
 
   .card {
     background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: var(--sp-3);
+    border-radius: var(--radius); padding: clamp(var(--sp-3), 2.6vw, var(--sp-4));
     margin-bottom: var(--sp-3); box-shadow: var(--shadow);
   }
 
   /* ===== 首屏概览条（DESIGN-1）===== */
   .ov-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); }
   .ov-item { background: var(--surface-2); border-radius: var(--radius-sm); padding: var(--sp-2) var(--sp-3); min-height: 56px; }
+  .ov-item .sk-line { width: 60%; margin: 6px 0 4px; }
+  .ov-num .sk-line { margin-bottom: 0; }
   .ov-num { font-size: var(--fs-xl); font-weight: 700; color: var(--accent-text); line-height: var(--lh-tight); }
   .ov-num.time { font-size: var(--fs-lg); }
   .ov-label { font-size: var(--fs-xs); color: var(--muted); }
@@ -251,6 +269,7 @@ window.__WX_DIR = (function () {
     flex: 1; min-width: 0; min-height: var(--tap);
     display: flex; align-items: center; gap: var(--sp-2);
     padding: var(--sp-1) 0; cursor: pointer;
+    background: none; border: none; font: inherit; color: inherit; text-align: left;
   }
   .caret { color: var(--muted); font-size: var(--fs-sm); flex: none; width: 14px; }
   .conv-main { flex: 1; min-width: 0; display: block; }
@@ -279,9 +298,10 @@ window.__WX_DIR = (function () {
   .m-meta { font-size: var(--fs-xs); color: var(--muted); }
   .m-text { font-size: var(--fs-sm); white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
   .date-head {
-    display: flex; align-items: center; gap: var(--sp-2);
-    min-height: var(--tap); font-size: var(--fs-sm);
-    color: var(--info); font-weight: 700; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: var(--sp-2); width: 100%;
+    min-height: var(--tap); font: inherit; font-size: var(--fs-sm); text-align: left;
+    background: none; border: none; border-bottom: 1px solid var(--border);
+    color: var(--info); font-weight: 700; cursor: pointer;
   }
   .date-body { padding-left: var(--sp-2); }
   .badge {
@@ -305,6 +325,17 @@ window.__WX_DIR = (function () {
   .imp-high { color: var(--danger); font-weight: 700; }
   .imp-mid { color: var(--warn); font-weight: 700; }
   .todo-block { margin: var(--sp-2) 0; }
+  /* 卡片网格：基准单列，宽屏再分成多列（§2-6 响应式） */
+  .cards { display: grid; grid-template-columns: 1fr; gap: var(--sp-3); }
+  .cards .card { margin-bottom: 0; }
+  /* 结果区：窄屏单列，宽屏自动多列（§2-6 响应式，grid + clamp，无外部 CSS） */
+  #pane { display: grid; grid-template-columns: 1fr; gap: var(--sp-3); align-items: start; }
+  .pane-full { grid-column: 1 / -1; }
+  .pane-sec { min-width: 0; }
+  .pane-sec > .card { margin-bottom: 0; }
+  .more-wrap { display: flex; flex-direction: column; align-items: center; gap: var(--sp-1); padding: var(--sp-3) 0; }
+  .more-btn { min-width: 168px; }
+  .more-state { font-size: var(--fs-xs); color: var(--muted); text-align: center; }
   .stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); }
   .stat-grid .card { margin-bottom: 0; }
   .stat-num { font-size: var(--fs-xl); font-weight: 700; color: var(--accent-text); }
@@ -391,9 +422,21 @@ window.__WX_DIR = (function () {
   .toast.show { opacity: 1; }
 
   /* ===== 宽屏两栏（DESIGN-11）===== */
+  /* 窄屏（<=600px）单列布局 */
+  @media (max-width: 600px) {
+    .ov-grid { grid-template-columns: 1fr; }
+    .cards { grid-template-columns: 1fr; }
+    #pane { grid-template-columns: 1fr; }
+    .stat-grid { grid-template-columns: 1fr; }
+    .ov-item { min-height: var(--tap); }
+    .fb-row { flex-wrap: wrap; }
+    .h-row { flex-wrap: wrap; }
+  }
+
+  /* 宽屏（>=900px）多列布局 */
   @media (min-width: 900px) {
     .shell {
-      max-width: 1180px; display: grid;
+      max-width: clamp(960px, 96vw, 1180px); display: grid;
       grid-template-columns: 320px minmax(0, 1fr);
       gap: var(--sp-4); align-items: start;
     }
@@ -403,15 +446,28 @@ window.__WX_DIR = (function () {
       max-height: calc(100vh - 90px); overflow-y: auto;
     }
     .filterbar { position: static; border-bottom: none; padding-bottom: 0; }
-    main { max-width: none; }
-    .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3); }
-    .cards .card { margin-bottom: 0; }
+    /* 宽屏 main 撑满第二栏：max-width:none 之外还要去掉 margin:0 auto，
+       否则 auto 外边距会让它按 fit-content 收缩，结果区永远只有一列 */
+    main { max-width: none; margin: 0; width: 100%; }
+    .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #pane { grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
+    .ov-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     .stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     .tabbar {
       left: 50%; transform: translateX(-50%);
       width: min(560px, 100%); border-radius: var(--radius) var(--radius) 0 0;
       border: 1px solid var(--border); border-bottom: none;
     }
+  }
+
+  /* 超宽屏（>=1280px）三列卡片 */
+  @media (min-width: 1280px) {
+    .shell {
+      max-width: clamp(1200px, 94vw, 1440px);
+      grid-template-columns: 340px minmax(0, 1fr);
+    }
+    .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    #pane { grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); }
   }
 
   /* ===== 尊重系统的减弱动效设置 ===== */
@@ -425,11 +481,78 @@ window.__WX_DIR = (function () {
     .sk-line { background: var(--surface-2); }
   }
 </style>
+<script>
+// ---------- 主题三态：auto（跟随系统）/ light / dark ----------
+// 颜色只写在 CSS 的 :root 与 [data-theme="dark"] 两个变量块里；
+// 这里只负责把「用户偏好」解析成「实际生效主题」，写到 <html data-theme>，
+// 再把 CSS 变量 --theme-color 同步给 theme-color meta（不写死颜色）。
+(function () {
+  var KEY = 'wx_theme_v1';
+  var root = document.documentElement;
+  var mem = 'auto';
+  function readPref() {
+    try {
+      var v = window.localStorage.getItem(KEY);
+      if (v === 'auto' || v === 'light' || v === 'dark') { mem = v; return v; }
+    } catch (e) { }
+    return mem;
+  }
+  function writePref(p) {
+    mem = p;
+    try { window.localStorage.setItem(KEY, p); } catch (e) { }
+  }
+  function systemTheme() {
+    try {
+      return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+    } catch (e) { return 'light'; }
+  }
+  function resolve(p) { return (p === 'auto') ? systemTheme() : p; }
+  function paint() {
+    var p = readPref();
+    var r = resolve(p);
+    root.setAttribute('data-theme', r);
+    root.setAttribute('data-theme-pref', p);
+    var meta = document.getElementById('meta-theme-color');
+    if (meta) {
+      var c = '';
+      try { c = window.getComputedStyle(root).getPropertyValue('--theme-color'); } catch (e) { }
+      c = String(c || '').trim();
+      if (c) meta.setAttribute('content', c);
+    }
+    return r;
+  }
+  window.__WX_THEME = {
+    key: KEY,
+    pref: readPref,
+    resolve: resolve,
+    paint: paint,
+    set: function (p) {
+      if (p !== 'auto' && p !== 'light' && p !== 'dark') p = 'auto';
+      writePref(p);
+      paint();
+    }
+  };
+  // 首次访问：localStorage 里没有偏好 -> auto -> 读 prefers-color-scheme 兜底
+  paint();
+  try {
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    var onMq = function () { if (readPref() === 'auto') paint(); };
+    if (mq.addEventListener) mq.addEventListener('change', onMq);
+    else if (mq.addListener) mq.addListener(onMq);
+  } catch (e) { }
+})();
+</script>
 </head>
 <body>
 <header>
   <div class="h-row">
     <h1>💬 微信分析助手</h1>
+    <label class="sr-only" for="theme-select">主题外观</label>
+    <select id="theme-select" class="theme-select" aria-label="主题外观">
+      <option value="auto">跟随系统</option>
+      <option value="light">浅色</option>
+      <option value="dark">深色</option>
+    </select>
     <button type="button" class="icon-btn" id="btn-refresh" aria-label="立即刷新数据" onclick="load('manual')">⟳</button>
   </div>
   <div class="sync-line" id="sync-line" role="status" aria-live="polite">正在同步…</div>
@@ -437,27 +560,27 @@ window.__WX_DIR = (function () {
 <div id="ptr" aria-hidden="true"><span class="ptr-in" id="ptr-text">下拉刷新</span></div>
 <div class="shell">
   <aside class="side">
-    <section class="card" id="overview" aria-label="今日概览" aria-live="polite">
+    <section class="card" id="overview" aria-label="今日概览" aria-live="polite" aria-busy="true">
       <div class="ov-grid">
         <div class="ov-item">
-          <div class="ov-num" id="ov-todo">—</div>
-          <div class="ov-label">今日待办</div>
-          <div class="ov-sub" id="ov-todo-sub"></div>
+          <div class="ov-num" id="ov-24h"><span class="ov-val" id="ov-24h-val">—</span></div>
+          <div class="ov-label">近 24 小时消息</div>
+          <div class="ov-sub" id="ov-24h-sub">按已加载数据统计</div>
         </div>
         <div class="ov-item">
-          <div class="ov-num" id="ov-analysis">—</div>
-          <div class="ov-label">未读分析</div>
-          <div class="ov-sub" id="ov-analysis-sub"></div>
+          <div class="ov-num" id="ov-todo"><span class="ov-val" id="ov-todo-val">—</span></div>
+          <div class="ov-label">待处理</div>
+          <div class="ov-sub" id="ov-todo-sub">需要行动的分析</div>
         </div>
         <div class="ov-item">
-          <div class="ov-num" id="ov-msgs">—</div>
-          <div class="ov-label">消息总数</div>
-          <div class="ov-sub" id="ov-msgs-sub"></div>
+          <div class="ov-num" id="ov-fail"><span class="ov-val" id="ov-fail-val">—</span></div>
+          <div class="ov-label">同步失败</div>
+          <div class="ov-sub" id="ov-fail-sub">加载失败累计次数</div>
         </div>
         <div class="ov-item">
-          <div class="ov-num time" id="ov-sync">—</div>
+          <div class="ov-num time" id="ov-sync"><span class="ov-val" id="ov-sync-val">—</span></div>
           <div class="ov-label">最近同步</div>
-          <div class="ov-sub" id="ov-sync-sub"></div>
+          <div class="ov-sub" id="ov-sync-sub">每 30 秒自动同步</div>
         </div>
       </div>
     </section>
@@ -476,7 +599,10 @@ window.__WX_DIR = (function () {
     </section>
   </aside>
   <main id="main">
-    <div id="data" role="tabpanel" aria-labelledby="tab-conv"></div>
+    <div id="data" role="tabpanel" aria-labelledby="tab-conv" aria-busy="true">
+      <div id="err-box"></div>
+      <div id="pane" aria-live="polite" aria-relevant="additions text"></div>
+    </div>
   </main>
 </div>
 <nav class="tabbar" role="tablist" aria-label="主导航">
@@ -625,8 +751,7 @@ var AUTH_MODE = false;
 // true = 展开，默认折叠；持久化到 localStorage）
 var COLLAPSE = {};
 try { COLLAPSE = JSON.parse(LS.get('wx_collapse_v1') || '{}') || {}; } catch (e) { COLLAPSE = {}; }
-var CONV_NODES = [];   // 折叠节点索引 -> 折叠 key
-var CONV_CARDS = [];   // 会话卡片索引 -> {ck, name}（复制会话名用）
+var CONV_CARDS = {};   // 会话 key -> 会话名（复制会话名用；key 含 SEP，编码后进 data-*）
 var todoByConv = {};
 var LAST_SYNC = 0;     // 最近一次数据同步成功时间（毫秒）
 var LAST_ERR = '';     // 最近一次同步错误（空 = 正常）
@@ -639,6 +764,17 @@ var LOAD_CTRL = null;  // 当前轮的 AbortController
 var LOAD_BUSY = false; // 上一轮是否还在飞（30s 定时器据此跳过）
 var TOAST_T = null;
 var FILTER_SIG = '';
+// 分页：服务端 next_before 是 <毫秒>_<rowid> 复合游标，
+// 前端按游标一页一页往前翻，不做「一次拉全量 + 前端切片」。
+var PAGE_LIMIT = 200;
+var MSG_NEXT = '';     // 消息下一页游标（空 = 没有更多）
+var ANA_NEXT = '';     // 分析下一页游标（空 = 没有更多）
+var MSG_PAGES = 0;     // 已加载消息页数
+var ANA_PAGES = 0;     // 已加载分析页数
+var MORE_BUSY = false; // 「加载更多」进行中
+var FAIL_COUNT = 0;    // 累计加载失败次数（接口不提供失败统计，只能前端计数）
+var HAS_DATA = false;  // 是否至少成功加载过一次（决定骨架占位还是真实数字）
+var THEME_KEY = 'wx_theme_v1';
 
 // 来源 App 口径（与服务端 PKG_LABELS 一致）：老数据没有 pkg，一律按微信
 var PKG_WX = 'com.tencent.mm';
@@ -683,7 +819,12 @@ function analysisKey(a) {
 function renderAuth(msg) {
   var box = $('auth-box');
   if (!box) {
-    $('data').innerHTML =
+    // 鉴权框只占结果区 #pane，不再整块替换 #data：
+    // 换掉 #data 会连带干掉 #err-box / #pane 两个固定节点
+    var pane = $('pane') || $('data');
+    if (!pane) return;
+    clearPaneSections();
+    pane.innerHTML =
       '<div class="card auth-box" id="auth-box">' +
       '<h2>🔒 请输入访问令牌</h2>' +
       '<p class="auth-msg" id="auth-msg"></p>' +
@@ -769,10 +910,11 @@ function copyText(text) {
     } catch (e) { reject(e); }
   });
 }
-function copyConvName(i) {
-  var meta = CONV_CARDS[i];
-  if (!meta) return;
-  copyText(meta.name).then(function () {
+// 复制会话名：按会话 key（复合游标同一套 key）取名字，不再依赖数组下标
+function copyConvNameByKey(ck) {
+  var name = CONV_CARDS[ck];
+  if (name == null) return;
+  copyText(name).then(function () {
     toast('已复制会话名');
   }, function () {
     toast('复制失败，请长按会话名手动复制');
@@ -851,14 +993,6 @@ function clearAppFilter() {
   renderData();
   toast('已清除来源过滤');
 }
-// chips 的键盘可达（Enter / 空格）
-function onFilterKey(e) {
-  if (e.key !== 'Enter' && e.key !== ' ') return;
-  e.preventDefault();
-  var el = e.currentTarget || e.target;
-  var pkg = (el && el.getAttribute) ? (el.getAttribute('data-pkg') || '') : '';
-  setAppFilter(pkg);
-}
 function renderFilterBar(force) {
   var box = $('app-chips');
   if (!box) return;
@@ -867,12 +1001,12 @@ function renderFilterBar(force) {
   // 只有页签集合变了才重建 DOM：重建会把键盘焦点从 chip 上弄丢
   if (force || listSig !== FILTER_SIG) {
     FILTER_SIG = listSig;
+    // 原生 button：自带焦点环、Enter/空格触发、aria-pressed 语义，
+    // 不再需要 span[role=button] + 内联 onclick/onkeydown
     box.innerHTML = tabs.map(function (t) {
-      return '<span class="chip-btn" role="button" tabindex="0" aria-pressed="' +
+      return '<button type="button" class="chip-btn" aria-pressed="' +
         (APP_FILTER === t[0] ? 'true' : 'false') +
-        '" data-pkg="' + esc(t[0]) +
-        '" onclick="setAppFilter(this.dataset.pkg)"' +
-        ' onkeydown="onFilterKey(event)">' + esc(t[1]) + '</span>';
+        '" data-pkg="' + esc(t[0]) + '">' + esc(t[1]) + '</button>';
     }).join('');
   } else {
     // 只更新选中态
@@ -934,27 +1068,54 @@ function advisorSearchText(r) {
 }
 
 // ---------- 首屏概览条 + tab 角标 ----------
+// 服务端没有统计接口，概览条只能基于「当前已加载」的数据在本地算；
+// 首次加载完成前用骨架占位，避免直接显示 0 造成误解。
+function countLast24h(list) {
+  var from = Date.now() - 86400000;
+  var n = 0;
+  for (var i = 0; i < list.length; i++) {
+    var t = Number(list[i].timestamp || 0);
+    if (t && t >= from) n++;
+  }
+  return n;
+}
+// 写概览数字；sk 为真时写骨架占位（而不是假数字）
+function setOv(id, val, sk) {
+  var el = $(id);
+  if (!el) return;
+  if (sk) {
+    el.innerHTML = '<span class="sk-line w60" aria-hidden="true"></span>';
+    return;
+  }
+  el.textContent = val;
+}
 function renderOverview() {
-  var todos = filteredTodos();
-  var today = todos.filter(function (a) { return isToday(a.received_at || 0); });
-  var analyses = filteredAnalyses();
   var msgs = filteredMsgs();
-  var unread = 0;
-  analyses.forEach(function (a) { if (NEW_CASES[analysisKey(a)]) unread++; });
-  var todoEl = $('ov-todo'), anaEl = $('ov-analysis');
-  var msgEl = $('ov-msgs'), syncEl = $('ov-sync');
-  if (todoEl) todoEl.textContent = String(today.length);
-  if (anaEl) anaEl.textContent = String(unread);
-  if (msgEl) msgEl.textContent = String(msgs.length);
-  if (syncEl) syncEl.textContent = LAST_SYNC ? fmtClock(LAST_SYNC) : '—';
-  var tSub = $('ov-todo-sub');
-  if (tSub) tSub.textContent = todos.length > today.length ? ('共 ' + todos.length + ' 条待办') : '';
-  var aSub = $('ov-analysis-sub');
-  if (aSub) aSub.textContent = '上次同步后新增';
-  var mSub = $('ov-msgs-sub');
-  if (mSub) mSub.textContent = APP_FILTER ? pkgLabel(APP_FILTER) : '全部来源';
-  var sSub = $('ov-sync-sub');
-  if (sSub) sSub.textContent = LAST_ERR ? '同步失败' : (LOAD_BUSY ? '同步中' : '');
+  var todos = filteredTodos();
+  var sk = !HAS_DATA;
+  setOv('ov-24h', String(countLast24h(msgs)), sk);
+  setOv('ov-todo', String(todos.length), sk);
+  setOv('ov-fail', String(FAIL_COUNT), sk);
+  setOv('ov-sync', LAST_SYNC ? fmtClock(LAST_SYNC) : '—', sk);
+  var s24 = $('ov-24h-sub');
+  if (s24) {
+    s24.textContent = sk ? '加载中…' :
+      (MSG_NEXT ? ('已加载 ' + msgs.length + ' 条，还有更多') : ('已加载 ' + msgs.length + ' 条'));
+  }
+  var sTodo = $('ov-todo-sub');
+  if (sTodo) sTodo.textContent = sk ? '加载中…' : ('当前筛选下 ' + todos.length + ' 条');
+  var sFail = $('ov-fail-sub');
+  if (sFail) {
+    sFail.textContent = sk ? '加载中…' :
+      (FAIL_COUNT ? ('最近错误：' + LAST_ERR) : '暂无失败记录');
+  }
+  var sSync = $('ov-sync-sub');
+  if (sSync) {
+    sSync.textContent = sk ? '加载中…' :
+      (LOAD_BUSY ? '同步中' : (LAST_ERR ? '同步失败' : '每 30 秒自动同步'));
+  }
+  var ov = $('overview');
+  if (ov) ov.setAttribute('aria-busy', LOAD_BUSY ? 'true' : 'false');
 }
 function setBadge(id, n) {
   var el = $(id);
@@ -979,21 +1140,66 @@ function renderBadges() {
   });
 }
 
-// ---------- 数据加载（并发 + 序号 + AbortController）----------
-// 分页拉完消息：服务端的 next_before 是 <毫秒>_<rowid> 复合游标。
-// 只取一页 -> 超过一页的历史消息在控制台里永远看不到。
-async function fetchAllMessages(signal) {
-  var all = [], before = null, guard = 0;
-  while (guard++ < 100) {
-    var url = 'messages?limit=500';
-    if (before) url += '&before=' + encodeURIComponent(before);
-    var r = await api(url, { signal: signal });
-    var part = r.messages || [];
-    all = all.concat(part);
-    if (!r.next_before || !part.length) break;
-    before = r.next_before;
+// ---------- 数据加载（并发 + 序号 + AbortController + 游标分页）----------
+// 服务端的 next_before 是 <毫秒>_<rowid> 复合游标，且只在「真的还有下一页」
+// 时才返回；前端按游标一页一页往前翻，不再一次性把全部消息拉下来再切片。
+async function fetchMsgPage(before, signal) {
+  var url = 'messages?limit=' + PAGE_LIMIT;
+  if (before) url += '&before=' + encodeURIComponent(before);
+  var r = await api(url, { signal: signal });
+  return { items: r.messages || [], next: r.next_before || '' };
+}
+async function fetchAnaPage(before, signal) {
+  var url = 'analysis?limit=' + PAGE_LIMIT;
+  if (before) url += '&before=' + encodeURIComponent(before);
+  var r = await api(url, { signal: signal });
+  return { items: r.analyses || [], next: r.next_before || '' };
+}
+// 由当前 ANALYSES 重建派生索引：同一复合会话保留 received_at 最新的一条待办
+function rebuildDerived() {
+  todoByConv = {};
+  ANALYSES.forEach(function (x) {
+    if (!needActionOf(x)) return;
+    var ck = ckOf(x);
+    if (!todoByConv[ck] ||
+        (x.received_at || 0) > (todoByConv[ck].received_at || 0)) {
+      todoByConv[ck] = x;
+    }
+  });
+}
+
+// 「加载更多」：按 next_before 游标取下一页并追加；游标为空就是「没有更多」
+async function loadMore(kind) {
+  if (MORE_BUSY) return;
+  var isAna = (kind === 'ana');
+  var next = isAna ? ANA_NEXT : MSG_NEXT;
+  if (!next) { render(); return; }
+  MORE_BUSY = true;
+  render();
+  try {
+    var sig = LOAD_CTRL ? LOAD_CTRL.signal : undefined;
+    var r = isAna ? await fetchAnaPage(next, sig) : await fetchMsgPage(next, sig);
+    if (isAna) {
+      ANALYSES = ANALYSES.concat(r.items);
+      ANA_NEXT = r.next;
+      ANA_PAGES++;
+    } else {
+      MSGS = MSGS.concat(r.items);
+      MSG_NEXT = r.next;
+      MSG_PAGES++;
+    }
+    rebuildDerived();
+  } catch (e) {
+    if (!e || e.kind !== 'abort') {
+      FAIL_COUNT++;
+      toast('加载更多失败：' + ((e && e.message) ? e.message : '未知错误'));
+      renderSyncLine();
+      renderOverview();
+    }
+  } finally {
+    MORE_BUSY = false;
+    render();
   }
-  return all;
 }
 
 async function load(reason) {
@@ -1007,39 +1213,34 @@ async function load(reason) {
   var ctrl = new AbortController();
   LOAD_CTRL = ctrl;
   LOAD_BUSY = true;
+  var dataEl = $('data');
+  if (dataEl) dataEl.setAttribute('aria-busy', 'true');
   renderSyncLine();
   renderOverview();
   try {
-    // 三个接口并发：原来串行 await，一个慢接口会拖住整轮
+    // 三个接口并发：只取第一页，其余靠「加载更多」按 next_before 游标翻
     var res = await Promise.all([
-      fetchAllMessages(ctrl.signal),
-      api('analysis?limit=1000', { signal: ctrl.signal }),
-      // TODO: 服务端本轮可能给 /analysis 增加可选 before/date 参数，
-      // 前端暂不依赖（当前 limit=1000 已经够用）。
+      fetchMsgPage('', ctrl.signal),
+      fetchAnaPage('', ctrl.signal),
       api('advisor?limit=100', { signal: ctrl.signal })
     ]);
     // 旧响应后到 -> 丢弃，不能覆盖新数据
     if (seq !== LOAD_SEQ) return;
-    MSGS = res[0] || [];
-    ANALYSES = (res[1] && res[1].analyses) || [];
+    MSGS = res[0].items || [];
+    MSG_NEXT = res[0].next || '';
+    MSG_PAGES = MSGS.length ? 1 : 0;
+    ANALYSES = res[1].items || [];
+    ANA_NEXT = res[1].next || '';
+    ANA_PAGES = ANALYSES.length ? 1 : 0;
     ADVISORS = (res[2] && res[2].reports) || [];
     AUTH_MODE = false;
+    HAS_DATA = true;
     // 「未读分析」= 上次同步之后才到达的分析（首次同步时全部算新增）
     NEW_CASES = {};
     ANALYSES.forEach(function (a) {
       if (!PREV_SYNC || (a.received_at || 0) > PREV_SYNC) NEW_CASES[analysisKey(a)] = true;
     });
-    todoByConv = {};
-    ANALYSES.forEach(function (x) {
-      if (needActionOf(x)) {
-        // 同一复合会话保留 received_at 最新的一条
-        var ck = ckOf(x);
-        if (!todoByConv[ck] ||
-            (x.received_at || 0) > (todoByConv[ck].received_at || 0)) {
-          todoByConv[ck] = x;
-        }
-      }
-    });
+    rebuildDerived();
     LAST_SYNC = Date.now();
     PREV_SYNC = LAST_SYNC;
     LAST_ERR = '';
@@ -1050,6 +1251,7 @@ async function load(reason) {
     if (seq !== LOAD_SEQ) return;           // 已被新一轮接管
     if (e && e.kind === 'abort') return;    // 主动中止，不算错误
     LOAD_BUSY = false;
+    FAIL_COUNT++;
     LAST_ERR = (e && e.message) ? e.message : '未知错误';
     LAST_ERR_KIND = (e && e.kind) ? e.kind : 'network';
     if (LAST_ERR_KIND === 'unauthorized') {
@@ -1064,6 +1266,12 @@ async function load(reason) {
     renderSyncLine();
     renderOverview();
     renderData();
+  } finally {
+    if (seq === LOAD_SEQ) {
+      LOAD_BUSY = false;
+      var d = $('data');
+      if (d) d.setAttribute('aria-busy', 'false');
+    }
   }
 }
 function retryLoad() {
@@ -1106,34 +1314,100 @@ function retryLoad() {
   }, { passive: true });
 })();
 
-// ---------- 渲染 ----------
-// 只重绘数据区 #data：过滤条 / 搜索框 / 概览条都在 #data 之外，
-// 不会被整块 innerHTML 换掉（焦点、光标、输入内容都不丢）
+// ---------- 渲染（分区打补丁：只改真正变了的那一块）----------
+// #data 内部固定两块：#err-box（错误提示）与 #pane（结果区）。
+// 结果区按 section 打补丁：内容没变的 section 根本不碰 DOM，
+// 变了的也只替换该 section 内部 —— 单张卡片变化不会带动整页重排。
+var PANE_SECTIONS = {};
+
+// section key 要能安全地放进 data-* 属性：统一 percent 编码
+function encKey(k) {
+  return encodeURIComponent(String(k == null ? '' : k));
+}
+function decKey(k) {
+  var s = String(k == null ? '' : k);
+  try { return decodeURIComponent(s); } catch (e) { return s; }
+}
+function clearPaneSections() {
+  Object.keys(PANE_SECTIONS).forEach(function (k) {
+    var n = PANE_SECTIONS[k];
+    if (n && n.parentNode) n.parentNode.removeChild(n);
+    delete PANE_SECTIONS[k];
+  });
+}
+// 局部更新：内容没变的 section 一律不碰 DOM
+function patchSections(list) {
+  var pane = $('pane');
+  if (!pane) return;
+  var seen = {};
+  var ordered = [];
+  // 新区块先攒进 DocumentFragment，最后一次性挂到 DOM 上，避免逐个插入触发多次重排
+  var frag = document.createDocumentFragment();
+  (list || []).forEach(function (sec) {
+    if (!sec) return;
+    seen[sec.key] = true;
+    var el = PANE_SECTIONS[sec.key];
+    if (!el) {
+      el = document.createElement('div');
+      el.className = sec.full ? 'pane-sec pane-full' : 'pane-sec';
+      el.setAttribute('data-sec', sec.key);
+      el.__html = sec.html;
+      el.innerHTML = sec.html;
+      PANE_SECTIONS[sec.key] = el;
+      frag.appendChild(el);
+    } else if (el.__html !== sec.html) {
+      // 只有内容真的变了才替换这一块
+      el.__html = sec.html;
+      el.innerHTML = sec.html;
+    }
+    ordered.push(el);
+  });
+  // 摘掉已经不存在的 section
+  Object.keys(PANE_SECTIONS).forEach(function (k) {
+    if (seen[k]) return;
+    var n = PANE_SECTIONS[k];
+    if (n && n.parentNode) n.parentNode.removeChild(n);
+    delete PANE_SECTIONS[k];
+  });
+  if (frag.childNodes.length) pane.appendChild(frag);
+  // 按目标顺序摆放：只移动位置不对的节点
+  var ref = null;
+  ordered.forEach(function (el) {
+    if (ref) {
+      if (ref.nextSibling !== el) pane.insertBefore(el, ref.nextSibling);
+    } else if (pane.firstChild !== el) {
+      pane.insertBefore(el, pane.firstChild);
+    }
+    ref = el;
+  });
+}
 function renderData() {
   if (AUTH_MODE) { renderAuth('令牌无效或已过期，请重新输入令牌'); return; }
   if (!TOKEN) { renderAuth('请输入访问令牌后进入控制台'); return; }
-  var el = $('data');
-  if (!el) return;
+  var errBox = $('err-box');
+  var pane = $('pane');
+  if (!errBox || !pane) return;
   var errHtml = '';
   if (LAST_ERR_KIND && LAST_ERR_KIND !== 'unauthorized') {
     errHtml = errorState(LAST_ERR_KIND, LAST_ERR);
   }
+  // 错误提示块单独比内容：没变就不动 DOM
+  if (errBox.__html !== errHtml) {
+    errBox.__html = errHtml;
+    errBox.innerHTML = errHtml;
+  }
   var hasData = MSGS.length || ANALYSES.length || ADVISORS.length;
   // 只有错误、没有旧数据 -> 只显示错误态；错误 + 旧数据 -> 错误态在上、数据在下
   if (errHtml && !hasData) {
-    el.innerHTML = errHtml;
+    clearPaneSections();
+    if (pane.__cleared !== true) {
+      pane.__cleared = true;
+      pane.innerHTML = '';
+    }
     return;
   }
-  // 重绘前记住搜索框的焦点与光标（保险：即使将来把搜索框挪进 #data 也不丢）
-  var ae = document.activeElement;
-  var keep = (ae && ae.id === 'global-search') ? ae : null;
-  var selS = keep ? keep.selectionStart : null;
-  var selE = keep ? keep.selectionEnd : null;
-  el.innerHTML = errHtml + renderTabHtml();
-  if (keep && document.activeElement !== keep) {
-    keep.focus();
-    try { keep.setSelectionRange(selS, selE); } catch (e) { }
-  }
+  pane.__cleared = false;
+  patchSections(renderTabSections());
 }
 function render() {
   renderSyncLine();
@@ -1142,14 +1416,15 @@ function render() {
   renderBadges();
   renderData();
 }
-function renderTabHtml() {
+// 当前 tab 的 section 列表（每个 tab 渲染函数返回 [{key, html, full}]）
+function renderTabSections() {
   if (CUR_TAB === 'conv') return renderConvs();
   if (CUR_TAB === 'todo') return renderTodos();
   if (CUR_TAB === 'stat') return renderStats();
   return renderAdvisor();
 }
-function switchTab(t) {
-  CUR_TAB = t;
+// 同步 tab 状态：roving tabindex（选中 tab 可 Tab 进入，其余 -1）+ aria-selected
+function syncTabs(t) {
   ['conv', 'todo', 'stat', 'adv'].forEach(function (k) {
     var b = $('tab-' + k);
     if (!b) return;
@@ -1160,6 +1435,10 @@ function switchTab(t) {
   });
   var panel = $('data');
   if (panel) panel.setAttribute('aria-labelledby', 'tab-' + t);
+}
+function switchTab(t) {
+  CUR_TAB = t;
+  syncTabs(t);
   window.scrollTo(0, 0);
   render();
 }
@@ -1187,7 +1466,7 @@ function errorState(kind, msg) {
     '<div class="state-desc">' + esc(meta.desc) + '</div>' +
     (msg ? '<div class="state-next">' + esc(msg) + '</div>' : '') +
     '<div class="state-actions">' +
-    '<button type="button" class="btn btn-primary" onclick="retryLoad()">重试</button>' +
+    '<button type="button" class="btn btn-primary" data-action="retry">重试</button>' +
     '</div></div>';
 }
 function skeletonHtml(n) {
@@ -1201,8 +1480,8 @@ function skeletonHtml(n) {
 function emptyStateFor(tab) {
   var q = QUERY.trim();
   var acts = '';
-  if (q) acts += '<button type="button" class="btn btn-secondary" onclick="clearSearch()">清除搜索</button>';
-  if (APP_FILTER) acts += '<button type="button" class="btn btn-secondary" onclick="clearAppFilter()">查看全部 App</button>';
+  if (q) acts += '<button type="button" class="btn btn-secondary" data-action="clear-search">清除搜索</button>';
+  if (APP_FILTER) acts += '<button type="button" class="btn btn-secondary" data-action="clear-app">查看全部 App</button>';
   if (q) {
     return emptyState('没有匹配结果',
       '当前搜索「' + q + '」没有匹配的内容。',
@@ -1229,10 +1508,78 @@ function refreshNote() {
   return '<div class="refresh-note">下拉可刷新 · 每 30 秒自动同步</div>';
 }
 
+// ---------- 分页：按 next_before 游标翻页 + 「没有更多」状态 ----------
+// 服务端只在「真的还有下一页」时才给 next_before：游标为空即到底。
+function moreHtml(kind) {
+  var isAna = (kind === 'ana');
+  var next = isAna ? ANA_NEXT : MSG_NEXT;
+  var pages = isAna ? ANA_PAGES : MSG_PAGES;
+  if (!next) {
+    return '<div class="more-wrap"><div class="more-state">已到底部 · 没有更多了</div></div>';
+  }
+  return '<div class="more-wrap">' +
+    '<button type="button" class="btn btn-secondary more-btn" data-action="more"' +
+    ' data-kind="' + (isAna ? 'ana' : 'msg') + '"' + (MORE_BUSY ? ' disabled' : '') + '>' +
+    (MORE_BUSY ? '加载中…' : '加载更多') + '</button>' +
+    '<div class="more-state">已加载 ' + pages + ' 页，还有更多</div></div>';
+}
+
+// ---------- 事件委托：卡片动作统一由容器处理 ----------
+// 卡片是 innerHTML 生成的、没有稳定引用，用 data-action + 委托代替内联 onclick。
+function handleAction(action, btn) {
+  var key = decKey(btn.getAttribute('data-key') || '');
+  if (action === 'toggle') { toggleNodeByKey(key); return; }
+  if (action === 'copy') { copyConvNameByKey(key); return; }
+  if (action === 'more') { loadMore(btn.getAttribute('data-kind') || 'msg'); return; }
+  if (action === 'retry') { retryLoad(); return; }
+  if (action === 'clear-search') { clearSearch(); return; }
+  if (action === 'clear-app') { clearAppFilter(); return; }
+}
+function bindDelegation() {
+  var data = $('data');
+  if (data) {
+    data.addEventListener('click', function (e) {
+      var t = e.target;
+      if (!t || !t.closest) return;
+      var btn = t.closest('[data-action]');
+      if (!btn || !data.contains(btn)) return;
+      handleAction(btn.getAttribute('data-action'), btn);
+    });
+  }
+  var chips = $('app-chips');
+  if (chips) {
+    chips.addEventListener('click', function (e) {
+      var t = e.target;
+      if (!t || !t.closest) return;
+      var btn = t.closest('[data-pkg]');
+      if (!btn || !chips.contains(btn)) return;
+      setAppFilter(btn.getAttribute('data-pkg') || '');
+    });
+  }
+}
+
+// ---------- 主题控件：跟随系统 / 浅色 / 深色 ----------
+function themeLabel(v) {
+  return v === 'light' ? '浅色' : (v === 'dark' ? '深色' : '跟随系统');
+}
+function initThemeControl() {
+  var sel = $('theme-select');
+  if (!sel) return;
+  var tw = window.__WX_THEME;
+  if (!tw) return;
+  if (tw.pref) sel.value = tw.pref();
+  sel.addEventListener('change', function () {
+    var v = sel.value;
+    if (tw.set) tw.set(v);
+    toast('主题：' + themeLabel(v));
+  });
+}
+
 // ---------- 会话 tab：需关注分区 + 会话/日期分层折叠 ----------
+// 返回 section 列表：每张会话卡是独立 section，
+// 只有内容真的变了的那张卡才会被替换，折叠/展开其它卡片不受影响。
 function renderConvs() {
-  CONV_NODES = [];
-  CONV_CARDS = [];
+  CONV_CARDS = {};
   var q = QUERY.trim().toLowerCase();
   var groups = {}, order = [];
   filteredMsgs().forEach(function (m) {
@@ -1258,17 +1605,38 @@ function renderConvs() {
     if (todoByConv[ck]) watch.push(item);
     else rest.push(item);
   });
-  var html = '';
+  var out = [];
+  if (!watch.length && !rest.length) {
+    out.push({ key: 'conv-empty', html: emptyStateFor('conv'), full: true });
+    out.push({ key: 'conv-note', html: refreshNote(), full: true });
+    return out;
+  }
   if (watch.length) {
-    html += '<div class="sec-head warn">⚡ 需关注（' + watch.length + '）</div>' +
-      '<div class="cards">' + watch.map(renderConvCard).join('') + '</div>';
+    out.push({
+      key: 'conv-watch-head',
+      html: '<div class="sec-head warn">⚡ 需关注（' + watch.length + '）</div>',
+      full: true
+    });
+    watch.forEach(function (item) {
+      CONV_CARDS[item.ck] = item.name;
+      out.push({ key: 'card:' + encKey(item.ck), html: renderConvCard(item) });
+    });
   }
   if (rest.length) {
-    html += '<div class="sec-head">全部会话（' + rest.length + '）</div>' +
-      '<div class="cards">' + rest.map(renderConvCard).join('') + '</div>';
+    out.push({
+      key: 'conv-rest-head',
+      html: '<div class="sec-head">全部会话（' + rest.length + '）</div>',
+      full: true
+    });
+    rest.forEach(function (item) {
+      CONV_CARDS[item.ck] = item.name;
+      out.push({ key: 'card:' + encKey(item.ck), html: renderConvCard(item) });
+    });
   }
-  if (!html) html = emptyStateFor('conv');
-  return html + refreshNote();
+  // 分页：按 next_before 游标翻页；游标为空就是「没有更多」
+  out.push({ key: 'conv-more', html: moreHtml('msg'), full: true });
+  out.push({ key: 'conv-note', html: refreshNote(), full: true });
+  return out;
 }
 
 // 一级折叠组：会话（默认折叠，显示名称 + 条数 + 最新摘要 + 相对时间）；
@@ -1276,21 +1644,21 @@ function renderConvs() {
 function renderConvCard(item) {
   var ck = item.ck, name = item.name, list = item.list;
   var key = 'c:' + ck;
-  var nodeIdx = CONV_NODES.length;
-  CONV_NODES.push(key);
-  var cardIdx = CONV_CARDS.length;
-  CONV_CARDS.push({ ck: ck, name: name });
+  var ek = encKey(key);
   var open = !!COLLAPSE[key];
   var latest = list[0];
   var todo = todoByConv[ck];
   // App 角标：微信不显示（主场景），其它 App 显示中文名，防止同名会话混淆
   var appBadge = normPkg(latest.pkg) === PKG_WX ? '' :
     '<span class="badge b-app">' + esc(pkgLabel(latest.pkg)) + '</span>';
+  // 折叠头用原生 button：自带焦点环、Enter/空格触发、aria-expanded 语义，
+  // 点击由 #data 上的事件委托统一处理（不再用内联 onclick）
   var html = '<div class="card"><div class="conv-row">' +
-    '<div class="conv-head" role="button" tabindex="0" aria-expanded="' +
-    (open ? 'true' : 'false') + '" data-node="' + nodeIdx + '"' +
-    ' onclick="toggleNode(' + nodeIdx + ')" onkeydown="onNodeKey(event, ' + nodeIdx + ')">' +
-    '<span class="caret" id="caret-' + nodeIdx + '" aria-hidden="true">' + (open ? '▾' : '▸') + '</span>' +
+    '<button type="button" class="conv-head" aria-expanded="' +
+    (open ? 'true' : 'false') + '" data-action="toggle" data-key="' + ek + '"' +
+    ' data-head="' + ek + '" aria-controls="panel-' + ek + '"' +
+    ' aria-label="' + esc('会话 ' + (name || '未命名') + '，' + list.length + ' 条消息') + '">' +
+    '<span class="caret" data-caret="' + ek + '" aria-hidden="true">' + (open ? '▾' : '▸') + '</span>' +
     '<span class="conv-main">' +
     '<span class="conv-title-row">' + appBadge +
     '<span class="conv-name">' + esc(name) + '</span>' +
@@ -1300,10 +1668,11 @@ function renderConvCard(item) {
     esc(latest.sender) + '：' + esc(latest.text) + '</span>' +
     '<span class="pv-time">' + esc(relTime(latest.timestamp)) + '</span></span>' +
     '</span>' +
-    '<span class="conv-count">' + list.length + ' 条</span></div>' +
-    '<button type="button" class="copy-btn" aria-label="复制会话名" ' +
-    'onclick="copyConvName(' + cardIdx + ')">⧉</button></div>' +
-    '<div class="msg-list" id="node-' + nodeIdx + '"' + (open ? '' : ' hidden') + '>';
+    '<span class="conv-count">' + list.length + ' 条</span></button>' +
+    '<button type="button" class="copy-btn" aria-label="复制会话名" data-action="copy"' +
+    ' data-key="' + encKey(ck) + '">⧉</button></div>' +
+    '<div class="msg-list" id="panel-' + ek + '" data-panel="' + ek + '"' +
+    (open ? '' : ' hidden') + '>';
   if (todo) html += renderAnalysisBlock(todo);
   // 二级折叠组：按日期分组（list 已按时间倒序，日期组同样倒序）
   var byDate = {}, dOrder = [];
@@ -1313,16 +1682,17 @@ function renderConvCard(item) {
     byDate[d].push(m);
   });
   dOrder.forEach(function (d) {
-    var dIdx = CONV_NODES.length;
-    CONV_NODES.push(key + '|' + d);
-    var dOpen = !!COLLAPSE[key + '|' + d];
-    html += '<div class="date-head" role="button" tabindex="0" aria-expanded="' +
-      (dOpen ? 'true' : 'false') + '" data-node="' + dIdx + '"' +
-      ' onclick="toggleNode(' + dIdx + ')" onkeydown="onNodeKey(event, ' + dIdx + ')">' +
-      '<span class="caret" id="caret-' + dIdx + '" aria-hidden="true">' + (dOpen ? '▾' : '▸') + '</span>' +
+    var dkey = key + '|' + d;
+    var edk = encKey(dkey);
+    var dOpen = !!COLLAPSE[dkey];
+    html += '<button type="button" class="date-head" aria-expanded="' +
+      (dOpen ? 'true' : 'false') + '" data-action="toggle" data-key="' + edk + '"' +
+      ' data-head="' + edk + '" aria-controls="panel-' + edk + '">' +
+      '<span class="caret" data-caret="' + edk + '" aria-hidden="true">' + (dOpen ? '▾' : '▸') + '</span>' +
       '<span class="conv-name">' + esc(fmtDate(byDate[d][0].timestamp)) + '</span>' +
-      '<span class="conv-count">' + byDate[d].length + ' 条</span></div>' +
-      '<div class="date-body" id="node-' + dIdx + '"' + (dOpen ? '' : ' hidden') + '>';
+      '<span class="conv-count">' + byDate[d].length + ' 条</span></button>' +
+      '<div class="date-body" id="panel-' + edk + '" data-panel="' + edk + '"' +
+      (dOpen ? '' : ' hidden') + '>';
     byDate[d].forEach(function (m) {
       var badges = (m.is_group ? '<span class="badge b-grp">群</span>' : '') +
         (normPkg(m.pkg) !== PKG_WX ? '<span class="badge b-app">' +
@@ -1337,29 +1707,23 @@ function renderConvCard(item) {
   return html + '</div></div>';
 }
 
-// 折叠头键盘可达（Enter / 空格）
-function onNodeKey(e, i) {
-  if (e.key === 'Enter' || e.key === ' ') {
-    e.preventDefault();
-    toggleNode(i);
-  }
-}
-// 折叠 / 展开切换：更新状态、持久化、只动对应节点（不重绘整页）
-function toggleNode(i) {
-  var key = CONV_NODES[i];
-  if (key == null) return;
-  COLLAPSE[key] = !COLLAPSE[key];
+// 折叠 / 展开切换：按 key（不再依赖数组下标），只动对应节点（不重绘整页）
+function toggleNodeByKey(nodeKey) {
+  if (nodeKey == null) return;
+  COLLAPSE[nodeKey] = !COLLAPSE[nodeKey];
   LS.set('wx_collapse_v1', JSON.stringify(COLLAPSE));
-  var open = !!COLLAPSE[key];
-  var el = $('node-' + i);
-  if (el) el.hidden = !open;
-  var caret = $('caret-' + i);
-  if (caret) caret.textContent = open ? '▾' : '▸';
-  var heads = document.querySelectorAll('[data-node="' + i + '"]');
-  for (var k = 0; k < heads.length; k++) {
-    heads[k].setAttribute('aria-expanded', open ? 'true' : 'false');
-  }
+  var open = !!COLLAPSE[nodeKey];
+  applyNodeState(encKey(nodeKey), open);
   toast(open ? '已展开' : '已收起');
+}
+// 只更新这个折叠组涉及的三个节点：面板显隐 / 箭头 / 折叠头 aria-expanded
+function applyNodeState(ek, open) {
+  var panel = document.querySelector('[data-panel="' + ek + '"]');
+  if (panel) panel.hidden = !open;
+  var caret = document.querySelector('[data-caret="' + ek + '"]');
+  if (caret) caret.textContent = open ? '▾' : '▸';
+  var head = document.querySelector('[data-head="' + ek + '"]');
+  if (head) head.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 
 // ---------- 分析结果块：S1 chips + S2 区 ----------
@@ -1431,12 +1795,16 @@ function renderTodos() {
     if (ra !== rb) return ra - rb;
     return (b.received_at || 0) - (a.received_at || 0);
   });
-  if (!todos.length) return emptyStateFor('todo') + refreshNote();
-  var html = '<div class="cards">';
+  var out = [];
+  if (!todos.length) {
+    out.push({ key: 'todo-empty', html: emptyStateFor('todo'), full: true });
+    out.push({ key: 'todo-note', html: refreshNote(), full: true });
+    return out;
+  }
   todos.forEach(function (a) {
     var appBadge = normPkg(a.pkg) === PKG_WX ? '' :
       '<span class="badge b-app">' + esc(pkgLabel(a.pkg)) + '</span>';
-    html += '<div class="card">' +
+    var html = '<div class="card">' +
       '<div class="conv-row"><div class="conv-head">' +
       '<span class="conv-main"><span class="conv-title-row">' + appBadge +
       '<span class="conv-name">' + esc(a.conversation) + '</span>' +
@@ -1447,8 +1815,16 @@ function renderTodos() {
       renderAnalysisBlock(a) +
       '<div class="ana-meta">分析于 ' + esc(a.analyzed_at || '') +
       ' · case ' + esc(a.case_id || '') + '</div></div>';
+    // 每条待办一个 section：key 稳定，改一条不会带动其它条重绘
+    out.push({
+      key: 'todo:' + encKey(analysisKey(a)) + ':' + encKey(String(a.received_at || 0)),
+      html: html
+    });
   });
-  return html + '</div>' + refreshNote();
+  // 分析结果同样按 next_before 游标翻页
+  out.push({ key: 'todo-more', html: moreHtml('ana'), full: true });
+  out.push({ key: 'todo-note', html: refreshNote(), full: true });
+  return out;
 }
 
 // ---------- 统计 tab ----------
@@ -1480,30 +1856,45 @@ function renderStats() {
   var appTxt = Object.keys(byApp).map(function (k) {
     return pkgLabel(k) + ' ' + byApp[k];
   }).join(' / ');
-  var html = '<div class="stat-grid">' +
-    cell(total, '消息总数') +
-    cell(Object.keys(analyzedConvs).length, '已分析会话数') +
-    cell(analyses.length, '分析结果数') +
-    cell(lastReport ? fmtTime(lastReport) : '—', '最近上报时间') +
-    '</div><div class="card"><div class="stat-label">应用分布</div>' +
-    '<div class="stat-value">' + esc(appTxt || '—') + '</div></div>' +
-    '<div class="card"><div class="stat-label">来源分布</div>' +
-    '<div class="stat-value">' + esc(srcTxt || '—') + '</div></div>';
+  var out = [];
+  out.push({
+    key: 'stat-grid',
+    html: '<div class="stat-grid">' +
+      cell(total, '消息总数') +
+      cell(Object.keys(analyzedConvs).length, '已分析会话数') +
+      cell(analyses.length, '分析结果数') +
+      cell(lastReport ? fmtTime(lastReport) : '—', '最近上报时间') +
+      '</div>',
+    full: true
+  });
+  out.push({
+    key: 'stat-app',
+    html: '<div class="card"><div class="stat-label">应用分布</div>' +
+      '<div class="stat-value">' + esc(appTxt || '—') + '</div></div>'
+  });
+  out.push({
+    key: 'stat-src',
+    html: '<div class="card"><div class="stat-label">来源分布</div>' +
+      '<div class="stat-value">' + esc(srcTxt || '—') + '</div></div>'
+  });
   // 最近分析结果（供全局搜索按 s1 / s2 / case_id 命中）
   var list = analyses.filter(function (a) {
     if (!q) return true;
     return analysisSearchText(a).indexOf(q) >= 0;
   });
-  html += '<div class="sec-head">最近分析结果（' + list.length + '）</div>';
+  out.push({
+    key: 'stat-list-head',
+    html: '<div class="sec-head">最近分析结果（' + list.length + '）</div>',
+    full: true
+  });
   if (!list.length) {
-    html += emptyStateFor('stat');
+    out.push({ key: 'stat-empty', html: emptyStateFor('stat'), full: true });
   } else {
-    html += '<div class="cards">';
     list.slice(0, 30).forEach(function (a) {
       var appBadge = normPkg(a.pkg) === PKG_WX ? '' :
         '<span class="badge b-app">' + esc(pkgLabel(a.pkg)) + '</span>';
       var summary = (a.s2 && a.s2.summary) ? a.s2.summary : '';
-      html += '<div class="card">' +
+      var html = '<div class="card">' +
         '<div class="ana-head">' + appBadge +
         '<span class="conv-name">' + esc(a.conversation) + '</span>' +
         '<span class="conv-count">' + esc(a.case_id || '') + '</span></div>' +
@@ -1513,10 +1904,14 @@ function renderStats() {
         (summary ? '<div class="conv-preview"><span class="pv-text">' +
           esc(summary) + '</span></div>' : '') +
         '</div>';
+      out.push({
+        key: 'stat-item:' + encKey(analysisKey(a)) + ':' + encKey(String(a.received_at || 0)),
+        html: html
+      });
     });
-    html += '</div>';
   }
-  return html + refreshNote();
+  out.push({ key: 'stat-note', html: refreshNote(), full: true });
+  return out;
 }
 
 // ---------- 顾问层（Fable）复盘报告 ----------
@@ -1536,14 +1931,22 @@ function renderAdvisor() {
     if (!q) return true;
     return advisorSearchText(r).indexOf(q) >= 0;
   });
-  if (!reports.length) return emptyStateFor('adv') + refreshNote();
-  var html = '';
-  if (APP_FILTER) {
-    html += '<div class="note">顾问报告不携带来源 App 字段，无法按「' +
-      esc(pkgLabel(APP_FILTER)) + '」过滤，下面显示的是全部报告。</div>';
+  var out = [];
+  if (!reports.length) {
+    out.push({ key: 'adv-empty', html: emptyStateFor('adv'), full: true });
+    out.push({ key: 'adv-note', html: refreshNote(), full: true });
+    return out;
   }
-  html += '<div class="cards">';
-  reports.forEach(function (r) {
+  if (APP_FILTER) {
+    out.push({
+      key: 'adv-note-filter',
+      html: '<div class="note">顾问报告不携带来源 App 字段，无法按「' +
+        esc(pkgLabel(APP_FILTER)) + '」过滤，下面显示的是全部报告。</div>',
+      full: true
+    });
+  }
+  reports.forEach(function (r, i) {
+    var html = '';
     // 建议按 type 分组展示
     var groups = {}, order = [];
     (r.suggestions || []).forEach(function (s) {
@@ -1581,8 +1984,14 @@ function renderAdvisor() {
       html += '</ul></div></div>';
     });
     html += '</div>';
+    out.push({
+      key: 'adv:' + i + ':' + encKey(String(r.created_at || '')) + ':' +
+        encKey(String(r.case_count == null ? '' : r.case_count)),
+      html: html
+    });
   });
-  return html + '</div>' + refreshNote();
+  out.push({ key: 'adv-note', html: refreshNote(), full: true });
+  return out;
 }
 
 // ---------- tab 栏方向键切换 ----------
@@ -1606,20 +2015,11 @@ function renderAdvisor() {
 (function boot() {
   // PWA 快捷方式 ?tab=conv|todo|stat|adv
   var t = new URLSearchParams(window.location.search).get('tab');
-  if (t && ['conv', 'todo', 'stat', 'adv'].indexOf(t) >= 0) {
-    CUR_TAB = t;
-    ['conv', 'todo', 'stat', 'adv'].forEach(function (k) {
-      var b = $('tab-' + k);
-      if (!b) return;
-      var on = (k === t);
-      b.className = 'tab' + (on ? ' active' : '');
-      b.setAttribute('aria-selected', on ? 'true' : 'false');
-      b.setAttribute('tabindex', on ? '0' : '-1');
-    });
-    var panel = $('data');
-    if (panel) panel.setAttribute('aria-labelledby', 'tab-' + t);
-  }
+  if (t && ['conv', 'todo', 'stat', 'adv'].indexOf(t) >= 0) CUR_TAB = t;
+  syncTabs(CUR_TAB);
   updateSearchUI();
+  initThemeControl();
+  bindDelegation();
   if (!TOKEN) {
     renderAuth('请输入访问令牌后进入控制台');
     renderSyncLine();
@@ -1627,8 +2027,11 @@ function renderAdvisor() {
     renderFilterBar(true);
     return;
   }
-  // 首次加载：骨架屏（DESIGN-10）
-  $('data').innerHTML = skeletonHtml(4);
+  // 首次加载：骨架屏（DESIGN-10）—— 放在 #pane 里，不重建 #data 的固定结构
+  var pane = $('pane');
+  if (pane) pane.innerHTML = skeletonHtml(4);
+  var dataEl = $('data');
+  if (dataEl) dataEl.setAttribute('aria-busy', 'true');
   renderSyncLine();
   renderOverview();
   renderFilterBar(true);
@@ -1721,18 +2124,20 @@ function cacheable(resp) {
 var OFFLINE_HTML = '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">' +
   '<meta name="viewport" content="width=device-width,initial-scale=1">' +
   '<title>离线 - 微信分析助手</title>' +
-  '<style>body{margin:0;padding:24px;min-height:100vh;display:flex;align-items:center;' +
-  'justify-content:center;background:#f2f4f5;color:#1f2328;' +
+  '<style>:root{--bg:#f2f4f5;--surface:#ffffff;--text:#1f2328;--muted:#5b6570;' +
+  '--border:#d8dee3;--accent:#07c160;--on-accent:#ffffff}' +
+  'body{margin:0;padding:24px;min-height:100vh;display:flex;align-items:center;' +
+  'justify-content:center;background:var(--bg);color:var(--text);' +
   'font-family:-apple-system,BlinkMacSystemFont,sans-serif}' +
-  '.box{max-width:360px;background:#fff;border:1px solid #d8dee3;border-radius:12px;' +
-  'padding:20px;text-align:center}' +
+  '.box{max-width:360px;background:var(--surface);border:1px solid var(--border);' +
+  'border-radius:12px;padding:20px;text-align:center}' +
   'h1{font-size:20px;margin:0 0 8px}' +
-  'p{font-size:14px;line-height:1.6;color:#5b6570;margin:0 0 16px}' +
+  'p{font-size:14px;line-height:1.6;color:var(--muted);margin:0 0 16px}' +
   'button{min-height:44px;padding:0 20px;font-size:16px;border:0;border-radius:8px;' +
-  'background:#07c160;color:#fff}' +
-  '@media (prefers-color-scheme:dark){body{background:#0f1317;color:#e9edf1}' +
-  '.box{background:#171c22;border-color:#2a323b}p{color:#a9b4c0}' +
-  'button{background:#2fbf72;color:#06130b}}</style>' +
+  'background:var(--accent);color:var(--on-accent)}' +
+  '@media (prefers-color-scheme:dark){:root{--bg:#0f1317;--surface:#171c22;' +
+  '--text:#e9edf1;--muted:#a9b4c0;--border:#2a323b;--accent:#2fbf72;' +
+  '--on-accent:#06130b}}</style>' +
   '</head><body><div class="box"><h1>离线中</h1>' +
   '<p>没有网络连接，且本地还没有缓存控制台页面。恢复网络后重试。</p>' +
   '<button onclick="location.reload()">重试</button></div></body></html>';

@@ -227,6 +227,12 @@ $env:JAVA_HOME = "你的 JDK 17 路径"
 .\gradlew.bat lintOpenDebug           # Android Lint
 ```
 
+开 PR 前跑一遍本地全量自检（服务端用例 + 语法检查 + 隐私守卫 + 版本校验 + Android 单测/双 flavor/Lint）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File docs\scripts\local_check.ps1
+```
+
 ---
 
 ## 隐私

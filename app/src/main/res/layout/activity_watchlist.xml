@@ -57,26 +57,24 @@
             android:orientation="horizontal">
 
             <Button
+                style="@style/AppButtonSecondary"
                 android:id="@+id/btnWatchAll"
                 android:layout_width="0dp"
                 android:layout_height="46dp"
                 android:layout_weight="1"
-                android:background="@drawable/btn_secondary"
                 android:minHeight="0dp"
                 android:text="@string/btn_watch_all"
-                android:textColor="@color/text_primary"
                 android:textSize="13sp" />
 
             <Button
+                style="@style/AppButtonSecondary"
                 android:id="@+id/btnWatchNone"
                 android:layout_width="0dp"
                 android:layout_height="46dp"
                 android:layout_marginStart="8dp"
                 android:layout_weight="1"
-                android:background="@drawable/btn_secondary"
                 android:minHeight="0dp"
                 android:text="@string/btn_watch_none"
-                android:textColor="@color/text_primary"
                 android:textSize="13sp" />
         </LinearLayout>
 
@@ -102,14 +100,13 @@
                 android:textSize="14sp" />
 
             <Button
+                style="@style/AppButtonPrimary"
                 android:id="@+id/btnAddConversation"
                 android:layout_width="wrap_content"
                 android:layout_height="46dp"
                 android:layout_marginStart="8dp"
-                android:background="@drawable/btn_primary"
                 android:minHeight="0dp"
                 android:text="@string/btn_add"
-                android:textColor="@color/card_bg"
                 android:textSize="13sp" />
         </LinearLayout>
     </LinearLayout>
