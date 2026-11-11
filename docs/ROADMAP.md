@@ -41,8 +41,8 @@
 | **端侧推理** | 只有接口 + 占位实现（`UnavailableLocalLlmEngine`），`forModel` 是 TODO；模型**下载链已通**（ModelScope 直链，S1 MiniCPM4-0.5B-MNN 311 MB / S2 MiniCPM3-4B-GGUF Q4_K_M 2.47 GB，S2 需 8 GB+ RAM） | `LocalLlmEngine.kt:47-53,67-69`；`LocalModelStore.kt:13-14,47-48` |
 | 分析文本出口 | 云端发送前的文本汇聚在 3 个函数 → **脱敏可单点插入** | `AnalysisCase.kt:56`(`buildStateJson`)、`:226`(`buildS1OpenAiSystemPrompt`)、`:268`(`buildS2SystemPrompt`) |
 | 分析双系统 | S1 快筛（laya/JEV systemone 或 openai 或本地）→ 条件升级 S2 深分析；S1→S2 阈值：need_action≥0.5 / importance≥6 / 置信度<0.5 | `AnalysisWorker.kt:29-33,280-380` |
-| 服务端 API | `POST /weixin`、`GET /messages`、`POST/GET /analysis`、`POST/GET /advisor`、`POST /admin/extract`、`/console` PWA + manifest + sw.js → **iOS/多端可直接复用** | `server/app.py:177,279,351,441,532,587,651,1347-1385` |
-| 入站校验 | `_validate_item` 决定 schema v2 是否要服务端同步改 | `server/app.py:257` |
+| 服务端 API | `POST /weixin`、`GET /messages`、`POST/GET /analysis`、`POST/GET /advisor`、`POST /admin/extract`、`/console` PWA + manifest + sw.js → **iOS/多端可直接复用** | `server/routes.py:20,169,322,548,718,807,844,889`（数据面）、`server/app.py:470,484,490,498`（/console 与 PWA 资源） |
+| 入站校验 | `_validate_item` 决定 schema v2 是否要服务端同步改 | `server/util.py:257` |
 
 **一句话结论**：产品功能已可用，但「公开可获取」（签名/CI/Releases）与「工程安全网」（测试）两块地基是空的；
 而路线图里最有价值的跨应用（#2）与端侧推理（#6）分别卡在 schema 与 native 库上。
@@ -257,7 +257,7 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
 | **B. 强化现有 PWA** | 补 sw.js 离线缓存、安装引导、图标/启动屏、暗色 | 零外部成本；1–2 天；**无系统推送**（iOS PWA 推送需已安装到主屏 + iOS 16.4+） |
 
 任务清单（若走 A）：
-1. 服务端：为 iOS 增加只读聚合端点（会话→日期分组直接在服务端算，省客户端逻辑）+ token 鉴权复用 `check_token`（`server/app.py:155`）
+1. 服务端：为 iOS 增加只读聚合端点（会话→日期分组直接在服务端算，省客户端逻辑）+ token 鉴权复用 `check_token`（`server/app.py:268`）
 2. APNs：提醒生成时由**服务端**推送（安卓端产生提醒 → 上报 → 服务端推 iPhone），需要提醒上报端点
 3. SwiftUI：会话列表 / 会话详情 / 分析结果 / 提醒管理四屏，Keychain 存 token 与服务器地址
 4. HTTPS 前置：APNs 与 ATS 都要求 TLS，文档给出反代方案（仓库内域名一律示例）

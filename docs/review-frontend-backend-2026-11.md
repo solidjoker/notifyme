@@ -523,7 +523,7 @@ response.isSuccessful -> {                    // ← 207 也命中
 |  | 2-4 | 待修 | — | 控制台重绘治理未做 |
 |  | 2-5 | 待修 | — | 控制台可访问性（aria / 44px 热区）未系统整改 |
 |  | 2-6 | 待修 | — | 控制台响应式布局未做 |
-|  | 2-7 | 待修 | — | server/app.py 仍是单文件（约 2280 行），拆分任务未完成 |
+|  | 2-7 | 已修复并有测试 | python3 -m pytest server/ -q（226 passed）；python3 -m compileall -q server | server/app.py 2294 → 684 行，拆出 util.py / storage.py / routes.py / console_ui.py；server/test_module_split.py（94 条：路由三元组、导出面、运行期状态唯一性、模块归属） |
 
 ### 10.5 §7 阶段 3 · 工程化
 
