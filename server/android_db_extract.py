@@ -29,6 +29,11 @@ EnMicroMsg.db 拉出来、解密、合并进监测库 messages.db。
 写锁一直不释放，服务端 /weixin 上报被 busy_timeout 挡住后返回 500。
 去重在 SQLite 侧用索引查，不再把整张表读进 Python set（内存与表大小解耦）。
 
+增量游标：源库 message 表的 msgId（自增主键）就是增量水位，state.json 记
+「已处理到的最大 msgId」，每轮只扫 msgId > 游标的新行；--full 忽略游标、
+从 0 全量重扫并重建游标。游标状态文件的格式与自愈口径见下方
+「增量游标状态」小节。
+
 原文存档：真正入库的新消息按 server/app.py 的 _append_jsonl 同格式追加进
 data/messages.jsonl（被去重跳过的重复行不写，否则存档条数会多于库内条数）；
 O(1) 追加、超限轮转成 messages.jsonl.1；写入失败只计数 + stderr 告警，
@@ -162,6 +167,38 @@ TYPE_PLACEHOLDER = {
     42: "[名片]", 48: "[位置]", 49: "[链接/文件]",
     10000: "[系统消息]",
 }
+
+# ------------------------------------------------------------------
+# 增量游标状态（state.json）
+# ------------------------------------------------------------------
+#
+# 游标状态文件：server/data/android_db/state.json
+# （DATA_DIR 下的来源子目录；PC 侧各存各的 server/data/pc_db/state.json，
+#   两路游标互不影响，也不会互相覆盖。）
+#
+# 文件格式（version=2）：
+# {
+#   "version": 2,            # 格式版本；版本不认识 -> 退回全量重扫（自愈）
+#   "source": "android-db",  # 来源标记（与 messages.source 同口径）
+#   "cursor_kind": "msgId",  # 游标口径：源库 message 表的自增主键 msgId
+#   "last_msgId": 12345,     # 游标值：已处理到的最大 msgId（下一轮扫 > 它）
+#   "last_run": "2026-11-12 00:00:00",    # 最近一次提取时间
+#   "last_full_run": "2026-11-12 00:00:00"  # 最近一次 --full 全量重扫时间
+# }
+#
+# 兼容性：顶层保留 last_msgId / last_run 两个老键——服务端 app.py 的落地页
+# 直接读 state.json 的 last_run 显示「最近提取」时间，键名不能动；老版本
+# 写出来的 state.json（没有 version）也照常读取，读取时迁移到 version=2。
+#
+# 自愈口径（任何一种都只打 stderr 告警，绝不抛异常终止整轮提取）：
+#   * 文件不存在        -> 首次运行，从 0 开始（= 全量）
+#   * JSON 损坏 / 读不了 -> 退回全量重扫
+#   * 不是 JSON 对象     -> 退回全量重扫
+#   * version 不认识     -> 退回全量重扫（不猜测新格式的语义）
+#   * last_msgId 非法    -> 退回全量重扫
+# 退回全量是安全的：去重在 SQLite 侧按唯一索引判重，重扫不会产生重复行。
+CURSOR_STATE_VERSION = 2
+CURSOR_KIND = "msgId"
 
 
 class ExtractError(RuntimeError):
@@ -893,17 +930,111 @@ def _ensure_main_schema(dst):
     dst.commit()
 
 
+def _cursor_int(value):
+    """把游标字段安全转成非负 int；非法值返回 None（由调用方退回全量）。
+
+    bool 是 int 的子类，必须先排除（True 会被当成游标 1）；
+    负数、浮点小数、空串、None、容器类型一律判非法。
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        return int(value) if value >= 0 and float(value).is_integer() else None
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("+"):
+            text = text[1:]
+        if not text.isdigit():
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    return None
+
+
+def _load_cursor_state(full=False):
+    """读游标状态，返回 (游标值, 诊断 dict, 原始 state dict)。
+
+    诊断 dict：{"reset": bool 是否退回全量, "reason": str 原因,
+                "origin": "state"|"full"|"missing"|"broken"}
+    原始 state dict：读到的原始内容（用于保留未识别字段，方便以后扩展）；
+    读不出来时是空 dict。
+
+    任何异常路径都只打 stderr 告警并退回全量，绝不把异常抛给调用方——
+    状态文件坏了不该让整轮提取失败（去重兜底，重扫不会产生重复行）。
+    """
+    diag = {"reset": False, "reason": "", "origin": "state"}
+    if full:
+        diag.update(reset=True, reason="full_scan", origin="full")
+        _log_event("cursor_reset", reason="full_scan", path=STATE_PATH)
+        return 0, diag, {}
+
+    if not os.path.exists(STATE_PATH):
+        diag.update(reset=True, reason="state_missing", origin="missing")
+        _log_event("cursor_reset", reason="state_missing", path=STATE_PATH)
+        return 0, diag, {}
+
+    try:
+        with open(STATE_PATH, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+        diag.update(reset=True, reason=f"state_unreadable: {e}", origin="broken")
+        _log_warn(f"增量状态读取失败（退回全量重扫）: {e}")
+        _log_event("cursor_reset", reason="unreadable", detail=str(e))
+        return 0, diag, {}
+
+    if not isinstance(raw, dict):
+        diag.update(reset=True, reason="state_not_object", origin="broken")
+        _log_warn("增量状态格式异常（不是 JSON 对象，退回全量重扫）")
+        _log_event("cursor_reset", reason="not_object")
+        return 0, diag, {}
+
+    # 版本：缺版本 = 老格式（v1，只有 last_msgId/last_run），照常读；
+    # 版本不认识（更高版本 / 非法类型）不猜语义，直接退回全量重扫。
+    if "version" in raw:
+        version = _cursor_int(raw.get("version"))
+        if version is None or version > CURSOR_STATE_VERSION:
+            diag.update(reset=True, reason="state_version_unknown", origin="broken")
+            _log_warn("增量状态版本不认识（退回全量重扫）: "
+                      f"{raw.get('version')!r}")
+            _log_event("cursor_reset", reason="version_unknown",
+                       version=str(raw.get("version")))
+            return 0, diag, raw
+
+    last_id = _cursor_int(raw.get("last_msgId", 0))
+    if last_id is None:
+        diag.update(reset=True, reason="state_cursor_invalid", origin="broken")
+        _log_warn("增量状态游标字段非法（退回全量重扫）: "
+                  f"last_msgId={raw.get('last_msgId')!r}")
+        _log_event("cursor_reset", reason="cursor_invalid",
+                   value=str(raw.get("last_msgId")))
+        return 0, diag, raw
+
+    return last_id, diag, raw
+
+
 def _save_state(state):
     """原子写增量状态：先写临时文件，再 os.replace 覆盖目标。
 
     直接 open(STATE_PATH, "w") 写一半崩溃会留下损坏的 JSON，
     服务端读 state.json 时只能退化成"未知"。os.replace 在同一文件系统内
     是原子替换，读者要么看到旧文件、要么看到完整的新文件。
+
+    写出的文件带 version / source / cursor_kind；老键 last_msgId / last_run
+    原样保留（app.py 的落地页读 last_run 显示「最近提取」时间）。
+    default=str：状态里混进不可序列化对象时不至于写崩整轮提取。
     """
     os.makedirs(ANDROID_DIR, exist_ok=True)
+    payload = dict(state or {})
+    payload["version"] = CURSOR_STATE_VERSION
+    payload["source"] = SOURCE_TAG
+    payload["cursor_kind"] = CURSOR_KIND
     tmp = STATE_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+        json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, STATE_PATH)
@@ -918,18 +1049,8 @@ def merge_messages(full=False):
       不再把整张表读进 Python set，内存占用与表大小解耦；
     - 解析失败计数 + 记日志，不再静默吞掉。
     """
-    # 读增量状态
-    state = {"last_msgId": 0}
-    if os.path.exists(STATE_PATH) and not full:
-        try:
-            with open(STATE_PATH, encoding="utf-8") as f:
-                loaded = json.load(f)
-            if isinstance(loaded, dict):
-                state = loaded
-        except (json.JSONDecodeError, OSError) as e:
-            _log_warn(f"增量状态读取失败（按全量重扫处理）: {e}")
-            state = {"last_msgId": 0}
-    last_id = 0 if full else int(state.get("last_msgId", 0))
+    # 读增量状态（损坏 / 字段非法 / 版本不认识 -> 退回全量重扫，只告警不抛异常）
+    last_id, cursor_diag, prev_state = _load_cursor_state(full=full)
 
     now_ms = int(time.time() * 1000)
     inserted = duplicated = skipped = scanned = 0
@@ -1037,11 +1158,15 @@ def merge_messages(full=False):
         _log_event("parse_errors", count=skipped,
                    samples="；".join(parse_errors))
 
-    # 更新增量状态（原子写）
+    # 更新增量状态（原子写）；保留读到的未识别字段，方便以后扩展
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    state = dict(prev_state)
     state.update({
         "last_msgId": max_id,
-        "last_run": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "last_run": now_text,
     })
+    if full:
+        state["last_full_run"] = now_text   # 标记最近一次全量重扫
     _save_state(state)
 
     return {
@@ -1056,6 +1181,11 @@ def merge_messages(full=False):
         "archive_skipped": archiver.skipped,  # 去重跳过、未重复写存档的条数
         "archive_errors": archiver.errors,    # 存档写失败的条数（库内数据不受影响）
         "last_msgId": max_id,
+        # 游标诊断：本轮是否退回全量重扫、原因、游标口径与状态文件版本
+        "cursor_reset": bool(cursor_diag.get("reset")),
+        "cursor_reason": cursor_diag.get("reason", ""),
+        "cursor_kind": CURSOR_KIND,
+        "state_version": CURSOR_STATE_VERSION,
     }
 
 
