@@ -32,7 +32,7 @@ flowchart TB
     subgraph FORK2["fork 2 · s1 — System 1 轻量判定"]
         F2{"AnalysisConfig.s1Type ?"}:::fork
         F2A["runS1SystemOne()<br/>Laya 决策模型 · POST {baseUrl}/v1/systemone<br/>state.chat{relationship:wechat_work,<br/>conversation, messages:[[from,text]], latest_from}<br/>+ state.background ← PromptStore 会话级提示词<br/>题集一次批量 fan-out"]:::llmcall
-        F2B["runS1Local()<br/>端侧 MiniCPM4-0.5B-MNN<br/>复用 openai 风格 prompt + 防御式解析"]:::llmcall
+        F2B["runS1Local()<br/>端侧 MiniCPM4-0.5B-MNN<br/>复用 openai 风格 prompt + 防御式解析<br/>LiteRT 2.2.0 · LayaTfliteEngine"]:::llmcall
         F2 -->|"remote / systemone 预设"| F2A
         F2 -->|"local_model"| F2B
     end
@@ -66,12 +66,29 @@ flowchart TB
 
     REC["AnalysisCaseRecord 落库<br/>AnalysisStore → files/analysis.jsonl<br/>含 forks 决策轨迹数组 + raw_json 原文"]:::out
 
+    REC --> RED["脱敏标记 RedactorCore.kt 250<br/>RedactorRules ID_CARD/PHONE/NAME 等<br/>CLOUD_REDACT 下产出 redacted=true"]:::out
+    RED --> TAG["会话标签 ConvTagCore.kt 47<br/>NONE / TODO / TRACK / DONE / NOISE"]:::out
+    TAG --> REC
+
     REC --> NA{"needAction = true<br/>且提醒开关开启？"}:::dec
     NA -->|"是"| CAL["CalendarHelper.create<br/>dedupKey = caseId<br/>→ 三级降级提醒链"]:::out
     NA -->|"否"| END["本轮结束 · recordResult 写状态文案<br/>网络/HTTP 失败 → Result.retry()"]:::stop
     CAL --> END
 
     REC -->|"SyncWorker 通道 2"| UP["POST {server}/analysis<br/>case_id 唯一去重 · snake_case<br/>不带 raw_json"]:::out
+
+    subgraph KERN["本轮新增的分析侧 Core 内核"]
+        direction LR
+        K1["AnalysisScanCursor.kt 265<br/>持久化字节游标 + FULL_PASS_INTERVAL_MS 环形重扫"]:::fork
+        K2["AnalysisScheduleSummaryCore.kt 71<br/>Health：DISABLED / GLOBAL_OFF 等<br/>复用 ScheduleSelfHealCore.thresholdFor"]:::fork
+        K3["TodoPanelCore.kt 27<br/>待办面板 DEFAULT_LIMIT=8 · 首页可见性联动"]:::fork
+        K4["AnalysisRejectCore.kt 238<br/>被拒计数 + 隔离（quarantine）"]:::fork
+    end
+
+    K1 -.->|"扫描未同步记录"| REC
+    K2 -.->|"调度健康自愈"| TRIG
+    K3 -.->|"首页待办面板"| REC
+    K4 -.->|"上报被拒 → 隔离"| UP
 
     ADV["AdvisorWorker（Fable 层）<br/>通读近 7 天 case · ≤50 个 · 摘要截 30 字<br/>调 System 2 服务商生成复盘<br/>{summary, suggestions:[{type,title,detail}]}<br/>type ∈ prompt/watchlist/threshold/other"]:::llmcall
     REC -.->|"每 7 天周期 或 控制台「顾问复盘」"| ADV

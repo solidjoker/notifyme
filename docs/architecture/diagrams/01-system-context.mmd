@@ -10,12 +10,12 @@ flowchart TB
     FS["飞书 App<br/>com.ss.android.lark"]:::ext
     DT["钉钉 App<br/>com.alibaba.android.rimet"]:::ext
 
-    subgraph DEV["📱 Android 设备 / 真机（HyperOS）"]
+    subgraph DEV["📱 Android 设备 / 真机（HyperOS）· v0.3.19 versionCode 25 · 90 个 Kotlin 文件"]
         direction TB
         NL["NotifyMeListener<br/>通知监听服务（零注入 · 按 AppSourceStore 启用集合过滤）"]:::app
         A11Y["A11yExtractService<br/>无障碍直读服务（免 root · 目前仅微信）"]:::app
-        CORE["微信分析助手 App 主体<br/>多应用采集 · 分析 · 提醒 · 上报"]:::app
-        STORE[("files/*.jsonl<br/>SharedPreferences<br/>files/models/")]:::store
+        CORE["微信分析助手 App 主体<br/>多应用采集 · 分析 · 提醒 · 上报<br/>隐私三档 OFF / CLOUD_REDACT / LOCAL_ONLY"]:::app
+        STORE[("files/*.jsonl（5 个）<br/>SharedPreferences ×19<br/>files/models/")]:::store
         NL --> CORE
         A11Y --> CORE
         CORE <--> STORE
@@ -23,9 +23,9 @@ flowchart TB
 
     subgraph HOST["💻 PC 本机 · Windows"]
         direction TB
-        FLASK["Flask 服务端<br/>server/app.py · 0.0.0.0:8000"]:::srv
-        ADBEX["android_db_extract.py<br/>EnMicroMsg.db 解密直读"]:::srv
-        PCEX["pc_db_extract.py<br/>PC 微信 4.x 库直读"]:::srv
+        FLASK["Flask 服务端 · 4+1 模块 · 0.0.0.0:8000<br/>app.py 壳/鉴权/控制台路由/落地页 684 行<br/>util.py 纯函数 289 · storage.py 存储 484<br/>routes.py 数据面路由 913 · console_ui.py 前端常量 2243"]:::srv
+        ADBEX["android_db_extract.py · 1260 行<br/>EnMicroMsg.db 解密直读"]:::srv
+        PCEX["pc_db_extract.py · 1122 行<br/>PC 微信 4.x 库直读"]:::srv
         DB[("messages.db · messages.jsonl<br/>analyses 表 · advisor_reports.json<br/>android_db/ · pc_db/")]:::store
         FRPC["frpc 隧道<br/>localPort 8000 → remotePort 23444"]:::srv
         FLASK --> ADBEX
@@ -43,8 +43,9 @@ flowchart TB
 
     subgraph AI["🧠 外部模型 / 下载服务"]
         direction TB
-        LAYA["laya · JEV SystemOne<br/>POST /v1/systemone<br/>GET /v1/models"]:::llm
-        GLM["OpenAI 兼容通道 · GLM<br/>POST /chat/completions"]:::llm
+        LAYA["laya · JEV SystemOne（云端 S1）<br/>POST /v1/systemone<br/>GET /v1/models"]:::llm
+        GLM["OpenAI 兼容通道 · GLM（云端 S2）<br/>POST /chat/completions"]:::llm
+        LITE["端侧 LiteRT 2.2.0（laya/ 包 7 个 .kt）<br/>laya_ml_*.tflite · 数据不出端<br/>LOCAL_ONLY 下唯一可用链路"]:::llm
         MS["ModelScope CDN<br/>MiniCPM4-0.5B-MNN 311MB<br/>MiniCPM3-4B-GGUF 2.47GB"]:::llm
     end
 
@@ -60,6 +61,7 @@ flowchart TB
     CORE -->|"⑤ S1 轻量判定<br/>noul / choice / score 题集"| LAYA
     CORE -->|"⑥ S2 深度分析<br/>顾问复盘报告"| GLM
     CORE -->|"⑦ 模型文件下载<br/>Range 断点续传"| MS
+    CORE -.->|"⑤b 端侧 S1/S2 · LiteRT 推理"| LITE
     ADBEX --> MUMU
     MUMU -->|"拉取加密库快照"| WX
     CORE -->|"局域网直连<br/>http://IP:8000/weixin"| FLASK

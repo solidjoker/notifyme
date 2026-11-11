@@ -511,28 +511,28 @@ response.isSuccessful -> {                    // ← 207 也命中
 |  | 1-4 | 已修复并有测试 | server/test_regression.py::test_next_before_only_when_more_pages、test_messages_tz_day_bounds；server/test_hardening.py::test_messages_conversation_prefix_match、test_messages_has_conversation_index | server/app.py |
 |  | 1-5 | 已修复并有测试 | server/test_regression.py::test_jsonl_archive_matches_db_rows、test_message_text_length_limit；server/test_hardening.py::test_jsonl_archive_rotates_when_too_large | server/app.py |
 |  | 1-6 | 已修复并有测试 | app/src/test/java/com/notifyme/android/SyncBatchCoreTest.kt、SyncOutcomeCoreTest.kt、NetworkPolicyTest.kt、HistorySyncCoreTest.kt；server/test_regression.py::test_analysis_redaction_columns_roundtrip | SyncBatchCore、SyncOutcome、NetworkPolicy、HistorySync、server/app.py |
-|  | 1-7 | 已修复并有测试（探针脚本整体换成 132 条 pytest） | python -m pytest server/ -v --tb=short → 132 passed | server/test_app.py、test_weixin.py、test_hardening.py、test_regression.py、test_extract.py、test_console.py |
+|  | 1-7 | 已修复并有测试（探针脚本整体换成 274 条 pytest） | python -m pytest server/ -v --tb=short → 274 passed | server/test_app.py、test_weixin.py、test_hardening.py、test_regression.py、test_extract.py、test_console.py |
 
 ### 10.4 §7 阶段 2 · 前端与设计
 
 | # | 条目 | 状态 | 验证方式 | 证据 |
 |---|---|---|---|---|
-|  | 2-1 | 待修 | — | 控制台 UI 尚未做设计令牌化 / 暗色模式 |
-|  | 2-2 | 待修 | — | 首屏概览条 / tab 角标 / 骨架屏未做 |
-|  | 2-3 | 部分修复 | server/test_regression.py::test_next_before_only_when_more_pages（游标口径已接） | server/console_ui.py（next_before 游标）；前端数据层仍待重写 |
-|  | 2-4 | 待修 | — | 控制台重绘治理未做 |
-|  | 2-5 | 待修 | — | 控制台可访问性（aria / 44px 热区）未系统整改 |
-|  | 2-6 | 待修 | — | 控制台响应式布局未做 |
-|  | 2-7 | 已修复并有测试 | python3 -m pytest server/ -q（226 passed）；python3 -m compileall -q server | server/app.py 2294 → 684 行，拆出 util.py / storage.py / routes.py / console_ui.py；server/test_module_split.py（94 条：路由三元组、导出面、运行期状态唯一性、模块归属） |
+|  | 2-1 | 已修复并有测试 | server/test_console_ui.py（25 条，覆盖主题三态 / 概览条 / 骨架屏 / 游标翻页 / 局部重绘 / 可访问性 / 响应式） | server/console_ui.py：主题三态 auto/light/dark（localStorage 键 wx_theme_v1 + html[data-theme] + meta#meta-theme-color 联动，select#theme-select） |
+|  | 2-2 | 已修复并有测试 | server/test_console_ui.py（概览条四项 / 骨架屏 / tab 角标用例） | server/console_ui.py：概览条改为 ov-24h 近 24 小时 / ov-todo / ov-fail / ov-sync 四项 + skeletonHtml 骨架屏 + tab 角标 |
+|  | 2-3 | 已修复并有测试 | server/test_console_ui.py（游标翻页用例）+ server/test_regression.py::test_next_before_only_when_more_pages | server/console_ui.py：新增 fetchMsgPage / fetchAnaPage（PAGE_LIMIT=200，&before= 游标），删掉一次性拉全量的 fetchAllMessages；底部提示「已加载 N 页，还有更多」/「已到底部 · 没有更多了」 |
+|  | 2-4 | 已修复并有测试 | server/test_console_ui.py（局部更新与事件委托用例） | server/console_ui.py：renderData 只更 #err-box + #pane，patchSections 按 section key 局部更新（DocumentFragment + insertBefore），renderFilterBar 改事件委托 + 原生 button |
+|  | 2-5 | 已修复并有测试 | server/test_console_ui.py（roving tabindex / aria-live / 44px 热区 / 对比度用例） | server/console_ui.py：roving tabindex、#pane aria-live=polite、focus-visible 样式、44px 触控热区；明暗两套主题 29 组前景/背景对比度全部 ≥4.5:1 |
+|  | 2-6 | 已修复并有测试 | server/test_console_ui.py（420 / 900 / 1400px 断点用例） | server/console_ui.py：.shell max-width clamp(320px,100%,720px)、字号全 clamp()、≤600px 单列、≥900px 两栏、≥1280px 三列；修掉 main{margin:0 auto} 导致宽屏永远单列的历史 bug |
+|  | 2-7 | 已修复并有测试 | python3 -m pytest server/ -q（274 passed）；python3 -m compileall -q server | server/app.py 2294 → 684 行，拆出 util.py / storage.py / routes.py / console_ui.py；server/test_module_split.py（94 条：路由三元组、导出面、运行期状态唯一性、模块归属） |
 
 ### 10.5 §7 阶段 3 · 工程化
 
 | # | 条目 | 状态 | 验证方式 | 证据 |
 |---|---|---|---|---|
 |  | 3-1 | 已修复并有测试 | python3 -m pytest server/ -v --tb=short ；CI 步骤「Server tests」「Unit tests + assemble」 | .github/workflows/android.yml：语法检查改 compileall -q server、pytest 改 server/ 目录级、依赖装自 server/requirements.txt |
-|  | 3-2 | 待修 | — | 服务端用例走 Flask test client，未引入 MockWebServer 端到端 |
+|  | 3-2 | 已修复并有测试 | app/src/test/java/com/notifyme/android/SyncHttpEndToEndTest.kt（11 例）、HistorySyncPagingHttpTest.kt（5 例） | app/src/test/java/com/notifyme/android/HttpEndToEndFixture.kt：java.net.ServerSocket 自写 HTTP/1.1 服务端 + okhttp 4.12.0 客户端，走真实 socket 做上报/回填端到端；**生产代码与 app/build.gradle.kts 零改动** |
 |  | 3-3 | 已修复并有测试 | README.md「服务端部署」小节；docs/BUILD.md「CI 自动签名与发布」「守卫脚本本地自查」 | 以 server/app.py 现状为准改写：监听矩阵（0.0.0.0:8000 / 127.0.0.1:8000）、next_before 游标口径、两个字段表、server/data/ 四个数据文件；docs/BUILD.md 同步修正 Kotlin 2.2.21 / litert 2.2.0 / beta 桌面名 / 源码文件数 / CI 步骤 |
-|  | 3-4 | 待修 | — | 提取脚本仍是全表去重集合，未换成增量游标 |
+|  | 3-4 | 已修复并有测试（**本条原述有误**：HEAD(4fe0ea0) 起两个脚本已是增量游标 + SQLite 侧去重；本轮补的是游标健壮性） | python -m pytest server/test_extract_cursor.py -q → 23 passed | server/android_db_extract.py（`_cursor_int` / `_load_cursor_state` / `_save_state`，state.json 版本化 v2，损坏/非法/未知版本一律自愈退回全量且只告警不中断）；server/pc_db_extract.py（账号→会话两级游标，账号失败不写回旧游标，全账号失败不写 state.json）；server/test_extract_cursor.py（23 条，含 EXPLAIN QUERY PLAN 断言去重走索引） |
 |  | 3-5 | 已修复并有测试 | server/test_extract.py::test_dedup_key_contains_pkg_and_millisecond、test_merge_messages_keeps_same_second_different_ms | server/android_db_extract.py、server/pc_db_extract.py |
 |  | 3-6 | 已修复并有测试 | server/test_extract.py::test_log_event_emits_key_value_pairs、test_log_event_flattens_newlines、test_merge_emits_structured_parse_error_event | server/android_db_extract.py、server/pc_db_extract.py |
 |  | 3-7 | 已修复并有测试 | server/test_regression.py::test_extract_module_loads_by_path、test_run_extract_bg_requires_explicit_ok_true | server/app.py（_import_extract_module） |
@@ -545,4 +545,7 @@ response.isSuccessful -> {                    // ← 207 也命中
 |  | E-2 | 已修复并有测试 | python docs/scripts/privacy_guard.py（负向用例见 PR 描述）；python docs/scripts/version_check.py --expect-tag v0.3.19 | docs/scripts/privacy_guard.py、docs/scripts/version_check.py |
 |  | E-3 | 已修复 | python3 docs/scripts/version_check.py --expect-tag v9.9.9 → 退出码 1 | .github/workflows/release.yml |
 |  | E-4 | 已修复 | .github/workflows/release.yml「Assemble signed open release」 | app/build.gradle.kts |
+|  | E-5 | 已修复并有测试 | .\gradlew.bat lintOpenDebug → issue 数 97 → **3**（0 error）；剩余 3 条为刻意保留（依赖库自带 ObsoleteLintCustomCheck / targetSdk 34 的 OldTargetApi / release 只打 arm64 的 ChromeOsAbiSupport） | app/src/main/res/values/styles.xml、dimens.xml；strings.xml（11 个占位符资源，SetTextI18n 24 → 0）；res/xml/data_extraction_rules.xml + backup_rules.xml（AndroidManifest 同步 dataExtractionRules / fullBackupContent）；MainApplication.kt（API 33+ 用 RECEIVER_NOT_EXPORTED，低版本退回无标志注册）；ConsoleActivity.kt（dayKeyFmt 改 getter 属性消 ConstantLocale、电池白名单加 @SuppressLint("BatteryLife")） |
+|  | E-6 | 已修复 | mmdc 11.17.0 重渲染 9 张图 × (png + svg) 共 18 个产物退出码全 0，PNG 实际像素与 docs/architecture/README.md 索引表一致 | docs/architecture/diagrams/*.mmd、*.png、*.svg、docs/architecture/README.md（同步当前行数：console_ui.py 2243 / android_db_extract.py 1260 / pc_db_extract.py 1122，app/src/test 46 个 .kt） |
+|  | E-7 | 已修复并有测试 | python -m pytest server/ -q → 274 passed（新增 server/test_console_ui.py 25 条 + server/test_extract_cursor.py 23 条）；android 单测 551 条全绿 | server/console_ui.py、server/test_console_ui.py、server/test_extract_cursor.py、app/src/test/** |
 

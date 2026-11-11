@@ -4,11 +4,12 @@ flowchart TB
 subgraph SRC["仓库 · notifyme Android 端"]
     direction TB
     RG["settings.gradle.kts<br/>rootProject.name = notifyme · include :app<br/>FAIL_ON_PROJECT_REPOS + google/mavenCentral"]
-    RB["build.gradle.kts 根<br/>com.android.application 8.5.2 apply false<br/>org.jetbrains.kotlin.android 2.0.20 apply false"]
-    AB["app/build.gradle.kts<br/>namespace/applicationId com.notifyme.android<br/>compileSdk 34 · minSdk 26 · targetSdk 34<br/>versionCode 4 · versionName 0.1.3<br/>Java 17 · jvmTarget 17 · buildConfig=true<br/>release: isMinifyEnabled=false"]
+    RB["build.gradle.kts 根<br/>com.android.application 8.5.2 apply false<br/>org.jetbrains.kotlin.android 2.2.21 apply false<br/>（必须 ≥2.1：litert-api 2.2.0 元数据是 2.3.0）"]
+    AB["app/build.gradle.kts<br/>namespace/applicationId com.notifyme.android<br/>compileSdk 34 · minSdk 26 · targetSdk 34<br/>versionCode 25 · versionName 0.3.19<br/>Java 17 · jvmTarget 17 · buildConfig=true<br/>ndk 27.2.12479018 · cmake 3.31.6"]
     SEC[("secrets.local.properties · gitignored<br/>GLM_BASE_URL / GLM_API_KEY / GLM_MODEL<br/>JEV_URL / JEV_API_KEY<br/>MONITOR_URL / MONITOR_TOKEN")]
-    DEP["依赖仅 4 个<br/>androidx.core:core-ktx:1.13.1<br/>androidx.recyclerview:recyclerview:1.3.2<br/>androidx.work:work-runtime-ktx:2.9.1<br/>com.squareup.okhttp3:okhttp:4.12.0<br/>JSON 用平台内置 org.json（无 Gson/Moshi）"]
+    DEP["运行时依赖 5 个<br/>androidx.core:core-ktx:1.13.1<br/>androidx.recyclerview:recyclerview:1.3.2<br/>androidx.work:work-runtime-ktx:2.9.1<br/>com.squareup.okhttp3:okhttp:4.12.0<br/>com.google.ai.edge.litert:litert:2.2.0<br/>JSON 用平台内置 org.json（无 Gson/Moshi）"]
     NOWRAP["仓库内置 Gradle Wrapper 8.9<br/>gradlew.bat assembleOpenDebug / assembleBetaDebug"]
+    SRCSTAT["源码规模<br/>主源码 97 个 .kt（com.notifyme.android 顶层 90 + laya 7）<br/>app/src/test 43 个 .kt"]
 end
 
 subgraph FLAVOR["productFlavors · flavorDimensions += channel"]
@@ -27,11 +28,56 @@ subgraph FLAVOR["productFlavors · flavorDimensions += channel"]
     end
 end
 
+subgraph ABI["ABI 与产物形态"]
+    direction LR
+    DBG["debug / beta<br/>abiFilters = arm64-v8a + x86_64<br/>真机 + 模拟器双 ABI"]
+    REL["release<br/>abiFilters = releaseAbis 默认只 arm64-v8a<br/>少带一套 x86_64 原生库 约省 20MB<br/>isMinifyEnabled = true（R8 混淆）<br/>isShrinkResources = true（资源压缩）"]
+    RELABI["要在 x86_64 模拟器装发布包<br/>.\\gradlew.bat assembleOpenRelease<br/>-PreleaseAbis=arm64-v8a,x86_64"]
+end
+
 subgraph BUILD["构建产物"]
     direction LR
     REN["applicationVariants.all 重命名<br/>channel = if flavorName==beta then test else flavorName<br/>outputFileName = notifyme-<channel>.apk"]
     APK1[("notifyme-open.apk<br/>apk/open/debug/ 目录")]
     APK2[("notifyme-test.apk<br/>apk/beta/debug/ 目录")]
+    APK3[("notifyme-open.apk<br/>apk/open/release/ 目录<br/>arm64-v8a + R8 + 资源压缩")]
+end
+
+subgraph CI["CI · .github/workflows/android.yml"]
+    direction TB
+    C0["runs-on ubuntu-24.04（钉住不用 ubuntu-latest）<br/>timeout-minutes 60 · permissions contents: read<br/>concurrency group build-工作流-ref<br/>cancel-in-progress 仅 PR 为 true"]
+    C1["① checkout@v7"]
+    C2["② Set up JDK 17（temurin）"]
+    C3["③ setup-gradle@v5 缓存依赖<br/>PR 上 cache-read-only"]
+    C4["④ Prepare wrapper for CI<br/>sed 把 distributionUrl 换成官方源"]
+    C5["⑤ SDK platform 34 + NDK 27.2.12479018 + cmake 3.31.6"]
+    C6["⑥ Fetch llama.cpp v0.5.0（不入库）"]
+    C7["⑦ Lint（Android Lint）<br/>lintOpenDebug · 退出码直接判定<br/>不再被管道吞掉"]
+    C8["⑧ Unit tests + assemble（open & beta）<br/>testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug"]
+    C9["⑨ Set up Python 3.12（pip 缓存）"]
+    C10["⑩ Python syntax check · compileall -q server"]
+    C11["⑪ Server tests · pytest server/ -v --tb=short"]
+    C12["⑫ Guard · privacy_guard.py --forbid-local-secrets"]
+    C13["⑬ Version check · version_check.py"]
+    C14["⑭ Upload debug APKs（两个 · 保留 14 天）"]
+    C0 --> C1 --> C2 --> C3 --> C4 --> C5 --> C6 --> C7
+    C7 --> C8
+    C8 --> C9 --> C10 --> C11 --> C12 --> C13 --> C14
+end
+
+subgraph RELW["发布 · .github/workflows/release.yml"]
+    direction TB
+    R0["推送 v<version> 标签触发<br/>timeout-minutes 30 · concurrency 不取消旧跑"]
+    R1["① version_check.py --expect-tag<br/>校验 tag 与 versionName 一致"]
+    R2["② 解码 NOTIFYME_KEYSTORE_BASE64 为 keystore"]
+    R3["③ assembleOpenRelease -PrequireReleaseSigning=true<br/>缺签名直接 GradleException"]
+    R4["④ apksigner verify"]
+    R5["⑤ 生成 .sha256"]
+    R6["⑥ gh release create"]
+    R7["仓库 Secrets 4 个<br/>NOTIFYME_KEYSTORE_BASE64<br/>NOTIFYME_KEYSTORE_PASSWORD<br/>NOTIFYME_KEY_ALIAS<br/>NOTIFYME_KEY_PASSWORD"]
+    R0 --> R1 --> R2 --> R3 --> R4 --> R5 --> R6
+    R7 -.-> R2
+    R7 -.-> R3
 end
 
 subgraph DEVICE["设备安装与授权（adb install 之后）"]
@@ -51,7 +97,7 @@ end
 
 subgraph SVRSTART["服务端启动 · PC 宿主机"]
     direction TB
-    S0["依赖：requirements.txt 仅 flask==3.1.3<br/>在 server/ 目录用本机 .venv<br/>.venv\Scripts\python.exe app.py<br/>默认 0.0.0.0:8000 · set PORT=9000 可改"]
+    S0["依赖：requirements.txt<br/>flask==3.1.3 · waitress==3.0.2<br/>pycryptodome==3.23.0 · Pillow==12.3.0<br/>在 server/ 目录用本机 .venv<br/>.venv\Scripts\python.exe app.py<br/>默认 0.0.0.0:8000 · set PORT=9000 可改"]
     BAT["server\启动服务.bat 三件事"]
     S1["① set WEIXIN_TOKEN<br/>真值在 gitignored server\secrets.local.bat<br/>改令牌必须同步改 App 的「访问令牌」<br/>并重按「保存并启用定时上报」，否则 401"]
     S2["② adb connect 127.0.0.1:16384（MuMu）<br/>adb reverse tcp:8000 tcp:8000<br/>模拟器内 http://127.0.0.1:8000 直达宿主<br/>免局域网 IP / 防火墙问题"]
@@ -95,17 +141,24 @@ RB --> AB
 SEC -->|"secret(key) 读取<br/>bcString(value) 转义反斜杠+引号"| FLAVOR
 AB --> FLAVOR
 DEP --> AB
+SRCSTAT --> AB
 NOWRAP -.->|"gradlew.bat assembleOpenDebug / assembleBetaDebug"| BUILD
 OPEN --> REN
 BETA --> REN
+AB --> ABI
+ABI --> BUILD
 REN --> APK1
 REN --> APK2
+REL --> APK3
 APK1 --> D0
 APK2 --> D0
+APK3 --> D0
 D1 -.->|"监听器采集 → SyncWorker 上报"| L1
 S2 -.-> L2
 S0 --> L3
 S0 --> P5
+CI -.->|"CI 不签名 · 只上传 debug APK"| BUILD
+RELW -.->|"标签触发签名发布"| BUILD
 
 classDef src fill:#eceff1,stroke:#37474f,stroke-width:2px,color:#000
 classDef fl fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000
@@ -116,11 +169,12 @@ classDef net fill:#e0f7fa,stroke:#00695c,stroke-width:2px,color:#000
 classDef store fill:#f5f5f5,stroke:#616161,stroke-width:2px,color:#000
 classDef warn fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#000
 
-class RG,RB,AB,DEP,NOWRAP src
+class RG,RB,AB,DEP,NOWRAP,SRCSTAT src
 class O1,O2,O3,B1,B2,B3,OPEN,BETA,FLAVOR fl
-class REN,BUILD bld
+class REN,BUILD,ABI,DBG,REL,RELABI bld
 class D0,D1,D2,D3,D4,D5,D6,DEVICE dev
 class S0,BAT,S1,S2,S3,S4,S6,SVRSTART srv
 class L1,L2,L3,P1,P2,P3,P4,P5,LAN,PUB,DEPLOY net
-class SEC,APK1,APK2 store
-class S5,DBG,SEC2 warn
+class SEC,APK1,APK2,APK3 store
+class S5,DBG,SEC2,C0,C7,C12,C13,R0,R1,R7 warn
+class C1,C2,C3,C4,C5,C6,C8,C9,C10,C11,C14,CI,R2,R3,R4,R5,R6,RELW bld

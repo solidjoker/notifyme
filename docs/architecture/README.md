@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：图 01–03 已更新到 **M2 完成态（versionName 0.2.0 / versionCode 5）**；图 04–09 仍为 M2 前基线（0.1.3，41 个 Kotlin 文件 + `server/app.py` 1491 行），其中类名已被 M2 重命名的在正文里标注新名
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **90 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 97 个，`app/src/test` 46 个），服务端已拆成 **4+1 模块**（`app.py` 684 行 / `util.py` 289 / `storage.py` 484 / `routes.py` 913 / `console_ui.py` 2243），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -14,15 +14,19 @@
 
 | # | 图 | 回答的问题 | 尺寸 (px) |
 |---|---|---|---|
-| 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3286 × 1456 |
-| 02 | [Android 分层架构](#02-android-分层架构) | 40+ 个 Kotlin 文件各自属于哪一层？ | 5250 × 1713 |
-| 03 | [三条采集通道](#03-三条采集通道) | 消息是怎么进来的？为什么需要三条路？ | 3218 × 990 |
-| 04 | [分析决策流水线](#04-分析决策流水线) | 一条消息如何变成一条待办？ | 1010 × 4995 |
-| 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1999 × 3051 |
-| 06 | [功能全景脑图](#06-功能全景脑图) | 这个 App 到底有哪些功能？ | 2738 × 1357 |
-| 07 | [服务端架构](#07-服务端架构) | 服务端模块里装了什么？（图仍是 M2 前单文件基线） | 3819 × 3254 |
-| 08 | [构建与部署](#08-构建与部署) | 从源码到手机、从手机到公网的完整链路 | 4387 × 2753 |
-| 09 | [同步时序](#09-同步时序) | 冷启动回填与三通道上报的精确行为 | 4148 × 6143 |
+| 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3970 × 1611 |
+| 02 | [Android 分层架构](#02-android-分层架构) | 90 个顶层 Kotlin 文件各自属于哪一层？ | 6856 × 1986 |
+| 03 | [三条采集通道](#03-三条采集通道) | 消息是怎么进来的？为什么需要三条路？ | 3386 × 1048 |
+| 04 | [分析决策流水线](#04-分析决策流水线) | 一条消息如何变成一条待办？ | 2510 × 5315 |
+| 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1954 × 3185 |
+| 06 | [功能全景脑图](#06-功能全景脑图) | 这个 App 到底有哪些功能？ | 3159 × 1516 |
+| 07 | [服务端架构](#07-服务端架构) | 服务端 4+1 模块里各装了什么？路由在哪一行？ | 5041 × 3387 |
+| 08 | [构建与部署](#08-构建与部署) | 从源码到手机、从手机到公网的完整链路 | 6850 × 4895 |
+| 09 | [同步时序](#09-同步时序) | 冷启动回填与三通道上报的精确行为 | 5769 × 7926 |
+
+> 尺寸为本次重渲染后 `.png` 的**实际像素**（`System.Drawing.Image.Width × Height`），与 `diagrams/*.png` 一一对应。
+>
+> 重渲命令（mermaid-cli 11.17.0）：`mmdc -i diagrams/X.mmd -o diagrams/X.svg`；`mmdc -i diagrams/X.mmd -o diagrams/X.png -w <SVG viewBox 宽 + 20> -H <SVG viewBox 高 + 60>`（脑图 06 的 viewBox 起点不是 0，单独用 `-w 3200 -H 1600`）。改完 `.mmd` 必须重渲并回写本表尺寸。
 
 ---
 
@@ -44,40 +48,59 @@
 
 ## 02 Android 分层架构
 
-五层 + Application 入口。**刻意不引 Compose**：全部传统 View + RecyclerView，第三方依赖压到 4 个（core-ktx / recyclerview / work-runtime-ktx / okhttp），把首次构建失败风险降到最低。JSON 用平台内置 `org.json`，不引 Gson/Moshi。
+五层 + Application 入口。**刻意不引 Compose**：全部传统 View + RecyclerView，运行时依赖只有 5 个（core-ktx / recyclerview / work-runtime-ktx / okhttp / **litert-api**——`com.google.ai.edge.litert:litert:2.2.0`，端侧 LiteRT 推理用），把首次构建失败风险降到最低。JSON 用平台内置 `org.json`，不引 Gson/Moshi。
+
+源码规模：`app/src/main/java/com/notifyme/android/` **顶层 90 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 97 个；`app/src/test` 46 个 .kt（纯 JVM 单测）。
 
 ![Android 分层架构图](diagrams/02-android-layers.png)
 
 | 层 | 内容 |
 |---|---|
-| ① UI 层 | 10 个 Activity：Main（首页）· Console（控制台 8 卡）· Conversation（会话详情+分析面板）· AnalysisList · Watchlist · **Sources（通知来源，M2 新增）** · ReminderList · PromptEdit · ModelList · Onboarding |
-| ② 采集与常驻层 | `NotifyMeListener`（M2 前名 `WeChatNotificationListener`）· `A11yExtractService`（M2 前名 `WeChatA11yExtractService`）· `KeepAliveService`（60s 看门狗 requestRebind）· `BootReceiver` · `ReminderReceiver` |
+| ① UI 层 | **18 个 Activity**：Main（首页）· Console（控制台 8 卡）· Conversation（会话详情+分析面板）· AnalysisList · **AnalysisSettings（S1/S2 槽位）** · Watchlist · Sources（通知来源）· ReminderList · **ReminderSettings** · PromptEdit · ModelList · Onboarding · **Capture** · **CaptureDiagnostics** · **EngineSmoke** · **OverlaySettings** · **PrivacySettings** · **RedactorPreview** |
+| ② 采集与常驻层 | `NotifyMeListener`（通知监听）· `A11yExtractService`（无障碍直读，仅微信）· `KeepAliveService`（60s 看门狗 requestRebind）· `BootReceiver` · `ReminderReceiver` · **`OverlayService`**（悬浮窗）· **`OverlayActionReceiver`** |
 | ③ 后台任务层 | 4 个 Worker：Sync（三通道上报）· Analysis（逐会话窗口 case）· Advisor（近 7 天复盘）· ModelDownload（.part 断点续传）；3 个 Scheduler 全部 `enqueueUniquePeriodicWork` + UPDATE 策略 |
-| ④ 领域 / 决策层 | `AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` |
-| ⑤ 存储层 | 6 个 JSONL/目录 + 12 个 SharedPreferences 文件（见下方存储清单） |
+| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 15 个 Core 逻辑内核**（见下表） |
+| ⑤ 存储层 | 5 个 JSONL + `files/models/` 目录 + **19 个** SharedPreferences 文件（见下方存储清单） |
+
+**④ 层本轮新增的 15 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
+
+| 主题 | 类 | 职责 |
+|---|---|---|
+| 同步与上报 | `SyncOutcome`（192）· `SyncBatchCore`（84）· `SyncWatermarkCore`（57）· `AnalysisSyncCore`（60）· `AdvisorSyncCore`（44）· `HistorySyncCore`（62） | 上报结果分类（207 先于 2xx 判定）· 分批与二分 · **已结算前缀水位** · 各通道分批 · 历史同步隐私门控与翻页判定 |
+| 拒绝与隔离 | `AnalysisRejectCore`（238）· `AdvisorRejectCore`（213）· `PendingRejectCore`（66） | 被拒次数累计 + 超限隔离，顾问通道复用分析通道实现 |
+| 扫描与调度 | `AnalysisScanCursor`（265）· `AnalysisScheduleSummaryCore`（71） | 持久化字节游标 + 环形重扫 · 调度健康（Health）自愈阈值 |
+| 脱敏与标签 | `RedactorCore`（250）· `ConvTagCore`（47） | 身份证/手机号/姓名等规则脱敏 · 会话标签 NONE/TODO/TRACK/DONE/NOISE |
+| 交互与面板 | `ManualReminderCore`（117）· `TodoPanelCore`（27） | 手动提醒**先解析成功再落库** · 待办面板（DEFAULT_LIMIT=8）与首页联动 |
 
 **本地存储全清单**
 
 ```
-files/messages.jsonl            MessageStore.kt:66       采集到的消息
-files/pending.jsonl             PendingQueue.kt:43       待上报队列（自增 id 精确剔除）
-files/analysis.jsonl            AnalysisStore.kt:193     case 分析记录 + forks 决策轨迹
-files/reminders.jsonl           ReminderStore.kt:84      提醒记录
-files/advisor_reports.jsonl     AdvisorStore.kt:93       顾问复盘报告
-files/models/{modelId}/         LocalModelStore          端侧模型文件 + .part 续传
+files/messages.jsonl            MessageStore.kt:93       采集到的消息
+files/pending.jsonl             PendingQueue.kt:63       待上报队列（自增 id 精确剔除）
+files/analysis.jsonl            AnalysisStore.kt:270     case 分析记录 + forks 决策轨迹
+files/reminders.jsonl           ReminderStore.kt:98      提醒记录
+files/advisor_reports.jsonl     AdvisorStore.kt:125     顾问复盘报告
+files/models/{modelId}/         LocalModelStore.kt:31    端侧模型文件 + .part 续传
 
-prefs analysis_config           AnalysisConfig.kt:24     分析预设/槽位/协议/Basic 账号
-prefs sync_config               SyncConfig.kt:18         服务器地址/令牌/周期
-prefs analysis_sync             AnalysisStore.kt:196     分析上报水位
-prefs advisor_store             AdvisorStore.kt:96       顾问上报水位
-prefs watchlist                 WatchlistStore.kt:18     重点关注名单（v3 默认空=不关注；SENTINEL_ALL=全部关注）
-prefs prompt_config             PromptStore.kt:16        会话级自定义提示词
-prefs history_sync              HistorySync.kt:32        自动提取开关/冷却/状态
-prefs a11y_extract              A11yExtractStore.kt:16   无障碍提取运行态
-prefs keepalive_state           KeepAliveService.kt:37   保活状态
-prefs local_model_store         LocalModelStore.kt:24    模型清单与下载进度
-prefs collapse_state            MainActivity.kt:997      首页折叠状态
-prefs app_state                 OnboardingActivity.kt:29 向导完成标记
+prefs analysis_config           AnalysisConfig.kt:27     分析预设/槽位/协议/Basic 账号
+prefs analysis_sync             AnalysisStore.kt:273     分析上报水位（已结算前缀）
+prefs sync_config               SyncConfig.kt:21         服务器地址/令牌/周期
+prefs privacy_config            PrivacyConfig.kt:55      隐私模式 OFF / CLOUD_REDACT / LOCAL_ONLY
+prefs prompt_config             PromptStore.kt:21        会话级自定义提示词
+prefs watchlist                 WatchlistStore.kt:30     重点关注名单（v3 默认空=不关注；SENTINEL_ALL=全部关注）
+prefs history_sync              HistorySync.kt:40        自动提取开关/冷却/状态
+prefs a11y_extract              A11yExtractStore.kt:19   无障碍提取运行态
+prefs advisor_store             AdvisorStore.kt:128      顾问上报水位
+prefs app_sources               AppSourceStore.kt:36     通知来源启用集合
+prefs conv_analysis_schedule    ConvAnalysisScheduleStore.kt:22  会话级分析排期
+prefs conv_tags                 ConvTagStore.kt:19       会话标签
+prefs keepalive_state           KeepAliveService.kt:42   保活状态
+prefs local_model_store         LocalModelStore.kt:31    模型清单与下载进度
+prefs collapse_state            MainActivity.kt:1503     首页折叠状态
+prefs app_state                 OnboardingActivity.kt:32 向导完成标记
+prefs overlay_config            OverlayConfig.kt:32      悬浮层配置
+prefs pending_queue             PendingQueue.kt:66       待上报队列计数
+prefs retention_state           Retention.kt:25           保留期清理状态
 ```
 
 全部落在 app 私有目录，**卸载即删**。
@@ -94,9 +117,11 @@ prefs app_state                 OnboardingActivity.kt:29 向导完成标记
 |---|---|---|---|
 | ① 通知监听（主链路） | 官方 `NotificationListenerService`，按 `AppSourceStore` 启用集合过滤（默认全收，黑名单/被停用包跳过），丢弃 ongoing/聚合摘要，`EXTRA_MESSAGES` 逐条解析发言人，LRU 去重 | 实时增量，M2 起覆盖微信/飞书/钉钉等多 App | 免打扰群与前台会话**不产生通知**→ 完全不可见；拿不到服务启动前的历史；`EXTRA_TEXT` 可能只是"3 条新消息"摘要 |
 | ② 无障碍直读 | `AccessibilityService`，控制台点「开始提取」后自动跳回微信，逐屏向上翻页去重合并，连续 `NO_NEW_LIMIT` 屏无新增判定到顶 | 本机会话历史，**免 root** | 时间戳只能按采集顺序每秒递减**估算**（记录标 `source=a11y-extract`）；微信改版会导致 UI 碎裂，靠 resource-id 候选表 + 最大面积文本节点启发式 + 整屏文本行兜底三级降级 |
-| ③ 服务端数据库直读 | `android_db_extract.py` / `pc_db_extract.py`，在 PC 上解密微信本地库 | **完整历史**，含自己发出的消息 | 需要 MuMu root 通道（仅 MuMu 12）；微信版本相关（已验证 8.0.78）；只有文本，媒体是占位符 |
+| ③ 服务端数据库直读 | `android_db_extract.py`（**1260 行**，非空 1095 行）/ `pc_db_extract.py`（**1122 行**，非空 981 行），在 PC 上解密微信本地库 | **完整历史**，含自己发出的消息 | 需要 MuMu root 通道（仅 MuMu 12）；微信版本相关（已验证 8.0.78）；只有文本，媒体是占位符 |
 
 **反向写出路径（不在本图中，因为它是唯一的"写"方向）**：`MessageReplier` 用微信通知自带的「直接回复」`Notification.Action` + `RemoteInput`，把文本塞进 results Bundle 后发送该 action 的 `PendingIntent`——等价于用户在通知栏手打发送。**全部系统公开 API，无注入/hook/协议**。边界：仅用户手动触发的单条回复，禁止自动群发；执行的是微信自己的 PendingIntent，本 App 无法伪造会话。回复失败的一种典型原因是通知已被划掉（PendingIntent 失效）。
+
+**通道 ③ 的隐私门控与翻页**（`HistorySyncCore`）：`OFF` 全放行；`CLOUD_REDACT` **不触发** `POST /admin/extract`（服务端直读会把**原文**写进云端，端上没法脱敏），但仍可从服务端拉回**已脱敏**的历史；`LOCAL_ONLY` 整个云端回填停用（`allowFetch` 直接返回 false）。回填按 `next_before` 复合游标（`毫秒_rowid`）翻页，`MAX_PAGES=20` 封顶，游标不变 / 本页为空即停。
 
 ---
 
@@ -115,6 +140,8 @@ prefs app_state                 OnboardingActivity.kt:29 向导完成标记
 每步决策都写进 `forks` 数组，logcat tag = `AgentTree`，可 grep 复盘单条消息为什么被判成待办/非待办。
 
 落库后两条出口：`needAction=true` 且提醒开关开启 → `CalendarHelper.createReminder(dedupKey=caseId)`；`SyncWorker` 通道 2 → `POST {server}/analysis`。
+
+**本轮新增的分析侧内核**（详见 [02](#02-android-分层架构) 的 ④ 层清单）：`AnalysisScanCursor`（265 行）把「扫到哪」持久化成字节游标，配合 `FULL_PASS_INTERVAL_MS` 做环形重扫，避免每次全量扫描；`AnalysisScheduleSummaryCore`（71 行）汇总调度健康（`Health`：DISABLED / GLOBAL_OFF 等），阈值复用 `ScheduleSelfHealCore.thresholdFor`；`RedactorCore`（250 行）在落库时打 `redacted` 标记并按 `RedactorRules`（ID_CARD / PHONE / NAME 等）替换为类型占位符；`ConvTagCore`（47 行）给出会话标签 `NONE / TODO / TRACK / DONE / NOISE`；`TodoPanelCore`（27 行）控制待办面板条数（DEFAULT_LIMIT=8）与首页可见性；`AnalysisRejectCore`（238 行）负责被拒次数累计与超限隔离（详见 [09](#09-同步时序)）。
 
 旁支 **AdvisorWorker（Fable 层）**：每 7 天或手动触发，通读近 7 天 case（≤50 个，摘要截 30 字），调 System 2 服务商产出 `{summary, suggestions:[{type,title,detail}]}`，`type ∈ prompt/watchlist/threshold/other`。纯增量功能，失败不影响主链路。
 
@@ -145,11 +172,13 @@ prefs app_state                 OnboardingActivity.kt:29 向导完成标记
 
 `parseDueTime()` 支持 `yyyy-MM-dd HH:mm` / `M月d日H点` / `HH:mm` / `今天|明天|后天 HH:mm` / `周X HH:mm` / `下午|晚上` +12h；解析失败回退"分析时间 +1 小时"；事件默认占 1 小时。
 
+**手动提醒**（不经过分析链路）：用户在会话页手填提醒时间，走 `ManualReminderCore`（117 行）。`EVENT_TIME_PATTERN = yyyy-MM-dd HH:mm`，**先解析成功再落库**——解析失败就不写 `reminders.jsonl`，提示格式错误，不产生「僵尸记录」；解析成功才写记录并进入同一条三级降级链。
+
 ---
 
 ## 06 功能全景脑图
 
-七大功能域、约 180 个叶子节点，是全部功能的一次性清单。
+七大功能域、**177 个叶子节点**（另有 48 个中间分组），是全部功能的一次性清单。本次随代码基线重画，新增了隐私模式与脱敏、调度自愈与会话标签、手动提醒、413 单独处置、已结算前缀水位等分支。
 
 ![功能全景脑图](diagrams/06-feature-map.png)
 
@@ -176,7 +205,16 @@ prefs app_state                 OnboardingActivity.kt:29 向导完成标记
 
 ## 07 服务端架构
 
-服务端已从单文件拆成 4 个模块，依赖仍然只有 `flask==3.1.3`：`app.py`（Flask 壳：鉴权、错误处理、`/console` 与落地页、`create_app`）、`util.py`（纯函数工具层）、`storage.py`（SQLite / JSONL 存档 / 顾问存档 / 抽库后台）、`routes.py`（数据面路由，`register(app)` 挂载）。下面表格的行号对应拆分后的新位置（旧的 M2 单文件行号见图 04–09）。
+服务端已从早期单文件拆成 **4+1 个模块**，依赖仍然只有 `flask==3.1.3`（另有 waitress / pycryptodome / Pillow）。下面表格的行号是**当前源码的真实行号**，与图 07 标注一致。
+
+| 模块 | 行数 | 装什么 | 关键行 |
+|---|---|---|---|
+| `server/app.py` | 684 | Flask 壳：鉴权、错误处理、`/console` 与落地页、`create_app` | `check_token` @268 · `MAX_CONTENT_LENGTH`=8 MiB @83 · `_handle_too_large` @137 · `create_app` @638 |
+| `server/util.py` | 289 | 纯函数工具层（校验、转义、时区、格式化） | `_validate_item` @257 · `_safe_int` @49 · `_esc_html` @220 · `_fmt_ts` @170 |
+| `server/storage.py` | 484 | SQLite / JSONL 存档 / 顾问存档 / 抽库后台 | `init_db` @57 · `_append_jsonl` @174 · 顾问存档 @198-317 · `_run_extract_bg` @414 |
+| `server/routes.py` | 913 | 数据面路由，`register(app)` 挂载 8 条 | `register` @903 · `add_url_rule` 映射 @905-912 |
+| `server/console_ui.py` | 2243 | 控制台前端常量（HTML/CSS/JS 全内联） | `CONSOLE_HTML` @13 · `CONSOLE_MANIFEST` @2062 · `CONSOLE_SW` @2108 |
+> 行数为当前源码的**文件总行数**（wc -l 口径）；若只计非空行，依次为 app.py 579 / util.py 255 / storage.py 449 / routes.py 867 / console_ui.py 2184 / android_db_extract.py **1095** / pc_db_extract.py **981**。
 
 ![服务端架构图](diagrams/07-server-architecture.png)
 
@@ -223,7 +261,9 @@ CREATE TABLE analyses (
 --          filtered INTEGER NOT NULL DEFAULT 0
 ```
 
-**提取编排**：`_extract_status = {"running": False, "last": None}` 内存态 + `_extract_lock`；`_run_extract_bg(full, source)` @622 起 daemon Thread，逐腿 `mod = __import__(leg + "_db_extract")` → `mod.run_extract(full=full)`。**单腿失败不拖垮另一腿**，整体 ok = 至少一腿不是 `ok is False`。
+**提取编排**：`_extract_status = {"running": False, "last": None}` 内存态 + `_extract_lock`；`_run_extract_bg(full, source)` **@storage.py:414** 起 daemon Thread，逐腿 `mod = __import__(leg + "_db_extract")` → `mod.run_extract(full=full)`。**单腿失败不拖垮另一腿**，整体 ok = 至少一腿不是 `ok is False`。
+
+**部分接受 207**（`routes.py:149-160`）：一批里有条目校验失败时，响应码是 **207**（不是 200），body 为 `{ok:false, rejected:[下标], error:"some items were rejected"}`，**其余条目照常入库**。端上必须按 `rejected` 清单精确剔除（`SyncOutcomeCore.parseRejected`），不能整批当成功删掉——那正是消息永久丢失的根因。
 
 **安卓库解密参数对比**
 
@@ -249,14 +289,16 @@ CREATE TABLE analyses (
 
 ![构建与部署图](diagrams/08-build-deploy.png)
 
-**构建**：AGP 8.5.2 + Kotlin 2.0.20，compileSdk 34 / minSdk 26 / targetSdk 34，Java 17。仓库内置 Gradle Wrapper（8.9），直接 `gradlew.bat assembleOpenDebug` / `assembleBetaDebug` 即可（详见 [docs/BUILD.md](../BUILD.md)）。
+**构建**：AGP 8.5.2 + **Kotlin 2.2.21**，compileSdk 34 / minSdk 26 / targetSdk 34，Java 17，NDK 27.2.12479018 + CMake 3.31.6。仓库内置 Gradle Wrapper（8.9），直接 `gradlew.bat assembleOpenDebug` / `assembleBetaDebug` 即可（详见 [docs/BUILD.md](../BUILD.md)）。
+
+> Kotlin **必须 ≥2.1**：`litert-api 2.2.0` 的元数据是 2.3.0，2.0.x 编译器直接报 incompatible version。
 
 **两个 flavor**（`flavorDimensions += "channel"`）
 
 | | `open`（对外发布） | `beta`（内部测试，产品名 test） |
 |---|---|---|
 | applicationId | `com.notifyme.android` | + `.test` 后缀 |
-| versionName | `0.1.3` | `0.1.3-test` |
+| versionName | `0.3.19` | `0.3.19-test` |
 | 桌面名 | 微信分析助手 | 微信分析助手·测试 |
 | `DEFAULT_*` buildConfigField | **全部空串**，APK 内不含任何密钥 | 从 `secrets.local.properties` 经 `secret(key)` 读取，`bcString(value)` 转义反斜杠与引号 |
 | 产物 | `notifyme-open.apk` | `notifyme-test.apk` |
@@ -264,6 +306,36 @@ CREATE TABLE analyses (
 beta 注入：`DEFAULT_ANALYSIS_PROTOCOL="openai"`、`GLM_BASE_URL`/`GLM_API_KEY`/`GLM_MODEL`、`JEV_URL`/`JEV_API_KEY`、`MONITOR_URL`/`MONITOR_TOKEN`。首次启动 seed 进配置（仅填充，可改）。
 
 > AGP 禁止 flavor 名以 `test` 开头，故内部名 `beta`、产品名 `test`。桌面名加后缀是因为用户曾把 open 包误认成 test 包，报"没有预置模型、没有历史回填"——那是 open 的设计行为。
+
+**ABI 与产物形态**（`app/build.gradle.kts`）
+
+| buildType | ABI | 混淆 / 资源压缩 | 备注 |
+|---|---|---|---|
+| `debug`（open + beta） | `arm64-v8a` + `x86_64` | 无 | 真机 + 模拟器双 ABI |
+| `release`（open） | **只 `arm64-v8a`** | `isMinifyEnabled=true`（R8 混淆 + `proguard-android-optimize.txt` + `proguard-rules.pro`）· `isShrinkResources=true`（资源压缩） | 少带一套 x86_64 原生库，约省 20MB |
+
+要在 x86_64 模拟器上装发布包，临时加回：`.\gradlew.bat assembleOpenRelease -PreleaseAbis=arm64-v8a,x86_64`（release ABI 清单由 `-PreleaseAbis` 覆盖，默认值只有 `arm64-v8a`）。
+
+**CI：`.github/workflows/android.yml` · 14 步**
+
+`runs-on: ubuntu-24.04`（钉住不用 `ubuntu-latest`：后者将于 2026-10-19 迁到 Ubuntu 26，预装的 JDK / SDK 组合会变，而 CI 是这个仓库唯一的自动化护栏）、`timeout-minutes: 60`、`permissions: contents: read`、`concurrency` 组按 `build-<工作流>-<ref>`，**只在 PR 上** `cancel-in-progress`（main 上的构建不取消——半截提交被跳过比多跑一次更麻烦）。
+
+1. `actions/checkout@v7`
+2. `Set up JDK 17`（temurin）
+3. `gradle/actions/setup-gradle@v5`（缓存依赖；PR 上 `cache-read-only`）
+4. `Prepare wrapper for CI`（`sed` 把 `distributionUrl` 换成官方源）
+5. `Ensure Android SDK platform 34, NDK and CMake`（NDK 27.2.12479018 / CMake 3.31.6）
+6. `Fetch llama.cpp v0.5.0`（M4 native source，不入库）
+7. `Lint (Android Lint)` —— `lintOpenDebug`，**退出码直接判定**（不再 `2>&1 | tail -20` 把退出码吞掉，也不加 `--offline`）
+8. `Unit tests + assemble (open & beta)` —— `testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug`
+9. `Set up Python (pip 缓存)` —— 3.12，缓存 `server/requirements.txt`
+10. `Python syntax check (server, 目录级)` —— `python3 -m compileall -q server`
+11. `Server tests (pytest, 目录级发现)` —— `python3 -m pytest server/ -v --tb=short`
+12. `Guard - 隐私与仓库卫生` —— `python3 docs/scripts/privacy_guard.py --forbid-local-secrets`
+13. `Version check` —— `python3 docs/scripts/version_check.py`
+14. `Upload debug APKs` —— `upload-artifact@v7`，两个 debug APK，保留 14 天
+
+**发布：`.github/workflows/release.yml`** —— 推送 `v<version>` 标签触发，`timeout-minutes: 30`、`concurrency` 不取消旧跑。链路：`version_check.py --expect-tag` 校验 tag 与 `versionName` 一致 → 解码 `NOTIFYME_KEYSTORE_BASE64` → `assembleOpenRelease -PrequireReleaseSigning=true`（缺签名直接 `GradleException`）→ `apksigner verify` → 生成 `.sha256` → `gh release create`。需要的 4 个仓库 Secrets：`NOTIFYME_KEYSTORE_BASE64` / `NOTIFYME_KEYSTORE_PASSWORD` / `NOTIFYME_KEY_ALIAS` / `NOTIFYME_KEY_PASSWORD`。**CI 本身不签名。**
 
 **设备安装后的四道授权**（都是系统级手动开关，不能运行时申请）
 
@@ -309,7 +381,13 @@ beta 注入：`DEFAULT_ANALYSIS_PROTOCOL="openai"`、`GLM_BASE_URL`/`GLM_API_KEY
 
 **阶段二 · 三通道上报**（`SyncScheduler` unique `"wechat_sync"`，`NetworkType.CONNECTED`，周期 15/30/60/120 分钟，WorkManager 下限 15 分钟）
 
-`serverUrl` 为空 → `Result.success()` 不发任何请求。`pushEnabled=false` → 记「已跳过：推送开关已关闭（消息继续累积）」，`pending.jsonl` 与分析水位都保持不动，重开后下轮一并补报。
+**隐私门控先于任何通道**（`PrivacyConfig`，三档 `OFF` / `CLOUD_REDACT` / `LOCAL_ONLY`）：`serverUrl` 为空 → `Result.success()` 不发任何请求；`pushEnabled=false` → 记「已跳过：推送开关已关闭（消息继续累积）」，`pending.jsonl` 与分析水位都保持不动，重开后下轮一并补报；`LOCAL_ONLY` → 三通道整体不发送，记「已跳过：仅端侧模式，云端上报整体停用（数据继续留在本机）」；`CLOUD_REDACT` → 各通道在发送一刻替换，分析通道只放行**脱敏态产出**的记录。
+
+**三条必须记住的口径**
+
+1. **上报水位＝「已结算前缀」**（`SyncWatermarkCore.prefixWatermark`）：水位只推进到「本轮被接受 ∪ 本轮新被隔离」的**连续前缀**。中间存在「被拒未隔离 / 未脱敏 / 本轮结论不明（207 清单读不出来）」的**洞**时，水位**停在洞前，绝不越过**——越过的记录 `analyzedAt <= 水位`，扫描会当已同步跳过，**永远补报不了**。全部结算时行为与旧口径一致（推进到最大 `analyzedAt`）。
+2. **413 单独处置**：服务端单条请求体上限 8 MiB，超限的那一条是「毒丸」，重试无用。端上先把批次二分重试（`SyncBatchCore.bisect`），拆到单条仍 413 才单独隔离该条并继续下一批，**不触发整轮 retry**（否则一条毒丸会永久卡住它后面的整条队列）。消息通道把该条记为被拒（`PendingQueue.markRejected`，累计到上限自然清出队列），分析通道直接 `AnalysisStore.quarantineNow` 隔离。
+3. **隐私门控**：被拒 / 未脱敏的条目**不进水位**。`CLOUD_REDACT` 下未脱敏的记录在**扫描层**被跳过（`AnalysisStore.readPending(requireRedacted=true)`），且**不钉住游标**——否则队首那条未脱敏记录会把游标永久钉住，它后面新追加的记录永远读不到、永远不上报。隐私模式一变还会重置水位与扫描偏移（`AnalysisStore.syncPrivacyMode`）。
 
 | 通道 | 目标 | 成功动作 | 失败处置 |
 |---|---|---|---|
@@ -365,28 +443,35 @@ beta 注入：`DEFAULT_ANALYSIS_PROTOCOL="openai"`、`GLM_BASE_URL`/`GLM_API_KEY
 ```powershell
 # 前置：npm i -g @mermaid-js/mermaid-cli（本机已装 11.17.0）
 $d = "docs/architecture/diagrams"
+$mmdc = "$env:APPDATA\npm\mmdc.cmd"
 
-# SVG（可缩放母版）
+# 每张图先 .png 再 .svg
+# -w 12000：视口远大于自然宽度，PNG 落到原生分辨率（既不拉伸也不压缩）
 Get-ChildItem $d -Filter *.mmd | ForEach-Object {
-  & "$env:APPDATA\npm\mmdc.cmd" -i $_.FullName -o ($_.FullName -replace '\.mmd$','.svg') -b white
+  & $mmdc -i $_.FullName -o ($_.FullName -replace '\.mmd$','.png') -b white --scale 1 -w 12000
+  & $mmdc -i $_.FullName -o ($_.FullName -replace '\.mmd$','.svg') -b white
 }
 
-# PNG（原生分辨率：先读 SVG viewBox 宽度，再按该宽度光栅化，避免被默认视口压成小图）
-Get-ChildItem $d -Filter *.svg | ForEach-Object {
-  $n = $_.BaseName
-  $head = (Get-Content $_.FullName -TotalCount 12 -Encoding UTF8) -join " "
-  $vb = [regex]::Match($head,'viewBox="([^"]+)"').Groups[1].Value -split '\s+'
-  $w = [int][math]::Ceiling([double]$vb[2]) + 24
-  & "$env:APPDATA\npm\mmdc.cmd" -i "$d\$n.mmd" -o "$d\$n.png" -b white --scale 1 -w $w
+# 读回真实像素尺寸，回填上方索引表的「尺寸 (px)」列
+Add-Type -AssemblyName System.Drawing
+Get-ChildItem $d -Filter *.png | ForEach-Object {
+  $i = [System.Drawing.Image]::FromFile($_.FullName)
+  "$($_.BaseName)  $($i.Width)x$($i.Height)"
+  $i.Dispose()
 }
 ```
 
-**踩过的两个坑**
+**踩过的三个坑**
 
 1. `classDef call ...` 会解析失败——`call` 是 Mermaid 保留字（CALLBACKNAME）。本图集改用 `llmcall`
 2. sequenceDiagram 的消息文本里**不能出现 ASCII 分号 `;`**（被当成语句分隔符）。改用中文全角 `，` 或 `；`
+3. 不加 `-w` 时 mmdc 会把图压进默认视口（约 800 CSS px 宽），文字完全不可读。这里统一传 `-w 12000`：Mermaid 给 SVG 设了 `max-width: <viewBox 宽>`，视口比自然宽度大时 PNG 落在自然分辨率上。也可以先渲染 SVG 读 `viewBox` 宽，再用 `-w <宽+24>` 精确光栅化，两种做法得到的像素尺寸一致。
 
-另外：不加 `-w` 时 mmdc 会把 SVG 压进默认视口（约 784 CSS px 宽），4000px 宽的图被缩到 1568px，文字完全不可读。**必须显式传 `-w`。**
+**如果 mmdc 起浏览器失败**（Windows 上偶发），加 `--puppeteerConfigFile` 指向一个临时配置，渲染完删掉即可：
+
+```json
+{ "args": ["--no-sandbox"] }
+```
 
 ---
 

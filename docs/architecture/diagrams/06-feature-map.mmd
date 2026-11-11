@@ -1,11 +1,11 @@
 %%{init: {'theme':'base','themeVariables':{'fontSize':'15px','fontFamily':'Microsoft YaHei, PingFang SC, sans-serif'}}}%%
 mindmap
-  root((微信分析助手<br/>v0.1.3 · versionCode 4))
+  root((微信分析助手<br/>v0.3.19 · versionCode 25))
     采集能力
       通知监听 实时增量
         系统官方 NotificationListenerService
         零注入 不 hook 不碰协议
-        过滤 com.tencent.mm
+        按 AppSourceStore 启用集合过滤
         丢弃 ongoing 状态类 聚合摘要
         MessagingStyle 逐条解析发言人
         LRU 去重
@@ -21,15 +21,17 @@ mindmap
         source 标记 a11y-extract
         可中断 stopRequested 每屏检查
       服务端数据库直读 完整历史
-        android_db_extract.py
+        android_db_extract.py 1260 行
         MD5 IMEI 加 uin 前 7 位推导密钥
         AES-CBC 逐页解密 WCDB2
         MuMuManager root shell 加 adb pull
         读 message rcontact chatroom 三表
-        pc_db_extract.py
+        pc_db_extract.py 1122 行
         PC 微信 4.x message_0.db 加 contact.db
         增量游标 state.json 记最大 msgId
         HistorySync 启动回填 6 小时冷却
+        翻页游标 毫秒加 rowid 复合游标
+        MAX_PAGES 20 页安全上限
       手动回复
         MessageReplier RemoteInput 直接回复
         仅用户手动触发的单条回复
@@ -52,6 +54,7 @@ mindmap
         题集 noul choice score 批量 fan-out
         need_action importance due_window topic
         本地模型 MiniCPM4-0.5B-MNN
+        LiteRT 2.2.0 端侧推理
         防御式解析 字段缺失不崩
       fork 3 System 2 深度分析
         升级条件 概率 0.5 或重要度 6 或置信度低于 0.5
@@ -71,13 +74,18 @@ mindmap
         建议类型 prompt watchlist threshold other
         每 7 天周期 或 控制台手动
         纯增量功能 失败不影响主链路
+      调度与扫描内核
+        AnalysisScanCursor 持久化字节游标
+        FULL_PASS_INTERVAL 环形重扫
+        AnalysisScheduleSummary 健康自愈
+        阈值复用 ScheduleSelfHealCore
       端侧模型管理
         ModelScope 直链下载
         Range 断点续传 .part 文件
         dataSync 前台任务
         每 512KB 写进度到 prefs
         杀进程后 onResume 自动重新入队
-        LocalLlmEngine 抽象 当前占位实现
+        LocalLlmEngine 抽象 LayaTfliteEngine 实现
     提醒与触达
       三级降级链
         Level 1 直接写系统日历加 Reminders 行
@@ -92,6 +100,10 @@ mindmap
         中文月日 今天明天后天 周X
         下午晚上加 12 小时
         解析失败回退加 1 小时
+      手动提醒
+        ManualReminderCore 先解析成功再落库
+        EVENT_TIME_PATTERN yyyy-MM-dd HH:mm
+        解析失败不产生僵尸记录
       提醒列表管理
         状态徽标 四种
         待保存可再次唤起
@@ -101,6 +113,19 @@ mindmap
         通道 1 消息 POST /weixin
         通道 2 分析 POST /analysis
         通道 3 顾问 POST /advisor
+      分批与批量上限
+        SyncBatchCore 200 条或 1 MiB 上限
+        413 先二分重试 拆到单条仍 413 才隔离
+        毒丸单独丢弃 不触发整轮 retry
+      水位口径 已结算前缀
+        SyncWatermarkCore prefixWatermark
+        只推进到 被接受 并集 本轮新隔离 的连续前缀
+        遇洞停在洞前 绝不越过
+        被拒未隔离 未脱敏 结论不明 都是洞
+      隐私门控
+        LOCAL_ONLY 三通道整体停用
+        CLOUD_REDACT 未脱敏记录留本机不进水位
+        被拒或未脱敏条目不进水位
       可靠性
         WorkManager 周期下限 15 分钟
         NetworkType.CONNECTED 约束
@@ -131,23 +156,44 @@ mindmap
         后端分析 S1 与 S2
         顾问复盘
         日历提醒
-      二级页面
+      二级页面 共 18 个 Activity
         WatchlistActivity 名单
         ConversationActivity 会话详情加分析面板
         AnalysisListActivity 结果列表 只看待办
+        AnalysisSettingsActivity S1 S2 槽位
         ReminderListActivity 提醒列表
+        ReminderSettingsActivity 提醒开关
         PromptEditActivity 提示词编辑
         ModelListActivity 本地模型管理
         OnboardingActivity 三步向导
+        SourcesActivity 通知来源
+        CaptureActivity 采集自检
+        CaptureDiagnosticsActivity 采集诊断
+        EngineSmokeActivity 引擎冒烟
+        OverlaySettingsActivity 悬浮层
+        PrivacySettingsActivity 隐私模式
+        RedactorPreviewActivity 脱敏预览
+      隐私与脱敏
+        PrivacyConfig 三档 OFF CLOUD_REDACT LOCAL_ONLY
+        RedactorCore 身份证 手机号 姓名等规则
+        RedactorPreviewActivity 规则预览
+        ConvTagCore 会话标签 五态
+        TodoPanelCore 待办面板
       常驻与自愈
         KeepAliveService 前台保活
         60 秒看门狗 requestRebind
         BootReceiver 开机自启
         REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 引导
     服务端与查看端
-      Flask app.py
+      Flask 拆成 4 加 1 模块
+        app.py 684 行 壳 鉴权 控制台路由 落地页
+        util.py 289 行 纯函数 校验 转义 时区
+        storage.py 484 行 SQLite JSONL 顾问存档
+        routes.py 913 行 数据面路由 register
+        console_ui.py 2243 行 控制台前端常量
+      数据面路由
         POST /weixin 接收消息
-        GET /messages 查询
+        GET /messages 查询 翻页游标
         POST /analysis 接收分析
         GET /analysis 查询分析 todo_only
         POST /advisor 接收复盘
@@ -175,6 +221,7 @@ mindmap
       零注入 只用系统公开 API
       消息只存 app 私有目录 卸载即删
       上报默认关闭 需显式开启
+      LOCAL_ONLY 下云端链路整体停用
       open flavor 不注入任何密钥
       beta flavor 从 secrets.local.properties 读
       usesCleartextTraffic 仅为局域网调试
