@@ -643,11 +643,19 @@ class ConversationActivity : Activity() {
         // ---- S2 深分析区 ----
         if (record.escalated) {
             s2Container.visibility = View.VISIBLE
-            tvS2Summary.text = getString(R.string.s2_summary_label) + "：" + record.s2Summary
+            tvS2Summary.text = getString(
+                R.string.s2_summary_line,
+                getString(R.string.s2_summary_label),
+                record.s2Summary
+            )
             if (record.s2DueTime.isNotEmpty()) {
                 tvS2Summary.append("　" + getString(R.string.analysis_due_prefix) + record.s2DueTime)
             }
-            tvS2Action.text = getString(R.string.s2_action_label) + "：" + record.s2SuggestedAction
+            tvS2Action.text = getString(
+                R.string.s2_action_line,
+                getString(R.string.s2_action_label),
+                record.s2SuggestedAction
+            )
             s2TasksContainer.removeAllViews()
             if (record.s2Tasks.isEmpty()) {
                 tvS2TasksTitle.visibility = View.GONE

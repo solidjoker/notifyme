@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">notifyme</string>
     <string name="listener_service_label">微信通知监听器</string>
 
@@ -15,6 +15,10 @@
 
     <!-- 分析结果联动与列表页 -->
     <string name="analysis_label_todo">⚡ 待办</string>
+    <!-- 分析列表行：⚡ 待办 + 摘要 + 截止 + 次数（一次 getString 拼好，避免 setText 拼接告警） -->
+    <string name="analysis_label_todo_item">%1$s %2$s%3$s%4$s</string>
+    <!-- 分析列表行：主题 + 重要度 + 次数 -->
+    <string name="analysis_topic_item">%1$s · %2$s%3$s</string>
     <string name="analysis_due_prefix">截止：</string>
     <string name="analysis_list_title">分析结果</string>
     <string name="btn_open_analysis">查看分析结果</string>
@@ -272,7 +276,7 @@
         <item>JEV</item>
         <item>GLM coding plan</item>
         <item>自定义 OpenAI 兼容</item>
-        <item>本地 MiniCPM5-2B（端侧）</item>
+        <item tools:ignore="TypographyDashes">本地 MiniCPM5-2B（端侧）</item>
     </string-array>
     <string name="s2_baseurl_hint">System 2 服务地址，如 https://open.bigmodel.cn/api/coding/paas/v4</string>
     <string name="s2_apikey_hint">System 2 API 密钥（Bearer）</string>
@@ -281,15 +285,15 @@
 
     <!-- M10 advisor -->
     <string name="ai_review_section_title">AI 评审 · 第二模型复核（可选）</string>
-    <string name="ai_review_section_desc">分析落库前请第二模型复核 S1/S2 结论；连续失败时请它诊断原因。只给建议，不改结论。服务商可选本地模型（MiniCPM5-2B，数据不出端）。</string>
+    <string name="ai_review_section_desc" tools:ignore="TypographyDashes">分析落库前请第二模型复核 S1/S2 结论；连续失败时请它诊断原因。只给建议，不改结论。服务商可选本地模型（MiniCPM5-2B，数据不出端）。</string>
     <string name="ai_review_enabled_switch">启用 AI 评审</string>
     <string name="ai_review_provider_label">服务商</string>
     <!-- 与 AnalysisConfig.ADVISOR_PROVIDER_CLOUD / ADVISOR_PROVIDER_LOCAL 一一对应 -->
     <string-array name="advisor_provider_labels">
         <item>云端服务（OpenAI 兼容）</item>
-        <item>本地 MiniCPM5-2B（端侧）</item>
+        <item tools:ignore="TypographyDashes">本地 MiniCPM5-2B（端侧）</item>
     </string-array>
-    <string name="advisor_local_not_ready_toast">本地模型尚未下载：本页底部「本地模型管理」→ MiniCPM5-2B → 下载（约 1.5 GB，支持断点续传）</string>
+    <string name="advisor_local_not_ready_toast" tools:ignore="TypographyDashes">本地模型尚未下载：本页底部「本地模型管理」→ MiniCPM5-2B → 下载（约 1.5 GB，支持断点续传）</string>
     <string name="ai_review_model_hint">评审模型名（可与主模型不同）</string>
     <string name="btn_test_ai_review_connection">测试 AI 评审连接</string>
 
@@ -297,9 +301,9 @@
     <string name="model_manage_entry">本地模型管理</string>
     <string name="model_page_title">本地模型</string>
     <string name="model_page_desc">端侧推理模型下载到本机后无需联网即可分析。文件较大，建议在 Wi-Fi 下下载；下载支持断点续传，杀进程后回到本页自动继续。模型来源：ModelScope（Qwen / OpenBMB 官方仓）、HuggingFace litert-community（Laya，失败自动切镜像）。</string>
-    <string name="model_s1_name">Qwen2.5-0.5B-Instruct（GGUF Q4_K_M）</string>
+    <string name="model_s1_name" tools:ignore="TypographyDashes">Qwen2.5-0.5B-Instruct（GGUF Q4_K_M）</string>
     <string name="model_s1_role">System 1 轻量判定 · 端侧快筛 · 469 MB</string>
-    <string name="model_s2_name">MiniCPM5-2B（GGUF Q4_K_M）</string>
+    <string name="model_s2_name" tools:ignore="TypographyDashes">MiniCPM5-2B（GGUF Q4_K_M）</string>
     <string name="model_s2_role">System 2 深度分析 · 端侧生成 · ~1.5 GB（128K 上下文 · 支持 Function Call）</string>
     <string name="model_laya_name">Laya-Multilingual（LiteRT TFLite）</string>
     <string name="model_laya_role">System 1 · Laya 端侧判定 · 648 MB（7 文件 · 多语言 · CPU 4 线程）</string>
@@ -379,7 +383,7 @@
     <string name="btn_new_reminder">📅 新建提醒</string>
     <string name="reminder_manual_title">新建提醒</string>
     <string name="reminder_manual_hint_text">提醒内容（必填）</string>
-    <string name="reminder_manual_hint_time">时间（如：明天15:00 / 2026-10-24 14:00）</string>
+    <string name="reminder_manual_hint_time" tools:ignore="TypographyDashes">时间（如：明天15:00 / 2026-10-24 14:00）</string>
     <string name="reminder_manual_pick_time">📅 选时间</string>
     <string name="reminder_manual_lead_label">提前提醒</string>
     <string name="reminder_manual_save">存入日历</string>
@@ -566,8 +570,8 @@
     <string name="analysis_stage_remote">云端分析</string>
     <string name="analysis_stage_saving">整理结果</string>
     <string name="analysis_progress_elapsed">%1$s · 已用 %2$s</string>
-    <string name="analysis_progress_prefill">%1$s %2$d/%3$d token · 已用 %4$s</string>
-    <string name="analysis_progress_decode">%1$s %2$d%% · 已生成 %3$d token · 已用 %4$s</string>
+    <string name="analysis_progress_prefill" tools:ignore="PluralsCandidate">%1$s %2$d/%3$d token · 已用 %4$s</string>
+    <string name="analysis_progress_decode" tools:ignore="PluralsCandidate">%1$s %2$d%% · 已生成 %3$d token · 已用 %4$s</string>
     <string name="analysis_stage_questions">端侧判定</string>
     <string name="analysis_progress_questions">%1$s %2$d/%3$d 题 · 已用 %4$s</string>
     <!-- M21 后台分析进度常驻通知 -->
@@ -582,4 +586,21 @@
     <string name="onboarding_icon_party">🎉</string>
     <string name="conv_tag_icon">🏷</string>
     <string name="conv_reminder_icon">📅</string>
+
+    <!-- 悬浮卡片（OverlayService）：标题「来源 · 会话」、正文「发送者: 内容」 -->
+    <string name="overlay_card_title">%1$s · %2$s</string>
+    <string name="overlay_card_content">%1$s: %2$s</string>
+
+    <!-- 拼接文案统一走资源占位符（SetTextI18n）：所有 setText 文本必须来自资源 -->
+    <string name="analysis_sender_line">%1$s · %2$s</string>
+    <string name="analysis_prob_fmt">need_action %1$.0f%%</string>
+    <string name="listener_status_line">%1$s\n%2$s</string>
+    <string name="analysis_run_progress">🔄 %1$s</string>
+    <string name="keepalive_status_line">%1$s\n%2$s</string>
+    <string name="s2_summary_line">%1$s：%2$s</string>
+    <string name="s2_action_line">%1$s：%2$s</string>
+    <string name="reminder_time_line">事件时间 %1$s ｜ 创建于 %2$s</string>
+    <string name="reminder_no_time">无时间</string>
+    <string name="sources_pkg_a11y">%1$s · 直读</string>
+    <string name="analysis_due_line">%1$s%2$s</string>
 </resources>

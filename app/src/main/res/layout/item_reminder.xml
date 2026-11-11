@@ -62,43 +62,40 @@
         android:orientation="horizontal">
 
         <Button
+            style="@style/AppButtonSecondary"
             android:id="@+id/btnRemindAgain"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
-            android:background="@drawable/btn_secondary"
             android:minHeight="0dp"
             android:paddingStart="16dp"
             android:paddingEnd="16dp"
             android:text="@string/reminder_action_reopen"
-            android:textColor="@color/text_primary"
             android:textSize="12sp"
             android:visibility="gone" />
 
         <Button
+            style="@style/AppButtonSecondary"
             android:id="@+id/btnRemindRetry"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:layout_marginStart="8dp"
-            android:background="@drawable/btn_secondary"
             android:minHeight="0dp"
             android:paddingStart="16dp"
             android:paddingEnd="16dp"
             android:text="@string/reminder_action_retry"
-            android:textColor="@color/text_primary"
             android:textSize="12sp"
             android:visibility="gone" />
 
         <Button
+            style="@style/AppButtonSecondaryAccent"
             android:id="@+id/btnRemindDelete"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:layout_marginStart="8dp"
-            android:background="@drawable/btn_secondary"
             android:minHeight="0dp"
             android:paddingStart="16dp"
             android:paddingEnd="16dp"
             android:text="@string/reminder_action_delete"
-            android:textColor="@color/accent_orange"
             android:textSize="12sp" />
     </LinearLayout>
 

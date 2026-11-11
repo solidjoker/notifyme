@@ -32,14 +32,13 @@
         android:visibility="gone" />
 
     <Button
+        style="@style/AppButtonSecondary"
         android:id="@+id/btnEditPrompt"
         android:layout_width="wrap_content"
         android:layout_height="36dp"
-        android:background="@drawable/btn_secondary"
         android:minHeight="0dp"
         android:paddingStart="12dp"
         android:paddingEnd="12dp"
         android:text="@string/btn_edit_prompt"
-        android:textColor="@color/text_primary"
         android:textSize="12sp" />
 </LinearLayout>

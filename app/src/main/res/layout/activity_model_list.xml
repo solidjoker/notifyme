@@ -97,6 +97,7 @@
                     android:orientation="horizontal">
 
                     <Button
+                        style="@style/AppButtonDefault"
                         android:id="@+id/btnModelS1Action"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
@@ -104,6 +105,7 @@
                         android:text="@string/model_btn_download" />
 
                     <Button
+                        style="@style/AppButtonDefault"
                         android:id="@+id/btnModelS1Delete"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
@@ -161,6 +163,7 @@
                     android:orientation="horizontal">
 
                     <Button
+                        style="@style/AppButtonDefault"
                         android:id="@+id/btnModelS2Action"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
@@ -168,6 +171,7 @@
                         android:text="@string/model_btn_download" />
 
                     <Button
+                        style="@style/AppButtonDefault"
                         android:id="@+id/btnModelS2Delete"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
@@ -225,6 +229,7 @@
                 android:orientation="horizontal">
 
                 <Button
+                    style="@style/AppButtonDefault"
                     android:id="@+id/btnModelLayaAction"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
@@ -232,6 +237,7 @@
                     android:text="@string/model_btn_download" />
 
                 <Button
+                    style="@style/AppButtonDefault"
                     android:id="@+id/btnModelLayaDelete"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"

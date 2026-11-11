@@ -20,40 +20,34 @@
         android:visibility="gone" />
 
     <!-- 对方（左侧）气泡行 -->
+    <!-- 对方（左侧）气泡行：竖向容器直接放「发言人小字 + 气泡」，去掉多余的一层嵌套 -->
     <LinearLayout
         android:id="@+id/llOther"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
+        android:gravity="start"
+        android:orientation="vertical">
 
-        <LinearLayout
-            android:layout_width="0dp"
+        <!-- 群聊发言人小字（私聊隐藏） -->
+        <TextView
+            android:id="@+id/tvSender"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:gravity="start"
-            android:orientation="vertical">
+            android:layout_marginStart="4dp"
+            android:layout_marginBottom="2dp"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp" />
 
-            <!-- 群聊发言人小字（私聊隐藏） -->
-            <TextView
-                android:id="@+id/tvSender"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="4dp"
-                android:layout_marginBottom="2dp"
-                android:textColor="@color/text_secondary"
-                android:textSize="11sp" />
-
-            <TextView
-                android:id="@+id/tvBubbleOther"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="48dp"
-                android:background="@drawable/bg_bubble_other"
-                android:padding="10dp"
-                android:textColor="@color/text_primary"
-                android:textIsSelectable="true"
-                android:textSize="15sp" />
-        </LinearLayout>
+        <TextView
+            android:id="@+id/tvBubbleOther"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="48dp"
+            android:background="@drawable/bg_bubble_other"
+            android:padding="10dp"
+            android:textColor="@color/text_primary"
+            android:textIsSelectable="true"
+            android:textSize="15sp" />
     </LinearLayout>
 
     <!-- 我方（右侧）气泡行：通知监听只捕获他人消息，当前不会有我方消息，

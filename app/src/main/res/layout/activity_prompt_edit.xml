@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 会话级自定义提示词编辑页：标题栏（返回+会话名）+ 说明 + 3 个内置模板按钮 + 多行编辑框 + 保存/清除 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical">
@@ -62,42 +63,42 @@
             android:orientation="horizontal">
 
             <Button
+                style="@style/AppButtonSecondary"
                 android:id="@+id/btnTemplate1"
                 android:layout_width="0dp"
                 android:layout_height="40dp"
                 android:layout_weight="1"
-                android:background="@drawable/btn_secondary"
                 android:minHeight="0dp"
                 android:text="@string/prompt_template_1_label"
-                android:textColor="@color/text_primary"
                 android:textSize="12sp" />
 
             <Button
+                style="@style/AppButtonSecondary"
                 android:id="@+id/btnTemplate2"
                 android:layout_width="0dp"
                 android:layout_height="40dp"
                 android:layout_marginStart="8dp"
                 android:layout_weight="1"
-                android:background="@drawable/btn_secondary"
                 android:minHeight="0dp"
                 android:text="@string/prompt_template_2_label"
-                android:textColor="@color/text_primary"
                 android:textSize="12sp" />
 
             <Button
+                style="@style/AppButtonSecondary"
                 android:id="@+id/btnTemplate3"
                 android:layout_width="0dp"
                 android:layout_height="40dp"
                 android:layout_marginStart="8dp"
                 android:layout_weight="1"
-                android:background="@drawable/btn_secondary"
                 android:minHeight="0dp"
                 android:text="@string/prompt_template_3_label"
-                android:textColor="@color/text_primary"
                 android:textSize="12sp" />
         </LinearLayout>
 
+        <!-- 编辑框用 layout_weight 撑满剩余高度：外层内容容器已带 weight（占满屏幕剩余高度），
+             拆掉任一层权重都会让编辑框塌陷成 0 高，故保留嵌套权重并显式豁免 NestedWeights -->
         <EditText
+            tools:ignore="NestedWeights"
             android:id="@+id/etPrompt"
             android:layout_width="match_parent"
             android:layout_height="0dp"
@@ -120,26 +121,24 @@
             android:orientation="horizontal">
 
             <Button
+                style="@style/AppButtonPrimary"
                 android:id="@+id/btnSavePrompt"
                 android:layout_width="0dp"
                 android:layout_height="46dp"
                 android:layout_weight="1"
-                android:background="@drawable/btn_primary"
                 android:minHeight="0dp"
                 android:text="@string/prompt_edit_save"
-                android:textColor="@color/card_bg"
                 android:textSize="14sp" />
 
             <Button
+                style="@style/AppButtonDanger"
                 android:id="@+id/btnClearPrompt"
                 android:layout_width="0dp"
                 android:layout_height="46dp"
                 android:layout_marginStart="8dp"
                 android:layout_weight="1"
-                android:background="@drawable/btn_danger"
                 android:minHeight="0dp"
                 android:text="@string/prompt_edit_clear"
-                android:textColor="@color/card_bg"
                 android:textSize="14sp" />
         </LinearLayout>
     </LinearLayout>

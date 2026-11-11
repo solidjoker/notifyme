@@ -63,17 +63,16 @@
             android:visibility="gone" />
 
         <Button
+            style="@style/AppButtonSecondary"
             android:id="@+id/btnOpenApp"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
-            android:background="@drawable/btn_secondary"
             android:minHeight="0dp"
             android:minWidth="0dp"
             android:paddingStart="12dp"
             android:paddingEnd="12dp"
             android:text="@string/open_source_app"
-            android:textColor="@color/text_primary"
             android:textSize="12sp" />
     </LinearLayout>
 
@@ -209,14 +208,13 @@
                     android:visibility="gone" />
 
                 <Button
+                    style="@style/AppButtonPrimary"
                     android:id="@+id/btnAnalyzeThis"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="10dp"
-                    android:background="@drawable/btn_primary"
                     android:minHeight="0dp"
                     android:text="@string/btn_analyze_this"
-                    android:textColor="@color/card_bg"
                     android:textSize="14sp" />
 
                 <!-- M15 端侧分析实时阶段：prefill/decode token 进度 + 已用时间 -->
@@ -241,14 +239,13 @@
 
                 <!-- M17 会话内自建提醒：写系统日历 + 提前量，无日历时降级 -->
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnNewReminder"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="10dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/btn_new_reminder"
-                    android:textColor="@color/text_primary"
                     android:textSize="14sp" />
 
                 <!-- M19 会话标签：一眼看出该会话之后还会不会被自动分析，点击换档 -->
@@ -304,6 +301,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:paddingStart="0dp"
                         android:paddingEnd="8dp"
                         android:text="@string/conv_schedule_interval"
                         android:textColor="@color/text_secondary"
@@ -347,17 +345,16 @@
             android:textSize="14sp" />
 
         <Button
+            style="@style/AppButtonPrimary"
             android:id="@+id/btnQuickReplySend"
             android:layout_width="wrap_content"
             android:layout_height="44dp"
             android:layout_marginStart="8dp"
-            android:background="@drawable/btn_primary"
             android:minHeight="0dp"
             android:minWidth="0dp"
             android:paddingStart="16dp"
             android:paddingEnd="16dp"
             android:text="@string/quick_reply_send"
-            android:textColor="@color/card_bg"
             android:textSize="14sp" />
     </LinearLayout>
 

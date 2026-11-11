@@ -35,30 +35,28 @@
         android:orientation="horizontal">
 
         <Button
+            style="@style/AppButtonSecondary"
             android:id="@+id/btnCardDismiss"
             android:layout_width="wrap_content"
             android:layout_height="40dp"
-            android:background="@drawable/btn_secondary"
             android:minHeight="0dp"
             android:minWidth="0dp"
             android:paddingStart="14dp"
             android:paddingEnd="14dp"
             android:text="@string/overlay_card_dismiss"
-            android:textColor="@color/text_primary"
             android:textSize="12sp" />
 
         <Button
+            style="@style/AppButtonSecondaryBrand"
             android:id="@+id/btnCardOpen"
             android:layout_width="wrap_content"
             android:layout_height="40dp"
             android:layout_marginStart="8dp"
-            android:background="@drawable/btn_secondary"
             android:minHeight="0dp"
             android:minWidth="0dp"
             android:paddingStart="14dp"
             android:paddingEnd="14dp"
             android:text="@string/overlay_card_open"
-            android:textColor="@color/brand_green"
             android:textSize="12sp" />
     </LinearLayout>
 </LinearLayout>

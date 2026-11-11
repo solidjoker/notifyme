@@ -181,24 +181,35 @@ class AnalysisListActivity : Activity() {
 
             holder.tvConversation.text = record.conversation
             // 发送者行复用为主题行：主题 + 重要度（S1 判定要点）
-            holder.tvSender.text = localizeTopic(ctx, record.s1Topic) +
-                " · " + ctx.getString(R.string.chip_importance, record.s1Importance)
+            holder.tvSender.text = ctx.getString(
+                R.string.analysis_sender_line,
+                localizeTopic(ctx, record.s1Topic),
+                ctx.getString(R.string.chip_importance, record.s1Importance)
+            )
             // 摘要：S2 深分析摘要优先，否则给 S1 判定概率
             holder.tvSummary.text = if (record.escalated) record.s2Summary
-            else "need_action %.0f%%".format(record.s1NeedActionProb * 100)
+            else ctx.getString(R.string.analysis_prob_fmt, record.s1NeedActionProb * 100)
             // 截止：S2 具体时间优先，其次 S1 截止桶（none 不显示）
             val dueText = record.s2DueTime.ifEmpty {
                 localizeDueWindow(ctx, record.s1DueWindow)
             }
             if (dueText.isNotEmpty() && dueText != ctx.getString(R.string.due_none)) {
                 holder.tvDue.visibility = View.VISIBLE
-                holder.tvDue.text = ctx.getString(R.string.analysis_due_prefix) + dueText
+                holder.tvDue.text = ctx.getString(
+                    R.string.analysis_due_line,
+                    ctx.getString(R.string.analysis_due_prefix),
+                    dueText
+                )
             } else {
                 holder.tvDue.visibility = View.GONE
             }
             // 正文行：S2 建议动作优先，否则窗口规模说明
             holder.tvText.text = if (record.escalated && record.s2SuggestedAction.isNotEmpty()) {
-                ctx.getString(R.string.s2_action_label) + "：" + record.s2SuggestedAction
+                ctx.getString(
+                    R.string.s2_action_line,
+                    ctx.getString(R.string.s2_action_label),
+                    record.s2SuggestedAction
+                )
             } else {
                 ctx.getString(R.string.msg_count, record.messageCount)
             }

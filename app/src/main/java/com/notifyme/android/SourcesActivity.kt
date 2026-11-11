@@ -189,8 +189,11 @@ class SourcesActivity : Activity() {
             holder.name.text = row.label
             holder.name.isChecked = row.enabled
             // 副标题：包名；支持无障碍直读的加「直读」标记（目前只有微信）
-            val a11y = if (row.canA11y) " · 直读" else ""
-            holder.pkg.text = row.pkg + a11y
+            holder.pkg.text = if (row.canA11y) {
+                holder.pkg.context.getString(R.string.sources_pkg_a11y, row.pkg)
+            } else {
+                row.pkg
+            }
             holder.name.setOnClickListener {
                 onToggle(row.pkg, !row.enabled)
             }

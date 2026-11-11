@@ -23,13 +23,12 @@
         android:orientation="vertical" />
 
     <Button
+        style="@style/AppButtonSecondaryBrand"
         android:id="@+id/btnPanelOpenApp"
         android:layout_width="match_parent"
         android:layout_height="42dp"
         android:layout_marginTop="10dp"
-        android:background="@drawable/btn_secondary"
         android:minHeight="0dp"
         android:text="@string/overlay_panel_open_app"
-        android:textColor="@color/brand_green"
         android:textSize="13sp" />
 </LinearLayout>

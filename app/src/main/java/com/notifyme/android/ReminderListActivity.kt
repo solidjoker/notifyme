@@ -183,12 +183,17 @@ class ReminderListActivity : Activity() {
             holder.status.text = ctx.getString(labelRes)
             holder.status.setBackgroundResource(bgRes)
 
+            val itemCtx = holder.time.context
             val eventText = if (record.eventTime > 0) {
                 timeFormat.format(Date(record.eventTime))
             } else {
-                "无时间"
+                itemCtx.getString(R.string.reminder_no_time)
             }
-            holder.time.text = "事件时间 $eventText ｜ 创建于 ${timeFormat.format(Date(record.createdAt))}"
+            holder.time.text = itemCtx.getString(
+                R.string.reminder_time_line,
+                eventText,
+                timeFormat.format(Date(record.createdAt))
+            )
             holder.note.text = record.note
 
             // 操作按钮：按状态出现

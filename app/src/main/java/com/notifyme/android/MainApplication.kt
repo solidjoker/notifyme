@@ -9,6 +9,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 
@@ -37,17 +38,21 @@ class MainApplication : Application() {
         // DEBUG 包自检通道：adb 广播触发无障碍直读的「开始提取」，
         // 配合服务的 DEBUG 本 App 监听，可在没有微信会话时验证采集引擎端到端链路
         if (BuildConfig.DEBUG) {
-            registerReceiver(
-                object : BroadcastReceiver() {
-                    override fun onReceive(context: Context, intent: Intent) {
-                        Log.i("MainApplication", "收到 A11Y_DEBUG_START 广播，置位开始提取")
-                        A11yExtractService.requestStart(packageName)
-                    }
-                },
-                IntentFilter("$packageName.A11Y_DEBUG_START"),
-                // 仅本机 adb（shell uid 有特权）自检用，不对其他 App 开放
-                Context.RECEIVER_NOT_EXPORTED
-            )
+            val debugFilter = IntentFilter("$packageName.A11Y_DEBUG_START")
+            val debugReceiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    if (intent.action != "$packageName.A11Y_DEBUG_START") return
+                    Log.i("MainApplication", "收到 A11Y_DEBUG_START 广播，置位开始提取")
+                    A11yExtractService.requestStart(packageName)
+                }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // API 33+ 显式标注「不导出」：仅本 App 能收到
+                registerReceiver(debugReceiver, debugFilter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                // API 26–32 无该标志：action 带包名前缀 + 仅 DEBUG 包注册，收敛足够
+                registerReceiver(debugReceiver, debugFilter)
+            }
         }
     }
 

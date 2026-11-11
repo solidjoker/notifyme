@@ -94,6 +94,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:paddingStart="0dp"
                         android:paddingEnd="8dp"
                         android:text="@string/s1_type_label"
                         android:textColor="@color/text_secondary"
@@ -209,6 +210,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:paddingStart="0dp"
                         android:paddingEnd="8dp"
                         android:text="@string/s2_provider_label"
                         android:textColor="@color/text_secondary"
@@ -261,14 +263,13 @@
                     android:textSize="14sp" />
 
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnTestS2Connection"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="8dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/btn_test_s2_connection"
-                    android:textColor="@color/text_primary"
                     android:textSize="13sp" />
 
                 <!-- M10 advisor 分组：第二模型评审（只建议，不落库） -->
@@ -307,6 +308,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:paddingStart="0dp"
                         android:paddingEnd="8dp"
                         android:text="@string/ai_review_provider_label"
                         android:textColor="@color/text_secondary"
@@ -359,14 +361,13 @@
                     android:textSize="14sp" />
 
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnTestAdvisorConnection"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="8dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/btn_test_ai_review_connection"
-                    android:textColor="@color/text_primary"
                     android:textSize="13sp" />
 
                 <LinearLayout
@@ -378,6 +379,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:paddingStart="0dp"
                         android:paddingEnd="8dp"
                         android:text="@string/sync_interval_label"
                         android:textColor="@color/text_secondary"
@@ -397,60 +399,55 @@
                     android:orientation="horizontal">
 
                     <Button
+                        style="@style/AppButtonPrimary"
                         android:id="@+id/btnSaveAnalysis"
                         android:layout_width="0dp"
                         android:layout_height="46dp"
                         android:layout_weight="1"
-                        android:background="@drawable/btn_primary"
                         android:minHeight="0dp"
                         android:text="@string/btn_save_analysis"
-                        android:textColor="@color/card_bg"
                         android:textSize="13sp" />
 
                     <Button
+                        style="@style/AppButtonSecondary"
                         android:id="@+id/btnTestConnection"
                         android:layout_width="0dp"
                         android:layout_height="46dp"
                         android:layout_marginStart="8dp"
                         android:layout_weight="1"
-                        android:background="@drawable/btn_secondary"
                         android:minHeight="0dp"
                         android:text="@string/btn_test_connection"
-                        android:textColor="@color/text_primary"
                         android:textSize="13sp" />
                 </LinearLayout>
 
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnAnalysisNow"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="8dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/btn_analysis_now"
-                    android:textColor="@color/text_primary"
                     android:textSize="13sp" />
 
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnOpenAnalysis"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="8dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/btn_open_analysis"
-                    android:textColor="@color/text_primary"
                     android:textSize="13sp" />
 
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnOpenModels"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="8dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/model_manage_entry"
-                    android:textColor="@color/text_primary"
                     android:textSize="13sp" />
 
                 <TextView
@@ -508,14 +505,13 @@
                     android:textSize="14sp" />
 
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnAdvisorNow"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="8dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/btn_advisor_now"
-                    android:textColor="@color/text_primary"
                     android:textSize="13sp" />
 
                 <TextView

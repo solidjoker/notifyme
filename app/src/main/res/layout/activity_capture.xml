@@ -79,26 +79,24 @@
                     android:orientation="horizontal">
 
                     <Button
+                        style="@style/AppButtonPrimary"
                         android:id="@+id/btnConsoleGrant"
                         android:layout_width="0dp"
                         android:layout_height="46dp"
                         android:layout_weight="1"
-                        android:background="@drawable/btn_primary"
                         android:minHeight="0dp"
                         android:text="@string/btn_go_grant"
-                        android:textColor="@color/card_bg"
                         android:textSize="13sp" />
 
                     <Button
+                        style="@style/AppButtonSecondary"
                         android:id="@+id/btnReopenOnboarding"
                         android:layout_width="0dp"
                         android:layout_height="46dp"
                         android:layout_marginStart="8dp"
                         android:layout_weight="1"
-                        android:background="@drawable/btn_secondary"
                         android:minHeight="0dp"
                         android:text="@string/btn_reopen_onboarding"
-                        android:textColor="@color/text_primary"
                         android:textSize="13sp" />
                 </LinearLayout>
             </LinearLayout>
@@ -129,36 +127,33 @@
                     android:textSize="12sp" />
 
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnOpenWatchlist"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="12dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/btn_open_watchlist"
-                    android:textColor="@color/text_primary"
                     android:textSize="13sp" />
 
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnOpenSources"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="10dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/btn_open_sources"
-                    android:textColor="@color/text_primary"
                     android:textSize="13sp" />
 
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnOpenDiagnostics"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="10dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/diagnostics_title"
-                    android:textColor="@color/text_primary"
                     android:textSize="13sp" />
             </LinearLayout>
 
@@ -224,6 +219,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:paddingStart="0dp"
                         android:paddingEnd="8dp"
                         android:text="@string/sync_interval_label"
                         android:textColor="@color/text_secondary"
@@ -243,26 +239,24 @@
                     android:orientation="horizontal">
 
                     <Button
+                        style="@style/AppButtonPrimary"
                         android:id="@+id/btnSaveSync"
                         android:layout_width="0dp"
                         android:layout_height="46dp"
                         android:layout_weight="1"
-                        android:background="@drawable/btn_primary"
                         android:minHeight="0dp"
                         android:text="@string/btn_save_sync"
-                        android:textColor="@color/card_bg"
                         android:textSize="13sp" />
 
                     <Button
+                        style="@style/AppButtonSecondary"
                         android:id="@+id/btnSyncNow"
                         android:layout_width="0dp"
                         android:layout_height="46dp"
                         android:layout_marginStart="8dp"
                         android:layout_weight="1"
-                        android:background="@drawable/btn_secondary"
                         android:minHeight="0dp"
                         android:text="@string/btn_sync_now"
-                        android:textColor="@color/text_primary"
                         android:textSize="13sp" />
                 </LinearLayout>
 
@@ -301,14 +295,13 @@
                     android:textSize="12sp" />
 
                 <Button
+                    style="@style/AppButtonPrimary"
                     android:id="@+id/btnExtractNow"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="12dp"
-                    android:background="@drawable/btn_primary"
                     android:minHeight="0dp"
                     android:text="@string/btn_extract_now"
-                    android:textColor="@color/card_bg"
                     android:textSize="13sp" />
 
                 <Switch
@@ -385,14 +378,13 @@
                 </LinearLayout>
 
                 <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnA11yPermission"
                     android:layout_width="match_parent"
                     android:layout_height="46dp"
                     android:layout_marginTop="12dp"
-                    android:background="@drawable/btn_secondary"
                     android:minHeight="0dp"
                     android:text="@string/btn_a11y_permission"
-                    android:textColor="@color/text_primary"
                     android:textSize="13sp" />
 
                 <LinearLayout
@@ -402,26 +394,24 @@
                     android:orientation="horizontal">
 
                     <Button
+                        style="@style/AppButtonPrimary"
                         android:id="@+id/btnA11yStart"
                         android:layout_width="0dp"
                         android:layout_height="46dp"
                         android:layout_weight="1"
-                        android:background="@drawable/btn_primary"
                         android:minHeight="0dp"
                         android:text="@string/btn_a11y_start"
-                        android:textColor="@color/card_bg"
                         android:textSize="13sp" />
 
                     <Button
+                        style="@style/AppButtonDanger"
                         android:id="@+id/btnA11yStop"
                         android:layout_width="0dp"
                         android:layout_height="46dp"
                         android:layout_marginStart="8dp"
                         android:layout_weight="1"
-                        android:background="@drawable/btn_danger"
                         android:minHeight="0dp"
                         android:text="@string/btn_a11y_stop"
-                        android:textColor="@color/card_bg"
                         android:textSize="13sp" />
                 </LinearLayout>
 

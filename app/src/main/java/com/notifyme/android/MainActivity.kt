@@ -376,7 +376,7 @@ class MainActivity : Activity() {
     private val batchActionCallback = object : android.view.ActionMode.Callback {
         override fun onCreateActionMode(mode: android.view.ActionMode, menu: Menu): Boolean {
             menu.add(0, MENU_BATCH_DELETE, 0, R.string.batch_delete_action)
-                .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+                .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
             return true
         }
 
@@ -1380,15 +1380,24 @@ class MainActivity : Activity() {
                     val due = if (dueText.isNotEmpty() && dueText != "none") {
                         " · " + ctx.getString(R.string.analysis_due_prefix) + dueText
                     } else ""
-                    holder.tvAnalysis.text =
-                        ctx.getString(R.string.analysis_label_todo) + " " + summary + due + suffix
+                    holder.tvAnalysis.text = ctx.getString(
+                        R.string.analysis_label_todo_item,
+                        ctx.getString(R.string.analysis_label_todo),
+                        summary,
+                        due,
+                        suffix
+                    )
                 }
                 else -> {
                     holder.tvAnalysis.visibility = View.VISIBLE
                     holder.tvAnalysis.setBackgroundResource(R.drawable.bg_tag_analyzed)
                     holder.tvAnalysis.setTextColor(ctx.getColor(R.color.text_secondary))
-                    holder.tvAnalysis.text = topicLabel(ctx, analysis.s1Topic) + " · " +
-                        ctx.getString(R.string.chip_importance, analysis.s1Importance) + suffix
+                    holder.tvAnalysis.text = ctx.getString(
+                        R.string.analysis_topic_item,
+                        topicLabel(ctx, analysis.s1Topic),
+                        ctx.getString(R.string.chip_importance, analysis.s1Importance),
+                        suffix
+                    )
                 }
             }
         }
