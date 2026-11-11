@@ -267,4 +267,86 @@ class PendingQueueCoreTest {
         assertTrue(dataFile.readText().contains("a11y-extract"))
         assertEquals("a11y-extract", core.readAll().single().message.source)
     }
+
+    // ---------------- 被拒计数与丢弃上限（报告外发现第 1 条） ----------------
+
+    @Test
+    fun `markRejected 累计被拒次数并写回文件`() {
+        core.append(msg("a", 1_000L))
+        core.append(msg("b", 2_000L))
+
+        val dropped = core.markRejected(setOf(1L), 5_000L)
+
+        assertEquals("未达上限不该丢弃", emptySet<Long>(), dropped)
+        val entry = core.readAll().first { it.id == 1L }
+        assertEquals(1, entry.rejectedCount)
+        assertEquals(5_000L, entry.firstRejectedAt)
+        assertTrue(
+            "被拒计数必须落盘（否则进程重启后计数归零，永远丢不掉僵尸条目）",
+            dataFile.readText().contains("\"rejected_count\":1")
+        )
+        assertEquals("没被拒的条目不受影响", 0, core.readAll().first { it.id == 2L }.rejectedCount)
+    }
+
+    @Test
+    fun `markRejected 累计达到上限即丢弃该条`() {
+        core.append(msg("a", 1_000L))
+        core.append(msg("b", 2_000L))
+
+        core.markRejected(setOf(1L), 1_000L)
+        core.markRejected(setOf(1L), 2_000L)
+        val dropped = core.markRejected(setOf(1L), 3_000L)
+
+        assertEquals(setOf(1L), dropped)
+        assertEquals(listOf(2L), core.readAll().map { it.id })
+    }
+
+    @Test
+    fun `markRejected 未知 id 不影响现有条目`() {
+        core.append(msg("a", 1_000L))
+
+        val dropped = core.markRejected(setOf(99L), 1_000L)
+
+        assertEquals(emptySet<Long>(), dropped)
+        assertEquals(1, core.readAll().size)
+    }
+
+    @Test
+    fun `pruneExpiredRejected 清理过期被拒条目且保留未被拒条目`() {
+        core.append(msg("a", 1_000L))
+        core.append(msg("b", 2_000L))
+        core.markRejected(setOf(1L), 1_000L)
+
+        // 还没到 7 天窗口：一条都不能清
+        assertEquals(
+            emptySet<Long>(),
+            core.pruneExpiredRejected(1_000L + PendingRejectCore.REJECT_TTL_MS - 1L)
+        )
+        assertEquals(2, core.readAll().size)
+
+        // 过了窗口：被拒过的 a 被清掉，从未被拒的 b 保留
+        val expired = core.pruneExpiredRejected(1_000L + PendingRejectCore.REJECT_TTL_MS)
+        assertEquals(setOf(1L), expired)
+        assertEquals(listOf(2L), core.readAll().map { it.id })
+    }
+
+    @Test
+    fun `PendingMessage 被拒字段序列化往返且老数据缺省为 0`() {
+        val entry = PendingMessage(
+            id = 7L,
+            message = msg("明天开会", 1_700_000_000_000L),
+            rejectedCount = 2,
+            firstRejectedAt = 1_234L
+        )
+        val json = entry.toJson()
+
+        assertEquals(2, json.optInt("rejected_count"))
+        assertEquals(1_234L, json.optLong("first_rejected_at"))
+        assertEquals(entry, PendingMessage.fromJson(json))
+
+        // 升级前写的老行没有这两个字段 -> 按 0 处理，不崩
+        val legacy = PendingMessage.fromJson(msg("老数据", 1_000L).toJson())
+        assertEquals(0, legacy.rejectedCount)
+        assertEquals(0L, legacy.firstRejectedAt)
+    }
 }
