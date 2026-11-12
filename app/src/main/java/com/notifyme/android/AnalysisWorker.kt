@@ -248,8 +248,10 @@ class AnalysisWorker(
         val watchedRaw = WatchlistStore.getWatched(applicationContext)
         var skippedByTag = 0
         var skippedUnwatched = 0
-        val byConversation = MessageStore.readRecent(applicationContext, 500)
-            .groupBy { it.convKey }
+        // 候选窗口按会话分组取（每会话各自保留最近 CandidateWindowCore.PER_CONV 条）：
+        // 旧写法是跨会话的 readRecent(500).groupBy{convKey}，几个群刷满窗口，
+        // 安静但有待办的会话就不进候选（与详情页 / 日历 / 回看原文同源，第四处）。
+        val byConversation = MessageStore.candidateGroups(applicationContext)
 
         // M12：范围里的「对象多选」。用户点名了会话 = 显式范围（与 forceKey 同口径），
         // 跳过名单/标签门禁；但 caseId 去重只有手动轮才放开 —— 周期任务若也跳，
