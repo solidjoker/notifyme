@@ -504,6 +504,12 @@
     <string name="section_watchlist">⭐ 重点关注 %1$d</string>
     <string name="section_others">其它会话 %1$d</string>
     <string name="search_no_result">没有匹配的会话或消息</string>
+    <string name="app_filter_all">全部</string>
+    <string name="app_filter_cleared">已显示全部来源</string>
+    <string name="app_filter_selected">已筛选：%1$s</string>
+    <string name="app_filter_empty">这个来源下暂时没有会话</string>
+    <string name="app_filter_desc">按来源 App 筛选会话</string>
+    <string name="app_filter_chip_desc">来源 %1$s</string>
     <string name="header_badge_todo">⚡%1$d</string>
     <string name="header_badge_analyzed">●</string>
 
