@@ -25,9 +25,13 @@
 
 ---
 
-## 0. 现状快照（代码级事实，规划的前提）
+## 0. M0 前基线快照（历史记录，**不是**当前状态）
 
-| 维度 | 现状 | 证据 |
+> 这张表是 2026-10 制定路线时记录的 M0 前基线，作为「为什么要有 M0/M1」的论据保留，**已不再反映当前代码**。
+> 当前状态见本文档开头的「现状速查（2026-11 对齐）」表，以及 docs/architecture/README.md 的当前行数与模块清单。
+> 端侧推理一行尤其过期：`UnavailableLocalLlmEngine` 早已换成 `LlamaCppEngine`（`forModel` 已实现，S1 可全离线跑通）。
+
+| 维度 | 现状（M0 前基线） | 证据 |
 |---|---|---|
 | 版本 | versionName `0.1.3` / versionCode `4`（五项需求 + 包名精简后未升版） | `app/build.gradle.kts:29-30` |
 | flavor | `open`（零预置）/ `beta`（`secrets.local.properties` 注入，`applicationIdSuffix=.test`） | `app/build.gradle.kts:38-68` |
@@ -58,7 +62,7 @@
 | **M1 测试与质量地基** | — | 存储/队列/解析层有 JVM 单测，后续改 schema 不怕炸用户数据 | M0(CI) | 1–2 天 | 低 |
 | **M2 跨应用通知管理** | #2 | 从「微信专用」变成「任意 App 通知」，schema v2 + 应用源注册表 | M1 | 3–5 天 | 中 |
 | **M3 隐私脱敏** | #4 | 云端分析前可端侧脱敏，用户看得见脱敏了什么 | M1 | 2–3 天 | 中低 |
-| **M4 端侧推理引擎** | #6 | 把 `UnavailableLocalLlmEngine` 换成真引擎，S1 全离线跑通 | M1、决策 D3 | 5–10 天 | **高** |
+| **M4 端侧推理引擎** ✅ | #6 | 把 `UnavailableLocalLlmEngine` 换成真引擎，S1 全离线跑通（已完成：`LlamaCppEngine` + `LocalLlmEngines.forModel` 落地，评测记录见 `docs/评测-云端vs端侧S1.md`） | M1、决策 D3 | 5–10 天 | **高** |
 | **M5 iOS 端** | #1（需重述） | 原生 SwiftUI 查看端 + 提醒推送（**不是**本地捕获，iOS 做不到） | M0、决策 D4 | 5–8 天 | 中高（外部账号） |
 | **M6 UI 优化** | #5 | 大会话性能、可读性、多端适配 | — | 2–4 天 | 低 |
 | **M7 通知之外的信息融入** | #3 | 自己发出的消息等旁路数据入库并参与分析 | M2 | 3–5 天 | 中 |
@@ -234,7 +238,7 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
 3. [x] 准入判定：`ActivityManager.memoryInfo` + `Build.SUPPORTED_ABIS` → S2（2.47 GB）仅在 8 GB+ RAM 且 arm64 时开放，否则引擎工厂返回带理由的不可用引擎（`LocalDeviceCapabilities`）
 4. [x] `LocalLlmEngines.releaseAll()` 接 `MainApplication.onTrimMemory`（≥MODERATE）/`onLowMemory`
 5. [x] `ModelDownloadWorker`/`ModelListActivity`：断点续传校验、下载失败重试文案 —— 复核（2026-10-05）确认已全部落地：`.part` + `Range` 续传且 206/200 兜底（`ModelDownloadWorker.kt` `downloadFile`）、按预期字节数最终校验（`doWork` 尾部 `bad` 过滤）、`runAttemptCount<1` 退避重试；UI 侧 `ModelListActivity.onResume` 杀进程自动续传检测、`model_status_error_resume`/`model_status_partial`/`model_btn_retry`/`model_no_space` 文案齐备（`strings.xml:266-279`）。`testOpenDebugUnitTest --rerun-tasks` 绕缓存真实执行 243 全绿，双 flavor assemble 通过
-6. [ ] 分析质量对比：同一批会话，云端 vs 端侧 S1 判定一致率、S2 摘要可用性，写进 `docs/` 评测记录
+6. [x] 分析质量对比：同一批会话，云端 vs 端侧 S1 判定一致率、S2 摘要可用性，写进 `docs/` 评测记录 → [docs/评测-云端vs端侧S1.md](评测-云端vs端侧S1.md)（S1 两侧已量化；S2 摘要可用性待真机端侧采集后补）
 
 验收：飞行模式下 S1 分析全流程走通并出 ⚡ 标记；引擎不可用时降级文案正确、不崩；评测记录有真实数字。
 

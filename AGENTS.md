@@ -39,6 +39,16 @@ python docs/scripts/privacy_guard.py                        # 隐私守卫自查
 python docs/scripts/version_check.py                       # 版本号自查（--expect-tag v0.3.19）
 ```
 
+S1 判定质量评测（云端 vs 端侧，见 `docs/评测-云端vs端侧S1.md`）：
+
+```powershell
+# 配置写 app/build/eval/eval.properties（app/build 被 .gitignore 忽略，端点与 key 不入库）
+Remove-Item -Recurse -Force app\build\test-results\testOpenDebugUnitTest -ErrorAction SilentlyContinue
+.\gradlew.bat --no-build-cache testOpenDebugUnitTest --tests 'com.notifyme.android.S1EvalHttpTest' --console=plain
+```
+
+**必须先删 test-results 再加 `--no-build-cache`**：否则 Gradle 判 UP-TO-DATE，评测根本不执行（改 properties 不算 task input，cleanTest 是 no-op）。
+
 ### 一条命令自检（开 PR 前跑这个）
 
 ```powershell

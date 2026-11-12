@@ -1,0 +1,401 @@
+{
+  "version": 1,
+  "note": "人工标注的合成样本，非真机采集；仅用于云端 vs 端侧 S1 判定口径对比",
+  "cases": [
+    {
+      "conversation": "老板",
+      "pkg": "com.tencent.mm",
+      "isGroup": false,
+      "expect": {
+        "need_action": true,
+        "importance": 7,
+        "due_window": "tomorrow",
+        "topic": "work_task"
+      },
+      "messages": [
+        {
+          "sender": "对方",
+          "text": "明天上午十点开会，材料你准备一下",
+          "timestamp": 1762761600000
+        },
+        {
+          "sender": "我",
+          "text": "好的",
+          "timestamp": 1762761660000
+        }
+      ]
+    },
+    {
+      "conversation": "朋友",
+      "pkg": "com.tencent.mm",
+      "isGroup": false,
+      "expect": {
+        "need_action": false,
+        "importance": 1,
+        "due_window": "none",
+        "topic": "smalltalk"
+      },
+      "messages": [
+        {
+          "sender": "对方",
+          "text": "哈哈哈昨天那个视频太搞笑了",
+          "timestamp": 1762761700000
+        },
+        {
+          "sender": "我",
+          "text": "是吧",
+          "timestamp": 1762761760000
+        }
+      ]
+    },
+    {
+      "conversation": "产品群",
+      "pkg": "com.tencent.mm",
+      "isGroup": true,
+      "expect": {
+        "need_action": true,
+        "importance": 6,
+        "due_window": "today",
+        "topic": "work_task"
+      },
+      "messages": [
+        {
+          "sender": "产品经理",
+          "text": "今天下班前把接口文档给我",
+          "timestamp": 1762761800000
+        },
+        {
+          "sender": "我",
+          "text": "收到",
+          "timestamp": 1762761860000
+        }
+      ]
+    },
+    {
+      "conversation": "张三",
+      "pkg": "com.tencent.mm",
+      "isGroup": false,
+      "expect": {
+        "need_action": false,
+        "importance": 2,
+        "due_window": "none",
+        "topic": "work_task"
+      },
+      "messages": [
+        {
+          "sender": "我",
+          "text": "我明天把方案发你",
+          "timestamp": 1762761900000
+        },
+        {
+          "sender": "对方",
+          "text": "好",
+          "timestamp": 1762761960000
+        }
+      ]
+    },
+    {
+      "conversation": "表情包",
+      "pkg": "com.tencent.mm",
+      "isGroup": false,
+      "expect": {
+        "need_action": false,
+        "importance": 0,
+        "due_window": "none",
+        "topic": "smalltalk"
+      },
+      "messages": [
+        {
+          "sender": "对方",
+          "text": "[微笑]",
+          "timestamp": 1762762000000
+        },
+        {
+          "sender": "对方",
+          "text": "[旺柴]",
+          "timestamp": 1762762060000
+        },
+        {
+          "sender": "对方",
+          "text": "[捂脸]",
+          "timestamp": 1762762120000
+        }
+      ]
+    },
+    {
+      "conversation": "优惠通知",
+      "pkg": "com.tencent.mm",
+      "isGroup": false,
+      "expect": {
+        "need_action": false,
+        "importance": 1,
+        "due_window": "none",
+        "topic": "notice"
+      },
+      "messages": [
+        {
+          "sender": "对方",
+          "text": "限时优惠券领取点击链接 http://example.com/a",
+          "timestamp": 1762762200000
+        }
+      ]
+    },
+    {
+      "conversation": "客户",
+      "pkg": "com.tencent.mm",
+      "isGroup": false,
+      "expect": {
+        "need_action": true,
+        "importance": 8,
+        "due_window": "today",
+        "topic": "risk"
+      },
+      "messages": [
+        {
+          "sender": "对方",
+          "text": "你们再不给答复我们就投诉到监管",
+          "timestamp": 1762762300000
+        }
+      ]
+    },
+    {
+      "conversation": "李四",
+      "pkg": "com.tencent.mm",
+      "isGroup": false,
+      "expect": {
+        "need_action": true,
+        "importance": 6,
+        "due_window": "this_week",
+        "topic": "schedule"
+      },
+      "messages": [
+        {
+          "sender": "对方",
+          "text": "周会改到周五下午三点了",
+          "timestamp": 1762762400000
+        }
+      ]
+    },
+    {
+      "conversation": "部门群",
+      "pkg": "com.tencent.mm",
+      "isGroup": true,
+      "expect": {
+        "need_action": true,
+        "importance": 6,
+        "due_window": "today",
+        "topic": "work_task"
+      },
+      "messages": [
+        {
+          "sender": "总监",
+          "text": "@所有人 今天五点前把周报发群里",
+          "timestamp": 1762762500000
+        }
+      ]
+    },
+    {
+      "conversation": "妈妈",
+      "pkg": "com.tencent.mm",
+      "isGroup": false,
+      "expect": {
+        "need_action": true,
+        "importance": 5,
+        "due_window": "today",
+        "topic": "notice"
+      },
+      "messages": [
+        {
+          "sender": "对方",
+          "text": "下班记得买菜",
+          "timestamp": 1762762600000
+        }
+      ]
+    },
+    {
+      "conversation": "快递",
+      "pkg": "com.tencent.mm",
+      "isGroup": false,
+      "expect": {
+        "need_action": true,
+        "importance": 4,
+        "due_window": "today",
+        "topic": "notice"
+      },
+      "messages": [
+        {
+          "sender": "对方",
+          "text": "您的快递已到驿站，取件码 8-2-3",
+          "timestamp": 1762762700000
+        }
+      ]
+    },
+    {
+      "conversation": "行政",
+      "pkg": "com.tencent.mm",
+      "isGroup": false,
+      "expect": {
+        "need_action": true,
+        "importance": 5,
+        "due_window": "this_week",
+        "topic": "work_task"
+      },
+      "messages": [
+        {
+          "sender": "对方",
+          "text": "本周五前提交报销单",
+          "timestamp": 1762762800000
+        }
+      ]
+    },
+    {
+      "conversation": "系统通知",
+      "pkg": "com.tencent.mm",
+      "isGroup": false,
+      "expect": {
+        "need_action": false,
+        "importance": 0,
+        "due_window": "none",
+        "topic": "notice"
+      },
+      "messages": [
+        {
+          "sender": "对方",
+          "text": "验证码 123456，5 分钟内有效",
+          "timestamp": 1762762900000
+        }
+      ]
+    },
+    {
+      "conversation": "王五",
+      "pkg": "com.tencent.mm",
+      "isGroup": false,
+      "expect": {
+        "need_action": false,
+        "importance": 1,
+        "due_window": "none",
+        "topic": "smalltalk"
+      },
+      "messages": [
+        {
+          "sender": "对方",
+          "text": "收到",
+          "timestamp": 1762763000000
+        }
+      ]
+    },
+    {
+      "conversation": "HR",
+      "pkg": "com.tencent.mm",
+      "isGroup": false,
+      "expect": {
+        "need_action": true,
+        "importance": 6,
+        "due_window": "tomorrow",
+        "topic": "schedule"
+      },
+      "messages": [
+        {
+          "sender": "对方",
+          "text": "面试改到明天下午两点，地址不变",
+          "timestamp": 1762763100000
+        }
+      ]
+    },
+    {
+      "conversation": "银行",
+      "pkg": "com.tencent.mm",
+      "isGroup": false,
+      "expect": {
+        "need_action": true,
+        "importance": 7,
+        "due_window": "later",
+        "topic": "notice"
+      },
+      "messages": [
+        {
+          "sender": "对方",
+          "text": "您有一笔账单将在 11 月 25 日到期还款",
+          "timestamp": 1762763200000
+        }
+      ]
+    },
+    {
+      "conversation": "业主群",
+      "pkg": "com.tencent.mm",
+      "isGroup": true,
+      "expect": {
+        "need_action": true,
+        "importance": 3,
+        "due_window": "today",
+        "topic": "notice"
+      },
+      "messages": [
+        {
+          "sender": "邻居",
+          "text": "今晚八点投票选业委会成员",
+          "timestamp": 1762763300000
+        }
+      ]
+    },
+    {
+      "conversation": "老同学",
+      "pkg": "com.tencent.mm",
+      "isGroup": false,
+      "expect": {
+        "need_action": false,
+        "importance": 1,
+        "due_window": "none",
+        "topic": "smalltalk"
+      },
+      "messages": [
+        {
+          "sender": "对方",
+          "text": "好久不见，最近怎么样",
+          "timestamp": 1762763400000
+        }
+      ]
+    },
+    {
+      "conversation": "赵六",
+      "pkg": "com.tencent.mm",
+      "isGroup": false,
+      "expect": {
+        "need_action": false,
+        "importance": 2,
+        "due_window": "none",
+        "topic": "smalltalk"
+      },
+      "messages": [
+        {
+          "sender": "对方",
+          "text": "有空聊",
+          "timestamp": 1762763500000
+        }
+      ]
+    },
+    {
+      "conversation": "项目群",
+      "pkg": "com.tencent.mm",
+      "isGroup": true,
+      "expect": {
+        "need_action": true,
+        "importance": 7,
+        "due_window": "this_week",
+        "topic": "work_task"
+      },
+      "messages": [
+        {
+          "sender": "甲方",
+          "text": "这版需求本周五前必须确认，不然上线要延",
+          "timestamp": 1762763600000
+        },
+        {
+          "sender": "我",
+          "text": "我们内部对一下",
+          "timestamp": 1762763660000
+        }
+      ]
+    }
+  ]
+}
