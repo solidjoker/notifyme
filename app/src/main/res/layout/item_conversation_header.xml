@@ -115,6 +115,18 @@
             android:textSize="14sp" />
     </LinearLayout>
 
+    <!-- 搜索命中提示（⚡ 命中分析结论 / 命中来源 App / 命中消息内容）
+         未搜索或只命中会话名时隐藏：会话名就在标题上，再提示一遍是噪音。 -->
+    <TextView
+        android:id="@+id/tvHitHint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:singleLine="true"
+        android:textColor="@color/accent_orange"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
     <!-- 最新一条预览：折叠时也有信息量 -->
     <TextView
         android:id="@+id/tvPreview"
