@@ -977,7 +977,12 @@ def query_queue():
     """
     查询排队任务（按更新时间倒序，最新的在前）。
     参数：device_id（可选）、state（可选）、limit（默认 200，上限 500）
-    返回：{"ok": true, "tasks": [...], "summary": {...}}
+    返回：{"ok": true, "tasks": [...], "summary": {...}, "devices": [...]}
+
+    devices 是「库里出现过哪几台设备」的清单（device_id / total / active），
+    它统计的是全库，不受 device_id / state / limit 过滤影响 —— 
+    过滤只影响 tasks 与 summary 的计数口径。
+    summary.devices = len(devices)，即库里一共几台设备。
     """
     import app as app_module
     import storage as storage_module
@@ -1008,7 +1013,13 @@ def query_queue():
         task_state = task.get("state")
         if task_state in storage_module.QUEUE_STATES:
             summary[task_state] += 1
-    return jsonify({"ok": True, "tasks": tasks, "summary": summary})
+
+    # 设备维度清单：回答「有哪几台设备」，统计全库（不过滤 device_id/state），
+    # 与 tasks 的过滤口径解耦 —— 前端既能列设备，也能筛某台设备看它的任务。
+    devices = storage_module.queue_devices()
+    summary["devices"] = len(devices)
+    return jsonify({"ok": True, "tasks": tasks, "summary": summary,
+                    "devices": devices})
 
 def register(app):
     """把数据面路由挂载到 Flask 应用（endpoint 名与拆分前一致）。"""

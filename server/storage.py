@@ -531,7 +531,16 @@ QUEUE_DETAIL_MAX_LEN = 512
 # 枚举值：kind 决定控制台怎么分组，state 决定徽标颜色。
 # 只认这几个值：端升级后新增的枚举一律拒收，不让未知值进库污染 summary 计数。
 QUEUE_KINDS = ("analysis", "sync", "model", "other")
-QUEUE_STATES = ("queued", "running", "failed", "done")
+# 单个状态先起名、再组元组：「哪些状态算在跑」直接引用常量，
+# 别处不再写一遍状态字符串，枚举改动只改这一处。
+QUEUE_STATE_QUEUED = "queued"
+QUEUE_STATE_RUNNING = "running"
+QUEUE_STATE_FAILED = "failed"
+QUEUE_STATE_DONE = "done"
+QUEUE_STATES = (QUEUE_STATE_QUEUED, QUEUE_STATE_RUNNING,
+                QUEUE_STATE_FAILED, QUEUE_STATE_DONE)
+# 「在跑」= 排队中 + 运行中（设备维度汇总用）。
+QUEUE_ACTIVE_STATES = (QUEUE_STATE_QUEUED, QUEUE_STATE_RUNNING)
 
 
 def _normalize_queue_task(item, max_ts_ms):
@@ -704,5 +713,46 @@ def query_queue_tasks(device_id=None, state=None, limit=QUEUE_DEFAULT_LIMIT):
             "stale": (now_ms - updated_at) > QUEUE_TTL_MS,
         })
     return tasks
+
+
+def queue_devices():
+    """统计库里出现过哪几台设备（回答「有哪几台设备」）。
+
+    返回：[{"device_id": str, "total": int, "active": int}, ...]
+    - total ：该设备在队列表里的总条数（含各种状态）
+    - active：其中 state 为排队中 / 运行中的条数（还在跑的）
+    排序：active 倒序 -> total 倒序 -> device_id 升序（结果稳定可复现）。
+
+    一条 SQL 搞定分组聚合：按 device_id 分组，COUNT(*) 给总数，
+    SUM(CASE WHEN state IN (...) THEN 1 ELSE 0 END) 给在跑数。
+    「在跑」判定引用模块常量 QUEUE_ACTIVE_STATES（queued / running），
+    不另写一份状态字面量。
+    """
+    import app as app_module
+    placeholders = ",".join("?" * len(QUEUE_ACTIVE_STATES))
+    sql = (
+        "SELECT device_id, COUNT(*) AS total, "
+        "SUM(CASE WHEN state IN (%s) THEN 1 ELSE 0 END) AS active "
+        "FROM queue_tasks GROUP BY device_id "
+        "ORDER BY active DESC, total DESC, device_id ASC" % placeholders)
+    params = list(QUEUE_ACTIVE_STATES)
+    conn = app_module._connect()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError as e:
+        # 表还没建（老库没跑过 init_db）：当「没有设备」，不抛异常
+        if "no such table" in str(e).lower():
+            return []
+        raise
+    finally:
+        conn.close()
+    devices = []
+    for row in rows:
+        devices.append({
+            "device_id": row[0],
+            "total": int(row[1] or 0),
+            "active": int(row[2] or 0),
+        })
+    return devices
 
 

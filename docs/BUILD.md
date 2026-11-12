@@ -261,9 +261,9 @@ Android 单测 + 双 flavor 构建 + Lint，并额外汇总 Lint 报告里的 is
 │   ├── storage.py              # 存储层（SQLite、JSONL 存档、顾问存档、排队任务表、抽库后台）
 │   ├── routes.py               # 数据面路由（/weixin、/messages、/analysis、/advisor、/admin/extract、/queue）
 │   ├── console_ui.py           # 内嵌 PWA 控制台前端（HTML/CSS/JS，5 个 Tab，无外部依赖）
-│   ├── console_classify.js     # 控制台归类规则单一事实源（UMD：浏览器 + node 共用，node 可单测）
+│   ├── console_classify.js     # 控制台归类规则单一事实源（UMD：浏览器 + node 共用，node 可单测；含会话两级分组 groupMessages 与设备分组 groupQueueTasksByDevice）
 │   ├── android_db_extract.py / pc_db_extract.py / gen_icons.py  # 本地库提取与图标脚本
-│   └── test_*.py               # 服务端 pytest 用例
+│   └── test_*.py               # 服务端 pytest 用例（含 test_queue_contract.py 端云字段契约守卫）
 ├── docs/
 │   ├── BUILD.md                # 本文件
 │   ├── ROADMAP.md              # 里程碑 M0–M8、工作量、风险与决策门

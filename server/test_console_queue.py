@@ -81,3 +81,49 @@ def test_queue_empty_state_registered():
 def test_service_worker_lets_queue_go_to_network():
     assert "/queue" in SW, "Service Worker 必须放行 /queue，否则会命中离线兜底分支"
     assert "indexOf('/queue') >= 0" in SW, "Service Worker 放行条件写错"
+
+
+def test_group_dimension_switcher_exists():
+    assert 'data-action="conv-dim"' in HTML, "缺少会话内二级归类维度切换"
+    assert "function convDimBar(" in HTML, "缺少 convDimBar"
+    assert "function setConvGroupDim(" in HTML, "缺少 setConvGroupDim"
+
+
+def test_group_dimension_is_persisted():
+    assert "wx_group_v1" in HTML, "维度选择没有持久化键"
+    assert "LS.set('wx_group_v1'" in HTML, "维度切换没有写回 localStorage"
+
+
+def test_group_dimension_uses_rules_layer():
+    assert "CC.groupMessages" in HTML, "会话分组没有走规则层"
+    assert "function groupMsgsByDim(" in HTML, "缺少 groupMsgsByDim"
+    assert "function convGroupHtml(" in HTML, "缺少 convGroupHtml"
+
+
+def test_group_dimension_aligns_date_to_local_midnight():
+    assert "function dayStartMs(" in HTML, "日期分组必须按当天零点对齐"
+    assert "dayStartMs(m && m.timestamp)" in HTML, "getTs 没有走当天零点对齐"
+
+
+def test_group_dimension_falls_back_when_rules_missing():
+    assert "if (!CC || !CC.groupMessages) return null;" in HTML, "规则层缺失没有降级出口"
+
+
+def test_group_reuses_collapse_event_delegation():
+    assert 'data-action="toggle"' in HTML, "折叠组没有复用事件委托"
+    assert "aria-expanded=" in HTML, "折叠组缺少 aria-expanded"
+
+
+def test_queue_device_filter_exists():
+    assert 'data-action="queue-device"' in HTML, "缺少排队设备筛选"
+    assert "function setQueueDevice(" in HTML, "缺少 setQueueDevice"
+    assert "var QUEUE_DEVICES" in HTML, "缺少 QUEUE_DEVICES 状态"
+
+
+def test_queue_devices_come_from_api_response():
+    assert "devices: r.devices || []" in HTML, "fetchQueue 没带设备清单"
+    assert "QUEUE_DEVICES = (res[3] && res[3].devices) || [];" in HTML, "load() 没落地设备清单"
+
+
+def test_queue_device_filter_applies_to_list():
+    assert "if (QUEUE_DEVICE) {" in HTML, "设备筛选没有生效到列表"

@@ -1314,6 +1314,11 @@ var QUEUE = [];        // 端上排队任务（GET /queue）
 var QUEUE_SUMMARY = null;  // 排队汇总：running/queued/failed/done/stale/total
 var QUEUE_ERR = '';    // 排队接口不可用时的说明（只提示，不影响其它数据）
 var QUEUE_STATE = '';  // 排队 tab 的状态筛选（空 = 全部）
+var QUEUE_DEVICE = '';   // 排队 tab 的设备筛选（空 = 全部设备）
+var QUEUE_DEVICES = [];  // 设备清单（GET /queue 响应里的 devices 字段）
+// 会话卡内的二级归类维度：date（按日期，默认）/ sender（按发送者）；持久化到 localStorage
+var CONV_GROUP_DIM = 'date';
+try { var _gd = LS.get('wx_group_v1'); if (_gd === 'sender' || _gd === 'date') CONV_GROUP_DIM = _gd; } catch (e) { }
 var HAS_DATA = false;  // 是否至少成功加载过一次（决定骨架占位还是真实数字）
 var THEME_KEY = 'wx_theme_v1';
 
@@ -1655,8 +1660,11 @@ function renderOverview() {
   if (sTodo) sTodo.textContent = sk ? '加载中…' : ('当前筛选下 ' + todos.length + ' 条');
   var sQueue = $('ov-queue-sub');
   if (sQueue) {
+    var devN = QUEUE_DEVICES.length;
     sQueue.textContent = sk ? '加载中…' :
-      (queueActiveCount() ? (queueActiveCount() + ' 个任务排队或运行中') : '当前没有排队任务');
+      (queueActiveCount()
+        ? (queueActiveCount() + ' 个任务排队或运行中' + (devN ? (' · ' + devN + ' 台设备') : ''))
+        : (devN ? ('当前没有排队任务 · ' + devN + ' 台设备') : '当前没有排队任务'));
   }
   var sFail = $('ov-fail-sub');
   if (sFail) {
@@ -1714,7 +1722,7 @@ async function fetchAnaPage(before, signal) {
 // 排队任务（端上 WorkManager 队列 + 待同步消息队列）
 async function fetchQueue(signal) {
   var r = await api('queue?limit=200', { signal: signal });
-  return { items: r.tasks || [], summary: r.summary || null };
+  return { items: r.tasks || [], summary: r.summary || null, devices: r.devices || [] };
 }
 // 由当前 ANALYSES 重建派生索引：同一复合会话保留 received_at 最新的一条待办
 function rebuildDerived() {
@@ -1787,7 +1795,7 @@ async function load(reason) {
       // 排队任务单独兜底：接口缺失或报错只影响「排队」tab，不能让整个控制台失败
       fetchQueue(ctrl.signal).catch(function (e) {
         if (e && e.kind === 'abort') throw e;
-        return { items: [], summary: null, err: (e && e.message) ? e.message : '排队任务接口不可用' };
+        return { items: [], summary: null, devices: [], err: (e && e.message) ? e.message : '排队任务接口不可用' };
       })
     ]);
     // 旧响应后到 -> 丢弃，不能覆盖新数据
@@ -1802,6 +1810,7 @@ async function load(reason) {
     QUEUE = (res[3] && res[3].items) || [];
     QUEUE_SUMMARY = (res[3] && res[3].summary) || null;
     QUEUE_ERR = (res[3] && res[3].err) || '';
+    QUEUE_DEVICES = (res[3] && res[3].devices) || [];
     AUTH_MODE = false;
     HAS_DATA = true;
     // 「未读分析」= 上次同步之后才到达的分析（首次同步时全部算新增）
@@ -2111,6 +2120,8 @@ function handleAction(action, btn) {
   if (action === 'clear-search') { clearSearch(); return; }
   if (action === 'clear-app') { clearAppFilter(); return; }
   if (action === 'queue-filter') { setQueueState(btn.getAttribute('data-state') || ''); return; }
+  if (action === 'queue-device') { setQueueDevice(btn.getAttribute('data-device') || ''); return; }
+  if (action === 'conv-dim') { setConvGroupDim(btn.getAttribute('data-dim') || 'date'); return; }
 }
 function bindDelegation() {
   var data = $('data');
@@ -2211,6 +2222,8 @@ function renderConvs() {
     else rest.push(item);
   });
   var out = [];
+  // 会话卡内的二级归类维度切换（按日期 / 按发送者）
+  out.push({ key: 'conv-dim', html: convDimBar(), full: true });
   if (!watch.length && !rest.length) {
     out.push({ key: 'conv-empty', html: emptyStateFor('conv'), full: true });
     out.push({ key: 'conv-note', html: refreshNote(), full: true });
@@ -2261,6 +2274,84 @@ function renderConvs() {
   return out;
 }
 
+// ---------- 会话卡内的二级归类维度（按日期 / 按发送者） ----------
+// 维度选择持久化到 localStorage（wx_group_v1），刷新后保持
+function setConvGroupDim(dim) {
+  CONV_GROUP_DIM = (dim === 'sender') ? 'sender' : 'date';
+  try { LS.set('wx_group_v1', CONV_GROUP_DIM); } catch (e) { }
+  renderData();
+}
+function convDimBar() {
+  var dims = [['date', '按日期'], ['sender', '按发送者']];
+  var html = '<div class="chips" role="group" aria-label="会话内二级归类维度">';
+  dims.forEach(function (d) {
+    html += '<button type="button" class="chip-btn" aria-pressed="' +
+      (CONV_GROUP_DIM === d[0] ? 'true' : 'false') +
+      '" data-action="conv-dim" data-dim="' + d[0] + '">' + esc(d[1]) + '</button>';
+  });
+  html += '</div>';
+  html += '<p class="q-note">会话展开后先按「' +
+    (CONV_GROUP_DIM === 'sender' ? '发送者' : '日期') + '」分组，再按次级维度细分。</p>';
+  return html;
+}
+// 当天零点（本地时区）：规则层按这个值分日期组，
+// 保证同一天的消息落进同一组（传原始毫秒会一条一个组）
+function dayStartMs(ms) {
+  var d = new Date(Number(ms) || 0);
+  if (isNaN(d.getTime())) return 0;
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+// 二级分组统一走规则层；规则层缺失时返回 null，由调用方降级成平铺
+function groupMsgsByDim(msgs, dim) {
+  if (!CC || !CC.groupMessages) return null;
+  var list = msgs || [];
+  var getTs = function (m) { return dayStartMs(m && m.timestamp); };
+  var getSender = function (m) { return (m && m.sender != null) ? String(m.sender) : ''; };
+  var groups = null;
+  try {
+    groups = CC.groupMessages(list, dim, getTs, getSender);
+  } catch (e) {
+    try { groups = CC.groupMessages(list, dim, getTs); } catch (e2) { groups = null; }
+  }
+  if (!groups || !groups.length) return null;
+  for (var i = 0; i < groups.length; i++) {
+    var g = groups[i];
+    if (!g || g.key == null || !g.items) return null;
+  }
+  return groups;
+}
+// 一级/二级折叠组共用渲染：g = {key, dim, name, ts, count, items, children}
+function convGroupHtml(baseKey, g) {
+  var gkey = baseKey + '|' + g.key;
+  var egk = encKey(gkey);
+  var gOpen = !!COLLAPSE[gkey];
+  var isSender = (g.dim === 'sender');
+  var headCls = isSender ? 'sender-head' : 'date-head';
+  var bodyCls = isSender ? 'sender-body' : 'date-body';
+  var nameCls = isSender ? 'sender-name' : 'conv-name';
+  var label = isSender ? esc(g.name || '未知发送者') :
+    (g.ts ? esc(fmtDate(g.ts)) : esc(g.name || ''));
+  var cnt = (g.count == null) ? (g.items || []).length : g.count;
+  var html = '<button type="button" class="' + headCls + '" aria-expanded="' +
+    (gOpen ? 'true' : 'false') + '" data-action="toggle" data-key="' + egk + '"' +
+    ' data-head="' + egk + '" aria-controls="panel-' + egk + '"' +
+    ' aria-label="' + esc((isSender ? '发送者 ' : '日期 ') + (g.name || label) + '，' + cnt + ' 条消息') + '">' +
+    '<span class="caret" data-caret="' + egk + '" aria-hidden="true">' + (gOpen ? '▾' : '▸') + '</span>' +
+    '<span class="' + nameCls + '">' + label + '</span>' +
+    '<span class="conv-count">' + cnt + ' 条</span></button>' +
+    '<div class="' + bodyCls + '" id="panel-' + egk + '" data-panel="' + egk + '"' +
+    (gOpen ? '' : ' hidden') + '>';
+  var kids = g.children || [];
+  if (kids.length) {
+    kids.forEach(function (c) { html += convGroupHtml(gkey, c); });
+  } else {
+    (g.items || []).forEach(function (m) { html += msgHtml(m); });
+  }
+  html += '</div>';
+  return html;
+}
+
 // 单条消息的 HTML（会话卡内复用）
 function msgHtml(m) {
   var badges = (m.is_group ? '<span class="badge b-grp">群</span>' : '') +
@@ -2307,52 +2398,18 @@ function renderConvCard(item) {
     '<div class="msg-list" id="panel-' + ek + '" data-panel="' + ek + '"' +
     (open ? '' : ' hidden') + '>';
   if (todo) html += renderAnalysisBlock(todo);
-  // 二级折叠组：按日期分组（list 已按时间倒序，日期组同样倒序）；
-  // 日期组内若有多个人说话，再分三级（发送者）折叠组
-  var byDate = {}, dOrder = [];
-  list.forEach(function (m) {
-    var d = dateKey(m.timestamp);
-    if (!byDate[d]) { byDate[d] = []; dOrder.push(d); }
-    byDate[d].push(m);
-  });
-  dOrder.forEach(function (d) {
-    var dkey = key + '|' + d;
-    var edk = encKey(dkey);
-    var dOpen = !!COLLAPSE[dkey];
-    var dayMsgs = byDate[d];
-    html += '<button type="button" class="date-head" aria-expanded="' +
-      (dOpen ? 'true' : 'false') + '" data-action="toggle" data-key="' + edk + '"' +
-      ' data-head="' + edk + '" aria-controls="panel-' + edk + '">' +
-      '<span class="caret" data-caret="' + edk + '" aria-hidden="true">' + (dOpen ? '▾' : '▸') + '</span>' +
-      '<span class="conv-name">' + esc(fmtDate(dayMsgs[0].timestamp)) + '</span>' +
-      '<span class="conv-count">' + dayMsgs.length + ' 条</span></button>' +
-      '<div class="date-body" id="panel-' + edk + '" data-panel="' + edk + '"' +
-      (dOpen ? '' : ' hidden') + '>';
-    // 三级折叠组：日期组里发送者超过一个才分组（单人会话保持平铺，不啰嗦）
-    var senders = groupMsgsBySender(dayMsgs);
-    if (senders && senders.length > 1) {
-      senders.forEach(function (g) {
-        // 折叠 key：<会话key>|<日期键>|<发送者key>，复用日期组同一套事件委托
-        var skey = dkey + '|' + g.key;
-        var esk = encKey(skey);
-        var sOpen = !!COLLAPSE[skey];
-        html += '<button type="button" class="sender-head" aria-expanded="' +
-          (sOpen ? 'true' : 'false') + '" data-action="toggle" data-key="' + esk + '"' +
-          ' data-head="' + esk + '" aria-controls="panel-' + esk + '"' +
-          ' aria-label="' + esc('发送者 ' + g.name + '，' + g.count + ' 条消息') + '">' +
-          '<span class="caret" data-caret="' + esk + '" aria-hidden="true">' + (sOpen ? '▾' : '▸') + '</span>' +
-          '<span class="sender-name">' + esc(g.name) + '</span>' +
-          '<span class="conv-count">· ' + g.count + ' 条</span></button>' +
-          '<div class="sender-body" id="panel-' + esk + '" data-panel="' + esk + '"' +
-          (sOpen ? '' : ' hidden') + '>';
-        g.messages.forEach(function (m) { html += msgHtml(m); });
-        html += '</div>';
-      });
-    } else {
-      dayMsgs.forEach(function (m) { html += msgHtml(m); });
-    }
-    html += '</div>';
-  });
+  // 二级折叠组：维度可切换（默认按日期，可切成按发送者）。
+  // 分组与排序统一走规则层（console_classify.js 的 groupMessages），
+  // 规则层缺失时降级成平铺消息（不抛异常、不产生坏 DOM）。
+  var dim = (CONV_GROUP_DIM === 'sender') ? 'sender' : 'date';
+  var dimGroups = groupMsgsByDim(list, dim);
+  if (dimGroups) {
+    dimGroups.forEach(function (g) {
+      html += convGroupHtml(key, g);
+    });
+  } else {
+    list.forEach(function (m) { html += msgHtml(m); });
+  }
   return html + '</div></div>';
 }
 
@@ -2708,11 +2765,19 @@ function setQueueState(st) {
   QUEUE_STATE = st || '';
   renderData();
 }
+// 设备筛选（多台设备时才出现）
+function setQueueDevice(d) {
+  QUEUE_DEVICE = d || '';
+  renderData();
+}
 function filteredQueues() {
   var q = QUERY.trim().toLowerCase();
   var out = QUEUE.slice();
   if (QUEUE_STATE) {
     out = out.filter(function (t) { return (t.state || '') === QUEUE_STATE; });
+  }
+  if (QUEUE_DEVICE) {
+    out = out.filter(function (t) { return (t.device_id || '') === QUEUE_DEVICE; });
   }
   if (q) {
     out = out.filter(function (t) {
@@ -2760,6 +2825,20 @@ function queueFilterBar() {
       '" data-action="queue-filter" data-state="' + st + '">' + esc(meta.label) + ' ' + esc(cnt) + '</button>';
   });
   html += '</div>';
+  // 设备筛选：只有一台设备时不给切换入口（筛了等于没筛），多台才显示
+  if (QUEUE_DEVICES.length > 1) {
+    html += '<div class="chips" role="group" aria-label="按设备筛选">';
+    html += '<button type="button" class="chip-btn" aria-pressed="' + (QUEUE_DEVICE ? 'false' : 'true') +
+      '" data-action="queue-device" data-device="">全部设备</button>';
+    QUEUE_DEVICES.forEach(function (d) {
+      var did = (d && d.device_id != null) ? String(d.device_id) : '';
+      var ac = Number((d && d.active) || 0);
+      html += '<button type="button" class="chip-btn" aria-pressed="' + (QUEUE_DEVICE === did ? 'true' : 'false') +
+        '" data-action="queue-device" data-device="' + esc(did) + '">' + esc(did || '未知设备') +
+        ' ' + esc(ac) + ' 活跃</button>';
+    });
+    html += '</div>';
+  }
   return html;
 }
 function queueCard(t) {

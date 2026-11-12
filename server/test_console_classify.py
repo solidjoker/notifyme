@@ -11,7 +11,8 @@
 所以测的是浏览器里跑的那份真逻辑，而不是一份镜像实现。
 
 覆盖维度：来源 App 归一化与标签 / 会话复合身份 / 发送者归一化与分组 /
-来源 App 分区 / 重要度档位与待办排序分区 / 顾问建议类型分组 / runner 协议本身。
+来源 App 分区 / 重要度档位与待办排序分区 / 顾问建议类型分组 / 会话卡两级折叠分组
+（groupMessages：按日期 / 按发送者）/ 排队任务按设备分组 / runner 协议本身。
 
 环境：需要 node（或 nodejs）。找不到时默认 skip；环境变量 REQUIRE_NODE=1 时
 必须 fail（让 CI 立刻暴露问题，而不是静默跳过）。
@@ -491,7 +492,7 @@ def test_group_todos_by_importance_survives_prototype_keys(call):
     ranks = {g["key"]: g["rank"] for g in out}
     assert ranks["high"] == 0, "high rank 应为 0"
     assert ranks[""] == 3, f"未标重要度 rank 应为 3，实际 {ranks['']}"
-
+
 
 
 # --------------------------------------------------------------------------
@@ -657,4 +658,508 @@ def test_group_queue_tasks_survives_prototype_keys(call):
     )
     total = sum(g["count"] for g in groups)
     assert total == 2, "原型键条目应正常保留，实际 %r" % (total,)
+
+
+# --------------------------------------------------------------------------
+# 会话卡两级折叠分组（groupMessages）
+#
+# groupMessages 需要 getTs / getSender 两个回调，server/test_console_classify_runner.js
+# 的协议只能透传 JSON 值（传不了函数），所以这一节另起一个 node -e 一次性 driver：
+# 它从 stdin 读 {module, fn, args, getTsSrc, getSenderSrc}，把 getTsSrc / getSenderSrc
+# 用 new Function 编译成真正的函数，再去调 server/console_classify.js 里的被测函数。
+# 归类规则仍然全部来自 console_classify.js，driver 只负责「接线」，不在 Python 里复刻规则。
+# --------------------------------------------------------------------------
+
+MODULE_PATH = os.path.join(HERE, "console_classify.js")
+
+DRIVER_JS = (
+    "var fs=require('fs');"
+    "var p=JSON.parse(fs.readFileSync(0,'utf8'));"
+    "var api=require(p.module);"
+    "function mk(src){return src?new Function('m',src):null;}"
+    "var args=(p.args||[]).slice();"
+    "if(p.getTsSrc!=null)args.push(mk(p.getTsSrc));"
+    "if(p.getSenderSrc!=null)args.push(mk(p.getSenderSrc));"
+    "var out=(p.fn==='__exports__')?Object.keys(api).sort():api[p.fn].apply(null,args);"
+    "process.stdout.write(Buffer.from(JSON.stringify({ok:true,out:out===undefined?null:out}),'utf8'));"
+)
+
+# getTs 返回什么，「日期」就按什么分组（调用方决定粒度，例如传当天零点对齐的时间戳）。
+# 所以测试里用「同一天 = 同一个 ts」来表达日期分组。
+DAY_MS = 86400000
+BASE_DAY = 1767225600000  # 2026-01-01 00:00:00 UTC
+
+
+def _ts(day=0):
+    """第 day 天的零点时间戳（毫秒）。"""
+    return BASE_DAY + day * DAY_MS
+
+
+def _msg(sender, day=0, **kw):
+    """构造一条消息（默认字段与控制台会话卡一致：sender + timestamp）。"""
+    m = {"sender": sender, "timestamp": _ts(day)}
+    m.update(kw)
+    return m
+
+
+@pytest.fixture(scope="session")
+def call_msg(node_exe):
+    """调用带回调的纯函数：call_msg(fn, args, get_ts_src=None, get_sender_src=None)。"""
+
+    def _call(fn, msgs=None, dim="date", get_ts_src=None, get_sender_src=None):
+        payload = {
+            "module": MODULE_PATH,
+            "fn": fn,
+            "args": [msgs, dim],
+            "getTsSrc": get_ts_src,
+            "getSenderSrc": get_sender_src,
+        }
+        proc = subprocess.run(
+            [node_exe, "-e", DRIVER_JS],
+            input=json.dumps(payload, ensure_ascii=False),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+        )
+        assert proc.returncode == 0, (
+            f"driver 调用失败：fn={fn} 退出码={proc.returncode} stderr={proc.stderr!r}"
+        )
+        data = json.loads(proc.stdout)
+        assert data.get("ok") is True, f"driver 未返回 ok：fn={fn} stdout={proc.stdout!r}"
+        return data.get("out")
+
+    return _call
+
+
+def test_group_messages_date_basic_shape(call_msg):
+    """dim='date'：顶层是日期组；key='d|'+ts、name=String(ts)、ts=组内最大时间戳。"""
+    out = call_msg(
+        "groupMessages",
+        [_msg("张三", 0), _msg("李四", 0), _msg("张三", 1)],
+        "date",
+        get_ts_src="return m.timestamp;",
+    )
+    assert len(out) == 2, f"应分 2 个日期组，实际 {len(out)}：{out!r}"
+    g = out[0]
+    assert g["key"] == "d|" + str(_ts(1)), f"日期组 key 不对：{g['key']!r}"
+    assert g["dim"] == "date", f"日期组 dim 应为 date，实际 {g['dim']!r}"
+    assert g["name"] == str(_ts(1)), f"日期组 name 应是 ts 的字符串：{g['name']!r}"
+    assert g["ts"] == _ts(1), f"日期组 ts 应为组内最大时间戳：{g['ts']!r}"
+    assert g["count"] == 1, f"count 应为 1，实际 {g['count']}"
+    assert len(g["items"]) == 1, "items 应是日期组内的消息"
+
+
+def test_group_messages_date_multi_sender_same_day_has_children(call_msg):
+    """同一天多个人说话 -> 日期组下再分发送者子组（key='s|'+名字）。"""
+    out = call_msg(
+        "groupMessages",
+        [_msg("张三", 0), _msg("李四", 0)],
+        "date",
+        get_ts_src="return m.timestamp;",
+    )
+    assert len(out) == 1, f"应只分 1 个日期组，实际 {len(out)}"
+    g = out[0]
+    assert g["count"] == 2, f"日期组 count 应为 2，实际 {g['count']}"
+    assert len(g["items"]) == 2, "日期组 items 应是该日期全部消息"
+    assert len(g["children"]) == 2, f"应分 2 个发送者子组，实际 {g['children']!r}"
+    keys = sorted(c["key"] for c in g["children"])
+    assert keys == ["s|张三", "s|李四"], f"子组 key 不对：{keys}"
+    assert all(c["dim"] == "sender" for c in g["children"]), "子组 dim 应为 sender"
+    assert sorted(c["name"] for c in g["children"]) == ["张三", "李四"]
+
+
+def test_group_messages_date_single_sender_children_empty(call_msg):
+    """某日期只有一个人 -> children 为空数组，items 直接平铺。"""
+    out = call_msg(
+        "groupMessages",
+        [_msg("张三", 0), _msg("张三", 0)],
+        "date",
+        get_ts_src="return m.timestamp;",
+    )
+    assert len(out) == 1
+    g = out[0]
+    assert g["children"] == [], f"单人不该再分二级，实际 {g['children']!r}"
+    assert len(g["items"]) == 2, "items 应平铺该日期全部消息"
+    assert g["count"] == 2
+
+
+def test_group_messages_sender_basic_shape(call_msg):
+    """dim='sender'：顶层是发送者组；key='s|'+名字、name=归一名、ts=其最大时间戳。"""
+    out = call_msg(
+        "groupMessages",
+        [_msg("张三", 0), _msg("李四", 0), _msg("张三", 1)],
+        "sender",
+        get_ts_src="return m.timestamp;",
+    )
+    assert len(out) == 2, f"应分 2 个发送者组，实际 {len(out)}"
+    g = out[0]
+    assert g["key"] == "s|张三", f"发送者组 key 不对：{g['key']!r}"
+    assert g["dim"] == "sender", f"发送者组 dim 应为 sender，实际 {g['dim']!r}"
+    assert g["name"] == "张三", f"发送者组 name 应为归一名：{g['name']!r}"
+    assert g["ts"] == _ts(1), f"发送者组 ts 应为其最大时间戳：{g['ts']!r}"
+    assert g["count"] == 2, f"count 应为 2，实际 {g['count']}"
+    assert len(g["items"]) == 2, "items 应是该发送者的全部消息"
+
+
+def test_group_messages_sender_single_day_children_empty(call_msg):
+    """某人只说过一天 -> children 为空数组，items 平铺。"""
+    out = call_msg(
+        "groupMessages",
+        [_msg("张三", 0), _msg("张三", 0)],
+        "sender",
+        get_ts_src="return m.timestamp;",
+    )
+    assert len(out) == 1
+    g = out[0]
+    assert g["children"] == [], f"只有一天不该再分二级，实际 {g['children']!r}"
+    assert len(g["items"]) == 2
+
+
+def test_group_messages_sender_spanning_days(call_msg):
+    """跨天同发送者 -> 发送者组下按日期再分子组（key='d|'+ts，ts 倒序）。"""
+    out = call_msg(
+        "groupMessages",
+        [_msg("张三", 0), _msg("张三", 1), _msg("李四", 1)],
+        "sender",
+        get_ts_src="return m.timestamp;",
+    )
+    assert len(out) == 2, f"应分 2 个发送者组，实际 {len(out)}"
+    zhang = out[0]
+    assert zhang["name"] == "张三", f"count 多的排前面，实际 {zhang['name']!r}"
+    assert len(zhang["children"]) == 2, "张三跨两天 -> 2 个日期子组"
+    assert [c["key"] for c in zhang["children"]] == ["d|" + str(_ts(1)), "d|" + str(_ts(0))], (
+        "日期子组应按 ts 倒序，实际 %r" % ([c["key"] for c in zhang["children"]],)
+    )
+    assert all(c["dim"] == "date" for c in zhang["children"]), "日期子组 dim 应为 date"
+    li = out[1]
+    assert li["name"] == "李四"
+    assert li["children"] == [], "只有一天不该再分二级"
+
+
+def test_group_messages_date_single_sender_multiple_days(call_msg):
+    """单发送者多日期 -> 日期维度下分多个日期组，每个组都只有一个人（children 空）。"""
+    out = call_msg(
+        "groupMessages",
+        [_msg("张三", 0), _msg("张三", 1)],
+        "date",
+        get_ts_src="return m.timestamp;",
+    )
+    assert len(out) == 2, f"应分 2 个日期组，实际 {len(out)}"
+    assert [g["key"] for g in out] == ["d|" + str(_ts(1)), "d|" + str(_ts(0))], (
+        "日期组应按 ts 倒序，实际 %r" % ([g["key"] for g in out],)
+    )
+    assert all(g["children"] == [] for g in out), "单人日期组不该有子组"
+
+
+def test_group_messages_date_sort_by_ts_desc(call_msg):
+    """date 维度顶层按 ts 倒序（新的日期在前）。"""
+    out = call_msg(
+        "groupMessages",
+        [_msg("甲", 0), _msg("乙", 2), _msg("丙", 1)],
+        "date",
+        get_ts_src="return m.timestamp;",
+    )
+    assert [g["ts"] for g in out] == [_ts(2), _ts(1), _ts(0)], (
+        "日期组应按 ts 倒序，实际 %r" % ([g["ts"] for g in out],)
+    )
+
+
+def test_group_messages_sender_sort_by_count_then_name(call_msg):
+    """sender 维度顶层按 count 倒序；同 count 按 name 升序。"""
+    out = call_msg(
+        "groupMessages",
+        [
+            _msg("B", 0),
+            _msg("A", 0),
+            _msg("A", 1),
+            _msg("C", 0),
+        ],
+        "sender",
+        get_ts_src="return m.timestamp;",
+    )
+    assert [(g["name"], g["count"]) for g in out] == [("A", 2), ("B", 1), ("C", 1)], (
+        "应先按 count 倒序再按 name 升序，实际 %r" % ([(g["name"], g["count"]) for g in out],)
+    )
+
+
+def test_group_messages_children_sort_by_own_dimension(call_msg):
+    """子组按自己的维度排序：日期组下的发送者按 count 倒序/name 升序，发送者组下的日期按 ts 倒序。"""
+    out = call_msg(
+        "groupMessages",
+        [_msg("B", 0), _msg("A", 0), _msg("A", 0)],
+        "date",
+        get_ts_src="return m.timestamp;",
+    )
+    children = out[0]["children"]
+    assert [c["name"] for c in children] == ["A", "B"], (
+        "同 count 时子组应按 name 升序，实际 %r" % ([c["name"] for c in children],)
+    )
+
+    out2 = call_msg(
+        "groupMessages",
+        [_msg("A", 0), _msg("A", 1), _msg("A", 2)],
+        "sender",
+        get_ts_src="return m.timestamp;",
+    )
+    dates = out2[0]["children"]
+    assert [c["ts"] for c in dates] == [_ts(2), _ts(1), _ts(0)], (
+        "日期子组应按 ts 倒序，实际 %r" % ([c["ts"] for c in dates],)
+    )
+
+
+def test_group_messages_uses_get_ts(call_msg):
+    """getTs 生效：分组按 getTs 返回的值，不看消息自带字段。"""
+    msgs = [
+        {"sender": "张三", "t": _ts(0), "timestamp": _ts(5)},
+        {"sender": "李四", "t": _ts(0), "timestamp": _ts(9)},
+    ]
+    by_t = call_msg("groupMessages", msgs, "date", get_ts_src="return m.t;")
+    assert len(by_t) == 1, f"按 t 分组应只分 1 组，实际 {len(by_t)}"
+    assert by_t[0]["key"] == "d|" + str(_ts(0)), f"分组键应基于 t：{by_t[0]['key']!r}"
+    assert by_t[0]["count"] == 2
+
+    by_timestamp = call_msg(
+        "groupMessages", msgs, "date", get_ts_src="return m.timestamp;"
+    )
+    assert len(by_timestamp) == 2, "换成 timestamp 就该分 2 组（说明确实用的是 getTs）"
+
+
+def test_group_messages_uses_get_sender(call_msg):
+    """getSender 生效：发送者名来自 getSender，而不是 m.sender。"""
+    msgs = [
+        {"from": "张三", "timestamp": _ts(0)},
+        {"from": "李四", "timestamp": _ts(0)},
+    ]
+    out = call_msg(
+        "groupMessages",
+        msgs,
+        "date",
+        get_ts_src="return m.timestamp;",
+        get_sender_src="return m.from;",
+    )
+    children = out[0]["children"]
+    assert sorted(c["name"] for c in children) == ["张三", "李四"], (
+        f"应按 from 字段分发送者，实际 %r" % ([c["name"] for c in children],)
+    )
+
+    # 不给 getSender 时只能看到 m.sender（这里没有 -> 全部落进「未知发送者」）
+    fallback = call_msg(
+        "groupMessages", msgs, "sender", get_ts_src="return m.timestamp;"
+    )
+    assert len(fallback) == 1, "取不到 sender 时应归到一个「未知发送者」"
+    assert fallback[0]["name"] == "未知发送者", f"实际 %r" % (fallback[0]["name"],)
+
+
+def test_group_messages_default_get_sender(call_msg):
+    """getSender 可选：不给时默认取 m.sender。"""
+    out = call_msg(
+        "groupMessages",
+        [_msg("张三", 0), _msg("李四", 0)],
+        "date",
+        get_ts_src="return m.timestamp;",
+    )
+    names = sorted(c["name"] for c in out[0]["children"])
+    assert names == ["张三", "李四"], f"默认应取 m.sender，实际 %r" % (names,)
+
+
+def test_group_messages_empty_list(call_msg):
+    """空数组 -> []。"""
+    out = call_msg(
+        "groupMessages", [], "date", get_ts_src="return m.timestamp;"
+    )
+    assert out == [], "空数组应返回 []"
+
+
+def test_group_messages_unknown_dim_falls_back_to_date(call_msg):
+    """dim 其它取值一律当日期处理。"""
+    out = call_msg(
+        "groupMessages",
+        [_msg("张三", 0), _msg("李四", 0)],
+        "whatever",
+        get_ts_src="return m.timestamp;",
+    )
+    assert len(out) == 1, "未知维度应按日期分组"
+    assert out[0]["dim"] == "date", f"未知维度应落到 date，实际 {out[0]['dim']!r}"
+
+
+@pytest.mark.parametrize("name", ["__proto__", "constructor", "toString"])
+def test_group_messages_survives_prototype_keys(call_msg, name):
+    """发送者名撞 Object.prototype 时正常分组，不抛异常。"""
+    out = call_msg(
+        "groupMessages",
+        [{"sender": name, "timestamp": _ts(0)}],
+        "sender",
+        get_ts_src="return m.timestamp;",
+    )
+    assert len(out) == 1, f"应只分 1 组，实际 {len(out)}"
+    assert out[0]["key"] == "s|" + name, f"分组键应为 s|{name}，实际 {out[0]['key']!r}"
+    assert out[0]["name"] == name
+    assert out[0]["count"] == 1
+
+    # 同一日期放两个发送者：日期组下要能正常分出子组，且原型键不影响结果
+    by_date = call_msg(
+        "groupMessages",
+        [
+            {"sender": name, "timestamp": _ts(0)},
+            {"sender": "普通同事", "timestamp": _ts(0)},
+        ],
+        "date",
+        get_ts_src="return m.timestamp;",
+    )
+    assert len(by_date[0]["children"]) == 2, "日期组下应分出 2 个发送者子组"
+    keys = [c["key"] for c in by_date[0]["children"]]
+    assert "s|" + name in keys, f"子组键应含 s|{name}，实际 {keys!r}"
+    assert by_date[0]["count"] == 2
+
+
+def test_group_messages_normalizes_sender_names(call_msg):
+    """发送者名归一复用 senderKey：冒号前缀 / 零宽字符 / 首尾空白都算同一个人。"""
+    msgs = [
+        {"sender": "张三: 你好", "timestamp": _ts(0)},
+        {"sender": "张\u200b三", "timestamp": _ts(0)},
+        {"sender": "  张三  ", "timestamp": _ts(0)},
+    ]
+    out = call_msg(
+        "groupMessages", msgs, "sender", get_ts_src="return m.timestamp;"
+    )
+    assert len(out) == 1, f"归一后应只分 1 组，实际 {len(out)}：{out!r}"
+    assert out[0]["name"] == "张三", f"归一名应为张三，实际 {out[0]['name']!r}"
+    assert out[0]["key"] == "s|张三"
+    assert out[0]["count"] == 3, f"count 应为 3，实际 {out[0]['count']}"
+
+
+def test_group_messages_is_deterministic(call_msg):
+    """同样的输入永远得到同样的顺序与内容（排序确定且稳定）。"""
+    msgs = [
+        _msg("B", 0),
+        _msg("A", 0),
+        _msg("A", 1),
+        _msg("C", 2),
+    ]
+    first = call_msg("groupMessages", msgs, "sender", get_ts_src="return m.timestamp;")
+    second = call_msg("groupMessages", msgs, "sender", get_ts_src="return m.timestamp;")
+    assert first == second, "同一份输入两次结果应完全一致"
+
+
+def test_exports_keep_old_api_and_add_new(call_msg):
+    """导出面：旧 API 一个不少，新 API 三个都在。"""
+    keys = call_msg("__exports__", [])
+    old_api = [
+        "VERSION",
+        "normPkg",
+        "pkgLabel",
+        "ckOf",
+        "senderKey",
+        "groupBySender",
+        "groupByPkg",
+        "importanceRank",
+        "sortTodos",
+        "groupTodosByImportance",
+        "groupSuggestions",
+        "QUEUE_STATE_ORDER",
+        "QUEUE_STATE_LABELS",
+        "QUEUE_KIND_LABELS",
+        "normalizeQueueTasks",
+        "queueSummary",
+        "groupQueueTasks",
+    ]
+    new_api = ["groupMessages", "groupQueueTasksByDevice", "queueDeviceSummary"]
+    for name in old_api + new_api:
+        assert name in keys, f"导出里应保留 {name}，实际 {keys}"
+
+
+# --------------------------------------------------------------------------
+# 排队任务按设备分组
+# --------------------------------------------------------------------------
+
+
+def test_group_queue_tasks_by_device_groups(call):
+    """按设备分组：key/name=设备号，count=任务数，active=排队中+运行中。"""
+    tasks = [
+        _qtask(device_id="dev-a", task_id="t1", state="running"),
+        _qtask(device_id="dev-a", task_id="t2", state="queued"),
+        _qtask(device_id="dev-b", task_id="t3", state="done"),
+    ]
+    groups = call("groupQueueTasksByDevice", tasks)
+    assert len(groups) == 2, f"应分 2 个设备组，实际 {len(groups)}"
+    a = groups[0]
+    assert a["key"] == "dev-a", f"key 应是设备号，实际 {a['key']!r}"
+    assert a["name"] == "dev-a", f"name 应是设备号，实际 {a['name']!r}"
+    assert a["count"] == 2, f"count 应为 2，实际 {a['count']}"
+    assert a["active"] == 2, f"active 应为 2（running+queued），实际 {a['active']}"
+    assert len(a["items"]) == 2, "items 应是该设备的归一化任务"
+    assert all(t["device_id"] == "dev-a" for t in a["items"]), "items 只含该设备的任务"
+    b = groups[1]
+    assert b["name"] == "dev-b"
+    assert b["count"] == 1
+    assert b["active"] == 0, f"已完成的任务不算 active，实际 {b['active']}"
+
+
+def test_group_queue_tasks_by_device_sorting(call):
+    """排序：active 倒序 -> count 倒序 -> device_id 升序。"""
+    tasks = [
+        _qtask(device_id="dev-b", task_id="t1", state="done"),
+        _qtask(device_id="dev-c", task_id="t2", state="queued"),
+        _qtask(device_id="dev-a", task_id="t3", state="queued"),
+        _qtask(device_id="dev-a", task_id="t4", state="running"),
+    ]
+    groups = call("groupQueueTasksByDevice", tasks)
+    assert [g["name"] for g in groups] == ["dev-a", "dev-c", "dev-b"], (
+        "应先按 active 倒序，实际 %r" % ([g["name"] for g in groups],)
+    )
+
+    tie = call(
+        "groupQueueTasksByDevice",
+        [
+            _qtask(device_id="dev-z", task_id="t1", state="queued"),
+            _qtask(device_id="dev-y", task_id="t2", state="queued"),
+        ],
+    )
+    assert [g["name"] for g in tie] == ["dev-y", "dev-z"], (
+        "active 与 count 相同应按设备号升序，实际 %r" % ([g["name"] for g in tie],)
+    )
+
+
+def test_group_queue_tasks_by_device_missing_device_id(call):
+    """设备号缺失 -> 归一成空串设备组。"""
+    groups = call("groupQueueTasksByDevice", [_qtask(device_id=None, task_id="t1")])
+    assert len(groups) == 1, f"应只分 1 组，实际 {len(groups)}"
+    assert groups[0]["key"] == "", f"key 应为空串，实际 {groups[0]['key']!r}"
+    assert groups[0]["name"] == "", f"name 应为空串，实际 {groups[0]['name']!r}"
+    assert groups[0]["count"] == 1
+
+
+@pytest.mark.parametrize("name", ["__proto__", "constructor", "toString"])
+def test_group_queue_tasks_by_device_survives_prototype_keys(call, name):
+    """设备号撞 Object.prototype 时正常分组，不抛异常。"""
+    groups = call(
+        "groupQueueTasksByDevice", [_qtask(device_id=name, task_id="t1", state="queued")]
+    )
+    assert len(groups) == 1, f"应只分 1 组，实际 {len(groups)}"
+    assert groups[0]["key"] == name, f"设备组键应为 {name!r}，实际 {groups[0]['key']!r}"
+    assert groups[0]["count"] == 1
+
+
+def test_group_queue_tasks_by_device_empty(call):
+    """空数组 -> []。"""
+    assert call("groupQueueTasksByDevice", []) == [], "空数组应返回 []"
+
+
+def test_queue_device_summary(call):
+    """设备维度汇总：设备数 / 在跑任务数 / 任务总数。"""
+    tasks = [
+        _qtask(device_id="dev-a", task_id="t1", state="running"),
+        _qtask(device_id="dev-a", task_id="t2", state="done"),
+        _qtask(device_id="dev-b", task_id="t3", state="queued"),
+    ]
+    s = call("queueDeviceSummary", tasks)
+    assert s == {"devices": 2, "active": 2, "total": 3}, "设备汇总不对：%r" % (s,)
+
+
+def test_queue_device_summary_empty(call):
+    """空列表 -> 全 0。"""
+    s = call("queueDeviceSummary", [])
+    assert s == {"devices": 0, "active": 0, "total": 0}, "空列表的汇总应全 0，实际 %r" % (s,)
+
 
