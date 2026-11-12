@@ -237,11 +237,12 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ④ **首页「最近待办」与悬浮面板必须同口径**（都走 `visibleKeys`）：悬浮面板曾漏接首页筛选，首页筛了飞书、面板还列微信待办（真机复现过）。面板的可选项要用「过了前三层门槛」的来源集算 `AppFilterCore.resolve` 的回落，不能拿未过滤的全集，否则停用来源会让筛选卡住、面板整页空白。
   改门槛顺序、加第五层或改 forced 语义前先跑 `app/src/test/java/com/notifyme/android/ConvVisibilityCoreTest.kt`。
 
-- **会话详情页的消息窗口口径全在 `ConvWindowCore`**（internal object，纯函数 + 31 条单测），别在 `ConversationActivity` 里另写一套：
+- **会话详情页的消息窗口口径全在 `ConvWindowCore`**（internal object，纯函数 + 38 条单测），别在 `ConversationActivity` 里另写一套：
   ① **必须先按 `convKey` 过滤再排序**：旧写法是 `readRecent(500).filter { convKey }.sortedBy { timestamp }`，先在全库最近 500 条里选、再挑本会话，别的会话刷屏就把本会话历史挤掉；`slice()` 反过来做。
   ② **请求行数必须封顶**：`requestLines(limit)` 取 8 倍（默认 4000，硬上限 50000）。`readTailLines` 是按行数向文件头扩容的，行数给爆（如 `Int.MAX_VALUE`）会一路读到文件头、退化成全量读，大文件直接 OOM。
   ③ **`ts <= 0` 的未标注日期消息归 0 参与排序**（与旧 `sortedBy { it.timestamp }` 同口径），且超 `limit` 时保留最近若干条而不是最早。
   ④ **「共 N 条」只在 `preview().countedAll` 为真时才能报**：条数可信 = 已读到文件头（`linesRead < requested`，行数打满一律保守当没读全）**且** 命中未被 `limit` 砍掉（`visible < limit`）。否则提示文案走 `chat_truncated_window` / `chat_window_partial`，不要拿窗口内命中数冒充真实总数。
   ⑤ **`MAX_RENDER = 200` 只在 Core 里留一份**；`MessageStore.readWindow` 因返回 `internal` 类型而必须加 `internal`（不加会报 `'public' function exposes its 'internal' return type`）。
   ⑥ **别再用 `readRecent(500)` 去挑「本会话的一条消息」**：`latest(window)`（= `messages.lastOrNull()`，`slice()` 已升序）给 `MainActivity.runTodoReminderChain` 补日历事件描述的发送者 / 原文，`knownIsGroup(window)` 给 `A11yExtractService` 判群聊。跨会话窗口被别的会话占满时两处都会取到 null（事件描述只剩任务行、群聊标记丢失），这是同源隐患的第二次复现。`knownIsGroup` 空窗口必须回 **null**（= 没有历史可参考，按首次提取处理）而不是 false（= 历史判定私聊，写死就再也不会按昵称回推）。
-  改窗口大小、排序方向或可信度判据前先跑 `app/src/test/java/com/notifyme/android/ConvWindowCoreTest.kt`（31 条，含 600 条噪声 + 5 条本会话的回归）。
+  ⑦ **回看原文（`AnalysisListActivity.buildSourceMap`）也不能拿跨会话窗口切**：`sourceKeys(records)` 给出要读窗口的会话键集合（去重保序、跳过空会话名的老记录），每键各读一次 `MessageStore.readWindow`，再交 `sourceMap(records, windows)` 逐条还原 case 窗口原文。这是同一个错误的第三次复现（详情页、`latest`/`knownIsGroup`、分析列表原文）：别的会话刷满窗口，本会话那几条就不在窗口里，`tvAnalysisSource` 整行消失而数据仍在文件里。取不满返回空串、调用方隐藏 —— 宁可不显示，也不拿别的窗口内容冒充原文。
+  改窗口大小、排序方向或可信度判据前先跑 `app/src/test/java/com/notifyme/android/ConvWindowCoreTest.kt`（38 条，含 600 条噪声 + 本会话的回归）。

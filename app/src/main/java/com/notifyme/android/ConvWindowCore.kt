@@ -142,4 +142,46 @@ internal object ConvWindowCore {
             countedAll = reachedHead(window.linesRead, window.requested) && visible < window.limit
         )
     }
+
+    /**
+     * 回看原文时要按会话取窗口的键集合：[records] 里出现过的会话键，去重且保持首次出现顺序。
+     *
+     * 分析列表最多 200 条 case，但会话数通常远小于它 —— 按这个集合**每会话各读一次窗口**，
+     * 而不是拿一份跨会话的 `readRecent(500)` 去切。空会话名（老记录）跳过。
+     */
+    fun sourceKeys(records: List<AnalysisCaseRecord>): List<ConvKey> {
+        val seen = LinkedHashSet<ConvKey>()
+        for (record in records) {
+            if (record.conversation.isBlank()) continue
+            seen.add(record.convKey)
+        }
+        return seen.toList()
+    }
+
+    /**
+     * caseId → 窗口原文（「[发送时间] 发送者: 内容」逐行）。
+     *
+     * 窗口口径与 [AnalysisCase.windowOf] 一致（时间戳 ≤ windowEnd 的最近 messageCount 条），
+     * 但**消息来源必须是该会话自己的窗口**（[MessageStore.readWindow] 的结果）。旧实现把跨会话
+     * 的 `readRecent(500)` 分组后交给 windowOf：别的会话刷满 500 条，本会话在窗口里一条都没有，
+     * 原文行整块消失（数据其实还在 messages.jsonl 里）。
+     *
+     * 会话窗口里取不满（case 窗口比最近 [Window.limit] 条还早）时返回空串 → 调用方隐藏该行：
+     * 宁可不显示，也不拿别的窗口内容冒充原文。
+     */
+    fun sourceMap(
+        records: List<AnalysisCaseRecord>,
+        windows: Map<ConvKey, Window>,
+        nowMs: Long = System.currentTimeMillis()
+    ): Map<String, String> {
+        if (records.isEmpty()) return emptyMap()
+        val out = LinkedHashMap<String, String>(records.size)
+        for (record in records) {
+            val window = windows[record.convKey] ?: continue
+            val slice = AnalysisCase.windowOf(window.messages, record.windowEnd, record.messageCount)
+            val text = AnalysisCase.formatWindowSource(slice, nowMs)
+            if (text.isNotEmpty()) out[record.caseId] = text
+        }
+        return out
+    }
 }

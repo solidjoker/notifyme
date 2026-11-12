@@ -306,4 +306,108 @@ class ConvWindowCoreTest {
         assertEquals(listOf("m8", "m9", "m10"), window.messages.map { it.text })
         assertFalse(ConvWindowCore.preview(window).countedAll)
     }
+
+    // ---------------- sourceKeys / sourceMap（分析列表回看原文） ----------------
+
+    private fun rec(
+        conv: String,
+        caseId: String = "case-$conv",
+        windowEnd: Long = 30_000L,
+        messageCount: Int = 10,
+        pkg: String = "com.tencent.mm"
+    ) = AnalysisCaseRecord(
+        caseId = caseId,
+        conversation = conv,
+        windowEnd = windowEnd,
+        messageCount = messageCount,
+        analyzedAt = windowEnd,
+        protocol = "openai",
+        rawJson = "{}",
+        pkg = pkg,
+        s1NeedAction = false,
+        s1NeedActionProb = 0.1,
+        s1Importance = 2.0,
+        s1DueWindow = "none",
+        s1Topic = "notice",
+        s1Confidence = 0.8,
+        escalated = false,
+        s2Summary = "",
+        s2DueTime = "",
+        s2SuggestedAction = "",
+        s2Tasks = emptyList()
+    )
+
+    @Test
+    fun `sourceKeys 去重并保持首次出现顺序`() {
+        val records = listOf(rec("张三"), rec("李四"), rec("张三"), rec("李四"))
+        assertEquals(listOf(key, other), ConvWindowCore.sourceKeys(records))
+    }
+
+    @Test
+    fun `sourceKeys 跳过空会话名的老记录`() {
+        val records = listOf(rec(""), rec("张三"))
+        assertEquals(listOf(key), ConvWindowCore.sourceKeys(records))
+    }
+
+    @Test
+    fun `sourceMap 按会话自己的窗口取原文，不被别的会话刷屏挤掉`() {
+        // 别的会话塞 600 条（远超旧的 readRecent(500) 窗口），本会话 3 条
+        val noise = (1..600).map { msg("噪声" + it, 1_000L + it, conversation = "李四") }
+        val mine = (1..3).map { msg("我的" + it, 10_000L + it) }
+        val core = coreWith(noise + mine)
+        val windows = mapOf(key to core.readWindow(key))
+        val out = ConvWindowCore.sourceMap(listOf(rec("张三", windowEnd = 10_003L)), windows, nowMs = 20_000L)
+
+        val text = out.getValue("case-张三")
+        assertTrue(text.contains("我的3"))
+        assertFalse(text.contains("噪声"))
+    }
+
+    @Test
+    fun `sourceMap 只取 windowEnd 之前且最近 messageCount 条`() {
+        val core = coreWith(
+            listOf(
+                msg("a", 1_000L),
+                msg("b", 2_000L),
+                msg("c", 3_000L),
+                msg("d", 4_000L)
+            )
+        )
+        val windows = mapOf(key to core.readWindow(key))
+        val out = ConvWindowCore.sourceMap(
+            listOf(rec("张三", windowEnd = 3_000L, messageCount = 2)),
+            windows,
+            nowMs = 10_000L
+        )
+
+        val text = out.getValue("case-张三")
+        // windowEnd=3000 → 只剩 a/b/c；messageCount=2 → 取最近两条 b/c
+        assertTrue(text.contains(": b") || text.contains("b"))
+        assertTrue(text.contains("c"))
+        assertFalse(text.contains("d"))
+    }
+
+    @Test
+    fun `sourceMap 该会话没有窗口时整条不出现`() {
+        val out = ConvWindowCore.sourceMap(listOf(rec("张三")), emptyMap(), nowMs = 10_000L)
+        assertTrue(out.isEmpty())
+    }
+
+    @Test
+    fun `sourceMap 窗口外取不满时返回空串而不是别的会话内容`() {
+        // case 的窗口在 1_000 附近，但会话窗口只保留了最近的近期消息（limit=1 且时间更晚）
+        val core = coreWith(listOf(msg("近期", 9_000L)))
+        val windows = mapOf(key to core.readWindow(key))
+        val out = ConvWindowCore.sourceMap(
+            listOf(rec("张三", windowEnd = 1_000L)),
+            windows,
+            nowMs = 10_000L
+        )
+        assertTrue(out.isEmpty())
+    }
+
+    @Test
+    fun `sourceMap 空记录返回空表`() {
+        assertTrue(ConvWindowCore.sourceMap(emptyList(), emptyMap()).isEmpty())
+    }
 }

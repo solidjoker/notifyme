@@ -59,7 +59,7 @@ flowchart TB
         ENGINE2["LocalLlmEngine · LayaTfliteEngine<br/>端侧推理抽象 · LiteRT 2.2.0"]:::dom
     end
 
-    subgraph L4B["④-2 本轮新增 Core 逻辑内核 ×31（纯 JVM · 无 Android 依赖 · app/src/test 65 个 .kt / 969 条覆盖）"]
+    subgraph L4B["④-2 本轮新增 Core 逻辑内核 ×31（纯 JVM · 无 Android 依赖 · app/src/test 65 个 .kt / 976 条覆盖）"]
         direction LR
         C1["同步与上报<br/>SyncOutcome.kt 192（207 先于 2xx）<br/>SyncBatchCore.kt 84（200 条 / 1 MiB · 二分）<br/>SyncWatermarkCore.kt 57（已结算前缀）<br/>AnalysisSyncCore.kt 60 · AdvisorSyncCore.kt 44<br/>HistorySyncCore.kt 62（隐私门控 · MAX_PAGES=20）"]:::dom
         C2["拒绝与隔离<br/>AnalysisRejectCore.kt 238（被拒计数 + 隔离）<br/>AdvisorRejectCore.kt 213（复用 AnalysisRejectCore）<br/>PendingRejectCore.kt 66（被拒计数 + 丢弃上限）"]:::dom
@@ -75,7 +75,7 @@ flowchart TB
         C12["搜索与本地化<br/>SearchCore.kt 137（四类命中：会话名/来源 App/消息/分析结论 · 搜索态强制展开 · 命中来源提示）"]:::dom
         C13["文案与本地化<br/>TopicLabelCore.kt 229（topic / due_window 码值↔中文档名双向归一 · 四处重复实现已删除 · 首页「截止：none」与待办码值泄漏已修）"]:::dom
         C14["提醒列表<br/>ReminderListCore.kt 175（分组：需要处理 → 生效中 → 已过期 · 组内按事件时间（过期倒序）· chip 筛选 · failed 与无时间不算过期）"]:::dom
-        C15["会话窗口<br/>ConvWindowCore.kt 145（按 convKey 取窗口 · requestLines 8 倍且封顶 50000 · slice 升序保最近 · preview 三态信度 · latest/knownIsGroup 收掉两处跨会话取一条的同源隐患）"]:::dom
+        C15["会话窗口<br/>ConvWindowCore.kt 187（按 convKey 取窗口 · requestLines 8 倍且封顶 50000 · slice 升序保最近 · preview 三态信度 · latest/knownIsGroup · sourceKeys/sourceMap 收掉三处跨会话取内容的同源隐患）"]:::dom
         C16["可见性门槛<br/>ConvVisibilityCore.kt 123（四层门槛：关注名单 → 自身/系统源 → 启用集合 → 首页来源筛选 · why 回原因码 · forced 只放宽启用 · 悬浮面板已接首页筛选）"]:::dom
     end
 
