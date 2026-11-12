@@ -148,8 +148,14 @@ class AnalysisListActivity : Activity() {
         val onlyTodo = switchOnlyTodo.isChecked
         val filter = filterKey
         Thread {
-            var all = AnalysisStore.readRecent(this, 200)
-            filter?.let { f -> all = all.filter { it.convKey == f } }
+            // 有会话过滤时按会话读窗口（不受全局条数截断）；否则读最近 LIMIT 条。
+            // 旧写法 readRecent(200).filter { convKey } 在别的会话刷满尾部 200 行后
+            // 会让本会话的列表整页空白（数据仍在文件里），口径见 AnalysisWindowCore
+            val all = if (filter != null) {
+                AnalysisStore.readForConversation(this, filter)
+            } else {
+                AnalysisStore.readRecentWindow(this, AnalysisWindowCore.LIST_LIMIT)
+            }
             val shown = if (onlyTodo) all.filter { it.s1NeedAction } else all
             val sources = if (shown.isEmpty()) emptyMap() else buildSourceMap(shown)
             runOnUiThread {

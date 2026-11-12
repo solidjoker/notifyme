@@ -370,6 +370,40 @@ object AnalysisStore {
             .take(limit)
 
     /**
+     * 按会话分组读全部 case（尾部 [AnalysisWindowCore.TAIL_LINES] 行窗口）。
+     *
+     * 为什么不能沿用 [readRecent] + `groupBy`：readRecent 读的是文件尾部 limit 行，
+     * 那些行可能全来自同几个会话，别的会话（尤其安静的）在这个窗口里一条都没有 ——
+     * 首页会话角标、历史天挂结果、搜索历史结论、悬浮面板待办会同时缺失，
+     * 而数据完整躺在文件里。口径见 [AnalysisWindowCore]。
+     */
+    @Synchronized
+    fun readGrouped(context: Context): Map<ConvKey, List<AnalysisCaseRecord>> =
+        AnalysisWindowFile(JsonlStore(storeFile(context))).group()
+
+    /** 不分会话的「最近 [limit] 条」（分析时间倒序），从尾部行窗口里取。 */
+    @Synchronized
+    fun readRecentWindow(
+        context: Context,
+        limit: Int = AnalysisWindowCore.LIST_LIMIT
+    ): List<AnalysisCaseRecord> =
+        AnalysisWindowFile(JsonlStore(storeFile(context))).recent(limit)
+
+    /**
+     * 指定会话的全部 case（分析时间倒序），不受 limit 截断。
+     *
+     * 从某个会话进入分析列表时用它 —— 旧写法是 `readRecent(200).filter { convKey }`，
+     * 别的会话刷满尾部 200 行，本会话列表就空白。
+     */
+    @Synchronized
+    fun readForConversation(
+        context: Context,
+        key: ConvKey,
+        limit: Int = AnalysisWindowCore.UNLIMITED
+    ): List<AnalysisCaseRecord> =
+        AnalysisWindowFile(JsonlStore(storeFile(context))).forConversation(key, limit = limit)
+
+    /**
      * 删除分析时间早于 [cutoffMs] 的记录（保留策略，与 messages 同 7 天口径）。
      * 损坏行与 analyzed_at≤0 的行保守保留；消息侧同窗口早已清理，旧 case 不会被
      * 重新分析，删除不影响 caseId 去重成本。返回删除条数。
@@ -384,11 +418,16 @@ object AnalysisStore {
         return removed
     }
 
-    /** [ConvKey] 口径的最新记录：M2 起同名会话在不同 App 里分别给角标。 */
+    /**
+     * [ConvKey] 口径的最新记录：M2 起同名会话在不同 App 里分别给角标。
+     *
+     * 旧写法是 `readRecent(context, 500).groupBy { it.convKey }` —— 尾部 500 行可能
+     * 全来自几个活跃会话，安静会话的最新结论在这里直接消失（详情页轮询、悬浮面板待办
+     * 都会看不到）。现在按 [AnalysisWindowCore.POLL_LINES] 的更大窗口取，聚合口径见
+     * [AnalysisWindowCore.latestByConvKey]。
+     */
     fun latestByConvKey(context: Context): Map<ConvKey, AnalysisCaseRecord> =
-        readRecent(context, 500)
-            .groupBy { it.convKey }
-            .mapValues { (_, list) -> list.maxByOrNull { it.windowEnd }!! }
+        AnalysisWindowFile(JsonlStore(storeFile(context))).latestByConvKey()
 
     /** 删除一条 case 记录（闪电标记阅读后清除），返回是否实际删除。 */
     @Synchronized

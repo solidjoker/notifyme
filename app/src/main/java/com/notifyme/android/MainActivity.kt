@@ -728,10 +728,11 @@ class MainActivity : Activity() {
         val collapsedDates = CollapseStore.loadCollapsedDates(this)
         val expandedDates = CollapseStore.loadExpandedDates(this)
         val collapsedConversations = CollapseStore.loadCollapsedConversations(this)
-        // M14：一次全量读，同时供「每会话最新 case」与「历史天逐条挂结果」使用
-        val allCases = AnalysisStore.readRecent(this, 200)
-        val latestCases = allCases.groupBy { it.convKey }
-            .mapValues { (_, recs) -> recs.maxByOrNull { it.windowEnd }!! }
+        // M14：一次按会话分组读，同时供「每会话最新 case」与「历史天逐条挂结果」使用。
+        // 不能再用 readRecent(200)：那是文件尾部 200 行，几个活跃会话刷满之后，
+        // 安静会话的结论在首页角标、历史天、搜索里会同时消失（口径见 AnalysisWindowCore）
+        val casesByConv = AnalysisStore.readGrouped(this)
+        val latestCases = AnalysisWindowCore.latest(casesByConv)
         // 有提醒的会话集合：首页会话头显示 📅
         val reminderRecords = ReminderStore.readAll(this)
         val reminderKeys = reminderRecords.map { it.convKey }.toSet()
@@ -750,8 +751,7 @@ class MainActivity : Activity() {
             .sortedByDescending { (_, list) -> list.last().timestamp }
 
         // M14：全部分析记录（不只每会话最新一条）——历史天的消息也要挂各自窗口的结果；
-        // 搜索也要用到它，所以提前算：只查最新一条会漏掉历史窗口里的结论
-        val casesByConv = allCases.groupBy { it.convKey }
+        // 搜索也要用到它：只查最新一条会漏掉历史窗口里的结论。casesByConv 在上面按会话读时已算好
 
         // 搜索过滤：口径全在 SearchCore（会话名 / 来源 App / 消息 / 分析结论四类命中）。
         // 命中原因顺带记下来——会话头要说明「为什么这条会话在结果里」
