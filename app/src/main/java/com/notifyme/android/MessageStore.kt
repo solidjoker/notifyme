@@ -170,6 +170,18 @@ object MessageStore {
         core(context).readRecent(limit)
 
     /**
+     * 按会话取消息窗口（详情页专用）：只含 [key] 会话、按时间升序。
+     * 窗口口径与「条数是否可信」的判定见 [ConvWindowCore] —— 别在 Activity 里再 filter 一遍
+     * readRecent 的结果，那会把别的会话的活跃度带进本会话的可视条数。
+     */
+    @Synchronized
+    internal fun readWindow(
+        context: Context,
+        key: ConvKey,
+        limit: Int = ConvWindowCore.ALL_LIMIT
+    ): ConvWindowCore.Window = core(context).readWindow(key, limit)
+
+    /**
      * 删除 [cutoffMs]（毫秒时间戳）之前的消息（数据保留策略：本地只留 7 天）。
      * timestamp ≤0 与损坏行保守保留。返回实际删除条数。
      */
@@ -372,6 +384,38 @@ internal class MessageStoreCore(
             .sortedByDescending { it.timestamp }
             .take(limit - undatedSlots)
         return dated + undated.take(undatedSlots)
+    }
+
+    /**
+     * 按会话取消息窗口：只返回 [key] 这个会话的消息，按时间**升序**（气泡从上到下）。
+     *
+     * 为什么不能沿用 [readRecent] + filter：readRecent 的窗口是**跨会话**的最近 N 条，
+     * 别的会话刷满窗口就会把本会话的历史挤出窗口 —— 详情页会空白，可数据仍在文件里。
+     * 这里按会话单独请求更大的行窗口（[ConvWindowCore.requestLines]），并同时把
+     * 「请求了多少行 / 实际读到多少行」带回给调用方，让 UI 能诚实判断条数是不是总数。
+     *
+     * @param limit 本会话最多返回多少条（保留最近的），默认 [ConvWindowCore.ALL_LIMIT]
+     */
+    fun readWindow(key: ConvKey, limit: Int = ConvWindowCore.ALL_LIMIT): ConvWindowCore.Window {
+        val requested = ConvWindowCore.requestLines(limit)
+        if (!store.exists()) {
+            return ConvWindowCore.Window(key, emptyList(), 0, requested, limit)
+        }
+        val lines = store.readTailLines(requested)
+        val parsed = lines.mapNotNull { line ->
+            try {
+                ChatMessage.fromJson(JSONObject(line))
+            } catch (e: Exception) {
+                null // 单行损坏不影响整体读取
+            }
+        }
+        return ConvWindowCore.Window(
+            key = key,
+            messages = ConvWindowCore.slice(parsed, key, limit),
+            linesRead = lines.size,
+            requested = requested,
+            limit = limit
+        )
     }
 
     /** 清空全部记录。 */

@@ -66,9 +66,6 @@ class ConversationActivity : Activity() {
         /** M17 手动提醒的日历权限请求码（与主页待办用的 1001 区分） */
         private const val REQ_CALENDAR_PERMISSION = 4001
 
-        /** 单次渲染的消息上限 */
-        private const val MAX_CHAT_RENDER = 200
-
         fun start(context: Context, key: ConvKey) {
             context.startActivity(createIntent(context, key))
         }
@@ -346,15 +343,17 @@ class ConversationActivity : Activity() {
         val token = ++renderToken
         val convKey = key
         Thread {
-            val messages = MessageStore.readRecent(this, 500)
-                .filter { it.convKey == convKey }
-                .sortedBy { it.timestamp }
+            // 按会话取窗口：不能再用 readRecent(500) + filter —— 那是跨会话窗口，
+            // 别的会话刷满 500 条就会把本会话历史挤掉（详情页空白，数据却还在）。
+            // 口径与「条数是否等于总数」的判定见 ConvWindowCore。
+            val window = MessageStore.readWindow(this, convKey)
+            val messages = window.messages
             val record = AnalysisStore.latestByConvKey(this)[convKey]
             val reminderCount = ReminderStore.readAll(this).count { it.convKey == convKey }
             runOnUiThread {
                 if (token != renderToken || isFinishing || isDestroyed) return@runOnUiThread
                 renderHeader(messages.lastOrNull()?.isGroup ?: false)
-                renderChat(messages)
+                renderChat(window)
                 refreshQuickReply()
                 renderAnalysisPanel(record)
                 renderReminderCount(reminderCount)
@@ -387,7 +386,8 @@ class ConversationActivity : Activity() {
     private var lastChatSignature: String = ""
 
     /** 渲染对话流：逐条 inflate 气泡；>5 分钟跨段插入时间分隔；多选态附加勾选交互。 */
-    private fun renderChat(messages: List<ChatMessage>) {
+    private fun renderChat(window: ConvWindowCore.Window) {
+        val messages = window.messages
         // 防重渲染：消息集合 + 多选状态都没变时跳过（轮询场景每秒调一次）
         val signature = messages.hashCode().toString() + "|" + (selectActionMode != null) + "|" +
             selectedMessages.hashCode()
@@ -395,18 +395,35 @@ class ConversationActivity : Activity() {
         lastChatSignature = signature
 
         chatContainer.removeAllViews()
-        // 上限控制：只渲染最近 MAX_CHAT_RENDER 条，避免历史大时 OOM
-        val renderList = if (messages.size > MAX_CHAT_RENDER) {
-            val hint = TextView(this).apply {
-                text = getString(R.string.chat_truncated, MAX_CHAT_RENDER, messages.size)
+        // 上限控制：只渲染最近 MAX_RENDER 条，避免历史大时 OOM。
+        // 提示文案分两种口径（ConvWindowCore.preview）：只有「尾读读到文件头且没被 limit 砍」
+        // 才知道本会话的真实总数，那时才敢说「共 N 条」；否则只说「更早的消息不在当前窗口」。
+        val preview = ConvWindowCore.preview(window)
+        val renderLimit = ConvWindowCore.MAX_RENDER
+        val hintText = when {
+            // 读到文件头 + 没被 limit 砍：条数就是真实总数，可以说「共 N 条」
+            preview.countedAll && preview.truncated ->
+                getString(R.string.chat_truncated, renderLimit, preview.visible)
+            // 条数不可信时绝不说「共 N 条」：只说这个窗口里有多少、更早的不在窗口内
+            preview.truncated ->
+                getString(R.string.chat_truncated_window, renderLimit, preview.visible)
+            !preview.countedAll ->
+                getString(R.string.chat_window_partial, preview.visible)
+            else -> null
+        }
+        if (hintText != null) {
+            val density = resources.displayMetrics.density
+            chatContainer.addView(TextView(this).apply {
+                text = hintText
                 setTextColor(getColor(R.color.text_secondary))
                 textSize = 12f
-                val density = resources.displayMetrics.density
-                setPadding((8 * density).toInt(), (4 * density).toInt(), (8 * density).toInt(), (4 * density).toInt())
-            }
-            chatContainer.addView(hint)
-            messages.takeLast(MAX_CHAT_RENDER)
-        } else messages
+                setPadding(
+                    (8 * density).toInt(), (4 * density).toInt(),
+                    (8 * density).toInt(), (4 * density).toInt()
+                )
+            })
+        }
+        val renderList = if (preview.truncated) messages.takeLast(renderLimit) else messages
         val inflater = LayoutInflater.from(this)
         var lastTimestamp = 0L
         val selecting = selectActionMode != null

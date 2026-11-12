@@ -9,6 +9,10 @@
     <string name="empty_hint">暂无捕获到的微信消息</string>
     <string name="clear_done">已清除全部记录</string>
     <string name="chat_truncated">仅显示最近 %1$d 条（共 %2$d 条）</string>
+    <!-- 窗口内命中数已超渲染上限、但不知道本会话真实总数时的提示（ConvWindowCore.preview.countedAll=false） -->
+    <string name="chat_truncated_window">仅显示最近 %1$d 条（本条会话在窗口内共 %2$d 条）</string>
+    <!-- 未超渲染上限、但窗口没读到文件头：更早的消息不在当前窗口内 -->
+    <string name="chat_window_partial">窗口内 %1$d 条，更早的消息不在当前读取范围内</string>
     <string name="confirm_clear_all">将清空全部消息记录与待上报队列，且无法恢复。确定继续？</string>
             <string name="msg_count">%1$d 条</string>
     <string name="date_unknown_label">未标注日期</string>
