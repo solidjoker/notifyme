@@ -76,6 +76,8 @@ EXPECTED_RULES = {
     ("/console/manifest.json", "GET", "console_manifest"),
     ("/health", "GET", "health"),
     ("/messages", "GET", "query_messages"),
+    ("/queue", "GET", "query_queue"),
+    ("/queue", "POST", "receive_queue"),
     ("/static/<path:filename>", "GET", "static"),
     ("/sw.js", "GET", "console_sw"),
     ("/weixin", "POST", "receive_weixin"),

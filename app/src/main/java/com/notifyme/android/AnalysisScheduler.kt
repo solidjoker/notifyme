@@ -136,6 +136,7 @@ object AnalysisScheduler {
     /** 返回观察指定会话分析进度所用的 tag（pkg+会话名都入 tag，避免同名串台）。 */
     fun convTag(key: ConvKey): String = "$TAG_CONV_PREFIX${key.id}"
 
-    private const val TAG_ON_DEMAND = "analysis_on_demand"
+    // 排队状态采集（QueueStateCollector）要按 tag 反查 WorkManager 任务，故放开可见性
+    internal const val TAG_ON_DEMAND = "analysis_on_demand"
     private const val TAG_CONV_PREFIX = "analysis_conv:"
 }
