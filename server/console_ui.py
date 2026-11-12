@@ -784,6 +784,19 @@ main#main {
 }
 
 /* ============================ 统计 ============================ */
+.skip-note {
+  border-left: 3px solid var(--warn);
+  color: var(--text);
+  font-size: var(--font-sm);
+}
+.suggest-card {
+  border-left: 3px solid var(--accent-strong);
+}
+.suggest-card .state-actions {
+  margin-top: var(--space-2);
+  display: flex;
+  gap: var(--space-2);
+}
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -1388,6 +1401,14 @@ var QUEUE_ERR = '';    // 排队接口不可用时的说明（只提示，不影
 var QUEUE_STATE = '';  // 排队 tab 的状态筛选（空 = 全部）
 var QUEUE_DEVICE = '';   // 排队 tab 的设备筛选（空 = 全部设备）
 var QUEUE_DEVICES = [];  // 设备清单（GET /queue 响应里的 devices 字段）
+// 服务端聚合真值（GET /stats）：概览与统计优先用它，避免「按已加载的数据算」随翻页漂移。
+// 接口不可用时保持 null，调用方退回本地估算并标注。
+var STATS = null;
+var STATS_ERR = '';
+// 下一步建议（GET /suggests/next）：表驱动规则给出的最多 3 条可执行动作。
+var SUGGESTS = [];
+// 分页接口跳过的脏数据条数（messages / analysis 各自累计），非 0 时给一行提示。
+var SKIP_NOTICE = { msg: 0, ana: 0 };
 // 会话卡内的二级归类维度：date（按日期，默认）/ sender（按发送者）；持久化到 localStorage
 var CONV_GROUP_DIM = 'date';
 try { var _gd = LS.get('wx_group_v1'); if (_gd === 'sender' || _gd === 'date') CONV_GROUP_DIM = _gd; } catch (e) { }
@@ -1560,7 +1581,16 @@ function renderSyncLine() {
   if (el) el.className = 'sync-pill' + (LOAD_BUSY ? ' busy' : '');
   if (LOAD_BUSY && LAST_SYNC) txt = '同步中… · 上次同步 ' + fmtClock(LAST_SYNC);
   else if (!LAST_SYNC) txt = '正在同步…';
-  else txt = '已同步 ' + fmtClock(LAST_SYNC) + ' · 消息 ' + MSGS.length + ' · 分析 ' + ANALYSES.length;
+  else {
+    // 有全库真值时显示真值，否则退回「已加载」口径并标注
+    var mTotal = statNum(['messages', 'total']);
+    var aTotal = statNum(['analyses', 'total']);
+    if (mTotal == null || APP_FILTER) {
+      txt = '已同步 ' + fmtClock(LAST_SYNC) + ' · 已加载消息 ' + MSGS.length + ' · 分析 ' + ANALYSES.length;
+    } else {
+      txt = '已同步 ' + fmtClock(LAST_SYNC) + ' · 消息 ' + mTotal + ' · 分析 ' + aTotal;
+    }
+  }
   if (SW_ERR) txt += ' · ⚠️ 离线缓存不可用';
   if (el) el.textContent = txt;
   if (live) live.textContent = txt;
@@ -1674,7 +1704,43 @@ function analysisSearchText(a) {
   if (a.s2) { try { parts.push(JSON.stringify(a.s2)); } catch (e) { } }
   if (a.todo_text) parts.push(String(a.todo_text));
   if (a.todo_due) parts.push(String(a.todo_due));
+  // 脱敏证据也能被搜到：命中规则名与条数决定要不要重点看这条
+  if (a.redaction_rules) {
+    try { parts.push(JSON.stringify(a.redaction_rules)); } catch (e) { }
+    parts.push(String(a.redaction_rules));
+  }
+  if (a.redaction_hits != null) parts.push(String(a.redaction_hits));
+  if (a.redacted) parts.push('已脱敏');
   return parts.join(' ').toLowerCase();
+}
+// 脱敏徽标：redacted 为真时说明这条分析结果里有内容被替换成占位符
+function redactBadge(a) {
+  if (!a || !a.redacted) return '';
+  var hits = Number(a.redaction_hits || 0);
+  return '<span class="badge b-grp" title="上报前已脱敏">🛡 已脱敏 ' +
+    (hits > 0 ? hits + ' 处' : '') + '</span>';
+}
+// 脱敏明细：命中了几条规则、共几处；没命中就不占版面
+function redactDetail(a) {
+  if (!a || !a.redacted) return '';
+  var rules = [];
+  var raw = a.redaction_rules;
+  if (raw) {
+    if (Object.prototype.toString.call(raw) === '[object Array]') {
+      for (var i = 0; i < raw.length; i++) {
+        var r0 = raw[i];
+        var nm = (r0 && typeof r0 === 'object') ? (r0.name || r0.rule || r0.id || '') : String(r0);
+        if (nm) rules.push(String(nm));
+      }
+    } else {
+      rules.push(String(raw));
+    }
+  }
+  var hits = Number(a.redaction_hits || 0);
+  var txt = '上报前已脱敏';
+  if (hits > 0) txt += ' · 命中 ' + hits + ' 处';
+  if (rules.length) txt += ' · 规则：' + rules.join('、');
+  return '<div class="ana-meta">🛡 ' + esc(txt) + '</div>';
 }
 // 顾问报告的搜索文本：报告内容
 function advisorSearchText(r) {
@@ -1693,7 +1759,7 @@ function advisorSearchText(r) {
 }
 
 // ---------- 首屏概览条 + tab 角标 ----------
-// 服务端没有统计接口，概览条只能基于「当前已加载」的数据在本地算；
+// 近 24 小时条数：只统计「已加载」的消息，用于 /stats 不可用时的估算口径。
 // 首次加载完成前用骨架占位，避免直接显示 0 造成误解。
 function countLast24h(list) {
   var from = Date.now() - 86400000;
@@ -1714,29 +1780,54 @@ function setOv(id, val, sk) {
   }
   el.textContent = val;
 }
+// 取聚合真值的某个数字：拿不到返回 null，调用方据此退回估算
+function statNum(path) {
+  if (!STATS) return null;
+  var cur = STATS;
+  for (var i = 0; i < path.length; i++) {
+    if (cur == null) return null;
+    cur = cur[path[i]];
+  }
+  return (typeof cur === 'number' && isFinite(cur)) ? cur : null;
+}
+// 概览条：优先服务端全库真值，拿不到才用「已加载」数据估算并标注
 function renderOverview() {
   var msgs = filteredMsgs();
   var todos = filteredTodos();
   var sk = !HAS_DATA;
-  setOv('ov-24h', String(countLast24h(msgs)), sk);
-  setOv('ov-todo', String(todos.length), sk);
-  setOv('ov-queue', String(queueActiveCount()), sk);
+  // /stats 是整库口径（pkg 只回显不参与过滤），所以来源过滤时一律走本地估算，避免混口径
+  var useSrv = !!(STATS && !APP_FILTER && !QUERY.trim());
+  var est = !useSrv;
+  var n24 = useSrv ? (statNum(['messages', 'last_24h']) || 0) : countLast24h(msgs);
+  var nTodo = useSrv ? (statNum(['analyses', 'todo']) || 0) : todos.length;
+  var nQueue = useSrv ? (statNum(['queue', 'active']) || 0) : queueActiveCount();
+  setOv('ov-24h', String(n24), sk);
+  setOv('ov-todo', String(nTodo), sk);
+  setOv('ov-queue', String(nQueue), sk);
   setOv('ov-fail', String(FAIL_COUNT), sk);
   setOv('ov-sync', LAST_SYNC ? fmtClock(LAST_SYNC) : '—', sk);
   var s24 = $('ov-24h-sub');
   if (s24) {
     s24.textContent = sk ? '加载中…' :
-      (MSG_NEXT ? ('已加载 ' + msgs.length + ' 条，还有更多') : ('已加载 ' + msgs.length + ' 条'));
+      (est
+        ? ('估算 · 仅已加载 ' + msgs.length + ' 条' + (MSG_NEXT ? '，还有更多' : ''))
+        : ('全库真值 · 已加载 ' + msgs.length + ' 条' + (MSG_NEXT ? '，还有更多' : '')));
   }
   var sTodo = $('ov-todo-sub');
-  if (sTodo) sTodo.textContent = sk ? '加载中…' : ('当前筛选下 ' + todos.length + ' 条');
+  if (sTodo) {
+    sTodo.textContent = sk ? '加载中…' :
+      (est ? ('估算 · 当前筛选下 ' + todos.length + ' 条')
+        : ('全库真值 · 共 ' + (statNum(['analyses', 'convs']) || 0) + ' 个会话'));
+  }
   var sQueue = $('ov-queue-sub');
   if (sQueue) {
-    var devN = QUEUE_DEVICES.length;
+    var devN = useSrv ? (STATS.queue.devices || 0) : QUEUE_DEVICES.length;
+    var actN = nQueue || 0;
     sQueue.textContent = sk ? '加载中…' :
-      (queueActiveCount()
-        ? (queueActiveCount() + ' 个任务排队或运行中' + (devN ? (' · ' + devN + ' 台设备') : ''))
+      (actN
+        ? (actN + ' 个任务排队或运行中' + (devN ? (' · ' + devN + ' 台设备') : ''))
         : (devN ? ('当前没有排队任务 · ' + devN + ' 台设备') : '当前没有排队任务'));
+    if (est && !sk) sQueue.textContent += '（估算）';
   }
   var sFail = $('ov-fail-sub');
   if (sFail) {
@@ -1783,18 +1874,37 @@ async function fetchMsgPage(before, signal) {
   var url = 'messages?limit=' + PAGE_LIMIT;
   if (before) url += '&before=' + encodeURIComponent(before);
   var r = await api(url, { signal: signal });
-  return { items: r.messages || [], next: r.next_before || '' };
+  return { items: r.messages || [], next: r.next_before || '', skipped: Number(r.skipped || 0) };
 }
 async function fetchAnaPage(before, signal) {
   var url = 'analysis?limit=' + PAGE_LIMIT;
   if (before) url += '&before=' + encodeURIComponent(before);
   var r = await api(url, { signal: signal });
-  return { items: r.analyses || [], next: r.next_before || '' };
+  return { items: r.analyses || [], next: r.next_before || '', skipped: Number(r.skipped || 0) };
+}
+// 脏数据提示条：跳过的坏行不进列表，但必须告诉用户「不是没有更多，是被跳过」
+function skipNoticeHtml() {
+  var n = (SKIP_NOTICE.msg || 0) + (SKIP_NOTICE.ana || 0);
+  if (!n) return '';
+  var parts = [];
+  if (SKIP_NOTICE.msg) parts.push('消息 ' + SKIP_NOTICE.msg + ' 条');
+  if (SKIP_NOTICE.ana) parts.push('分析 ' + SKIP_NOTICE.ana + ' 条');
+  return '<div class="card skip-note" role="status">⚠️ 有 ' + esc(parts.join(' / ')) +
+    ' 因格式损坏被跳过（服务端 skipped 计数），列表条数少于实际库存属正常。</div>';
 }
 // 排队任务（端上 WorkManager 队列 + 待同步消息队列）
 async function fetchQueue(signal) {
   var r = await api('queue?limit=200', { signal: signal });
   return { items: r.tasks || [], summary: r.summary || null, devices: r.devices || [] };
+}
+// 全库聚合真值：消息 / 分析 / 排队三段，与前端已加载多少条无关
+async function fetchStats(signal) {
+  return await api('stats', { signal: signal });
+}
+// 下一步建议：服务端表驱动规则，最多 3 条
+async function fetchSuggests(signal) {
+  var r = await api('suggests/next', { signal: signal });
+  return { items: r.suggests || [] };
 }
 // 由当前 ANALYSES 重建派生索引：同一复合会话保留 received_at 最新的一条待办
 function rebuildDerived() {
@@ -1824,10 +1934,12 @@ async function loadMore(kind) {
       ANALYSES = ANALYSES.concat(r.items);
       ANA_NEXT = r.next;
       ANA_PAGES++;
+      SKIP_NOTICE.ana = (SKIP_NOTICE.ana || 0) + (r.skipped || 0);
     } else {
       MSGS = MSGS.concat(r.items);
       MSG_NEXT = r.next;
       MSG_PAGES++;
+      SKIP_NOTICE.msg = (SKIP_NOTICE.msg || 0) + (r.skipped || 0);
     }
     rebuildDerived();
   } catch (e) {
@@ -1868,6 +1980,15 @@ async function load(reason) {
       fetchQueue(ctrl.signal).catch(function (e) {
         if (e && e.kind === 'abort') throw e;
         return { items: [], summary: null, devices: [], err: (e && e.message) ? e.message : '排队任务接口不可用' };
+      }),
+      // 聚合真值与建议同样单独兜底：拿不到就退回本地估算，不影响主数据流
+      fetchStats(ctrl.signal).catch(function (e) {
+        if (e && e.kind === 'abort') throw e;
+        return { err: (e && e.message) ? e.message : '统计接口不可用' };
+      }),
+      fetchSuggests(ctrl.signal).catch(function (e) {
+        if (e && e.kind === 'abort') throw e;
+        return { items: [], err: (e && e.message) ? e.message : '建议接口不可用' };
       })
     ]);
     // 旧响应后到 -> 丢弃，不能覆盖新数据
@@ -1878,11 +1999,19 @@ async function load(reason) {
     ANALYSES = res[1].items || [];
     ANA_NEXT = res[1].next || '';
     ANA_PAGES = ANALYSES.length ? 1 : 0;
+    SKIP_NOTICE = { msg: res[0].skipped || 0, ana: res[1].skipped || 0 };
+    if (SKIP_NOTICE.msg || SKIP_NOTICE.ana) {
+      toast('有 ' + ((SKIP_NOTICE.msg || 0) + (SKIP_NOTICE.ana || 0)) + ' 条脏数据被跳过');
+    }
     ADVISORS = (res[2] && res[2].reports) || [];
     QUEUE = (res[3] && res[3].items) || [];
     QUEUE_SUMMARY = (res[3] && res[3].summary) || null;
     QUEUE_ERR = (res[3] && res[3].err) || '';
     QUEUE_DEVICES = (res[3] && res[3].devices) || [];
+    // 聚合真值：只有拿到 ok 字段才算成功，否则视为不可用并记原因
+    if (res[4] && res[4].ok) { STATS = res[4]; STATS_ERR = ''; }
+    else { STATS = null; STATS_ERR = (res[4] && res[4].err) || '统计接口不可用'; }
+    SUGGESTS = (res[5] && res[5].items) || [];
     AUTH_MODE = false;
     HAS_DATA = true;
     // 「未读分析」= 上次同步之后才到达的分析（首次同步时全部算新增）
@@ -2071,13 +2200,50 @@ function render() {
   renderBadges();
   renderData();
 }
+// 下一步建议：服务端表驱动规则给的 0–3 条动作，按 jump 提供跳转按钮
+function suggestHtml(s) {
+  if (!s) return '';
+  var jumpMap = { queue: 'queue', todo: 'todo', conv: 'conv', adv: 'adv' };
+  var to = jumpMap[s.jump] || '';
+  var labelMap = { queue: '去看排队', todo: '去处理待办', conv: '去看会话', adv: '去看顾问' };
+  var act = to ? ('<button type="button" class="btn btn-secondary" data-action="jump"' +
+    ' data-jump="' + esc(to) + '">' + esc(labelMap[to] || '去看看') + '</button>') : '';
+  return '<div class="card suggest-card">' +
+    '<div class="conv-head"><span class="conv-main">' +
+    '<span class="conv-title-row"><span class="conv-name">' + esc(s.title || '建议') + '</span>' +
+    '<span class="badge b-app">优先级 ' + esc(s.priority == null ? '—' : s.priority) + '</span>' +
+    '</span></span></div>' +
+    (s.why ? '<div class="ana-meta">为什么：' + esc(s.why) + '</div>' : '') +
+    (s.how ? '<div class="ana-meta">怎么做：' + esc(s.how) + '</div>' : '') +
+    (s.evidence ? '<div class="conv-preview"><span class="pv-text">证据：' + esc(s.evidence) +
+      '</span></div>' : '') +
+    (act ? '<div class="state-actions">' + act + '</div>' : '') +
+    '</div>';
+}
+function suggestSections() {
+  if (!SUGGESTS || !SUGGESTS.length) return [];
+  var out = [{
+    key: 'suggest-head',
+    html: '<div class="sec-head">下一步建议（' + SUGGESTS.length + '）</div>',
+    full: true
+  }];
+  SUGGESTS.forEach(function (s, i) {
+    out.push({ key: 'suggest:' + i + ':' + encKey(String(s.type || '')), html: suggestHtml(s) });
+  });
+  return out;
+}
+// 脏数据提示（skipped 累计），放在建议之前
+function skipSections() {
+  var h = skipNoticeHtml();
+  return h ? [{ key: 'skip-note', html: h, full: true }] : [];
+}
 // 当前 tab 的 section 列表（每个 tab 渲染函数返回 [{key, html, full}]）
 function renderTabSections() {
-  if (CUR_TAB === 'conv') return renderConvs();
-  if (CUR_TAB === 'todo') return renderTodos();
-  if (CUR_TAB === 'queue') return renderQueue();
-  if (CUR_TAB === 'stat') return renderStats();
-  return renderAdvisor();
+  if (CUR_TAB === 'conv') return skipSections().concat(suggestSections(), renderConvs());
+  if (CUR_TAB === 'todo') return skipSections().concat(suggestSections(), renderTodos());
+  if (CUR_TAB === 'queue') return skipSections().concat(suggestSections(), renderQueue());
+  if (CUR_TAB === 'stat') return skipSections().concat(suggestSections(), renderStats());
+  return skipSections().concat(suggestSections(), renderAdvisor());
 }
 // 同步 tab 状态：roving tabindex（选中 tab 可 Tab 进入，其余 -1）+ aria-selected
 function syncTabs(t) {
@@ -2195,6 +2361,7 @@ function handleAction(action, btn) {
   if (action === 'queue-filter') { setQueueState(btn.getAttribute('data-state') || ''); return; }
   if (action === 'queue-device') { setQueueDevice(btn.getAttribute('data-device') || ''); return; }
   if (action === 'conv-dim') { setConvGroupDim(btn.getAttribute('data-dim') || 'date'); return; }
+  if (action === 'jump') { switchTab(btn.getAttribute('data-jump') || 'conv'); return; }
 }
 function bindDelegation() {
   var data = $('data');
@@ -2525,6 +2692,7 @@ function renderAnalysisBlock(a) {
   var html = '<div class="todo-block">';
   if (a.s1) {
     var s1 = a.s1, chips = '';
+    chips += redactBadge(a);
     if (s1.need_action) {
       var prob = Number(s1.need_action.prob);
       chips += '<span class="chip warn">⚡待办 ' +
@@ -2554,7 +2722,7 @@ function renderAnalysisBlock(a) {
     }
     html += '</div>';
   }
-  return html + '</div>';
+  return html + redactDetail(a) + '</div>';
 }
 
 // 单条待办的 section：每条一个 section，key 稳定，改一条不会带动其它条重绘
@@ -2627,7 +2795,8 @@ function renderStats() {
   var q = QUERY.trim().toLowerCase();
   var msgs = filteredMsgs();
   var analyses = filteredAnalyses();
-  var total = msgs.length;
+  // 无搜索/无来源过滤时用 /stats 的整库真值，否则退回「已加载」口径
+  var useSrv = !!(STATS && !APP_FILTER && !q);
   var bySrc = {};
   var byApp = {};
   var lastReport = 0;
@@ -2640,28 +2809,68 @@ function renderStats() {
   });
   var analyzedConvs = {};
   analyses.forEach(function (a) { analyzedConvs[ckOf(a)] = 1; });
+  if (useSrv) {
+    bySrc = STATS.messages.by_source || {};
+    byApp = STATS.messages.by_pkg || {};
+  }
+  var total = useSrv ? (STATS.messages.total || 0) : msgs.length;
+  var convTotal = useSrv ? (STATS.messages.convs || 0) : Object.keys(analyzedConvs).length;
+  var anaTotal = useSrv ? (STATS.analyses.total || 0) : analyses.length;
+  var lastMs = useSrv ? (STATS.messages.last_received_at || 0) : lastReport;
   function cell(num, label) {
     return '<div class="card"><div class="stat-num">' + esc(num) + '</div>' +
       '<div class="stat-label">' + esc(label) + '</div></div>';
   }
-  var srcTxt = Object.keys(bySrc).map(function (k) {
-    return (k === 'android-db' ? '数据库' : k === 'android-notification' ? '通知' : k) +
-      ' ' + bySrc[k];
+  // /stats 的 by_pkg / by_source 是 [{pkg|source, count}]，前端本地算的是 {键: 次数}；两种形状都要能吃
+  function pairList(obj, keyName) {
+    if (Object.prototype.toString.call(obj) === '[object Array]') {
+      return obj.map(function (x) {
+        return [String(x && x[keyName] != null ? x[keyName] : ''), Number(x && x.count || 0)];
+      });
+    }
+    return Object.keys(obj || {}).map(function (k) { return [k, Number(obj[k] || 0)]; });
+  }
+  var srcPairs = pairList(bySrc, 'source');
+  var appPairs = pairList(byApp, 'pkg');
+  var srcTxt = srcPairs.map(function (p) {
+    return (p[0] === 'android-db' ? '数据库' : p[0] === 'android-notification' ? '通知' : p[0]) +
+      ' ' + p[1];
   }).join(' / ');
-  var appTxt = Object.keys(byApp).map(function (k) {
-    return pkgLabel(k) + ' ' + byApp[k];
+  var appTxt = appPairs.map(function (p) {
+    return pkgLabel(p[0]) + ' ' + p[1];
   }).join(' / ');
   var out = [];
   out.push({
     key: 'stat-grid',
     html: '<div class="stat-grid">' +
-      cell(total, '消息总数') +
-      cell(Object.keys(analyzedConvs).length, '已分析会话数') +
-      cell(analyses.length, '分析结果数') +
-      cell(lastReport ? fmtTime(lastReport) : '—', '最近上报时间') +
+      cell(total, useSrv ? '消息总数（全库）' : '消息总数（已加载）') +
+      cell(useSrv ? convTotal : Object.keys(analyzedConvs).length,
+        useSrv ? '总会话数（全库）' : '已分析会话数') +
+      cell(anaTotal, useSrv ? '分析结果数（全库）' : '分析结果数') +
+      cell(lastMs ? fmtTime(lastMs) : '—', '最近上报时间') +
       '</div>',
     full: true
   });
+  if (useSrv) {
+    out.push({
+      key: 'stat-redact',
+      html: '<div class="card"><div class="stat-label">脱敏情况</div>' +
+        '<div class="stat-value">' + (STATS.analyses.redacted_cases || 0) + ' 条已脱敏 / ' +
+        (STATS.analyses.redaction_hits || 0) + ' 处命中</div>' +
+        '<div class="ov-sub">上报前已把命中规则的内容替换为占位符，原文不出设备</div></div>'
+    });
+    var kindTxt = pairList(STATS.queue.by_kind || [], 'kind').map(function (p) {
+      return p[0] + ' ' + p[1];
+    }).join(' / ');
+    out.push({
+      key: 'stat-queue',
+      html: '<div class="card"><div class="stat-label">排队任务</div>' +
+        '<div class="stat-value">活跃 ' + (STATS.queue.active || 0) + ' · 失败 ' +
+        (STATS.queue.failed || 0) + ' · 陈旧 ' + (STATS.queue.stale || 0) + '</div>' +
+        '<div class="ov-sub">' + esc(kindTxt || '暂无任务') + ' · 设备 ' +
+        (STATS.queue.devices || 0) + ' 台</div></div>'
+    });
+  }
   out.push({
     key: 'stat-app',
     html: '<div class="card"><div class="stat-label">应用分布</div>' +
@@ -2692,12 +2901,14 @@ function renderStats() {
       var html = '<div class="card">' +
         '<div class="ana-head">' + appBadge +
         '<span class="conv-name">' + esc(a.conversation) + '</span>' +
-        '<span class="conv-count">' + esc(a.case_id || '') + '</span></div>' +
+        '<span class="conv-count">' + esc(a.case_id || '') + '</span>' +
+        redactBadge(a) + '</div>' +
         '<div class="ana-meta">重要度 ' + esc(importanceOf(a) || '—') +
         ' · 分析于 ' + esc(a.analyzed_at || '') +
         ' · 消息 ' + esc(a.message_count == null ? 0 : a.message_count) + ' 条</div>' +
         (summary ? '<div class="conv-preview"><span class="pv-text">' +
           esc(summary) + '</span></div>' : '') +
+        redactDetail(a) +
         '</div>';
       out.push({
         key: 'stat-item:' + encKey(analysisKey(a)) + ':' + encKey(String(a.received_at || 0)),
@@ -3163,7 +3374,9 @@ self.addEventListener('fetch', function (e) {
       url.pathname.indexOf('/advisor') >= 0 ||
       url.pathname.indexOf('/weixin') >= 0 ||
       url.pathname.indexOf('/admin') >= 0 ||
-      url.pathname.indexOf('/queue') >= 0) {
+      url.pathname.indexOf('/queue') >= 0 ||
+      url.pathname.indexOf('/stats') >= 0 ||
+      url.pathname.indexOf('/suggests') >= 0) {
     return;  // 不拦截，默认网络
   }
   // 页面导航：只接管控制台骨架，且改成网络优先（离线时回缓存）。

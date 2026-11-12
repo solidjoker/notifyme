@@ -173,6 +173,11 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **排队通道 `/queue` 是 best-effort**：端上 `SyncWorker.pushQueue` 只认 2xx，失败既不重试也不阻塞消息同步（`doWork` 的 msgResult 不变）；服务端 `queue_tasks` 表按 `(device_id, task_id)` 主键整份覆盖，保留 7 天，`stale` = `updated_at` 超 30 分钟未更新。端侧 `task_id` 含原始会话名（与「分析通道原样上报 conversation」口径一致，服务端不哈希存储）——**别在控制台或文档里当隐私漏洞写，但确实存在**。
 - **控制台有 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）**：改 `server/console_ui.py` 的 HTML/CSS/JS 后必须自检三件事：① 内联脚本用 `node --check` 过一遍（脚本 `check_console_js.py`）；② `python -m pytest server/test_console_queue.py server/test_console_ui.py -q`；③ 浏览器实跑看 `errs: []`。**局部重绘 `patchSections` 只追加 `.pane-sec`，不清理临时节点** —— 骨架屏残留就是这么来的，改它时要顺手清掉没有 `data-sec` 的子节点。桌面布局里 `.tabbar` 必须是 `position:sticky`（媒体查询里若写成 `order:-1 + position:static` 会把标签栏甩到页面最顶）。
 - **端侧排队上报的 device_id 不能碰硬件标识**：`QueueStateCollector` 用 SharedPreferences("queue_state", "device_seed") 里的随机种子做 FNV-1a 派生（`android-` + 8 位 hex），**不要改用 ANDROID_ID / IMEI / 序列号**。
+- **控制台统计口径＝服务端全库真值，不是前端已加载页**：控制台概览条与统计 Tab 的数据来自 `GET /stats`（server/stats_api.py 聚合全库），
+前端只有在接口不可用或用户切了来源过滤时才退回本地估算，并在指标下方标「估算 · 仅已加载 N 条」（server/console_ui.py 的 `useSrv` 分支）。
+两个坑：① `/stats` 的 `by_pkg` / `by_source` / `by_kind` 是**对象数组** `[{pkg|source|kind, count}]`，而前端本地算法生成的是 `{键: 次数}` —— 必须走 `pairList()` 归一化再渲染，
+直接 `Object.keys()` 会拿到下标 0/1 打印成 `[object Object]`；② 分析侧的 `redacted` / `redaction_rules` / `redaction_hits` 字段服务端一直返回，
+但前端要显式渲染（`redactBadge` / `redactDetail`）并纳入 `analysisSearchText` 搜索，否则用户看不到「哪些内容被替换成了占位符」。
 - **周期分析任务按 tag 反查不到就不上报**：`AnalysisScheduler` 的周期任务（unique 名 `wechat_analysis` / `conv_analysis_<id>`）不带 tag，`QueueStateCollector.collect()` 只按 tag `analysis_on_demand` / `analysis_conv:<id>` 采集，所以控制台「排队」Tab 里看不到周期任务——这是已知取舍，不是 bug。
 
 - **会话卡内的「日期 / 发送者」两级分组**：规则在 `server/console_classify.js` 的 `groupMessages(msgs, dim, getTs, getSender)` —— **它按 `getTs` 返回的精确值分桶，不自己按天切**，所以调用方必须传「当天零点对齐」的时间戳（`server/console_ui.py` 的 `dayStartMs()`），直接传原始毫秒会一条消息一个组。维度切换状态存 `localStorage` 键 `wx_group_v1`（`date` / `sender`），前端 `setConvGroupDim` / `convDimBar` / `groupMsgsByDim` / `convGroupHtml` 四处要一起改；折叠仍复用 `#data` 上的 `data-action="toggle"` 事件委托（一级 key = `baseKey|g.key`，子组 key = `gkey|c.key`）。
