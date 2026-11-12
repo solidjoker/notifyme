@@ -13,7 +13,7 @@ notifyme = 微信通知本地智能分析助手（本地优先，通知原文留
 | 目录 | 内容 |
 |---|---|
 | `app/` | Android 客户端（Kotlin；传统 View + RecyclerView，**无 Compose**；JSON 用 `org.json`，**无 Gson/Moshi**） |
-| `server/` | 可选自托管 Flask 服务端（跨设备查看 / 历史回填 / PWA 控制台 / 排队任务看板）；已拆成 5 个模块：`app.py`（Flask 壳 + 鉴权 + 控制台/落地页）、`util.py`（纯函数工具层）、`storage.py`（SQLite / JSONL / 顾问存档 / 排队任务表）、`routes.py`（数据面路由，含 `/queue`）、`console_ui.py`（PWA 前端常量，5 个 Tab）+ `console_classify.js`（归类规则单一事实源，UMD 可 node 单测） |
+| `server/` | 可选自托管 Flask 服务端（跨设备查看 / 历史回填 / PWA 控制台 / 排队任务看板）；已拆成 5 个模块：`app.py`（Flask 壳 + 鉴权 + 控制台/落地页）、`util.py`（纯函数工具层）、`storage.py`（SQLite / JSONL / 顾问存档 / 排队任务表）、`routes.py`（数据面路由，含 `/queue`）、`console_ui.py`（PWA 前端常量，5 个 Tab；视觉走 aura 设计语言：暖米白底 + 发丝描边 + 胶囊控件，颜色只落在两个变量块）+ `console_classify.js`（归类规则单一事实源，UMD 可 node 单测） |
 | `docs/` | `BUILD.md`（构建）、`ROADMAP.md`（里程碑）、`architecture/`（9 张架构图） |
 | `third_party/llama.cpp` | M4 端侧推理依赖，CI 里 clone v0.5.0，**不入库** |
 

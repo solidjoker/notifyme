@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **92 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 99 个，`app/src/test` 47 个），服务端已拆成 **5+1 模块**（`app.py` 710 行 / `util.py` 289 / `storage.py` 758 / `routes.py` 1036 / `console_ui.py` 3144 + `console_classify.js` 434），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **92 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 99 个，`app/src/test` 47 个），服务端已拆成 **5+1 模块**（`app.py` 711 行 / `util.py` 290 / `storage.py` 759 / `routes.py` 1037 / `console_ui.py` 3218 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -213,8 +213,8 @@ prefs retention_state           Retention.kt:25           保留期清理状态
 | `server/util.py` | 289 | 纯函数工具层（校验、转义、时区、格式化） | `_validate_item` @257 · `_safe_int` @49 · `_esc_html` @220 · `_fmt_ts` @170 |
 | `server/storage.py` | 758 | SQLite / JSONL 存档 / 顾问存档 / 抽库后台 / 排队任务表 | `init_db` @58 · `_append_jsonl` @197 · `_advisor_jsonl_path` @216 · `_run_extract_bg` @437 · `upsert_queue_tasks` @613 · `query_queue_tasks` @659 · `queue_devices` @718 |
 | `server/routes.py` | 1036 | 数据面路由，`register(app)` 挂载 10 条 | `register` @1024 · `add_url_rule` 映射 @1026-1035 · `receive_queue` @903 · `query_queue` @976 |
-| `server/console_ui.py` | 3144 | 控制台前端常量（HTML/CSS/JS 全内联，5 个 Tab） | `CONSOLE_HTML` @13 · `CONSOLE_MANIFEST` @2962 · `CONSOLE_SW` @3008 |
-> 行数为当前源码的**文件总行数**（wc -l 口径）；若只计非空行，依次为 app.py 599 / util.py 255 / storage.py 705 / routes.py 978 / console_ui.py 3058 / console_classify.js 407 / android_db_extract.py **1095** / pc_db_extract.py **981**。
+| `server/console_ui.py` | 3218 | 控制台前端常量（HTML/CSS/JS 全内联，5 个 Tab） | `CONSOLE_HTML` @13 · `CONSOLE_MANIFEST` @2962 · `CONSOLE_SW` @3008 |
+> 行数为当前源码的**文件总行数**（wc -l 口径）；若只计非空行，依次为 app.py 599 / util.py 255 / storage.py 705 / routes.py 978 / console_ui.py 3128 / console_classify.js 407 / android_db_extract.py **1095** / pc_db_extract.py **981**。
 
 ![服务端架构图](diagrams/07-server-architecture.png)
 
