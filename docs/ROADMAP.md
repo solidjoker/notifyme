@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 58 个 `.kt` / 741 条（`app/src/test`）+ 服务端 `server/test_*.py`（513 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 59 个 `.kt` / 761 条（`app/src/test`）+ 服务端 `server/test_*.py`（513 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -195,12 +195,12 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
 **目标**：数据出设备之前，用户能选择脱敏，并能看见脱敏了什么。
 
 任务清单：
-1. [x] `RedactorCore`：规则化端侧脱敏（手机号、身份证、银行卡、邮箱、URL、金额、地址、姓名）；纯 JVM、30 个单测
+1. [x] `RedactorCore`：规则化端侧脱敏（手机号、身份证、银行卡、邮箱、URL、金额、地址、姓名）；纯 JVM、30 个单测。**后续补强（M3+，2026-11-13）**：姓名别名的盐从「无盐 sha256(名字)」升级为「设备随机盐 + sha256(盐 ‖ 0x00 ‖ 名字)」，抽成 `AliasSaltCore`（`object AliasSaltCore` 纯函数 16 条单测 + `AliasSaltStore` 落盘），并给 `redactCase` / `redactMessages` 两个窗口级函数补了 6 条端到端单测
 2. [x] 三档策略：**关闭**（默认）/ **出设备脱敏**（发往云端 S1/S2、上报前脱敏）/ **仅端侧分析**（云端分析与上报整体停用）；`PrivacyModeState` 语义 6 个单测
 3. [x] 单点插入：`AnalysisWorker` 云端 S1（laya）与 S2 统一用脱敏副本，本地模型/prefilter 用原文；`SyncWorker` 消息/分析/顾问三通道按模式门控
 4. [x] 会话级白名单：`bypassConvIds` 存 `PrivacyConfig`（prefs `privacy_config`），控制台多选
 5. [x] **脱敏预览页** `RedactorPreviewActivity`：最近消息逐行「原文 → 将发送文本」对照，模式横幅与白名单如实标注
-6. [x] `PRIVACY.md` 增补脱敏章节（三档口径、规则清单、保守取舍、哈希别名局限）；分析记录只存 `redacted` / 命中规则 id / 命中数，不记原文
+6. [x] `PRIVACY.md` 增补脱敏章节（三档口径、规则清单、保守取舍、哈希别名局限）；分析记录只存 `redacted` / 命中规则 id / 命中数，不记原文。**2026-11-13 已把别名局限从「可被候选名单反解」改为「设备随机盐：拿到设备存储的人才能重算」**，并补了设置页「别名盐」重置入口
 
 提交链：`b21f067`（M3.1 脱敏内核）→ `ce6468a`（M3.2-M3.6 策略/隐私卡/云端接线/预览）→ M3.7 文档。
 
@@ -209,7 +209,9 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
 - [x] 模式门控口径单测钉死（LOCAL_ONLY 的 cloudBlocked、白名单内外 shouldRedact）；真机抓包验证留待真机回归
 - [x] 预览页对照准确（白名单会话、OFF 模式显原文；LOCAL_ONLY 横幅注明不发送）
 
-遗留：真机「仅端侧」抓包确认零云端请求（与 M2 真机端到端回归一并执行）；消息文本里非会话名/非发送者的人名无法识别替换（PRIVACY.md 已注明）。
+遗留：真机「仅端侧」抓包确认零云端请求（与 M2 真机端到端回归一并执行）；消息文本里非会话名/非发送者的人名无法识别替换（PRIVACY.md 已注明）；顾问通道（`AdvisorWorker.buildDigest`）的会话名只走规则、不走姓名别名映射（报告是聚合文本、没有窗口发送者名单），属已知取舍。
+
+**M3 补强（2026-11-13，姓名别名设备随机盐）**：新增 `AliasSaltCore`（143 行，纯函数 16 条单测）+ `AliasSaltStore`（盐存 `privacy_config` / `alias_salt`，32 字节 SecureRandom）；`NameAliases` 由 `object` 改成 `class NameAliases(salt)`，`redactCase` / `redactMessages` 增加必填 `salt` 参数；四个调用点（`AnalysisWorker` / `SyncWorker` 消息通道 / `SyncWorker` 顾问报告 / `RedactorPreviewActivity`）全部接线；隐私设置页新增「别名盐」按钮（未生成 / 已生成 → 确认重置）。盐为空时逐字节退化为 M3 初版的无盐 sha256，历史别名不失效。
 
 ---
 

@@ -66,7 +66,7 @@ flowchart TB
 
     REC["AnalysisCaseRecord 落库<br/>AnalysisStore → files/analysis.jsonl<br/>含 forks 决策轨迹数组 + raw_json 原文"]:::out
 
-    REC --> RED["脱敏标记 RedactorCore.kt 250<br/>RedactorRules ID_CARD/PHONE/NAME 等<br/>CLOUD_REDACT 下产出 redacted=true"]:::out
+    REC --> RED["脱敏标记 RedactorCore.kt 293<br/>RedactorRules ID_CARD/PHONE/NAME 等<br/>姓名别名走 AliasSaltCore 设备随机盐<br/>CLOUD_REDACT 下产出 redacted=true"]:::out
     RED --> TAG["会话标签 ConvTagCore.kt 47<br/>NONE / TODO / TRACK / DONE / NOISE"]:::out
     TAG --> REC
 

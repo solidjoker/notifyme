@@ -521,7 +521,7 @@ class AnalysisWorker(
         // 会话级提示词 background 同走脱敏，防止用户写进提示词的身份信息漏出设备。
         val privacy = PrivacyConfig.get(applicationContext)
         val redaction = if (privacy.shouldRedact(ConvKey(kase.pkg, kase.conversation))) {
-            redactCase(kase, privacy.enabledRules)
+            redactCase(kase, AliasSaltStore.salt(applicationContext), privacy.enabledRules)
         } else null
         val sendCase = redaction?.case ?: kase
         val cloudBackground = redaction?.redactExtra(background) ?: background

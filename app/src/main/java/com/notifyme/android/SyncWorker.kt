@@ -230,7 +230,11 @@ class SyncWorker(
         // M3 出设备脱敏：按会话分组替换消息文本/发送者/会话名；
         // PendingEntry.id 不在 message 内，removeSent 仍按原 id 剔除
         val outgoing = if (privacy.cloudRedact) {
-            redactMessages(pending.map { it.message }, privacy.enabledRules)
+            redactMessages(
+                pending.map { it.message },
+                AliasSaltStore.salt(applicationContext),
+                privacy.enabledRules
+            )
         } else pending.map { it.message }
 
         // 批次条目：id 用于上报成功后精确剔除，json 是蛇形命名的上报片段

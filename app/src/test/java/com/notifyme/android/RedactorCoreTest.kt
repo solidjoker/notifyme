@@ -207,34 +207,116 @@ class RedactorCoreTest {
 
     // ---------------- NameAliases ----------------
 
+    /** 无盐别名（M3 初版口径），只在本文件里用于「历史别名可复现」断言。 */
+    private val legacy = NameAliases(AliasSaltCore.LEGACY_SALT)
+
     @Test
     fun `同名得到相同别名异名不同且不含原文`() {
-        val a1 = NameAliases.person("张三")
-        val a2 = NameAliases.person("张三")
-        val b = NameAliases.person("李四")
+        val a1 = legacy.person("张三")
+        val a2 = legacy.person("张三")
+        val b = legacy.person("李四")
         assertEquals(a1, a2)
         assertFalse(a1 == b)
         assertFalse(a1.contains("张三"))
         assertTrue(a1.startsWith("[人名"))
-        assertTrue(NameAliases.group("项目群").startsWith("[群"))
+        assertTrue(legacy.group("项目群").startsWith("[群"))
     }
 
     @Test
     fun `nameMapFor 群聊会话名用群别名并收集发送者`() {
-        val map = NameAliases.nameMapFor(
+        val map = legacy.nameMapFor(
             "项目群", true, listOf("李四", "王五", "李四")
         )
-        assertEquals(NameAliases.group("项目群"), map["项目群"])
-        assertEquals(NameAliases.person("李四"), map["李四"])
-        assertEquals(NameAliases.person("王五"), map["王五"])
+        assertEquals(legacy.group("项目群"), map["项目群"])
+        assertEquals(legacy.person("李四"), map["李四"])
+        assertEquals(legacy.person("王五"), map["王五"])
         assertEquals(3, map.size)
     }
 
     @Test
     fun `nameMapFor 私聊发送者与会话同名时不重复`() {
-        val map = NameAliases.nameMapFor("张三", false, listOf("张三"))
+        val map = legacy.nameMapFor("张三", false, listOf("张三"))
         assertEquals(1, map.size)
-        assertEquals(NameAliases.person("张三"), map["张三"])
+        assertEquals(legacy.person("张三"), map["张三"])
+    }
+
+    @Test
+    fun `加盐后别名与无盐别名不同但形态一致`() {
+        val salted = NameAliases(AliasSaltCore.newSalt())
+        assertFalse(legacy.person("张三") == salted.person("张三"))
+        assertTrue(salted.person("张三").startsWith("[人名"))
+        assertEquals("[人名".length + AliasSaltCore.ALIAS_HEX_LEN + 1, salted.person("张三").length)
+        // 同一把盐内依旧幂等：窗口内同一个人必须能追踪
+        assertEquals(salted.person("张三"), salted.person("张三"))
+    }
+
+    // ---------------- 窗口级脱敏：redactCase / redactMessages ----------------
+
+    @Test
+    fun `redactCase 替换会话名与发送者且不改时间戳`() {
+        val salt = AliasSaltCore.newSalt()
+        val kase = AnalysisCase(
+            caseId = "c1",
+            conversation = "项目群",
+            pkg = AppSourceRegistry.PKG_WECHAT,
+            isGroup = true,
+            windowEnd = 1000L,
+            messages = listOf(
+                ChatMessage(
+                    sender = "李四", text = "电话 13812345678", timestamp = 10L,
+                    conversation = "项目群", isGroup = true
+                ),
+                ChatMessage(
+                    sender = "王五", text = "收到", timestamp = 20L,
+                    conversation = "项目群", isGroup = true
+                )
+            )
+        )
+        val out = redactCase(kase, salt)
+        val aliases = NameAliases(salt)
+        assertTrue(out.hitCount > 0)
+        assertEquals(1, out.hitCount)
+        assertEquals(listOf(RedactorRules.PHONE), out.rules)
+        assertEquals(aliases.group("项目群"), out.case.conversation)
+        assertEquals(aliases.person("李四"), out.case.messages[0].sender)
+        assertEquals(aliases.person("王五"), out.case.messages[1].sender)
+        assertEquals("电话 [手机号]", out.case.messages[0].text)
+        assertEquals(10L, out.case.messages[0].timestamp)
+        assertEquals("c1", out.case.caseId)
+    }
+
+    @Test
+    fun `redactMessages 按会话分组且输出顺序与输入一一对应`() {
+        val salt = AliasSaltCore.newSalt()
+        val input = listOf(
+            ChatMessage(
+                sender = "李四", text = "A1", timestamp = 1L,
+                conversation = "项目群", isGroup = true
+            ),
+            ChatMessage(
+                sender = "张三", text = "邮箱 a@b.com", timestamp = 2L,
+                conversation = "张三", isGroup = false
+            ),
+            ChatMessage(
+                sender = "王五", text = "A3", timestamp = 3L,
+                conversation = "项目群", isGroup = true
+            )
+        )
+        val out = redactMessages(input, salt)
+        val aliases = NameAliases(salt)
+        assertEquals(3, out.size)
+        assertEquals(aliases.group("项目群"), out[0].conversation)
+        assertEquals(aliases.group("项目群"), out[2].conversation)
+        assertEquals(aliases.person("张三"), out[1].conversation)
+        assertEquals("A1", out[0].text)
+        assertEquals("邮箱 [邮箱]", out[1].text)
+        assertEquals("A3", out[2].text)
+        assertEquals(out[0].conversation, out[2].conversation)
+    }
+
+    @Test
+    fun `redactMessages 空输入返回空`() {
+        assertEquals(0, redactMessages(emptyList(), AliasSaltCore.newSalt()).size)
     }
 
     // ---------------- 规则子集 ----------------

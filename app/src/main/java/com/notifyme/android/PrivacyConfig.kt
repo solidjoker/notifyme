@@ -52,7 +52,7 @@ data class PrivacyModeState(
  * 与其它配置 object 同口径——损坏/缺失回落默认，不抛异常。
  */
 object PrivacyConfig {
-    private const val PREFS_NAME = "privacy_config"
+    internal const val PREFS_NAME = "privacy_config"
     private const val KEY_MODE = "mode"
     private const val KEY_RULES = "enabled_rules"
     private const val KEY_BYPASS = "bypass_conv_ids"

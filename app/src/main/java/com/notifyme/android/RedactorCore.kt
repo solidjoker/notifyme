@@ -20,30 +20,35 @@ data class RedactionResult(
 }
 
 /**
- * 姓名/群名稳定别名（M3）：无状态、无需本地映射表。
+ * 姓名/群名稳定别名（M3 → M3.6 强匿名）：无身份映射表，只依赖一把本地盐。
  *
- * token = 前缀 + sha256(名字) 前 6 位十六进制——同一个名字在任意时间、
- * 任意会话里都得到同一个别名，模型仍能在窗口内追踪「同一个人」；
+ * token = 前缀 + sha256(salt ‖ 0x00 ‖ 名字) 前 6 位十六进制——**同一台设备上**同一个
+ * 名字在任意时间、任意会话里都得到同一个别名，模型仍能在窗口内追踪「同一个人」；
  * 不同名字得到不同别名。别名不含名字原文，也不保存身份映射。
  *
- * 局限（写进 PRIVACY.md）：哈希别名不是加密强度的匿名——拿到候选名单者
- * 可逐个哈希比对。真正强匿名请关闭姓名规则或用本地随机映射（未实现）。
+ * 盐由 [AliasSaltStore] 管理：每台设备 SecureRandom 随机、只存 app 私有 prefs、
+ * 不入库不上报不进日志。加盐后即使拿到外部候选名单，也无法逐个哈希反解别名。
+ * 传 [AliasSaltCore.LEGACY_SALT]（空盐）得到无盐别名，与 M3 初版逐字节一致，
+ * 只用于「历史别名可复现」断言，**生产调用点必须传真盐**。
+ *
+ * 局限（见 PRIVACY.md）：同名同设备别名稳定 = 可关联的伪匿名，盐泄露或拿到设备
+ * 存储者仍可重算；6 位十六进制是 24 bit，只用于区分窗口内少数几个人。
  */
-object NameAliases {
-    fun person(name: String): String = "[人名${hashShort(name)}]"
-    fun group(name: String): String = "[群${hashShort(name)}]"
+class NameAliases(private val salt: ByteArray = AliasSaltCore.LEGACY_SALT) {
 
-    private fun hashShort(name: String): String {
-        val digest = java.security.MessageDigest.getInstance("SHA-256")
-            .digest(name.toByteArray(Charsets.UTF_8))
-        return digest.joinToString("") { "%02x".format(it) }.take(6)
-    }
+    fun person(name: String): String = AliasSaltCore.personAlias(name, salt)
+
+    fun group(name: String): String = AliasSaltCore.groupAlias(name, salt)
 
     /**
      * 为一个分析窗口构建姓名映射：会话名（群→群别名）+ 窗口内全部发送者。
      * 发送者与会话同名时不重复（群里发言人恰为群名的情况沿用会话别名）。
      */
-    fun nameMapFor(conversation: String, isGroup: Boolean, senders: Collection<String>): Map<String, String> {
+    fun nameMapFor(
+        conversation: String,
+        isGroup: Boolean,
+        senders: Collection<String>
+    ): Map<String, String> {
         val map = LinkedHashMap<String, String>()
         if (conversation.isNotEmpty()) {
             map[conversation] = if (isGroup) group(conversation) else person(conversation)
@@ -224,11 +229,12 @@ data class RedactedCase(
  */
 fun redactCase(
     kase: AnalysisCase,
+    salt: ByteArray,
     enabledRules: Set<String> = RedactorRules.ALL
 ): RedactedCase {
     val senders = LinkedHashSet<String>()
     kase.messages.forEach { if (it.sender.isNotEmpty()) senders.add(it.sender) }
-    val nameMap = NameAliases.nameMapFor(kase.conversation, kase.isGroup, senders)
+    val nameMap = NameAliases(salt).nameMapFor(kase.conversation, kase.isGroup, senders)
     val core = RedactorCore(enabledRules, nameMap)
 
     var hits = 0
@@ -259,13 +265,15 @@ fun redactCase(
  */
 fun redactMessages(
     messages: List<ChatMessage>,
+    salt: ByteArray,
     enabledRules: Set<String> = RedactorRules.ALL
 ): List<ChatMessage> {
     class Ctx(val core: RedactorCore, val nameMap: Map<String, String>)
 
+    val aliases = NameAliases(salt)
     val byConv = HashMap<ConvKey, Ctx>()
     messages.groupBy { it.convKey }.forEach { (_, group) ->
-        val nameMap = NameAliases.nameMapFor(
+        val nameMap = aliases.nameMapFor(
             group.first().conversation,
             group.any { it.isGroup },
             group.mapTo(LinkedHashSet()) { it.sender }

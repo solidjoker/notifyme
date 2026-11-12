@@ -56,7 +56,7 @@ class RedactorPreviewActivity : Activity() {
                 state.cloudRedact && !state.shouldRedact(msg.convKey) -> full
                 else -> {
                     // 姓名映射按本条信息即可（窗口里多人时预览逐行展示）
-                    val nameMap = NameAliases.nameMapFor(
+                    val nameMap = AliasSaltStore.aliases(this).nameMapFor(
                         msg.conversation, msg.isGroup, listOf(msg.sender)
                     )
                     RedactorCore(state.enabledRules, nameMap).redact(full).text

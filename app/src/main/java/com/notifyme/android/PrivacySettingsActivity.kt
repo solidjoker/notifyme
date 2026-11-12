@@ -13,6 +13,9 @@ import android.widget.Toast
 /** 隐私脱敏设置页（自 ConsoleActivity 拆出，行为不变）：三模式按钮 + 规则/白名单对话框 + 预览入口。 */
 class PrivacySettingsActivity : Activity() {
 
+    /** 由 [setupPrivacySection] 装上的刷新闭包：onResume 复用，从预览页返回时标签不会停在旧态。 */
+    private var refreshUi: (() -> Unit)? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_privacy_settings)
@@ -23,6 +26,13 @@ class PrivacySettingsActivity : Activity() {
         setupPrivacySection()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // 从预览页回来时，盐可能已经在那里被首次生成（PreviewActivity 走别名会 ensure），
+        // 不刷新的话「别名盐：未生成」会一直挂着，和实际落盘状态矛盾。
+        refreshUi?.invoke()
+    }
+
     /** 隐私卡片初始化：三模式按钮 + 规则/白名单对话框 + 预览入口。 */
     private fun setupPrivacySection() {
         val btnOff = findViewById<Button>(R.id.btnPrivacyOff)
@@ -31,6 +41,7 @@ class PrivacySettingsActivity : Activity() {
         val tvSummary = findViewById<TextView>(R.id.tvPrivacySummary)
         val btnRules = findViewById<Button>(R.id.btnPrivacyRules)
         val btnBypass = findViewById<Button>(R.id.btnPrivacyBypass)
+        val btnAliasSalt = findViewById<Button>(R.id.btnPrivacyAliasSalt)
         val btnPreview = findViewById<Button>(R.id.btnPrivacyPreview)
 
         var state = PrivacyConfig.get(this)
@@ -50,6 +61,10 @@ class PrivacySettingsActivity : Activity() {
                 R.string.privacy_rules_btn, state.enabledRules.size, RedactorRules.ALL.size
             )
             btnBypass.text = getString(R.string.privacy_bypass_btn, state.bypassConvIds.size)
+            btnAliasSalt.text = getString(
+                if (AliasSaltStore.hasSalt(this)) R.string.privacy_alias_btn_set
+                else R.string.privacy_alias_btn_unset
+            )
         }
 
         fun setMode(mode: String) {
@@ -125,10 +140,30 @@ class PrivacySettingsActivity : Activity() {
             }.start()
         }
 
+        // 别名盐重置：设备被他人拿过 / 怀疑盐外泄时的补救手段。
+        // 没生成过盐就不必重置（真需要时首次脱敏会自动生成），给个提示即可。
+        btnAliasSalt.setOnClickListener {
+            if (!AliasSaltStore.hasSalt(this)) {
+                Toast.makeText(this, R.string.privacy_alias_reset_empty, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            android.app.AlertDialog.Builder(this)
+                .setTitle(R.string.privacy_alias_reset_title)
+                .setMessage(R.string.privacy_alias_reset_msg)
+                .setNegativeButton(R.string.common_cancel, null)
+                .setPositiveButton(R.string.privacy_alias_reset) { _, _ ->
+                    AliasSaltStore.reset(this)
+                    refresh()
+                    Toast.makeText(this, R.string.privacy_alias_reset_done, Toast.LENGTH_SHORT).show()
+                }
+                .show()
+        }
+
         btnPreview.setOnClickListener {
             startActivity(Intent(this, RedactorPreviewActivity::class.java))
         }
 
+        refreshUi = { refresh() }
         refresh()
     }
 }
