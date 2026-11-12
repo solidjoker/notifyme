@@ -190,10 +190,17 @@ internal object ReminderListCore {
     /**
      * 空态文案的码值（**不回中文字面量**，单测是纯 JVM 无资源）：
      *  - 完全没有记录 → `null`（调用方显示 `reminder_list_empty`）
-     *  - 有记录但当前筛选为空 → 返回该筛选码值，调用方按它选「本页没有 XX 的提醒」文案
+     *  - 有记录、且当前筛选**确实一条都没有** → 返回该筛选码值，调用方按它选
+     *    「本页没有 XX 的提醒」文案
+     *  - 有记录、筛选后仍有命中 → `null`（不能弹空态）
+     *
+     * 第三个分支是本方法唯一容易写错的地方：只看 `totalCount > 0 && filter != ALL`
+     * 就返回码值，会让「筛选命中多条」的页面同时显示列表和空态横幅（真机复现过）。
+     * 所以必须把**筛选后的可见条数**传进来，空态由它决定。
      */
-    fun emptyFilter(totalCount: Int, filter: String): String? {
+    fun emptyFilter(totalCount: Int, visibleCount: Int, filter: String): String? {
         if (totalCount == 0) return null
+        if (visibleCount > 0) return null
         val target = normalizeFilter(filter)
         return if (target == FILTER_ALL) null else target
     }

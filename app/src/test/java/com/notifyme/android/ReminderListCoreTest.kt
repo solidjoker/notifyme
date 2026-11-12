@@ -319,19 +319,33 @@ class ReminderListCoreTest {
 
     @Test
     fun `完全没有记录时返回 null 走通用空态`() {
-        assertNull(ReminderListCore.emptyFilter(0, ReminderListCore.FILTER_ATTENTION))
-        assertNull(ReminderListCore.emptyFilter(0, ReminderListCore.FILTER_ALL))
+        assertNull(ReminderListCore.emptyFilter(0, 0, ReminderListCore.FILTER_ATTENTION))
+        assertNull(ReminderListCore.emptyFilter(0, 0, ReminderListCore.FILTER_ALL))
+    }
+
+    @Test
+    fun `有记录、筛选后仍有命中时不弹空态`() {
+        // 真机 bug 回归：只要 totalCount>0 且 filter!=ALL 就返回码值，
+        // 会让「需要处理」筛选下明明有 1 条的页面同时展示列表和空态横幅。
+        assertNull(ReminderListCore.emptyFilter(5, 2, ReminderListCore.FILTER_ATTENTION))
+        assertNull(ReminderListCore.emptyFilter(5, 5, ReminderListCore.FILTER_ALL))
     }
 
     @Test
     fun `有记录但不过滤时返回 null`() {
-        assertNull(ReminderListCore.emptyFilter(5, ReminderListCore.FILTER_ALL))
-        assertNull(ReminderListCore.emptyFilter(5, "bogus"))
+        assertNull(ReminderListCore.emptyFilter(5, 0, ReminderListCore.FILTER_ALL))
+        assertNull(ReminderListCore.emptyFilter(5, 0, "bogus"))
     }
 
     @Test
-    fun `有记录但筛选为空时返回该筛选码值`() {
-        assertEquals(ReminderListCore.FILTER_ATTENTION, ReminderListCore.emptyFilter(5, ReminderListCore.FILTER_ATTENTION))
-        assertEquals(ReminderListCore.FILTER_EXPIRED, ReminderListCore.emptyFilter(5, ReminderListCore.FILTER_EXPIRED))
+    fun `筛选后一条都不剩时返回该筛选码值`() {
+        assertEquals(
+            ReminderListCore.FILTER_ATTENTION,
+            ReminderListCore.emptyFilter(5, 0, ReminderListCore.FILTER_ATTENTION)
+        )
+        assertEquals(
+            ReminderListCore.FILTER_EXPIRED,
+            ReminderListCore.emptyFilter(2, 0, ReminderListCore.FILTER_EXPIRED)
+        )
     }
 }

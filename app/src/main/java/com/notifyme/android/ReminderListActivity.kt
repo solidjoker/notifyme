@@ -193,7 +193,7 @@ class ReminderListActivity : Activity() {
             statusOf = { it.status },
             eventTimeOf = { it.eventTime }
         )
-        renderEmptyState()
+        renderEmptyState(kept.size)
         val rows = buildRows(arranged, now)
         recycler.visibility = if (rows.isEmpty()) View.GONE else View.VISIBLE
         recycler.adapter = ReminderAdapter(
@@ -234,9 +234,9 @@ class ReminderListActivity : Activity() {
      * 空态：完全没有记录走通用文案；否则按当前筛选说「本组没有」——
      * 用户点了一个 chip 看到空白时，必须能立刻明白是筛选没命中，不是数据丢了。
      */
-    private fun renderEmptyState() {
-        val none = ReminderListCore.emptyFilter(loaded.size, filter)
-        if (loaded.isNotEmpty() && none == null) {
+    private fun renderEmptyState(visibleCount: Int) {
+        val none = ReminderListCore.emptyFilter(loaded.size, visibleCount, filter)
+        if (none == null) {
             emptyView.visibility = View.GONE
             return
         }
