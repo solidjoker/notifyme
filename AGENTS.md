@@ -254,3 +254,11 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ④ **`MessageStore.candidateGroups` 必须 `internal`**：它返回 `Map<ConvKey, List<ChatMessage>>` 但被 `CandidateWindowCore` 的参数类型牵连，声明成 public 会报 `public function exposes its internal return type`（与 `readWindow` 同一个坑）。
   ⑤ **分组顺序保首次出现（`LinkedHashMap`）**，后续 `sortedBy { windowEnd }` 是稳定排序 —— 同一份输入必须得到同一轮入选顺序，改排序方式前先想清楚「可复现」这条。
   改 `PER_CONV`、排序方向或分组语义前先跑 `app/src/test/java/com/notifyme/android/CandidateWindowCoreTest.kt`（16 条，含「600 条噪声 + 本会话仍在候选」与旧写法对照实验）。
+
+- **分析记录（`analysis.jsonl`）的取窗口口径全在 `AnalysisWindowCore`**（internal object，纯函数 + 23 条单测；文件级操作在同文件的 `internal class AnalysisWindowFile`，照 `AnalysisRejectFile` 范式），别在 Activity / Worker 里另写 `readRecent(N).filter{}` / `groupBy{}`：
+  ① **`AnalysisStore.readRecent(context, limit)` 是「文件尾部 limit 行」**，只留给「本意就是全局最近 N 条」的调用点（`AdvisorWorker` 顾问摘要、`AnalysisSettingsActivity` 统计文案）。要「某会话的全部记录」「每会话最新一条」「全库列表」时必须走 `readGrouped` / `readForConversation` / `readRecentWindow` / `latestByConvKey` —— 否则别的会话把尾部占满，安静会话的 case 一条都读不到（`AnalysisListActivity` 从会话头进入会显示「暂无分析结果」、首页 `latestCases` 丢掉它、详情页轮询与悬浮面板取不到最新结论，而记录仍在文件里）。这是 `MessageStore.readRecent` 同源隐患在分析侧的镜像，已经出现过三处（列表 / 首页 feed / `latestByConvKey`）。
+  ② **窗口量级分两档，别合并成一个常量**：`TAIL_LINES = 5_000` 给列表与首页聚合（一次读、多处派生）；`POLL_LINES = 1_500` 给详情页轮询（`ConversationActivity` 每 4 秒）与悬浮面板（每次展开）—— 这两条路径调用频繁，窗口给到 5 000 等于每 4 秒解析 5 000 行 JSON。`LIST_LIMIT = 200` 只是列表展示上限，`UNLIMITED = -1` 是「本会话不限条数」。
+  ③ **`group()` 保首次出现序、组内按 `windowEnd` 升序**：组内升序即「窗口推进顺序」，UI 与搜索直接当时间轴读；`latest()` 取每组末条，**同 `windowEnd` 取最后写入那条**（旧 `maxByOrNull` 取第一条，只在手工造数据 / 导入时能看出差别，别为它改语义）。
+  ④ **不按会话设条数上限**（与 `CandidateWindowCore.PER_CONV` 不同）：聚合前不知道有多少会话，内存由 `TAIL_LINES` 兜住。已知局限写进类注释：窗口外的老 case 读不到，要更强公平性得上索引。别悄悄把 `TAIL_LINES` 涨到几十万来「修」它。
+  ⑤ **新增返回这些内部类型的 `AnalysisStore` 方法必须 `@Synchronized` + 参数用 `JsonlStore(storeFile(context))` 现造**（与 `readRecent` / `readWindow` 同风格），否则并发追加时会读到半行。`AnalysisWindowFile` 自身只管读，不缓存。
+  改窗口量级、排序方向或「最新一条」的取舍前先跑 `app/src/test/java/com/notifyme/android/AnalysisWindowCoreTest.kt`（23 条，含 600 条噪声 + 本会话 3 条的对照回归）。
