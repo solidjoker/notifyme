@@ -258,8 +258,8 @@ Android 单测 + 双 flavor 构建 + Lint，并额外汇总 Lint 报告里的 is
 │       │   ├── AndroidManifest.xml      # 服务/权限/Activity 声明
 │       │   ├── res/                     # 布局、图标、主题、服务配置 XML
 │       │   ├── cpp/                     # M4 端侧推理 JNI（llama.cpp）
-│       │   └── java/com/notifyme/android/  # Kotlin 主源码（111 个 .kt）
-│       └── test/java/com/notifyme/android/  # 纯 JVM 单元测试（64 个 .kt / 938 条）
+│       │   └── java/com/notifyme/android/  # Kotlin 主源码（112 个 .kt）
+│       └── test/java/com/notifyme/android/  # 纯 JVM 单元测试（65 个 .kt / 963 条）
 ├── server/                     # 可选配套 Flask 服务端（见 server/README.md）
 │   ├── app.py                  # Flask 壳：鉴权、错误处理、/console 与落地页、create_app 工厂
 │   ├── util.py                 # 纯函数工具层（数值归一、时间格式化、文本转义）
