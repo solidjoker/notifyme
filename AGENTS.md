@@ -246,3 +246,11 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ⑥ **别再用 `readRecent(500)` 去挑「本会话的一条消息」**：`latest(window)`（= `messages.lastOrNull()`，`slice()` 已升序）给 `MainActivity.runTodoReminderChain` 补日历事件描述的发送者 / 原文，`knownIsGroup(window)` 给 `A11yExtractService` 判群聊。跨会话窗口被别的会话占满时两处都会取到 null（事件描述只剩任务行、群聊标记丢失），这是同源隐患的第二次复现。`knownIsGroup` 空窗口必须回 **null**（= 没有历史可参考，按首次提取处理）而不是 false（= 历史判定私聊，写死就再也不会按昵称回推）。
   ⑦ **回看原文（`AnalysisListActivity.buildSourceMap`）也不能拿跨会话窗口切**：`sourceKeys(records)` 给出要读窗口的会话键集合（去重保序、跳过空会话名的老记录），每键各读一次 `MessageStore.readWindow`，再交 `sourceMap(records, windows)` 逐条还原 case 窗口原文。这是同一个错误的第三次复现（详情页、`latest`/`knownIsGroup`、分析列表原文）：别的会话刷满窗口，本会话那几条就不在窗口里，`tvAnalysisSource` 整行消失而数据仍在文件里。取不满返回空串、调用方隐藏 —— 宁可不显示，也不拿别的窗口内容冒充原文。
   改窗口大小、排序方向或可信度判据前先跑 `app/src/test/java/com/notifyme/android/ConvWindowCoreTest.kt`（38 条，含 600 条噪声 + 本会话的回归）。
+
+- **分析候选的取样口径全在 `CandidateWindowCore`**（internal object，纯函数 + 16 条单测），别在 `AnalysisWorker` 里另写一套：
+  ① **候选集合不是「全局最近 N 条」，而是「每会话留够用的几条」**：下游一个 case 只吃 `AnalysisCase.WINDOW_SIZE = 10` 条（`takeLast`），候选存在的意义只是决定「哪些会话值得开一轮」。用 `readRecent(500).groupBy { convKey }` 会让几个群刷屏时把安静会话整个挤出候选 —— 这是 `readRecent` 同源隐患的第四次复现（前三次是详情页 / `latest`+`knownIsGroup` / 分析列表原文），数据在 `messages.jsonl` 里却永远不被分析。
+  ② **`PER_CONV = 50` 是「10 条窗口 + 范围过滤余量」**：范围是过去的自定义区间时，比区间更新的消息会先占掉保留名额，余量太小会让区间内消息整块消失（测试里留 10 条时区间内 0 条、留 50 条时 30 条）。但它不该涨到尾读窗口量级（`MessageStoreCore.TAIL_LINES = 5000`），否则等于放弃「每会话只留一窗」的内存约束。
+  ③ **组内必须按时间升序、且 `timestamp <= 0` 归 0 排最前**：与 `ConvWindowCore.slice` 同口径，未标注日期的消息不能被更晚的真实消息顶掉；超 `perConv` 只保最近若干条，`perConv <= 0` 返空表（调用方传错时保守退化）。
+  ④ **`MessageStore.candidateGroups` 必须 `internal`**：它返回 `Map<ConvKey, List<ChatMessage>>` 但被 `CandidateWindowCore` 的参数类型牵连，声明成 public 会报 `public function exposes its internal return type`（与 `readWindow` 同一个坑）。
+  ⑤ **分组顺序保首次出现（`LinkedHashMap`）**，后续 `sortedBy { windowEnd }` 是稳定排序 —— 同一份输入必须得到同一轮入选顺序，改排序方式前先想清楚「可复现」这条。
+  改 `PER_CONV`、排序方向或分组语义前先跑 `app/src/test/java/com/notifyme/android/CandidateWindowCoreTest.kt`（16 条，含「600 条噪声 + 本会话仍在候选」与旧写法对照实验）。
