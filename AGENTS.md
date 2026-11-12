@@ -208,6 +208,8 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ① **盐为空必须逐字节退化为 `sha256(名字)`**（`LEGACY_SALT = ByteArray(0)`）—— 老设备升级后历史别名不能变，改摘要输入等于让所有历史脱敏记录对不上号；
   ② `decode` 对非 64 字符 / 非 hex 返回 **null 而不是抛**，调用方就地重生成（`ensure` 第二项为 null 表示「无需落盘」，别无条件写回）；
   ③ `redactCase` / `redactMessages` 的 `salt` 是**必填纯位置参数**（在 `enabledRules` 之前）—— 故意不给默认值，避免新调用点忘记传盐而静默退回无盐别名；
-  ④ 顾问报告通道（`SyncWorker.pushAdvisor` 的 `reportCore`）只用 `emptyMap()` 做规则脱敏：报告是模型产出的聚合文本，没有窗口发送者名单，做不了姓名映射，这是取舍不是漏洞。
+  ④ 顾问通道（`AdvisorWorker.buildDigest` 摘要 + `SyncWorker.pushAdvisor` 报告正文）的姓名映射走 **`AdvisorDigestCore`**，别再退回 `emptyMap()`：分析记录里没有 `isGroup` / 窗口发送者名单，三元组只能从最近消息窗口反推（`windows()`）。
   改别名形态、改盐长度或改摘要输入前先跑 `app/src/test/java/com/notifyme/android/AliasSaltCoreTest.kt` 与 `RedactorCoreTest.kt`（后者有 6 条窗口级用例）。
 - **`res/` 下的 XML 是 CRLF、`.kt` 是 LF**：用 Python 脚本按字面量替换时先 `.replace("\r\n","\n")` 再匹配，写回用 `newline="\r\n"`；否则 count=0 报 MISS 会让你以为文案不存在。
+
+- **顾问通道的摘要口径与窗口级姓名映射全在 `AdvisorDigestCore`**（internal object，纯函数 + 36 条单测）。五条契约：① 三元组**只能从消息窗口反推**（`windows()` 按 `(pkg, conversation.trim())` 聚合，群聊取「任一条标为群聊」）—— 别给 `AnalysisCaseRecord` 加 `isGroup` / `senders` 字段，那是存量数据补不回来的 schema 变更；② 窗口里查不到该会话 → `nameMapFor()` 返回空表、只走七类规则，这是**下限不是漏洞**（PRIVACY.md 已写明）；③ 记录侧会话名带首尾空白时，别名必须用**窗口里 trim 过的写法**算摘要（同实体同别名），否则跨 case 关联会断；④ 摘要正文（首行「最近 N 天共 X 个分析 case：」/ `预筛过滤(prob=)` 与 `need_action=/importance=/topic=` 两支 / `已深分析 摘要=`+30 字+` 任务数=` / 超限「（其余 N 个较早 case 略）」）是顾问模型输入的分布，**改文案等于改模型输入**，`MAX_CASES_IN_PROMPT=50` / `SUMMARY_TRUNCATE=30` / `CONVERSATION_TRUNCATE=20` 三个常量只在 Core 里留一份；⑤ 盐只在 `privacy.cloudRedact` 时才取（`alias_salt` 的「首次真正需要脱敏才生成」语义），`salt == null` 表示本次不做任何替换。改口径前先跑 `app/src/test/java/com/notifyme/android/AdvisorDigestCoreTest.kt`。
