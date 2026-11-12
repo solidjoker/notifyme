@@ -900,6 +900,116 @@ def admin_extract_status():
         })
 
 
+def receive_queue():
+    """
+    接收端上报的排队任务状态（排队中 / 运行中 / 失败）。
+    请求体：{"device_id": "android-xxxxxxxx", "tasks": [{...}]}
+    - 逐条校验，非法条目单独拒收（不影响同批其它条目）
+    - 按 (device_id, task_id) 幂等 upsert：同一条任务反复上报只更新那一行
+    返回：{"ok": true, "accepted": n, "rejected": [{"index": i, "reason": "..."}]}
+    """
+    import app as app_module
+    import storage as storage_module
+    auth_err = app_module.check_token()
+    if auth_err:
+        return auth_err
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({
+            "ok": False,
+            "error": "body must be a JSON object"
+        }), 400
+
+    device_id = payload.get("device_id")
+    if not isinstance(device_id, str) or not device_id.strip():
+        return jsonify({
+            "ok": False,
+            "error": "device_id is required"
+        }), 400
+    device_id = device_id.strip()
+    if len(device_id) > storage_module.QUEUE_DEVICE_ID_MAX_LEN:
+        return jsonify({
+            "ok": False,
+            "error": "device_id too long"
+        }), 400
+
+    tasks = payload.get("tasks")
+    if not isinstance(tasks, list):
+        return jsonify({
+            "ok": False,
+            "error": "tasks must be a JSON array"
+        }), 400
+
+    # device_id 在请求体顶层，任务条目里不重复带：主键是 (device_id, task_id)，
+    # 每条都抄一遍设备号只会让报文变大。
+    items = []
+    for task in tasks:
+        if isinstance(task, dict):
+            item = dict(task)
+            item["device_id"] = device_id
+            items.append(item)
+        else:
+            # 非对象条目保留在原位，交给存储层逐条拒收（rejected 里报原始下标）
+            items.append(task)
+
+    now_ms = int(time.time() * 1000)
+    try:
+        accepted, rejected = storage_module.upsert_queue_tasks(items, now_ms)
+    except sqlite3.OperationalError as e:
+        # 主库正被提取任务占着：回 503 + Retry-After 让端稍后重试。
+        # 不能当成成功 —— 端会以为状态已上报，从而把这条任务从本地队列里丢掉。
+        text = str(e).lower()
+        if "locked" in text or "busy" in text:
+            resp = jsonify({
+                "ok": False,
+                "accepted": 0,
+                "rejected": [],
+                "error": "main database is busy, retry later"
+            })
+            resp.status_code = 503
+            resp.headers["Retry-After"] = "5"
+            return resp
+        raise
+    return jsonify({"ok": True, "accepted": accepted, "rejected": rejected})
+
+def query_queue():
+    """
+    查询排队任务（按更新时间倒序，最新的在前）。
+    参数：device_id（可选）、state（可选）、limit（默认 200，上限 500）
+    返回：{"ok": true, "tasks": [...], "summary": {...}}
+    """
+    import app as app_module
+    import storage as storage_module
+    auth_err = app_module.check_token()
+    if auth_err:
+        return auth_err
+
+    device_id = (request.args.get("device_id") or "").strip()
+    state = (request.args.get("state") or "").strip()
+    try:
+        limit = int(request.args.get("limit", storage_module.QUEUE_DEFAULT_LIMIT))
+    except (TypeError, ValueError):
+        limit = storage_module.QUEUE_DEFAULT_LIMIT
+    if limit <= 0:
+        limit = storage_module.QUEUE_DEFAULT_LIMIT
+    limit = min(limit, storage_module.QUEUE_MAX_LIMIT)
+
+    tasks = storage_module.query_queue_tasks(device_id, state, limit)
+
+    # summary 只统计「没过期」的条目：过期任务不再代表端上的真实队列，
+    # 混进 queued/running 会让控制台显示一个其实早就没了的「在跑」任务。
+    summary = {"queued": 0, "running": 0, "failed": 0, "done": 0,
+               "stale": 0, "total": len(tasks)}
+    for task in tasks:
+        if task.get("stale"):
+            summary["stale"] += 1
+            continue
+        task_state = task.get("state")
+        if task_state in storage_module.QUEUE_STATES:
+            summary[task_state] += 1
+    return jsonify({"ok": True, "tasks": tasks, "summary": summary})
+
 def register(app):
     """把数据面路由挂载到 Flask 应用（endpoint 名与拆分前一致）。"""
     app.add_url_rule("/weixin", "receive_weixin", receive_weixin, methods=["POST"])
@@ -908,6 +1018,8 @@ def register(app):
     app.add_url_rule("/analysis", "query_analysis", query_analysis, methods=["GET"])
     app.add_url_rule("/advisor", "receive_advisor", receive_advisor, methods=["POST"])
     app.add_url_rule("/advisor", "query_advisor", query_advisor, methods=["GET"])
+    app.add_url_rule("/queue", "receive_queue", receive_queue, methods=["POST"])
+    app.add_url_rule("/queue", "query_queue", query_queue, methods=["GET"])
     app.add_url_rule("/admin/extract", "admin_extract", admin_extract, methods=["POST"])
     app.add_url_rule("/admin/extract/status", "admin_extract_status", admin_extract_status, methods=["GET"])
 

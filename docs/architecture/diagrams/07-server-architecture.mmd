@@ -8,7 +8,7 @@ subgraph CLIENTS["客户端 · 三个入口"]
     BRW["浏览器<br/>GET / 最简消息页"]:::ext
 end
 
-subgraph APP["server/app.py · Flask 壳 684 行<br/>app.run host=0.0.0.0 port=PORT(默认8000) threaded=True<br/>create_app @app.py:638"]
+subgraph APP["server/app.py · Flask 壳 710 行<br/>app.run host=0.0.0.0 port=PORT(默认8000) threaded=True<br/>create_app @app.py:664"]
     direction TB
 
     subgraph AUTH["鉴权与错误处理 · 留在壳里"]
@@ -16,12 +16,13 @@ subgraph APP["server/app.py · Flask 壳 684 行<br/>app.run host=0.0.0.0 port=P
         EH["_security_headers @111 · _handle_not_found @131<br/>_handle_too_large @137（413 JSON）· _handle_internal_error @143<br/>MAX_CONTENT_LENGTH = 8 MiB @app.py:83"]:::auth
     end
 
-    subgraph MODS["其余 4 个模块（拆自旧单文件）"]
+    subgraph MODS["其余 4 个模块（拆自旧单文件）+ console_classify.js"]
         direction LR
         MU["util.py · 289 行<br/>纯函数工具层<br/>_validate_item @257 · _safe_int @49 · _clamp_int @68<br/>_esc_html @220 · _fmt_ts @170 · _parse_tz_offset @111"]:::mod
-        MS["storage.py · 484 行<br/>存储层<br/>init_db @57 · _append_jsonl @174<br/>顾问存档 @198-317 · _run_extract_bg @414"]:::mod
-        MR["routes.py · 913 行<br/>数据面路由<br/>register @903 · add_url_rule 映射 @905-912"]:::mod
-        MC["console_ui.py · 2243 行<br/>控制台前端常量<br/>CONSOLE_HTML @13 · CONSOLE_MANIFEST @2062<br/>CONSOLE_SW @2108"]:::mod
+        MS["storage.py · 708 行<br/>存储层<br/>init_db @58 · _append_jsonl @197<br/>顾问存档 @216 · _run_extract_bg @437<br/>排队任务 upsert @604 · query @650"]:::mod
+        MR["routes.py · 1025 行<br/>数据面路由<br/>register @1013 · add_url_rule 映射 @1015-1024"]:::mod
+        MC["console_ui.py · 3065 行<br/>控制台前端常量（5 个 Tab）<br/>CONSOLE_HTML @13 · CONSOLE_MANIFEST @2883<br/>CONSOLE_SW @2929"]:::mod
+        CC["console_classify.js · 292 行<br/>归类规则单一事实源（UMD）<br/>normPkg · ckOf · senderKey · groupBySender<br/>groupTodosByImportance · groupSuggestions"]:::mod
     end
 
     subgraph WRITE["写入 API · Android 上报（routes.py）"]
@@ -29,6 +30,7 @@ subgraph APP["server/app.py · Flask 壳 684 行<br/>app.run host=0.0.0.0 port=P
         RWX["POST /weixin  @routes.py:20<br/>receive_weixin()<br/>_validate_item @util.py:257<br/>返回 received/duplicated/invalid"]:::srv
         RAN["POST /analysis  @routes.py:322<br/>receive_analysis()<br/>case_id 唯一键去重"]:::srv
         RAD["POST /advisor  @routes.py:718<br/>receive_advisor()<br/>report_id 去重"]:::srv
+        RQ["POST /queue  @routes.py:903<br/>receive_queue()<br/>device_id + tasks[] 整份覆盖<br/>非法条目逐条拒收 207"]:::srv
     end
 
     subgraph READ["查询 API · PWA / App 回读（routes.py）"]
@@ -36,6 +38,7 @@ subgraph APP["server/app.py · Flask 壳 684 行<br/>app.run host=0.0.0.0 port=P
         QM["GET /messages  @routes.py:169<br/>conversation 模糊 · date · limit≤1000<br/>timestamp DESC + source 徽标 + 翻页游标"]:::srv
         QA["GET /analysis  @routes.py:548<br/>todo_only=1 只看待办<br/>s1/s2 反解析为对象"]:::srv
         QAD["GET /advisor  @routes.py:807"]:::srv
+        QQ["GET /queue  @routes.py:976<br/>query_queue()<br/>{ok, tasks[], summary{queued,running,failed,done,stale,total}}<br/>stale = 30 分钟未更新"]:::srv
     end
 
     subgraph PARTIAL["部分接受 207 · 路由层语义"]
@@ -46,7 +49,7 @@ subgraph APP["server/app.py · Flask 壳 684 行<br/>app.run host=0.0.0.0 port=P
         direction TB
         AE["POST /admin/extract  @routes.py:844<br/>admin_extract()<br/>full=1 全量 · source ∈ android|pc|all<br/>409 = 已在跑"]:::srv
         ST["_extract_status 内存态<br/>{running, last} + _extract_lock"]:::srv
-        BG["_run_extract_bg(full, source)  @storage.py:414<br/>daemon Thread<br/>mod = __import__(leg + '_db_extract')<br/>result[leg] = mod.run_extract(full=full)<br/>单腿失败不拖垮另一腿"]:::srv
+        BG["_run_extract_bg(full, source)  @storage.py:437<br/>daemon Thread<br/>mod = __import__(leg + '_db_extract')<br/>result[leg] = mod.run_extract(full=full)<br/>单腿失败不拖垮另一腿"]:::srv
         AS["GET /admin/extract/status  @routes.py:889<br/>admin_extract_status()<br/>{ok, running, last}<br/>scanned/inserted/duplicated/skipped/elapsed_sec"]:::srv
         AE --> BG
         BG --> ST
@@ -55,13 +58,13 @@ subgraph APP["server/app.py · Flask 壳 684 行<br/>app.run host=0.0.0.0 port=P
 
     subgraph PWA["PWA 控制台 · 零 CDN 全内联"]
         direction LR
-        CP["GET /console  @app.py:470<br/>console_page()<br/>HTML+CSS+JS 全在 console_ui.py 的 CONSOLE_HTML @13<br/>?token= 写 localStorage 后从地址栏抹除"]:::srv
-        MF["GET /console/manifest.json  @app.py:484<br/>CONSOLE_MANIFEST @console_ui.py:2062<br/>免鉴权"]:::srv
-        SW["GET /sw.js  @app.py:498<br/>console_sw()<br/>CONSOLE_SW @console_ui.py:1705 · CACHE wx-console-v5<br/>免鉴权 · 骨架 cache-first · API 永远走网络"]:::srv
-        IC["GET /console/icons/&lt;path&gt;  @app.py:490"]:::srv
+        CP["GET /console  @app.py:496<br/>console_page()<br/>HTML+CSS+JS 全在 console_ui.py 的 CONSOLE_HTML @13<br/>?token= 写 localStorage 后从地址栏抹除"]:::srv
+        MF["GET /console/manifest.json  @app.py:510<br/>CONSOLE_MANIFEST @console_ui.py:2883<br/>免鉴权"]:::srv
+        SW["GET /sw.js  @app.py:524<br/>console_sw()<br/>CONSOLE_SW @console_ui.py:2929 · CACHE wx-console-v5<br/>免鉴权 · 骨架 cache-first · API 永远走网络"]:::srv
+        IC["GET /console/icons/&lt;path&gt;  @app.py:516"]:::srv
     end
 
-    IDX["GET /  @app.py:510<br/>index()<br/>最近 100 条倒序 · 群聊绿标<br/>来源徽标 橙=通知 / 蓝=数据库"]:::srv
+    IDX["GET /  @app.py:536<br/>index()<br/>最近 100 条倒序 · 群聊绿标<br/>来源徽标 橙=通知 / 蓝=数据库"]:::srv
 
     LOCK["_write_lock = threading.Lock()<br/>JSONL 追加写互斥"]:::srv
 end
@@ -69,8 +72,8 @@ end
 subgraph STORE["server/data/ · 落地存储（备份=拷贝这些文件）"]
     direction TB
     JSONL[("messages.jsonl<br/>原始归档 · 含重复上报<br/>字段与 Android 上报格式一致")]
-    DB[("messages.db · SQLite<br/>init_db @storage.py:57<br/>表 messages：sender/text/timestamp/<br/>conversation/is_group/received_at/source<br/>UNIQUE idx_messages_dedup<br/>(conversation,sender,timestamp,text)<br/>表 analyses：case_id UNIQUE +<br/>importance/escalated/s1/s2/forks/filtered")]
-    ADV[("advisor_reports.json<br/>_advisor_jsonl_path @storage.py:193<br/>ADVISOR_MAX_REPORTS=1000 · 8 MiB")]
+    DB[("messages.db · SQLite<br/>init_db @storage.py:58<br/>表 messages：sender/text/timestamp/<br/>conversation/is_group/received_at/source<br/>UNIQUE idx_messages_dedup<br/>(conversation,sender,timestamp,text)<br/>表 analyses：case_id UNIQUE +<br/>importance/escalated/s1/s2/forks/filtered<br/>表 queue_tasks：device_id/task_id/kind/title/<br/>state/detail/queued_at/updated_at")]
+    ADV[("advisor_reports.json<br/>_advisor_jsonl_path @storage.py:216<br/>ADVISOR_MAX_REPORTS=1000 · 8 MiB")]
     ADB[("android_db/EnMicroMsg.db<br/>模拟器拉回的加密原件 · gitignored")]
     AST[("android_db/state.json<br/>增量游标 = 上次 max msgId")]
     PST[("pc_db/state.json")]
@@ -101,12 +104,14 @@ subgraph LEGS["提取腿 · 两条独立实现"]
     end
 end
 
-AND -->|"HTTPS POST 三通道"| CK
+AND -->|"HTTPS POST 四通道"| CK
 IOS -->|"?token= / X-Token"| CK
 BRW --> IDX
 CK --> RWX
 CK --> RAN
 CK --> RAD
+CK --> RQ
+CK --> QQ
 CK --> QM
 CK --> QA
 CK --> QAD
@@ -120,6 +125,8 @@ LOCK --> JSONL
 RWX --> DB
 RAN --> DB
 RAD --> ADV
+RQ --> DB
+QQ --> DB
 QM --> DB
 QA --> DB
 QAD --> ADV
@@ -130,13 +137,14 @@ A9 --> AST
 ADB -.->|"adb pull 源"| A6
 P4 --> DB
 P4 --> PST
-CP -->|"fetch /messages /analysis /advisor"| QM
-MR -.->|"register(app) 挂载 8 条数据面路由"| WRITE
+CP -->|"fetch /messages /analysis /advisor /queue"| QM
+MR -.->|"register(app) 挂载 10 条数据面路由"| WRITE
 MR -.-> READ
 MR -.-> EXTRACT
-MS -.->|"init_db / JSONL / 提取后台"| EXTRACT
+MS -.->|"init_db / JSONL / 提取后台 / 排队任务表"| EXTRACT
 MU -.->|"_validate_item 等纯函数"| WRITE
 MC -.-> PWA
+CC -.->|"归类规则注入 HTML"| PWA
 
 classDef ext fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000
 classDef app fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
@@ -148,7 +156,7 @@ classDef mod fill:#e0f7fa,stroke:#00695c,stroke-width:2px,color:#000
 
 class AND,IOS,BRW ext
 class CK,EH,PR auth
-class MU,MS,MR,MC mod
-class RWX,RAN,RAD,QM,QA,QAD,AE,AS,BG,ST,CP,MF,SW,IC,IDX,LOCK,APP,WRITE,READ,EXTRACT,PWA,PARTIAL,MODS srv
+class MU,MS,MR,MC,CC mod
+class RWX,RAN,RAD,RQ,QQ,QM,QA,QAD,AE,AS,BG,ST,CP,MF,SW,IC,IDX,LOCK,APP,WRITE,READ,EXTRACT,PWA,PARTIAL,MODS srv
 class JSONL,DB,ADV,ADB,AST,PST store
 class A1,A2,A3,A4,A5,A6,A7,A8,A9,P1,P2,P3,P4,ALEG,PLEG,LEGS leg

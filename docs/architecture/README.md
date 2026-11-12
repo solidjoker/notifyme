@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **90 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 97 个，`app/src/test` 46 个），服务端已拆成 **4+1 模块**（`app.py` 684 行 / `util.py` 289 / `storage.py` 484 / `routes.py` 913 / `console_ui.py` 2243），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **92 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 99 个，`app/src/test` 47 个），服务端已拆成 **5+1 模块**（`app.py` 710 行 / `util.py` 289 / `storage.py` 708 / `routes.py` 1025 / `console_ui.py` 3065 + `console_classify.js` 292），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -14,13 +14,13 @@
 
 | # | 图 | 回答的问题 | 尺寸 (px) |
 |---|---|---|---|
-| 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3970 × 1611 |
-| 02 | [Android 分层架构](#02-android-分层架构) | 90 个顶层 Kotlin 文件各自属于哪一层？ | 6856 × 1986 |
+| 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3970 × 1656 |
+| 02 | [Android 分层架构](#02-android-分层架构) | 92 个顶层 Kotlin 文件各自属于哪一层？ | 6856 × 1986 |
 | 03 | [三条采集通道](#03-三条采集通道) | 消息是怎么进来的？为什么需要三条路？ | 3386 × 1048 |
 | 04 | [分析决策流水线](#04-分析决策流水线) | 一条消息如何变成一条待办？ | 2510 × 5315 |
 | 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1954 × 3185 |
-| 06 | [功能全景脑图](#06-功能全景脑图) | 这个 App 到底有哪些功能？ | 3159 × 1516 |
-| 07 | [服务端架构](#07-服务端架构) | 服务端 4+1 模块里各装了什么？路由在哪一行？ | 5041 × 3387 |
+| 06 | [功能全景脑图](#06-功能全景脑图) | 这个 App 到底有哪些功能？ | 3135 × 1556 |
+| 07 | [服务端架构](#07-服务端架构) | 服务端 5+1 模块里各装了什么？路由在哪一行？ | 6473 × 3471 |
 | 08 | [构建与部署](#08-构建与部署) | 从源码到手机、从手机到公网的完整链路 | 6850 × 4895 |
 | 09 | [同步时序](#09-同步时序) | 冷启动回填与三通道上报的精确行为 | 5769 × 7926 |
 
@@ -50,7 +50,7 @@
 
 五层 + Application 入口。**刻意不引 Compose**：全部传统 View + RecyclerView，运行时依赖只有 5 个（core-ktx / recyclerview / work-runtime-ktx / okhttp / **litert-api**——`com.google.ai.edge.litert:litert:2.2.0`，端侧 LiteRT 推理用），把首次构建失败风险降到最低。JSON 用平台内置 `org.json`，不引 Gson/Moshi。
 
-源码规模：`app/src/main/java/com/notifyme/android/` **顶层 90 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 97 个；`app/src/test` 46 个 .kt（纯 JVM 单测）。
+源码规模：`app/src/main/java/com/notifyme/android/` **顶层 92 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 99 个；`app/src/test` 47 个 .kt（纯 JVM 单测）。
 
 ![Android 分层架构图](diagrams/02-android-layers.png)
 
@@ -205,16 +205,16 @@ prefs retention_state           Retention.kt:25           保留期清理状态
 
 ## 07 服务端架构
 
-服务端已从早期单文件拆成 **4+1 个模块**，依赖仍然只有 `flask==3.1.3`（另有 waitress / pycryptodome / Pillow）。下面表格的行号是**当前源码的真实行号**，与图 07 标注一致。
+服务端已从早期单文件拆成 **5+1 个模块**（5 个 Python 模块 + 1 个 JS 规则模块），依赖仍然只有 `flask==3.1.3`（另有 waitress / pycryptodome / Pillow）。下面表格的行号是**当前源码的真实行号**，与图 07 标注一致。
 
 | 模块 | 行数 | 装什么 | 关键行 |
 |---|---|---|---|
-| `server/app.py` | 684 | Flask 壳：鉴权、错误处理、`/console` 与落地页、`create_app` | `check_token` @268 · `MAX_CONTENT_LENGTH`=8 MiB @83 · `_handle_too_large` @137 · `create_app` @638 |
+| `server/app.py` | 710 | Flask 壳：鉴权、错误处理、`/console` 与落地页、`create_app` | `check_token` @268 · `MAX_CONTENT_LENGTH`=8 MiB @83 · `_handle_too_large` @137 · `console_page` @496 · `create_app` @664 |
 | `server/util.py` | 289 | 纯函数工具层（校验、转义、时区、格式化） | `_validate_item` @257 · `_safe_int` @49 · `_esc_html` @220 · `_fmt_ts` @170 |
-| `server/storage.py` | 484 | SQLite / JSONL 存档 / 顾问存档 / 抽库后台 | `init_db` @57 · `_append_jsonl` @174 · 顾问存档 @198-317 · `_run_extract_bg` @414 |
-| `server/routes.py` | 913 | 数据面路由，`register(app)` 挂载 8 条 | `register` @903 · `add_url_rule` 映射 @905-912 |
-| `server/console_ui.py` | 2243 | 控制台前端常量（HTML/CSS/JS 全内联） | `CONSOLE_HTML` @13 · `CONSOLE_MANIFEST` @2062 · `CONSOLE_SW` @2108 |
-> 行数为当前源码的**文件总行数**（wc -l 口径）；若只计非空行，依次为 app.py 579 / util.py 255 / storage.py 449 / routes.py 867 / console_ui.py 2184 / android_db_extract.py **1095** / pc_db_extract.py **981**。
+| `server/storage.py` | 708 | SQLite / JSONL 存档 / 顾问存档 / 抽库后台 / 排队任务表 | `init_db` @58 · `_append_jsonl` @197 · `_advisor_jsonl_path` @216 · `_run_extract_bg` @437 · `upsert_queue_tasks` @604 · `query_queue_tasks` @650 |
+| `server/routes.py` | 1025 | 数据面路由，`register(app)` 挂载 10 条 | `register` @1013 · `add_url_rule` 映射 @1015-1024 · `receive_queue` @903 · `query_queue` @976 |
+| `server/console_ui.py` | 3065 | 控制台前端常量（HTML/CSS/JS 全内联，5 个 Tab） | `CONSOLE_HTML` @13 · `CONSOLE_MANIFEST` @2883 · `CONSOLE_SW` @2929 |
+> 行数为当前源码的**文件总行数**（wc -l 口径）；若只计非空行，依次为 app.py 599 / util.py 255 / storage.py 659 / routes.py 969 / console_ui.py 2980 / android_db_extract.py **1095** / pc_db_extract.py **981**。
 
 ![服务端架构图](diagrams/07-server-architecture.png)
 
@@ -230,15 +230,17 @@ prefs retention_state           Retention.kt:25           保留期清理状态
 | GET | `/advisor` | `query_advisor` @routes.py:807 | |
 | POST | `/admin/extract` | `admin_extract` @routes.py:844 | `full=1` + `source ∈ android\|pc\|all`，409 = 已在跑 |
 | GET | `/admin/extract/status` | `admin_extract_status` @routes.py:889 | `{ok, running, last}` |
-| GET | `/console` | `console_page` @app.py:470 | PWA 单页，HTML/CSS/JS 全在 `console_ui.py` 的 `CONSOLE_HTML` @console_ui.py:13 |
-| GET | `/console/manifest.json` | @app.py:484 | 免鉴权 |
-| GET | `/console/icons/<path>` | @app.py:490 | |
-| GET | `/sw.js` | `console_sw` @app.py:498 | 免鉴权；骨架 cache-first，API 永远走网络 |
-| GET | `/` | `index` @app.py:510 | 极简网页，最近 100 条倒序 |
+| POST | `/queue` | `receive_queue` @routes.py:903 | 手机端上报排队任务快照（整份覆盖，非法条目逐条拒收） |
+| GET | `/queue` | `query_queue` @routes.py:976 | `device_id` / `state` / `limit`≤500，返回 `{ok, tasks, summary}` |
+| GET | `/console` | `console_page` @app.py:496 | PWA 单页，HTML/CSS/JS 全在 `console_ui.py` 的 `CONSOLE_HTML` @console_ui.py:13 |
+| GET | `/console/manifest.json` | @app.py:510 | 免鉴权 |
+| GET | `/console/icons/<path>` | @app.py:516 | |
+| GET | `/sw.js` | `console_sw` @app.py:524 | 免鉴权；骨架 cache-first，API 永远走网络 |
+| GET | `/` | `index` @app.py:536 | 极简网页，最近 100 条倒序 |
 
 **鉴权**：`check_token()` @app.py:268 接受 Header `X-Token` **或** Query `?token=`。设置 `WEIXIN_TOKEN` 后除 `/console/manifest.json` 与 `/sw.js` 外全部需要鉴权。
 
-**数据库 schema**（`init_db` @storage.py:57）
+**数据库 schema**（`init_db` @storage.py:58）
 
 ```sql
 CREATE TABLE messages (
@@ -259,9 +261,18 @@ CREATE TABLE analyses (
 );
 -- 迁移追加：forks TEXT（JSON 数组 [{fork,prob,verdict,note}]）
 --          filtered INTEGER NOT NULL DEFAULT 0
+
+CREATE TABLE queue_tasks (
+  device_id TEXT NOT NULL, task_id TEXT NOT NULL,
+  kind TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '',
+  queued_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL,
+  PRIMARY KEY (device_id, task_id)
+);
+CREATE INDEX idx_queue_device ON queue_tasks (device_id);
 ```
 
-**提取编排**：`_extract_status = {"running": False, "last": None}` 内存态 + `_extract_lock`；`_run_extract_bg(full, source)` **@storage.py:414** 起 daemon Thread，逐腿 `mod = __import__(leg + "_db_extract")` → `mod.run_extract(full=full)`。**单腿失败不拖垮另一腿**，整体 ok = 至少一腿不是 `ok is False`。
+**提取编排**：`_extract_status = {"running": False, "last": None}` 内存态 + `_extract_lock`；`_run_extract_bg(full, source)` **@storage.py:437** 起 daemon Thread，逐腿 `mod = __import__(leg + "_db_extract")` → `mod.run_extract(full=full)`。**单腿失败不拖垮另一腿**，整体 ok = 至少一腿不是 `ok is False`。
 
 **部分接受 207**（`routes.py:149-160`）：一批里有条目校验失败时，响应码是 **207**（不是 200），body 为 `{ok:false, rejected:[下标], error:"some items were rejected"}`，**其余条目照常入库**。端上必须按 `rejected` 清单精确剔除（`SyncOutcomeCore.parseRejected`），不能整批当成功删掉——那正是消息永久丢失的根因。
 
@@ -281,7 +292,7 @@ CREATE TABLE analyses (
 
 **跨源去重**：两个来源的毫秒时间戳不一致，故归一化到 `(conversation, sender, 秒级timestamp, text)`；已存在行与批内重复都跳过。通知来源的重试去重仍由原毫秒级唯一索引兜住。增量游标在 `data/android_db/state.json`（上次 max msgId）。
 
-**PWA 查看端**：`?token=` 写入 localStorage 后从地址栏抹除，后续请求自动带 `X-Token`。三个 Tab——会话（按会话分组，头部计数 + 最新预览 + ⚡待办角标，点卡片展开，待办会话内联 S1 chips 与 S2 区）/ 待办（全部 `need_action=true`，高重要度标红）/ 统计（消息总数、来源分布、已分析会话数、最后上报时间）。30 秒自动刷新，全内联无 CDN，**数据永不缓存，只缓存页面骨架**。
+**PWA 查看端**：`?token=` 写入 localStorage 后从地址栏抹除，后续请求自动带 `X-Token`。五个 Tab——会话（按会话分组，头部计数 + 最新预览 + ⚡待办角标，点卡片展开，待办会话内联 S1 chips 与 S2 区）/ 待办（全部 `need_action=true`，高重要度标红）/ **排队（手机端 WorkManager 任务快照，按状态分区，可按状态筛选；stale = 30 分钟未更新）**/ 统计（消息总数、来源分布、已分析会话数、最后上报时间）/ 顾问（AI 复盘建议，按建议类型分区）。顶部概览条 5 个指标（近 24 小时消息 / 待处理 / 排队任务 / 同步失败 / 最近同步）。30 秒自动刷新，全内联无 CDN，**数据永不缓存，只缓存页面骨架**。
 
 ---
 

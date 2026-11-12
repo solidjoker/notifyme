@@ -17,12 +17,14 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
- * 定时上报 Worker：三个通道依次执行——
+ * 定时上报 Worker：四个通道依次执行——
  *  1. 消息：把 PendingQueue 里的待上报消息 POST 到 serverUrl；
  *  2. 分析结果：把 AnalysisStore 里未同步的 case 记录 POST 到
  *     {serverUrl 去末尾 /weixin}/analysis（与 /admin/extract 同款路径规则）；
  *  3. 顾问报告：把 AdvisorStore 里未同步的复盘报告 POST 到
- *     {serverUrl 去末尾 /weixin}/advisor（同款路径规则）。
+ *     {serverUrl 去末尾 /weixin}/advisor（同款路径规则）；
+ *  4. 排队状态：把端上排队中/运行中/失败的分析任务与待同步条数 POST 到
+ *     {serverUrl 去末尾 /weixin}/queue（best-effort，失败不影响其它通道）。
  *
  * 行为约定：
  *  - serverUrl 为空（未配置）-> 直接 Result.success()，不产生网络请求；
@@ -43,6 +45,8 @@ import java.util.concurrent.TimeUnit
  *    其它失败 -> 只记文案，水位不动、不触发 Worker 重试，下轮自然补报；
  *  - 分析通道的任何结果都不改变消息通道的处置；两通道结果文案合并进 lastSyncResult
  *   （如「成功：消息 5 条 + 分析 2 个」）；
+ *  - 排队通道（/queue）是 best-effort：上传失败只记日志 + 在结果文案里追加一段，
+ *    **绝不影响**消息通道对整轮 success/retry/failure 的判定；
  *  - 网络约束（NetworkType.CONNECTED）在 SyncScheduler 建请求时声明；
  *  - authToken 非空时带 X-Token 请求头，与服务端 WEIXIN_TOKEN 环境变量对应。
  */
@@ -110,6 +114,10 @@ class SyncWorker(
         //      404 静默跳过，失败不影响主通道、不触发重试，下轮自然补报） ----
         pushAdvisor(config, url, privacy, okParts, extraParts)
 
+        // ---- 第四步：排队状态上报（best-effort：失败只记日志 + 追加一段文案，
+        //      绝不影响消息通道决定的整轮 success/retry/failure） ----
+        pushQueue(config, url, okParts, extraParts)
+
         val parts = mutableListOf<String>()
         if (okParts.isNotEmpty()) parts += "成功：" + okParts.joinToString(" + ")
         parts += extraParts
@@ -143,7 +151,7 @@ class SyncWorker(
      * 207 时额外解析 body 里的 rejected 下标与服务端给出的原因。
      * 网络异常统一归为 [SyncOutcome.FAILED]（由调用方按失败退避重试）。
      *
-     * 消息 / 分析 / 顾问三条通道共用这里，保证「207 先于 2xx 判定」的口径一致。
+     * 消息 / 分析 / 顾问 / 排队四条通道共用这里，保证「207 先于 2xx 判定」的口径一致。
      */
     private fun postJson(config: SyncConfig, url: String, body: String): BatchResult {
         val request = Request.Builder()
@@ -771,6 +779,52 @@ class SyncWorker(
         }
         if (payloadTooLarge > 0) {
             extraParts += "顾问报告 $payloadTooLarge 份超限(413)，已单独隔离"
+        }
+    }
+
+    /**
+     * 排队状态上报通道（第 4 个通道）：把端上「排队中 / 运行中 / 失败」的
+     * 分析任务与待同步条数 POST 到 {serverUrl 去末尾 /weixin}/queue。
+     *
+     * best-effort 语义（为什么要这么克制）：排队状态是给控制台看的辅助信息，
+     * 缺一轮只是控制台慢一拍；而消息通道的成败判定牵着同步水位与队列清理，
+     * 让一个辅助通道把整轮打成 retry 只会白白推迟消息上报。因此这里
+     * **不返回任何结果码**：失败只写日志 + 在结果描述里追加一段，
+     * 绝不改变 doWork 里 msgResult 的取值。
+     *
+     * 状态码口径：只认 2xx（207 也算 2xx，成功）——postJson 对 207 有
+     * 「部分条目被拒」的特殊口径，那是消息/分析/顾问三通道的语义；
+     * 排队上报是整份替换、没有「部分被拒」，故这里按状态码自行判定。
+     */
+    private fun pushQueue(
+        config: SyncConfig,
+        serverUrl: String,
+        okParts: MutableList<String>,
+        extraParts: MutableList<String>
+    ) {
+        var base = serverUrl.trim().trimEnd('/')
+        if (base.endsWith("/weixin")) base = base.dropLast("/weixin".length)
+        val url = "$base/queue"
+        try {
+            val tasks = QueueStateCollector.collect(applicationContext, System.currentTimeMillis())
+            val payload = QueueStateCore.buildPayload(
+                QueueStateCollector.deviceId(applicationContext),
+                tasks
+            )
+            val result = postJson(config, url, payload)
+            if (result.code in 200..299) {
+                Log.i(TAG, "排队状态上报成功: ${tasks.size} 项")
+                if (tasks.isNotEmpty()) okParts += "排队状态 ${tasks.size} 项"
+            } else {
+                // 不抛、不重试：下轮自然重报，控制台晚一拍不影响数据一致性
+                // postJson 把网络异常统一记成 code=0，这里还原成「网络错误」文案
+                val why = if (result.code > 0) "HTTP ${result.code}" else "网络错误"
+                Log.w(TAG, "排队状态上报失败: ${why}")
+                extraParts += "排队状态上报失败：${why}"
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "排队状态上报异常", e)
+            extraParts += "排队状态上报失败：网络错误"
         }
     }
 

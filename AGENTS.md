@@ -13,7 +13,7 @@ notifyme = 微信通知本地智能分析助手（本地优先，通知原文留
 | 目录 | 内容 |
 |---|---|
 | `app/` | Android 客户端（Kotlin；传统 View + RecyclerView，**无 Compose**；JSON 用 `org.json`，**无 Gson/Moshi**） |
-| `server/` | 可选自托管 Flask 服务端（跨设备查看 / 历史回填 / PWA 控制台）；已拆成 4 个模块：`app.py`（Flask 壳 + 鉴权 + 控制台/落地页）、`util.py`（纯函数工具层）、`storage.py`（SQLite / JSONL / 顾问存档）、`routes.py`（数据面路由） |
+| `server/` | 可选自托管 Flask 服务端（跨设备查看 / 历史回填 / PWA 控制台 / 排队任务看板）；已拆成 5 个模块：`app.py`（Flask 壳 + 鉴权 + 控制台/落地页）、`util.py`（纯函数工具层）、`storage.py`（SQLite / JSONL / 顾问存档 / 排队任务表）、`routes.py`（数据面路由，含 `/queue`）、`console_ui.py`（PWA 前端常量，5 个 Tab）+ `console_classify.js`（归类规则单一事实源，UMD 可 node 单测） |
 | `docs/` | `BUILD.md`（构建）、`ROADMAP.md`（里程碑）、`architecture/`（9 张架构图） |
 | `third_party/llama.cpp` | M4 端侧推理依赖，CI 里 clone v0.5.0，**不入库** |
 
@@ -170,3 +170,8 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **改 `docs/architecture/diagrams/*.mmd` 必须重渲并回写尺寸表**：mermaid-cli 11.17.0 的命令是 `mmdc -i X.mmd -o X.svg`，PNG 要给足页面宽度才能拿到原始像素 —— `-w <SVG viewBox 宽 + 20> -H <SVG viewBox 高 + 60>`；**脑图 06 的 viewBox 起点不是 `0 0`**，得单独用 `-w 3200 -H 1600`，否则会渲染出 14×7 的废图。**注意 mmdc 的 `-h` 是 help 不是高度**，高度用 `-H`。渲完用 `[System.Drawing.Image]::FromFile` 量实际像素，回写 `docs/architecture/README.md` 的索引表。
 - **控制台前端要改归类逻辑，先看 `server/console_classify.js`**：控制台的所有归类规则（来源 App / 会话 / 日期 / 发送者 / 重要度 / 建议类型）必须写在这个独立 JS 文件里，不要就地写进 `server/console_ui.py` 的 HTML 字符串。它是 UMD 模块（浏览器挂 `window.ConsoleClassify`，node 走 `module.exports`），无 DOM 依赖、不引第三方库；`server/app.py` 在 import `console_ui.py` 后把它注入 HTML 里的 `/*__CONSOLE_CLASSIFY_JS__*/` 占位符，再交给 `console_page()` 返回。改规则 → 跑 node 单测 `server/test_console_classify.py`（subprocess 调 node 执行真逻辑，不要在 Python 里重写一份）；CI 里 `REQUIRE_NODE=1` 时 node 缺失必须 **fail 而不是 skip**。前端取不到该脚本时必须优雅降级（`var CC = window.ConsoleClassify || null`），别抛异常把整页打挂。
 - **本机起浏览器调试实例的两个坑**：Windows WinINET 代理指向 `127.0.0.1:18888`（该端口 CONNECT 隧道已挂，Edge 报 `ERR_TUNNEL_CONNECTION_FAILED`），必须显式带 `--proxy-server=http://127.0.0.1:7890`；默认 user-data-dir 不允许 `--remote-debugging-port`（Chrome/Edge 136+ 策略），要把 User Data 拷到独立目录再带 `--remote-debugging-port=9223` 启动。访问仓库设置 / token 页还会撞 **sudo mode**，要过一次 2FA。
+- **排队通道 `/queue` 是 best-effort**：端上 `SyncWorker.pushQueue` 只认 2xx，失败既不重试也不阻塞消息同步（`doWork` 的 msgResult 不变）；服务端 `queue_tasks` 表按 `(device_id, task_id)` 主键整份覆盖，保留 7 天，`stale` = `updated_at` 超 30 分钟未更新。端侧 `task_id` 含原始会话名（与「分析通道原样上报 conversation」口径一致，服务端不哈希存储）——**别在控制台或文档里当隐私漏洞写，但确实存在**。
+- **控制台有 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）**：改 `server/console_ui.py` 的 HTML/CSS/JS 后必须自检三件事：① 内联脚本用 `node --check` 过一遍（脚本 `check_console_js.py`）；② `python -m pytest server/test_console_queue.py server/test_console_ui.py -q`；③ 浏览器实跑看 `errs: []`。**局部重绘 `patchSections` 只追加 `.pane-sec`，不清理临时节点** —— 骨架屏残留就是这么来的，改它时要顺手清掉没有 `data-sec` 的子节点。桌面布局里 `.tabbar` 必须是 `position:sticky`（媒体查询里若写成 `order:-1 + position:static` 会把标签栏甩到页面最顶）。
+- **端侧排队上报的 device_id 不能碰硬件标识**：`QueueStateCollector` 用 SharedPreferences("queue_state", "device_seed") 里的随机种子做 FNV-1a 派生（`android-` + 8 位 hex），**不要改用 ANDROID_ID / IMEI / 序列号**。
+- **周期分析任务按 tag 反查不到就不上报**：`AnalysisScheduler` 的周期任务（unique 名 `wechat_analysis` / `conv_analysis_<id>`）不带 tag，`QueueStateCollector.collect()` 只按 tag `analysis_on_demand` / `analysis_conv:<id>` 采集，所以控制台「排队」Tab 里看不到周期任务——这是已知取舍，不是 bug。
+

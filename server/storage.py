@@ -12,6 +12,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 import importlib.util
 
 from util import logger
@@ -167,6 +168,28 @@ def init_db():
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_analyses_conv_ts "
             "ON analyses (conversation, received_at)")
+        # 排队任务表：端上报「排队中 / 运行中 / 失败」的任务状态，控制台按设备查。
+        # 主键用 (device_id, task_id) 而不是自增 id —— 同一条任务会被反复上报
+        # （排队 -> 运行 -> 结束），靠主键做幂等 upsert，避免同一任务在表里出现多行。
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS queue_tasks (
+                device_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                state TEXT NOT NULL,
+                detail TEXT NOT NULL DEFAULT '',
+                queued_at INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (device_id, task_id)
+            )
+            """)
+        # 控制台与 /queue 都按 device_id 过滤再按 updated_at 倒序，
+        # 设备维度的索引让过滤走索引而不是全表扫 + 排序。
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_queue_device "
+            "ON queue_tasks (device_id)")
         conn.commit()
     finally:
         conn.close()
@@ -481,4 +504,205 @@ def _probe_main_db_writable(timeout=0.5):
             conn.close()
         except sqlite3.Error:
             pass
+
+# ------------------------------------------------------------------
+# 排队任务（端上排队 / 运行中 / 失败的任务状态）
+# ------------------------------------------------------------------
+# 端把「排队中 / 运行中 / 失败」的任务状态上报到服务端，PWA 控制台据此
+# 显示端上还挂着什么任务。任务状态是易变数据：同一条任务会被反复上报
+# （排队 -> 运行 -> 结束），所以按 (device_id, task_id) 做幂等 upsert，
+# 而不是像消息那样追加入库。
+
+# 超过这个时长没有更新就认为这条任务「过期」：端上可能已经把它从队列里
+# 摘掉、或者进程被杀，留着只会让控制台显示一个永远在跑的任务。
+QUEUE_TTL_MS = 30 * 60 * 1000
+# 行保留时长：任务状态只是「当下」的快照，7 天前的行没有参考价值，
+# 写入时顺带清掉，避免表无限膨胀。
+QUEUE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+# 单次查询返回条数上限（服务端也夹紧，防止一个 limit=999999 打爆内存）
+QUEUE_MAX_LIMIT = 500
+# 控制台默认一屏要看多少条
+QUEUE_DEFAULT_LIMIT = 200
+# 字段长度上限：端上报的是「一句话标题 + 一句详情」，超长视为脏数据
+QUEUE_DEVICE_ID_MAX_LEN = 64
+QUEUE_TASK_ID_MAX_LEN = 128
+QUEUE_TITLE_MAX_LEN = 256
+QUEUE_DETAIL_MAX_LEN = 512
+# 枚举值：kind 决定控制台怎么分组，state 决定徽标颜色。
+# 只认这几个值：端升级后新增的枚举一律拒收，不让未知值进库污染 summary 计数。
+QUEUE_KINDS = ("analysis", "sync", "model", "other")
+QUEUE_STATES = ("queued", "running", "failed", "done")
+
+
+def _normalize_queue_task(item, max_ts_ms):
+    """校验并归一一条排队任务。
+
+    返回 (归一化后的 dict, None) 表示接受；返回 (None, 原因) 表示拒绝。
+
+    逐条校验、逐条拒收：端上报的是一整批排队任务，其中一条脏数据
+    （字段缺失 / 超长 / 枚举越界）不能连累整批 —— 端会把被拒的条目一直重试，
+    一批卡住就等于整条队列卡住。
+    """
+    if not isinstance(item, dict):
+        return None, "task is not an object"
+    device_id = item.get("device_id")
+    if not isinstance(device_id, str) or not device_id.strip():
+        return None, "missing device_id"
+    device_id = device_id.strip()
+    if len(device_id) > QUEUE_DEVICE_ID_MAX_LEN:
+        return None, "device_id too long"
+    task_id = item.get("task_id")
+    if not isinstance(task_id, str) or not task_id.strip():
+        return None, "missing task_id"
+    task_id = task_id.strip()
+    if len(task_id) > QUEUE_TASK_ID_MAX_LEN:
+        return None, "task_id too long"
+    kind = item.get("kind")
+    if not isinstance(kind, str) or kind not in QUEUE_KINDS:
+        return None, "kind must be one of: " + ", ".join(QUEUE_KINDS)
+    state = item.get("state")
+    if not isinstance(state, str) or state not in QUEUE_STATES:
+        return None, "state must be one of: " + ", ".join(QUEUE_STATES)
+    title = item.get("title", "")
+    if title is None:
+        title = ""
+    if not isinstance(title, str):
+        return None, "title must be a string"
+    if len(title) > QUEUE_TITLE_MAX_LEN:
+        return None, "title too long"
+    detail = item.get("detail", "")
+    if detail is None:
+        detail = ""
+    if not isinstance(detail, str):
+        return None, "detail must be a string"
+    if len(detail) > QUEUE_DETAIL_MAX_LEN:
+        return None, "detail too long"
+    queued_at = item.get("queued_at", 0)
+    if queued_at is None:
+        queued_at = 0
+    if isinstance(queued_at, bool):
+        return None, "queued_at must be an integer"
+    if isinstance(queued_at, float):
+        if not queued_at.is_integer():
+            return None, "queued_at must be an integer"
+        queued_at = int(queued_at)
+    if not isinstance(queued_at, int):
+        return None, "queued_at must be an integer"
+    if queued_at < 0 or queued_at > int(max_ts_ms):
+        return None, "queued_at out of range"
+    return {
+        "device_id": device_id,
+        "task_id": task_id,
+        "kind": kind,
+        "title": title,
+        "state": state,
+        "detail": detail,
+        "queued_at": queued_at,
+    }, None
+
+
+def upsert_queue_tasks(items, now_ms):
+    """写入一批排队任务（按 (device_id, task_id) 幂等 upsert）。
+
+    返回 (写入条数, 拒收清单)。拒收清单元素形如 {"index": i, "reason": "..."}，
+    index 是 items 里的原始下标 —— 端据此只重试被拒的那几条，而不是整批重发。
+    """
+    import app as app_module
+    if not isinstance(items, list):
+        return 0, []
+    now_ms = int(now_ms)
+    rows = []
+    rejected = []
+    for idx, item in enumerate(items):
+        normalized, why = _normalize_queue_task(item, app_module.MAX_TS_MS)
+        if normalized is None:
+            rejected.append({"index": idx, "reason": why})
+            continue
+        rows.append(normalized)
+    conn = app_module._connect()
+    try:
+        with conn:
+            # 顺带清理过期行：任务状态只是当下快照，7 天前的行留着只是垃圾
+            cutoff = now_ms - QUEUE_RETENTION_MS
+            conn.execute("DELETE FROM queue_tasks WHERE updated_at < ?", (cutoff,))
+            for row in rows:
+                conn.execute(
+                    """
+                    INSERT INTO queue_tasks
+                        (device_id, task_id, kind, title, state, detail,
+                         queued_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(device_id, task_id) DO UPDATE SET
+                        kind = excluded.kind,
+                        title = excluded.title,
+                        state = excluded.state,
+                        detail = excluded.detail,
+                        queued_at = excluded.queued_at,
+                        updated_at = excluded.updated_at
+                    """,
+                    (row["device_id"], row["task_id"], row["kind"], row["title"],
+                     row["state"], row["detail"], row["queued_at"], now_ms))
+    finally:
+        conn.close()
+    return len(rows), rejected
+
+
+def query_queue_tasks(device_id=None, state=None, limit=QUEUE_DEFAULT_LIMIT):
+    """查询排队任务（按 updated_at 倒序，最新的在前）。
+
+    device_id / state 为空则不过滤；state 非法直接返回空列表 ——
+    既不能 500，也不能「忽略过滤条件把全表都吐出来」。
+    limit 上限 QUEUE_MAX_LIMIT（服务端也夹紧，防毒丸参数）。
+
+    每条额外带一个 stale 布尔：updated_at 距今超过 QUEUE_TTL_MS 即为 True，
+    表示端上大概率已经不再跑这条任务了。
+    """
+    import app as app_module
+    device_id = (device_id or "").strip()
+    state = (state or "").strip()
+    if state and state not in QUEUE_STATES:
+        return []
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = QUEUE_DEFAULT_LIMIT
+    if limit <= 0:
+        limit = QUEUE_DEFAULT_LIMIT
+    limit = min(limit, QUEUE_MAX_LIMIT)
+    sql = ("SELECT device_id, task_id, kind, title, state, detail, "
+           "queued_at, updated_at FROM queue_tasks")
+    params = []
+    conditions = []
+    if device_id:
+        conditions.append("device_id = ?")
+        params.append(device_id)
+    if state:
+        conditions.append("state = ?")
+        params.append(state)
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
+    sql += " ORDER BY updated_at DESC LIMIT ?"
+    params.append(limit)
+    conn = app_module._connect()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+    now_ms = int(time.time() * 1000)
+    tasks = []
+    for row in rows:
+        updated_at = int(row[7] or 0)
+        tasks.append({
+            "device_id": row[0],
+            "task_id": row[1],
+            "kind": row[2],
+            "title": row[3] or "",
+            "state": row[4],
+            "detail": row[5] or "",
+            "queued_at": int(row[6] or 0),
+            "updated_at": updated_at,
+            "stale": (now_ms - updated_at) > QUEUE_TTL_MS,
+        })
+    return tasks
+
 
