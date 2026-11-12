@@ -1169,8 +1169,10 @@ class MainActivity : Activity() {
         val caseId = rec.caseId
         Thread {
             val config = AnalysisConfig(this)
-            // 最近一条同会话消息：给日历事件描述补上发送者与原文（没有就留空，描述逐条拼接）
-            val last = MessageStore.readRecent(this, 500).lastOrNull { it.convKey == rec.convKey }
+            // 最近一条同会话消息：给日历事件描述补上发送者与原文（没有就留空，描述逐条拼接）。
+            // 必须按会话取窗口（ConvWindowCore）—— 旧写法 readRecent(500) 是跨会话窗口，
+            // 别的会话一刷屏，last 就变 null，日历事件描述只剩任务行。
+            val last = ConvWindowCore.latest(MessageStore.readWindow(this, rec.convKey))
             // M1：手动入口以「现在」为基准——老记录的 analyzedAt 可能已过点，
             // 拿它算出的事件时间会直接落进过去，日历/闹钟永不触发（Worker 自动路径仍用 analyzedAt）
             val outcome = CalendarHelper.createReminderResult(

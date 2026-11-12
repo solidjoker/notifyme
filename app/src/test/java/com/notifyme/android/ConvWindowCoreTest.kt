@@ -211,6 +211,45 @@ class ConvWindowCoreTest {
         assertEquals(5, p.visible)
     }
 
+    // ---------------- latest / knownIsGroup（跨会话窗口的两个受害者） ----------------
+
+    @Test
+    fun `latest 取窗口里时间最晚的那条`() {
+        // Window.messages 的契约是「slice 出来的升序」，所以末条即最新；这里按升序喂
+        val rows = listOf(msg("早", 1_000L), msg("中", 3_000L), msg("晚", 5_000L))
+        assertEquals("晚", ConvWindowCore.latest(window(rows, linesRead = 3))?.text)
+    }
+
+    @Test
+    fun `latest 对空窗口返回 null`() {
+        assertEquals(null, ConvWindowCore.latest(window(emptyList(), linesRead = 0)))
+    }
+
+    @Test
+    fun `latest 不会被同会话的未标注日期消息顶掉`() {
+        // ts<=0 在升序里排最前，所以它永远不可能是 lastOrNull 的结果
+        val rows = listOf(msg("无时间", 0L), msg("最新", 9_000L))
+        assertEquals("最新", ConvWindowCore.latest(window(rows, linesRead = 2))?.text)
+    }
+
+    @Test
+    fun `knownIsGroup 空窗口返回 null 而不是 false`() {
+        // null = 首次提取（调用方按昵称回推），false = 历史判定私聊（写死，不再回推）
+        assertEquals(null, ConvWindowCore.knownIsGroup(window(emptyList(), linesRead = 0)))
+    }
+
+    @Test
+    fun `knownIsGroup 沿用最新一条的群聊标记`() {
+        val group = msg("群消息", 5_000L).copy(isGroup = true)
+        val older = msg("早的私聊口气", 1_000L).copy(isGroup = false)
+        assertEquals(true, ConvWindowCore.knownIsGroup(window(listOf(older, group), linesRead = 2)))
+    }
+
+    @Test
+    fun `knownIsGroup 私聊历史返回 false`() {
+        assertEquals(false, ConvWindowCore.knownIsGroup(window(listOf(msg("a", 1_000L)), linesRead = 1)))
+    }
+
     // ---------------- MessageStoreCore.readWindow（按会话尾读的接线） ----------------
 
     @get:org.junit.Rule

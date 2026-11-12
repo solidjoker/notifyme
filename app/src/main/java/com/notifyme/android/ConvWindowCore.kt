@@ -113,6 +113,26 @@ internal object ConvWindowCore {
      */
     data class Preview(val visible: Int, val truncated: Boolean, val countedAll: Boolean)
 
+    /**
+     * 窗口里「最近一条」消息：[slice] 已按时间升序排列，所以 [Window.messages] 的末条即最新。
+     *
+     * 给「拿一条同会话消息补上下文」的调用方用（日历事件描述的发送者 / 原文）。
+     * 别再写 `readRecent(500).lastOrNull { it.convKey == key }` —— 那个窗口是跨会话的，
+     * 别的会话刷满 500 条时 last 会变 null，日历事件描述就只剩任务行。
+     *
+     * `timestamp <= 0` 的消息排在升序最前，因此不会顶掉真正最新的那条。
+     */
+    fun latest(window: Window): ChatMessage? = window.messages.lastOrNull()
+
+    /**
+     * 本地已知的「群聊标记」：界面本身拿不到可靠的群标记，只能沿用已有记录。
+     *
+     * 空窗口（该会话还没有任何入库消息）返回 **null 而不是 false** —— 两者语义不同：
+     * null = 「没有历史可参考，按首次提取处理」（调用方会按昵称回推），
+     * false = 「历史记录判定它是私聊」，直接写死成私聊就再也不会回推。
+     */
+    fun knownIsGroup(window: Window): Boolean? = latest(window)?.isGroup
+
     /** 由一次 [Window] 算渲染前口径。 */
     fun preview(window: Window, renderLimit: Int = MAX_RENDER): Preview {
         val visible = window.size
