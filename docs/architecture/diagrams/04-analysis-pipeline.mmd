@@ -90,7 +90,7 @@ flowchart TB
     K3 -.->|"首页待办面板"| REC
     K4 -.->|"上报被拒 → 隔离"| UP
 
-    ADV["AdvisorWorker（Fable 层）<br/>通读近 7 天 case · ≤50 个 · 摘要截 30 字<br/>调 System 2 服务商生成复盘<br/>{summary, suggestions:[{type,title,detail}]}<br/>type ∈ prompt/watchlist/threshold/other"]:::llmcall
+    ADV["AdvisorWorker（Fable 层）<br/>通读近 7 天 case · ≤50 个 · 摘要截 30 字<br/>摘要口径与别名映射在 AdvisorDigestCore<br/>调 System 2 服务商生成复盘<br/>{summary, suggestions:[{type,title,detail}]}<br/>type ∈ prompt/watchlist/threshold/other"]:::llmcall
     REC -.->|"每 7 天周期 或 控制台「顾问复盘」"| ADV
     ADV --> ADVS[("AdvisorStore<br/>files/advisor_reports.jsonl")]:::out
     ADVS -->|"SyncWorker 通道 3"| UP2["POST {server}/advisor<br/>服务端按 report_id 去重<br/>→ data/advisor_reports.json"]:::out

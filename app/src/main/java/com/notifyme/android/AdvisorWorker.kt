@@ -47,11 +47,8 @@ class AdvisorWorker(
         /** 复盘窗口：最近 7 天 */
         private const val PERIOD_DAYS = 7
 
-        /** 输入摘要最多携带的 case 数（防爆 token） */
-        private const val MAX_CASES_IN_PROMPT = 50
-
-        /** 每条 case 摘要的截断长度 */
-        private const val SUMMARY_TRUNCATE = 30
+        // 摘要口径（最多 50 个 case、每条摘要截 30 字、会话名截 20 字）
+        // 已迁进 AdvisorDigestCore，Worker 里不再各留一份常量。
 
         private val client: OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
@@ -135,40 +132,38 @@ class AdvisorWorker(
     }
 
     /**
-     * 组装 case 摘要（输入防爆 token）：
-     * 最新 50 个 case，每行一条——会话名、S1 判定、是否升级/被预筛、S2 摘要与任务数。
+     * 采集摘要所需的事实再交给 [AdvisorDigestCore] 组装：
+     *  - 是否需要脱敏（[PrivacyModeState.cloudRedact]）；
+     *  - 别名盐 + **最近消息窗口反推的会话事实**（分析记录里没有窗口发送者名单与
+     *    isGroup，只能从消息日志重建，口径见 [AdvisorDigestCore.windows]）。
+     *
+     * 时间格式用本机 Locale（用户看到的是本地时间），内核不碰 Locale ——
+     * 这样摘要正文的口径可以纯 JVM 单测钉死。
      */
     private fun buildDigest(cases: List<AnalysisCaseRecord>, privacy: PrivacyModeState): String {
         val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
-        val sb = StringBuilder("最近 $PERIOD_DAYS 天共 ${cases.size} 个分析 case：\n")
-        // 出设备脱敏（M3）：云端可见的会话名/主题/摘要先过脱敏器；本地模式已在上游拦截。
-        // caseId 与时间戳不含正文，保留原样以便与服务端分析记录对应。
-        val core = if (privacy.cloudRedact) RedactorCore(privacy.enabledRules) else null
-        cases.takeLast(MAX_CASES_IN_PROMPT).forEach { rec ->
-            val conversation = core?.redact(rec.conversation)?.text ?: rec.conversation
-            val topic = core?.redact(rec.s1Topic)?.text ?: rec.s1Topic
-            val summary = core?.redact(rec.s2Summary.replace("\n", " "))?.text
-                ?: rec.s2Summary.replace("\n", " ")
-            sb.append("- 「").append(conversation.take(20)).append("」")
-                .append(" ").append(fmt.format(Date(rec.analyzedAt)))
-            if (rec.filtered) {
-                sb.append(" 预筛过滤(prob=%.2f)".format(rec.s1NeedActionProb))
-            } else {
-                sb.append(" need_action=%.2f".format(rec.s1NeedActionProb))
-                    .append(" importance=%.1f".format(rec.s1Importance))
-                    .append(" topic=").append(topic)
-                if (rec.escalated) {
-                    sb.append(" 已深分析 摘要=")
-                        .append(summary.take(SUMMARY_TRUNCATE))
-                        .append(" 任务数=").append(rec.s2Tasks.size)
-                }
-            }
-            sb.append("\n")
+        // 盐只在真正需要出设备时才取：alias_salt 的「首次需要脱敏才生成」语义不能破
+        val salt: ByteArray?
+        val windows: Map<String, AdvisorDigestCore.ConvWindow>
+        if (privacy.cloudRedact) {
+            val messages = MessageStore.readRecent(
+                applicationContext,
+                AdvisorDigestCore.DEFAULT_MESSAGE_WINDOW
+            )
+            salt = AliasSaltStore.salt(applicationContext)
+            windows = AdvisorDigestCore.windows(messages)
+        } else {
+            salt = null
+            windows = emptyMap()
         }
-        if (cases.size > MAX_CASES_IN_PROMPT) {
-            sb.append("（其余 ${cases.size - MAX_CASES_IN_PROMPT} 个较早 case 略）\n")
-        }
-        return sb.toString()
+        return AdvisorDigestCore.digest(
+            cases = cases,
+            windows = windows,
+            salt = salt,
+            enabledRules = privacy.enabledRules,
+            periodDays = PERIOD_DAYS,
+            timeLabel = { fmt.format(Date(it)) }
+        )
     }
 
     /** 防御式解析顾问输出：第一个 { 到最后一个 }；字段缺失兜底；解析全崩也给兜底报告。 */
