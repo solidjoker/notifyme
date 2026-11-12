@@ -776,13 +776,16 @@ class MainActivity : Activity() {
         val unwatchedIds = WatchlistStore.getUnwatched(this)
         // M19：整轮只读一次标签表，逐会话取码
         val tagMap = ConvTagStore.readRaw(this)
-        // 按采集开关过滤：黑名单勾选 / 白名单外的 App，其会话不进主页；
-        // 自身与系统源（如 a11y 自抓噪声）同样不展示
-        val enabledGroups = groups.filter { it.first.id !in unwatchedIds }
-            .filter {
-                !AppSourceRegistry.isBlocked(it.first.pkg) &&
-                    AppSourceStore.isEnabled(this, it.first.pkg)
-            }
+        // 按采集开关过滤：关注名单 / 自身与系统源 / 停用来源，口径全在 ConvVisibilityCore
+        val enabledGroups = groups.filter {
+            ConvVisibilityCore.isVisible(
+                key = it.first,
+                unwatchedIds = unwatchedIds,
+                appFilter = AppFilterCore.ALL,
+                blocked = AppSourceRegistry.isBlocked(it.first.pkg),
+                enabled = AppSourceStore.isEnabled(this, it.first.pkg)
+            )
+        }
 
         // 来源筛选 chips：候选只取「本窗口内确实还有消息」的来源；
         // 搜索词也参与候选计算——搜索态下用户看到的就是这些来源，给别的来源 chip 只会导向空白列表。
@@ -806,14 +809,13 @@ class MainActivity : Activity() {
 
         // M12「最近待办」区：与悬浮面板同口径（TodoPanelCore），但必须在搜索过滤前算——
         // 待办区不受搜索框影响；可见集用未过滤的 groups 口径，与会话头角标一致
-        val todoVisibleKeys = messages.asSequence().map { it.convKey }.distinct()
-            .filter {
-                it.id !in unwatchedIds &&
-                    !AppSourceRegistry.isBlocked(it.pkg) &&
-                    AppSourceStore.isEnabled(this, it.pkg) &&
-                    AppFilterCore.matches(it.pkg, effectiveFilter)
-            }
-            .toSet()
+        val todoVisibleKeys = ConvVisibilityCore.visibleKeys(
+            keys = messages.asSequence().map { it.convKey },
+            unwatchedIds = unwatchedIds,
+            appFilter = effectiveFilter,
+            blockedOf = { AppSourceRegistry.isBlocked(it) },
+            enabledOf = { AppSourceStore.isEnabled(this, it) }
+        )
         val todos = TodoPanelCore.selectTodos(latestCases, todoVisibleKeys, HOME_TODO_LIMIT)
 
         // 汇总分区：仅当名单里有真实 ⭐ 会话（剔除新旧哨兵）时才分区；

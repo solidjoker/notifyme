@@ -335,16 +335,31 @@ class OverlayService : Service() {
         Thread {
             // 数据联动：按主页可见口径过滤——会话已删/不采集/不关注的待办不再显示，
             // 同会话只认最新窗口结论（latestByConvKey），新分析的待办即时出现。
+            // 四层门槛全在 ConvVisibilityCore；**首页来源筛选也要接**，否则首页筛了飞书、
+            // 悬浮面板还列微信待办（真机复现过）。
             val unwatchedIds = WatchlistStore.getUnwatched(this)
-            val visibleKeys = MessageStore.readRecent(this, 500).asSequence()
-                .map { it.convKey }
-                .distinct()
-                .filter {
-                    it.id !in unwatchedIds &&
-                        !AppSourceRegistry.isBlocked(it.pkg) &&
-                        AppSourceStore.isEnabled(this, it.pkg)
-                }
-                .toSet()
+            val windowKeys = MessageStore.readRecent(this, 500).map { it.convKey }.distinct()
+            // 可选项必须是「过了前三层门槛的来源」，与首页 buildFeed 的 chips 同口径：
+            // 已停用来源不该让筛选停在那里（首页已回落，面板若还保留就会整页空）
+            val baseKeys = ConvVisibilityCore.visibleKeys(
+                keys = windowKeys,
+                unwatchedIds = unwatchedIds,
+                appFilter = AppFilterCore.ALL,
+                blockedOf = { AppSourceRegistry.isBlocked(it) },
+                enabledOf = { AppSourceStore.isEnabled(this, it) }
+            )
+            // 选中来源若已没有任何可用会话，回落「全部」——与首页 buildFeed 同口径
+            val filter = AppFilterCore.resolve(
+                AppFilterStore.load(this),
+                baseKeys.map { it.pkg }.distinct()
+            )
+            val visibleKeys = ConvVisibilityCore.visibleKeys(
+                keys = windowKeys,
+                unwatchedIds = unwatchedIds,
+                appFilter = filter,
+                blockedOf = { AppSourceRegistry.isBlocked(it) },
+                enabledOf = { AppSourceStore.isEnabled(this, it) }
+            )
             val todos = TodoPanelCore.selectTodos(
                 AnalysisStore.latestByConvKey(this), visibleKeys
             )

@@ -264,12 +264,23 @@ class AnalysisWorker(
             }
             .filter { (key, _) -> scope.acceptsConv(key) }
             // 与主页口径一致：自身/系统源永不分析；未开启采集的 App
-            // 其历史会话也不进分析候选（force 显式指定除外）
+            // 其历史会话也不进分析候选（force 显式指定除外）。
+            // 四层门槛在 ConvVisibilityCore：分析不是展示，首页来源筛选要传 ALL。
             .filter { (key, _) ->
                 // M12：点名的会话与 forceKey 一样算显式指定，不受「未开启采集」拦截；
                 // 自身/系统源则任何时候都不放行，显式指定也不例外。
-                !AppSourceRegistry.isBlocked(key.pkg) &&
-                    (forced || AppSourceStore.isEnabled(applicationContext, key.pkg))
+                ConvVisibilityCore.isVisible(
+                    key = key,
+                    // 关注名单在这里**故意传空集**：分析链的关注名单门禁在下面那道
+                    // ConvTagCore.shouldAnalyze（且 forced && !quiet 时放行），
+                    // 若这里也按 unwatched 拦，会把「立即分析本会话」这条显式指定一起拦掉，
+                    // 并把 skippedUnwatched 的计数口径拆到两处。
+                    unwatchedIds = emptySet(),
+                    appFilter = AppFilterCore.ALL,
+                    blocked = AppSourceRegistry.isBlocked(key.pkg),
+                    enabled = AppSourceStore.isEnabled(applicationContext, key.pkg),
+                    forced = forced
+                )
             }
             // 强制模式同样跳过关注名单过滤——用户在会话详情页点「立即分析本会话」
             // 是显式指定目标，不该被名单悄悄拦下（W1 真机实测发现）
