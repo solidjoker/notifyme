@@ -406,6 +406,19 @@
     <string name="reminder_action_retry">重试</string>
     <string name="reminder_retry_done">重试完成</string>
 
+    <!-- 提醒列表分组筛选（口径见 ReminderListCore） -->
+    <string name="reminder_filter_all">全部</string>
+    <string name="reminder_filter_attention">需要处理</string>
+    <string name="reminder_filter_active">生效中</string>
+    <string name="reminder_filter_expired">已过期</string>
+    <string name="reminder_filter_desc">按处理状态筛选提醒</string>
+    <string name="reminder_filter_chip_desc">状态 %1$s，%2$d 条</string>
+    <string name="reminder_filter_chip_label">%1$s %2$d</string>
+    <string name="reminder_group_count">%1$d 条</string>
+    <string name="reminder_empty_attention">没有需要你处理的提醒</string>
+    <string name="reminder_empty_active">没有生效中的提醒</string>
+    <string name="reminder_empty_expired">没有已过期的提醒</string>
+
     <!-- M17 会话内自建提醒（写入系统日历 + 提前量；无日历时降级） -->
     <string name="btn_new_reminder">📅 新建提醒</string>
     <string name="reminder_manual_title">新建提醒</string>

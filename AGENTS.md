@@ -222,3 +222,10 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ③ **「该显示哪一份截止」的优先序只在 `displayDueCode`**：todoDue → s2DueTime → s1DueWindow（与 `AnalysisStore.displayDue()` 同序，改一处必须同时改另一处）；`hasDisplayDue` 把 `none` / 空串归为「不显示」。**别再写 `dueText != "none"` 这种拿码值比中文串的判定** —— 永远不相等，之前首页未编辑过的待办卡就渲染成「· 截止：none」；待办编辑框回填走 `editDueLabel`（只看 todoDue，不回落 s2/s1，否则保存就把分析结果变成硬覆盖）。
   ④ **提醒链的入参保持原始码值**：`runTodoReminderChain` 用 `displayDueCode`、`AnalysisWorker` 用 `s2DueTime.ifEmpty { s1DueWindow }`，别把 `dueLabel` 的中文结果喂给 `CalendarHelper.parseDueTime` ——「今天」会被解析成今天 09:00，下午分析时事件落进过去、日历永不触发；原始码值落进「解析不出 → baseTime + 1h」是既有分支。
   改码值集合、回落策略或「截止」优先序前先跑 `app/src/test/java/com/notifyme/android/TopicLabelCoreTest.kt`（33 条）。
+- **提醒列表的分组 / 排序 / 筛选口径全在 `ReminderListCore`**（internal object，纯函数 + 36 条单测），别在 `ReminderListActivity` 或 Adapter 里另写一套：
+  ① **三组顺序是契约**：「需要处理 → 生效中 → 已过期」（`groupRank`），`failed` 与 `intent` 都归「需要处理」但 **`failed` 排在 `intent` 之前**（`attentionRank`）——失败的需要重试，待保存的只是差一步。
+  ② **两条保守判定不能改**：`event_time <= 0` 不算过期（等于把「没写时间」当成「已过期」，用户会删掉可能有效的记录）；`failed` 永不算过期（它的语义是「等你重试」，不是「过去了」）。这两条与 `Retention.kt` 的 `ReminderRetentionCore.stillPending`（`status != failed && event_time > now`）口径一致，两处别把方向写反。
+  ③ **组内方向不得统一**：attention / active 按事件时间**升序**（马上要到的在上），expired **降序**（刚过期的在上），无时间始终垫组内最后。实现是先把比较键算进 `Arranged` 包装再一次 `sortedWith`，**别在比较器里反复调 `groupOf`**（O(n log n) 次状态判定）。
+  ④ **不拿 `created_at` 兜底**：比较器只比到 `event_time`，完全同键时靠 JVM 稳定排序保证传入顺序（`ReminderStore.readAll` 已是 `created_at` 倒序）。之前加了 `createdAtOf` 兜底一度把「同键保序」单测弄红，别加回去。
+  ⑤ **筛选到某一组时不插分组标题**（整页同组时标题是噪音），但 chip 本身始终全四个（`FILTERS` 顺序 = 全部 / 需要处理 / 生效中 / 已过期）；空态文案区分「一条记录都没有」（`emptyFilter` 返 null）与「本组没有」，否则点了 chip 看到空白会以为数据丢了；`emptyFilter(totalCount, visibleCount, filter)` 的第二个参数是**筛选后可见条数**，只判 `totalCount > 0 && filter != ALL` 就返回码值会让「命中多条」的页面同时显示列表和空态横幅（真机复现过）。
+  改分组语义、组内方向或筛选键前先跑 `app/src/test/java/com/notifyme/android/ReminderListCoreTest.kt`（36 条）。
