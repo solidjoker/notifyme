@@ -304,8 +304,9 @@ def test_get_empty_table_returns_zero_summary(client):
     body = r.get_json()
     assert body["ok"] is True
     assert body["tasks"] == []
+    # summary 新增 devices（库里一共几台设备），其余字段与原来一字不差
     assert body["summary"] == {"queued": 0, "running": 0, "failed": 0, "done": 0,
-                               "stale": 0, "total": 0}
+                               "stale": 0, "total": 0, "devices": 0}
 
 
 # ---------------------------------------------------------------- summary / stale
@@ -389,3 +390,196 @@ def test_storage_upsert_returns_accepted_and_rejected(client):
     accepted, rejected = storage_module.upsert_queue_tasks(items, now)
     assert accepted == 1
     assert rejected == [{"index": 1, "reason": rejected[0]["reason"]}]
+
+# ---------------------------------------------------------------- 设备清单（devices）
+
+def _devices_by_id(devices):
+    """把 devices 数组转成 {device_id: {"total":.., "active":..}} 便于断言。"""
+    return {d["device_id"]: {"total": d["total"], "active": d["active"]}
+            for d in devices}
+
+
+def test_devices_is_array_and_summary_counts_devices(client):
+    """devices 必须是数组，且 summary.devices == len(devices)。"""
+    _post(client, [_task(task_id="a1")], device_id="android-a")
+    _post(client, [_task(task_id="b1")], device_id="android-b")
+    body = client.get("/queue").get_json()
+    assert isinstance(body["devices"], list)
+    assert body["summary"]["devices"] == len(body["devices"]) == 2
+
+
+def test_devices_lists_both_devices_with_correct_totals(client):
+    """两台设备上报后都在清单里，total / active 各自算对。"""
+    _post(client, [_task(task_id="q1", state="queued"),
+                   _task(task_id="r1", state="running"),
+                   _task(task_id="d1", state="done")], device_id="android-a")
+    _post(client, [_task(task_id="q2", state="queued")], device_id="android-b")
+    devices = client.get("/queue").get_json()["devices"]
+    got = _devices_by_id(devices)
+    assert set(got) == {"android-a", "android-b"}
+    assert got["android-a"] == {"total": 3, "active": 2}
+    assert got["android-b"] == {"total": 1, "active": 1}
+
+
+def test_devices_active_counts_only_queued_and_running(client):
+    """active 只算排队中 / 运行中；failed / done 不算。"""
+    _post(client, [_task(task_id="q", state="queued"),
+                   _task(task_id="r", state="running"),
+                   _task(task_id="f", state="failed"),
+                   _task(task_id="d", state="done")], device_id="android-a")
+    devices = client.get("/queue").get_json()["devices"]
+    assert _devices_by_id(devices)["android-a"] == {"total": 4, "active": 2}
+
+
+def test_devices_reflect_all_devices_when_filtering_by_device_id(client):
+    """按 device_id 过滤只影响 tasks；devices 仍反映库里全部设备。"""
+    _post(client, [_task(task_id="a1")], device_id="android-a")
+    _post(client, [_task(task_id="b1")], device_id="android-b")
+    body = client.get("/queue?device_id=android-b").get_json()
+    # tasks 只剩被筛的那台设备
+    assert [t["device_id"] for t in body["tasks"]] == ["android-b"]
+    # devices 仍是库里全部两台设备
+    assert set(_devices_by_id(body["devices"])) == {"android-a", "android-b"}
+    assert body["summary"]["devices"] == 2
+
+
+def test_devices_unchanged_when_filtering_by_state(client):
+    """按 state 过滤：devices 不变（设备维度与状态过滤解耦）。"""
+    _post(client, [_task(task_id="q", state="queued"),
+                   _task(task_id="r", state="running")], device_id="android-a")
+    _post(client, [_task(task_id="q2", state="queued")], device_id="android-b")
+    all_body = client.get("/queue").get_json()
+    filtered = client.get("/queue?state=running").get_json()
+    assert filtered["devices"] == all_body["devices"]
+    assert filtered["summary"]["devices"] == 2
+
+
+def test_devices_empty_on_empty_db(client):
+    """空库：devices == []，summary.devices == 0。"""
+    body = client.get("/queue").get_json()
+    assert body["devices"] == []
+    assert body["summary"]["devices"] == 0
+
+
+def test_devices_ordering_is_deterministic(client):
+    """排序：active 倒序 -> total 倒序 -> device_id 升序。"""
+    _post(client, [_task(task_id="a1", state="queued"),
+                   _task(task_id="a2", state="running")], device_id="android-a")
+    _post(client, [_task(task_id="b1", state="queued"),
+                   _task(task_id="b2", state="done"),
+                   _task(task_id="b3", state="failed")], device_id="android-b")
+    _post(client, [_task(task_id="c1", state="queued")], device_id="android-c")
+    _post(client, [_task(task_id="d%d" % i, state="done") for i in range(5)],
+          device_id="android-d")
+    devices = client.get("/queue").get_json()["devices"]
+    assert [d["device_id"] for d in devices] == [
+        "android-a", "android-b", "android-c", "android-d"]
+    assert [d["active"] for d in devices] == [2, 1, 1, 0]
+
+
+def test_devices_ordering_stable_across_calls(client):
+    """同样的库重复查，顺序完全一致（可复现，不受返回顺序抖动影响）。"""
+    _post(client, [_task(task_id="a1")], device_id="android-b")
+    _post(client, [_task(task_id="b1")], device_id="android-a")
+    _post(client, [_task(task_id="c1")], device_id="android-c")
+    first = client.get("/queue").get_json()["devices"]
+    second = client.get("/queue").get_json()["devices"]
+    assert first == second
+    assert [d["device_id"] for d in first] == ["android-a", "android-b", "android-c"]
+
+
+def test_devices_with_prototype_like_device_ids(client):
+    """原型键风格设备名（__proto__ / constructor / toString）不炸库、不串数据。"""
+    _post(client, [_task(task_id="p1")], device_id="__proto__")
+    _post(client, [_task(task_id="p2")], device_id="constructor")
+    _post(client, [_task(task_id="p3")], device_id="toString")
+    _post(client, [_task(task_id="n1")], device_id="android-normal")
+    body = client.get("/queue").get_json()
+    got = _devices_by_id(body["devices"])
+    assert set(got) == {"__proto__", "constructor", "toString", "android-normal"}
+    assert got["__proto__"] == {"total": 1, "active": 1}
+    # 按原型键设备名过滤：只回自己的任务，不串到别的设备
+    filtered = client.get("/queue?device_id=__proto__").get_json()
+    assert [t["task_id"] for t in filtered["tasks"]] == ["p1"]
+    assert filtered["summary"]["devices"] == 4
+
+
+def test_get_invalid_state_does_not_500_and_keeps_devices(client):
+    """非法 state：不能 500；devices 依然反映库里的设备。"""
+    _post(client, [_task(task_id="q1")], device_id="android-a")
+    r = client.get("/queue?state=bogus")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["tasks"] == []
+    assert body["summary"]["total"] == 0
+    assert set(_devices_by_id(body["devices"])) == {"android-a"}
+
+
+def test_limit_99999_clamped_to_max_limit(client):
+    """limit=99999 被夹到 QUEUE_MAX_LIMIT，devices 不受 limit 影响。"""
+    now = int(time.time() * 1000)
+    _insert_rows_bulk(DEVICE, 520, now)
+    body = client.get("/queue?limit=99999").get_json()
+    assert len(body["tasks"]) == storage_module.QUEUE_MAX_LIMIT
+    assert body["summary"]["total"] == storage_module.QUEUE_MAX_LIMIT
+    # devices 统计的是全库，不被 limit 截断
+    assert _devices_by_id(body["devices"])[DEVICE] == {"total": 520, "active": 520}
+
+
+def test_rejected_entries_do_not_enter_devices(client):
+    """上报被拒的条目不进库，也不进 devices 清单。"""
+    r = _post(client, [_task(task_id="bad-kind", kind="unknown"),
+                       _task(task_id="bad-state", state="paused")],
+              device_id="android-bad")
+    body = r.get_json()
+    assert body["accepted"] == 0
+    assert len(body["rejected"]) == 2
+    assert _row_count() == 0
+    listed = client.get("/queue").get_json()
+    assert listed["devices"] == []
+    assert listed["summary"]["devices"] == 0
+
+
+def test_devices_only_counts_accepted_rows_of_a_device(client):
+    """同设备里既有合法条目也有被拒条目：devices 只算落库的那些。"""
+    _post(client, [_task(task_id="ok-1"),
+                   _task(task_id="bad-1", kind="unknown")],
+          device_id="android-mixed")
+    devices = client.get("/queue").get_json()["devices"]
+    assert _devices_by_id(devices)["android-mixed"] == {"total": 1, "active": 1}
+
+
+def test_storage_queue_devices_returns_list(client):
+    """存储层直调：返回 [{"device_id","total","active"}] 列表。"""
+    _post(client, [_task(task_id="a1", state="queued"),
+                   _task(task_id="a2", state="done")], device_id="android-a")
+    devices = storage_module.queue_devices()
+    assert isinstance(devices, list)
+    assert devices == [{"device_id": "android-a", "total": 2, "active": 1}]
+    for item in devices:
+        assert set(item) == {"device_id", "total", "active"}
+        assert isinstance(item["device_id"], str)
+        assert isinstance(item["total"], int)
+        assert isinstance(item["active"], int)
+
+
+def test_storage_queue_devices_without_table_returns_empty(client):
+    """表还没建（老库没跑过 init_db）：返回空列表，不抛异常。"""
+    tmp = tempfile.mkdtemp(prefix="notifyme_queue_notable_")
+    saved_db = app_module.DB_PATH
+    app_module.DB_PATH = os.path.join(tmp, "no_table.db")
+    try:
+        assert storage_module.queue_devices() == []
+    finally:
+        app_module.DB_PATH = saved_db
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_devices_counts_stale_rows_in_total(client):
+    """过期行仍计入 total（设备维度口径＝库里现存多少条，不做过期剔除）。"""
+    now = int(time.time() * 1000)
+    _post(client, [_task(task_id="fresh", state="queued")])
+    _insert_row(DEVICE, "old", now - storage_module.QUEUE_TTL_MS - 60000,
+                state="running")
+    devices = client.get("/queue").get_json()["devices"]
+    assert _devices_by_id(devices)[DEVICE] == {"total": 2, "active": 2}

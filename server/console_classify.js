@@ -265,6 +265,145 @@
     return out;
   }
 
+  // ---------- 会话卡两级折叠分组（按日期 / 按发送者）----------
+
+  // 组排序：date 组按 ts 倒序；sender 组按 count 倒序、同 count 按 name 升序。
+  // 末位再按 key 兜底，保证同一份输入永远得到同一个顺序（确定性 + 稳定）。
+  function sortMessageGroups(groups, dim) {
+    groups.sort(function (a, b) {
+      if (dim === 'date') {
+        if (a.ts !== b.ts) { return b.ts - a.ts; }
+      } else {
+        if (a.count !== b.count) { return b.count - a.count; }
+        if (a.name !== b.name) { return a.name < b.name ? -1 : 1; }
+      }
+      if (a.key !== b.key) { return a.key < b.key ? -1 : 1; }
+      return 0;
+    });
+    return groups;
+  }
+
+  // 两级折叠分组：顶层按 dim 分组（date=日期组 / sender=发送者组），
+  // 组内再按另一维度分一级子组；子组只有一个时不拆（items 平铺，不多一层废话）。
+  //
+  // getTs(m) 必须给：它返回的毫秒值就是「日期」的分组标识（调用方决定粒度，
+  // 例如传当天零点对齐的时间戳，这一天的消息就落进同一个日期组）。
+  // getSender(m) 可选，默认取 m.sender；名字归一一律复用 senderKey。
+  function groupMessages(msgs, dim, getTs, getSender) {
+    var list = msgs || [];
+    var mode = (dim === 'sender') ? 'sender' : 'date';   // 其它维度一律按日期
+    var tsOf = function (m) {
+      var v = getTs ? getTs(m) : (m && m.timestamp);
+      var n = Number(v);
+      return isNaN(n) ? 0 : n;
+    };
+    var senderOf = function (m) {
+      var raw = getSender ? getSender(m) : (m && m.sender);
+      return senderKey(raw);
+    };
+
+    // 键名来自外部数据（发送者名可能正好叫 __proto__），一律用无原型字典
+    var map = Object.create(null), order = [];
+    for (var i = 0; i < list.length; i++) {
+      var m = list[i];
+      var ts = tsOf(m);
+      var topKey = (mode === 'sender') ? senderOf(m) : String(ts);
+      var g = map[topKey];
+      if (!g) {
+        g = {
+          key: (mode === 'sender' ? 's|' : 'd|') + topKey,
+          dim: mode,
+          name: (mode === 'sender') ? topKey : String(ts),
+          ts: ts,
+          count: 0,
+          items: [],
+          children: [],
+          subs: Object.create(null),
+          subOrder: []
+        };
+        map[topKey] = g;
+        order.push(topKey);
+      }
+      g.count += 1;
+      g.items.push(m);
+      if (ts > g.ts) { g.ts = ts; }
+
+      // 子组：date 维度下按发送者再分，sender 维度下按 ts 再分
+      var subKey = (mode === 'date') ? senderOf(m) : String(ts);
+      var sub = g.subs[subKey];
+      if (!sub) {
+        sub = {
+          key: (mode === 'date' ? 's|' : 'd|') + subKey,
+          dim: (mode === 'date') ? 'sender' : 'date',
+          name: (mode === 'date') ? subKey : String(ts),
+          ts: ts,
+          count: 0,
+          items: []
+        };
+        g.subs[subKey] = sub;
+        g.subOrder.push(subKey);
+      }
+      sub.count += 1;
+      sub.items.push(m);
+      if (ts > sub.ts) { sub.ts = ts; }
+    }
+
+    var out = [];
+    order.forEach(function (k) {
+      var g = map[k];
+      var subs = [];
+      g.subOrder.forEach(function (sk) { subs.push(g.subs[sk]); });
+      // 只有一个子组时不展开二级（items 本来就是平铺的全部消息）
+      if (subs.length > 1) {
+        sortMessageGroups(subs, subs[0].dim);
+        g.children = subs;
+      }
+      delete g.subs;
+      delete g.subOrder;
+      out.push(g);
+    });
+    sortMessageGroups(out, mode);
+    return out;
+  }
+
+  // 按设备分组排队任务：active（排队中 + 运行中）倒序 -> count 倒序 -> device_id 升序
+  function groupQueueTasksByDevice(tasks) {
+    var list = normalizeQueueTasks(tasks);
+    var map = Object.create(null), order = [];
+    for (var i = 0; i < list.length; i++) {
+      var t = list[i];
+      var dev = t.device_id == null ? '' : String(t.device_id);
+      var g = map[dev];
+      if (!g) {
+        g = { key: dev, name: dev, count: 0, active: 0, items: [] };
+        map[dev] = g;
+        order.push(dev);
+      }
+      g.count += 1;
+      g.items.push(t);
+      if (t.state === 'queued' || t.state === 'running') { g.active += 1; }
+    }
+    var out = order.map(function (k) { return map[k]; });
+    out.sort(function (a, b) {
+      if (a.active !== b.active) { return b.active - a.active; }
+      if (a.count !== b.count) { return b.count - a.count; }
+      if (a.name !== b.name) { return a.name < b.name ? -1 : 1; }
+      return 0;
+    });
+    return out;
+  }
+
+  // 设备维度汇总：设备数 / 在跑任务数（排队中 + 运行中）/ 任务总数
+  function queueDeviceSummary(tasks) {
+    var groups = groupQueueTasksByDevice(tasks);
+    var active = 0, total = 0;
+    for (var i = 0; i < groups.length; i++) {
+      active += groups[i].active;
+      total += groups[i].count;
+    }
+    return { devices: groups.length, active: active, total: total };
+  }
+
   return {
     VERSION: VERSION,
     QUEUE_STATE_ORDER: QUEUE_STATE_ORDER,
@@ -287,6 +426,9 @@
     groupSuggestions: groupSuggestions,
     normalizeQueueTasks: normalizeQueueTasks,
     queueSummary: queueSummary,
-    groupQueueTasks: groupQueueTasks
+    groupQueueTasks: groupQueueTasks,
+    groupMessages: groupMessages,
+    groupQueueTasksByDevice: groupQueueTasksByDevice,
+    queueDeviceSummary: queueDeviceSummary
   };
 });
