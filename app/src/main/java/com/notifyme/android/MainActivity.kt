@@ -1053,7 +1053,8 @@ class MainActivity : Activity() {
         rows.removeAllViews()
         for (rec in todos) {
             val row = layoutInflater.inflate(R.layout.item_home_todo, rows, false)
-            row.findViewById<TextView>(R.id.tvHomeTodoText).text = rec.displayTodo()
+            row.findViewById<TextView>(R.id.tvHomeTodoText).text =
+                TopicLabelCore.todoLabel(this@MainActivity, rec.todoText, rec.s2Summary, rec.s1Topic)
             val hasDue = TopicLabelCore.hasDisplayDue(rec.todoDue, rec.s2DueTime, rec.s1DueWindow)
             row.findViewById<TextView>(R.id.tvHomeTodoMeta).text = if (!hasDue) {
                 rec.conversation
@@ -1095,7 +1096,7 @@ class MainActivity : Activity() {
         }
         val etText = EditText(this).apply {
             hint = getString(R.string.todo_edit_hint_text)
-            setText(rec.displayTodo())
+            setText(TopicLabelCore.todoLabel(this@MainActivity, rec.todoText, rec.s2Summary, rec.s1Topic))
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             filters = arrayOf(InputFilter.LengthFilter(200))
         }
@@ -1177,7 +1178,7 @@ class MainActivity : Activity() {
                 conversation = rec.conversation,
                 sender = last?.sender.orEmpty(),
                 sourceText = last?.text.orEmpty(),
-                summary = rec.displayTodo(),
+                summary = TopicLabelCore.todoLabel(this, rec.todoText, rec.s2Summary, rec.s1Topic),
                 // 提醒链入参保持码值：CalendarHelper 只认中文，码值落进「解析不出 -> +1h」既有分支
                 dueTimeText = TopicLabelCore.displayDueCode(rec.todoDue, rec.s2DueTime, rec.s1DueWindow),
                 baseTime = System.currentTimeMillis(),
@@ -1607,7 +1608,11 @@ class MainActivity : Activity() {
                     holder.tvAnalysis.visibility = View.VISIBLE
                     holder.tvAnalysis.setBackgroundResource(R.drawable.bg_tag_todo)
                     holder.tvAnalysis.setTextColor(ctx.getColor(R.color.card_bg))
-                    val summary = analysis.displayTodo().ifEmpty {
+                    // 第三级 s1Topic 是码值（未深分析时会出现 work_task / filtered），
+                    // 旧实现直接显示，用户看到的是英文码值
+                    val summary = TopicLabelCore.todoLabel(
+                        ctx, analysis.todoText, analysis.s2Summary, analysis.s1Topic
+                    ).ifEmpty {
                         msg.text.replace("\n", " ").take(15)
                     }
                     // 旧实现拿 displayDue() 的原始码值去比中文串（none != 无明确时间 永远成立），

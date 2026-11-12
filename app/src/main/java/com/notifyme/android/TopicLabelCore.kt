@@ -197,4 +197,33 @@ internal object TopicLabelCore {
         if (code.isEmpty()) return ""
         return dueLabel(context, code)
     }
+
+    /**
+     * 待办文本该显示什么（自由文本原样）：todoText -> s2Summary -> s1Topic。
+     *
+     * 顺序与 [AnalysisStore.displayTodo] 一致；最后一级 s1Topic 是码值，展示时须过 [todoLabel]。
+     */
+    fun displayTodoCode(todoText: String?, s2Summary: String?, s1Topic: String?): String {
+        val edited = todoText?.trim().orEmpty()
+        if (edited.isNotEmpty()) return edited
+        val summary = s2Summary?.trim().orEmpty()
+        if (summary.isNotEmpty()) return summary
+        return s1Topic?.trim().orEmpty()
+    }
+
+    /**
+     * 待办展示文案：前两级是用户/模型写的自由文本（原样），只有第三级 s1Topic 是码值要走资源。
+     *
+     * 为什么要区分：预筛结案的记录整条没有 S2 概括，回落到 s1Topic = "filtered"，
+     * 直接显示就是英文 filtered；同理未深分析的记录会显示 work_task / schedule。
+     */
+    fun todoLabel(context: Context, todoText: String?, s2Summary: String?, s1Topic: String?): String {
+        val edited = todoText?.trim().orEmpty()
+        if (edited.isNotEmpty()) return edited
+        val summary = s2Summary?.trim().orEmpty()
+        if (summary.isNotEmpty()) return summary
+        val topic = s1Topic?.trim().orEmpty()
+        if (topic.isEmpty()) return ""
+        return topicLabel(context, topic)
+    }
 }

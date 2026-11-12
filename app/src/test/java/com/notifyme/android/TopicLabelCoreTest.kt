@@ -281,5 +281,45 @@ class TopicLabelCoreTest {
         assertEquals("b", TopicLabelCore.displayDueCode("", "b", "c"))
         assertEquals("c", TopicLabelCore.displayDueCode("", "", "c"))
     }
+
+    // ---------- displayTodoCode / todoLabel（待办文本三级回退，真机复现过代码值泄漏）----------
+
+    @Test
+    fun displayTodoCodePrefersManualThenS2ThenS1() {
+        assertEquals("改过的", TopicLabelCore.displayTodoCode("改过的", "摘要", "work_task"))
+        assertEquals("摘要", TopicLabelCore.displayTodoCode("", "摘要", "work_task"))
+        assertEquals("work_task", TopicLabelCore.displayTodoCode("   ", "  ", "work_task"))
+        assertEquals("", TopicLabelCore.displayTodoCode(null, null, null))
+    }
+
+    @Test
+    fun displayTodoCodeTrimsEachLevel() {
+        assertEquals("改过的", TopicLabelCore.displayTodoCode(" 改过的 ", "摘要", "work_task"))
+        assertEquals("摘要", TopicLabelCore.displayTodoCode("", " 摘要 ", "work_task"))
+        assertEquals("", TopicLabelCore.displayTodoCode("", "", ""))
+    }
+
+    /**
+     * 真机复现（云手机 127.0.0.1:16384，预筛结案记录）：没有 S2 概括时 displayTodo() 回落到
+     * s1Topic = "filtered"，旧实现把英文码值直接渲染到「最近待办」与消息卡；todoLabel 一级回落必须翻中文。
+     */
+    @Test
+    fun filteredS1TopicIsLocalizedAtThirdLevel() {
+        assertEquals(
+            TopicLabelCore.TOPIC_FILTERED,
+            TopicLabelCore.normalizeTopic(TopicLabelCore.displayTodoCode("", "", "filtered"))
+        )
+        assertEquals(TopicLabelCore.TOPIC_WORK_TASK, TopicLabelCore.normalizeTopic("work_task"))
+        // 前两级是自由文本，即便内容恰好等于码值也原样返回（不能被再翻一次）
+        assertEquals("filtered", TopicLabelCore.displayTodoCode("filtered", "", "work_task"))
+    }
+
+    @Test
+    fun everyTopicCodeHasResource() {
+        for (code in TopicLabelCore.TOPIC_CODES) {
+            assertTrue("缺资源: $code", TopicLabelCore.topicRes(code) != null)
+        }
+        assertTrue(TopicLabelCore.topicRes(TopicLabelCore.TOPIC_FILTERED) != null)
+    }
 }
 
