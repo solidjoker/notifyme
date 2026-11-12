@@ -81,6 +81,14 @@ jobs:
         # 单元测试是全量发现（app/src/test 下所有用例），不需要点名字
         run: ./gradlew --stacktrace --console=plain testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug
 
+      - name: Set up Node.js (前端归类纯函数单测)
+        # 控制台前端的归类规则放在 server/console_classify.js：浏览器端内联进页面，
+        # 测试端由 node 直接跑真逻辑单测。CI 里必须真的有 node，
+        # 否则那条用例会被 skip —— 等于这条护栏根本没生效。
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Set up Python (pip 缓存)
         # 用 v5：pip 缓存能力自 v4 起就有；大版本固定住，避免上游改默认行为。
         uses: actions/setup-python@v5
@@ -94,6 +102,10 @@ jobs:
         run: python3 -m compileall -q server
 
       - name: Server tests (pytest, 目录级发现)
+        env:
+          # node 缺失时，前端归类纯函数单测必须 fail 而不是静默 skip：
+          # 那条用例是控制台归类逻辑唯一的自动化护栏，skip 等于没测。
+          REQUIRE_NODE: '1'
         run: |
           python3 -m pip install --upgrade pip
           # 装服务端真实依赖（flask / waitress / pycryptodome / Pillow），别只装 flask
