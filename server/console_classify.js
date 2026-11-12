@@ -7,7 +7,7 @@
  *   （server/test_console_classify.py 驱动 server/test_console_classify_runner.js）。
  *
  * 约束：纯函数、无 DOM 依赖、无网络、ES5 语法（浏览器与 node 双端都能跑）。
- * 归类维度：来源 App / 会话 / 日期 / 发送者 / 重要度 / 建议类型。
+ * 归类维度：来源 App / 会话 / 日期 / 发送者 / 重要度 / 建议类型 / 排队任务。
  */
 (function (root, factory) {
   var api = factory();
@@ -172,8 +172,104 @@
     return out;
   }
 
+
+  // ---------- 排队任务维度（端上 WorkManager 队列 + 待同步消息队列）----------
+  // 展示优先序：先看正在动的（运行中），再看排队的，最后才是失败与已完成
+  var QUEUE_STATE_ORDER = ['running', 'queued', 'failed', 'done'];
+  var QUEUE_STATE_LABELS = {
+    running: '运行中',
+    queued: '排队中',
+    failed: '失败',
+    done: '已完成'
+  };
+  var QUEUE_KIND_LABELS = {
+    analysis: '分析',
+    sync: '同步',
+    model: '模型',
+    other: '其它'
+  };
+
+  // 归一化一条排队任务：字段越界就截断、非法枚举退回默认值、空 id 直接丢弃
+  function normalizeQueueTasks(raw) {
+    var list = [];
+    var seen = Object.create(null);  // 键名来自外部数据，不能用普通对象
+    var arr = raw || [];
+    for (var i = 0; i < arr.length; i++) {
+      var t = arr[i] || {};
+      var id = t.task_id == null ? '' : String(t.task_id).trim();
+      if (!id || id.length > 128) continue;
+      var dev = t.device_id == null ? '' : String(t.device_id);
+      var kind = QUEUE_KIND_LABELS[t.kind] ? String(t.kind) : 'other';
+      var state = QUEUE_STATE_LABELS[t.state] ? String(t.state) : 'queued';
+      var title = t.title == null ? '' : String(t.title).trim();
+      if (!title) title = '未命名任务';
+      if (title.length > 256) title = title.slice(0, 256);
+      var detail = t.detail == null ? '' : String(t.detail);
+      if (detail.length > 512) detail = detail.slice(0, 512);
+      var queuedAt = Number(t.queued_at) || 0;
+      if (queuedAt < 0) queuedAt = 0;
+      var updatedAt = Number(t.updated_at) || queuedAt;
+      var key = dev + '/' + id;
+      var item = {
+        device_id: dev,
+        task_id: id,
+        kind: kind,
+        title: title,
+        state: state,
+        detail: detail,
+        queued_at: queuedAt,
+        updated_at: updatedAt,
+        stale: !!t.stale
+      };
+      if (seen[key] !== undefined) {
+        list[seen[key]] = item;   // 同一条目后到的覆盖先到的
+      } else {
+        seen[key] = list.length;
+        list.push(item);
+      }
+    }
+    list.sort(function (a, b) {
+      var ra = QUEUE_STATE_ORDER.indexOf(a.state);
+      var rb = QUEUE_STATE_ORDER.indexOf(b.state);
+      if (ra !== rb) { return ra - rb; }
+      if (a.queued_at !== b.queued_at) { return a.queued_at - b.queued_at; }
+      if (a.task_id === b.task_id) { return 0; }
+      return a.task_id < b.task_id ? -1 : 1;
+    });
+    return list;
+  }
+
+  // 汇总：四个状态只统计未过期的条目，过期单独计数，total = 条目总数
+  function queueSummary(tasks) {
+    var out = { running: 0, queued: 0, failed: 0, done: 0, stale: 0, total: 0 };
+    var arr = tasks || [];
+    for (var i = 0; i < arr.length; i++) {
+      var t = arr[i] || {};
+      out.total += 1;
+      if (t.stale) { out.stale += 1; continue; }
+      var st = String(t.state || '');
+      if (out[st] !== undefined) { out[st] += 1; }
+    }
+    return out;
+  }
+
+  // 按状态分区：固定顺序（运行中 → 排队中 → 失败 → 已完成）
+  function groupQueueTasks(tasks) {
+    var list = normalizeQueueTasks(tasks);
+    var out = [];
+    QUEUE_STATE_ORDER.forEach(function (st) {
+      var items = list.filter(function (t) { return t.state === st; });
+      if (!items.length) { return; }
+      out.push({ key: st, label: QUEUE_STATE_LABELS[st], count: items.length, items: items });
+    });
+    return out;
+  }
+
   return {
     VERSION: VERSION,
+    QUEUE_STATE_ORDER: QUEUE_STATE_ORDER,
+    QUEUE_STATE_LABELS: QUEUE_STATE_LABELS,
+    QUEUE_KIND_LABELS: QUEUE_KIND_LABELS,
     PKG_WX: PKG_WX,
     SEP: SEP,
     ADVISOR_TYPE_ORDER: ADVISOR_TYPE_ORDER,
@@ -188,6 +284,9 @@
     importanceRank: importanceRank,
     sortTodos: sortTodos,
     groupTodosByImportance: groupTodosByImportance,
-    groupSuggestions: groupSuggestions
+    groupSuggestions: groupSuggestions,
+    normalizeQueueTasks: normalizeQueueTasks,
+    queueSummary: queueSummary,
+    groupQueueTasks: groupQueueTasks
   };
 });

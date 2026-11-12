@@ -491,4 +491,170 @@ def test_group_todos_by_importance_survives_prototype_keys(call):
     ranks = {g["key"]: g["rank"] for g in out}
     assert ranks["high"] == 0, "high rank 应为 0"
     assert ranks[""] == 3, f"未标重要度 rank 应为 3，实际 {ranks['']}"
+
+
+
+# --------------------------------------------------------------------------
+# 排队任务维度（端上 WorkManager 队列 + 待同步消息队列）
+# --------------------------------------------------------------------------
+
+
+def test_queue_constants_exposed(call):
+    """排队维度常量：状态优先序、状态标签、类型标签。"""
+    assert call("__get__", "QUEUE_STATE_ORDER") == [
+        "running",
+        "queued",
+        "failed",
+        "done",
+    ], "排队状态优先序不对（应先运行中、再排队中、然后失败、最后已完成）"
+    labels = call("__get__", "QUEUE_STATE_LABELS")
+    assert labels == {
+        "running": "运行中",
+        "queued": "排队中",
+        "failed": "失败",
+        "done": "已完成",
+    }, "QUEUE_STATE_LABELS 不对：%r" % (labels,)
+    kinds = call("__get__", "QUEUE_KIND_LABELS")
+    assert kinds == {
+        "analysis": "分析",
+        "sync": "同步",
+        "model": "模型",
+        "other": "其它",
+    }, "QUEUE_KIND_LABELS 不对：%r" % (kinds,)
+
+
+def _qtask(**kw):
+    """构造一条排队任务（字段名与服务端 GET /queue 返回保持一致）。"""
+    base = {
+        "device_id": "android-1",
+        "task_id": "t1",
+        "kind": "analysis",
+        "title": "分析会话",
+        "state": "queued",
+        "detail": "",
+        "queued_at": 1000,
+        "updated_at": 1000,
+    }
+    base.update(kw)
+    return base
+
+
+def test_normalize_queue_tasks_drops_invalid_entries(call):
+    """空 task_id 与超长 task_id 都直接丢弃，不占位置。"""
+    out = call("normalizeQueueTasks", [_qtask(task_id=""), _qtask(task_id="x" * 129)])
+    assert out == [], "非法 task_id 应被丢弃：%r" % (out,)
+
+
+def test_normalize_queue_tasks_falls_back_to_defaults(call):
+    """非法 kind/state 退回默认值，空标题给默认名。"""
+    out = call("normalizeQueueTasks", [_qtask(kind="weird", state="weird", title="   ")])
+    assert len(out) == 1, "应保留 1 条"
+    assert out[0]["kind"] == "other", "非法 kind 应退回 other"
+    assert out[0]["state"] == "queued", "非法 state 应退回 queued"
+    assert out[0]["title"] == "未命名任务", "空标题应给默认名"
+
+
+def test_normalize_queue_tasks_truncates_long_text(call):
+    """标题截断到 256、详情截断到 512。"""
+    out = call("normalizeQueueTasks", [_qtask(title="标" * 300, detail="详" * 600)])
+    assert len(out[0]["title"]) == 256, "标题应截断到 256"
+    assert len(out[0]["detail"]) == 512, "详情应截断到 512"
+
+
+def test_normalize_queue_tasks_negative_queued_at_becomes_zero(call):
+    """负的 queued_at 归零。"""
+    out = call("normalizeQueueTasks", [_qtask(queued_at=-5)])
+    assert out[0]["queued_at"] == 0, "负 queued_at 应归零"
+
+
+def test_normalize_queue_tasks_keeps_latest_for_same_task(call):
+    """同 (device_id, task_id) 只留一条，后到的覆盖先到的。"""
+    out = call(
+        "normalizeQueueTasks",
+        [_qtask(state="queued", title="旧标题"), _qtask(state="running", title="新标题")],
+    )
+    assert len(out) == 1, "同一条任务应只留一条"
+    assert out[0]["state"] == "running", "应保留后到的状态"
+    assert out[0]["title"] == "新标题", "应保留后到的标题"
+
+
+def test_normalize_queue_tasks_sort_by_state_then_queued_at(call):
+    """排序：状态优先序 -> queued_at 升序 -> task_id。"""
+    out = call(
+        "normalizeQueueTasks",
+        [
+            _qtask(task_id="done-1", state="done", queued_at=1),
+            _qtask(task_id="q-2", state="queued", queued_at=20),
+            _qtask(task_id="r-1", state="running", queued_at=30),
+            _qtask(task_id="f-1", state="failed", queued_at=40),
+            _qtask(task_id="q-1", state="queued", queued_at=10),
+        ],
+    )
+    assert [t["task_id"] for t in out] == ["r-1", "q-1", "q-2", "f-1", "done-1"], (
+        "排序应按 状态优先序 -> queued_at 升序，实际 %r" % ([t["task_id"] for t in out],)
+    )
+
+
+def test_queue_summary_counts_only_fresh_tasks(call):
+    """四个状态只统计未过期条目，过期单独计数，total 是条目总数。"""
+    tasks = [
+        _qtask(task_id="a", state="queued"),
+        _qtask(task_id="b", state="running"),
+        _qtask(task_id="c", state="failed"),
+        _qtask(task_id="d", state="done"),
+        _qtask(task_id="e", state="queued", stale=True),
+    ]
+    s = call("queueSummary", tasks)
+    assert s["queued"] == 1, "过期条目不应计入 queued"
+    assert s["running"] == 1
+    assert s["failed"] == 1
+    assert s["done"] == 1
+    assert s["stale"] == 1, "过期条目应单独计数"
+    assert s["total"] == 5, "total 是条目总数（含过期）"
+
+
+def test_queue_summary_of_empty_is_all_zero(call):
+    """空列表 -> 全 0。"""
+    s = call("queueSummary", [])
+    assert s == {
+        "running": 0,
+        "queued": 0,
+        "failed": 0,
+        "done": 0,
+        "stale": 0,
+        "total": 0,
+    }, "空列表的汇总应全 0，实际 %r" % (s,)
+
+
+def test_group_queue_tasks_fixed_order(call):
+    """分组顺序固定：运行中 -> 排队中 -> 失败 -> 已完成。"""
+    tasks = [
+        _qtask(task_id="d", state="done"),
+        _qtask(task_id="q", state="queued"),
+        _qtask(task_id="f", state="failed"),
+        _qtask(task_id="r", state="running"),
+    ]
+    groups = call("groupQueueTasks", tasks)
+    assert [g["key"] for g in groups] == ["running", "queued", "failed", "done"], (
+        "分组顺序不对：%r" % ([g["key"] for g in groups],)
+    )
+    assert [g["label"] for g in groups] == ["运行中", "排队中", "失败", "已完成"]
+    assert [g["count"] for g in groups] == [1, 1, 1, 1]
+    assert groups[0]["items"][0]["task_id"] == "r"
+
+
+def test_group_queue_tasks_skips_empty_groups(call):
+    """没有条目的状态不出现。"""
+    groups = call("groupQueueTasks", [_qtask(task_id="q", state="queued")])
+    assert [g["key"] for g in groups] == ["queued"], "空分组不应出现"
+
+
+def test_group_queue_tasks_survives_prototype_keys(call):
+    """任务字段来自外部数据，键名撞 Object.prototype 时不能整页挂掉。"""
+    groups = call(
+        "groupQueueTasks",
+        [_qtask(task_id="__proto__", title="原型键"), _qtask(task_id="constructor")],
+    )
+    total = sum(g["count"] for g in groups)
+    assert total == 2, "原型键条目应正常保留，实际 %r" % (total,)
 
