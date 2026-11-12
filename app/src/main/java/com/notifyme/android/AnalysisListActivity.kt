@@ -48,6 +48,21 @@ class AnalysisListActivity : Activity() {
 
     private lateinit var switchOnlyTodo: Switch
     private lateinit var tvEmpty: TextView
+
+    /** M12：本轮分析的实时进度（顶部一行，与设置页共用 [AnalysisProgressUi]） */
+    private lateinit var rowAnalysisProgress: View
+    private lateinit var tvAnalysisProgress: TextView
+    private lateinit var progressAnalysisList: android.widget.ProgressBar
+
+    private val analysisProgressListener =
+        AnalysisProgressBus.Listener { state -> renderAnalysisProgress(state) }
+
+    private val progressTick = object : Runnable {
+        override fun run() {
+            val state = AnalysisProgressBus.state ?: return
+            renderAnalysisProgress(state)
+        }
+    }
     private val adapter = AnalysisAdapter { record ->
         // 阅读后清除闪电标记：删除该 case 记录，首页 ⚡ 角标随之消失
         AnalysisStore.deleteCase(this, record.caseId)
@@ -71,6 +86,9 @@ class AnalysisListActivity : Activity() {
         findViewById<TextView>(R.id.btnBack).setOnClickListener { finish() }
         switchOnlyTodo = findViewById(R.id.switchOnlyTodo)
         tvEmpty = findViewById(R.id.tvEmptyAnalysis)
+        rowAnalysisProgress = findViewById(R.id.rowAnalysisProgress)
+        tvAnalysisProgress = findViewById(R.id.tvAnalysisProgress)
+        progressAnalysisList = findViewById(R.id.progressAnalysisList)
 
         // 从首页会话头进入时标题显示会话名
         findViewById<TextView>(R.id.tvAnalysisTitle).text =
@@ -87,6 +105,39 @@ class AnalysisListActivity : Activity() {
     override fun onResume() {
         super.onResume()
         refreshList()
+        // addListener 会立刻回调当前运行态，所以进页面时正在跑的轮次能马上显示
+        AnalysisProgressBus.addListener(analysisProgressListener)
+    }
+
+    override fun onPause() {
+        AnalysisProgressBus.removeListener(analysisProgressListener)
+        tvAnalysisProgress.removeCallbacks(progressTick)
+        super.onPause()
+    }
+
+    /**
+     * M12 第④要素：TAG_ON_DEMAND 那一轮跑到哪了。
+     * 分析结果要等整轮结束才出现在列表里，如果只看空列表，用户会以为「点了没反应」。
+     */
+    private fun renderAnalysisProgress(state: AnalysisRunState?) {
+        if (state == null) {
+            tvAnalysisProgress.removeCallbacks(progressTick)
+            rowAnalysisProgress.visibility = View.GONE
+            // 轮次结束：列表大概率刚变，刷新一次拿到新记录
+            refreshList()
+            return
+        }
+        rowAnalysisProgress.visibility = View.VISIBLE
+        tvAnalysisProgress.removeCallbacks(progressTick)
+        tvAnalysisProgress.postDelayed(progressTick, 1000)
+        tvAnalysisProgress.text = AnalysisProgressUi.text(this, state)
+        val percent = state.percent()
+        if (percent == null) {
+            progressAnalysisList.isIndeterminate = true
+        } else {
+            progressAnalysisList.isIndeterminate = false
+            progressAnalysisList.progress = percent
+        }
     }
 
     /** H5 评审：readRecent 上后台线程；token 保证过期装载结果不覆盖新列表。 */

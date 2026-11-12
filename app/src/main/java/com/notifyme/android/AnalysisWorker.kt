@@ -184,9 +184,47 @@ class AnalysisWorker(
         // 此时前者的结果已落盘，caseId 过滤自然跳过，不会重复分析。
         // M11.4 会话级定时任务静默标记：成功/空结果不覆写全局分析状态文案
         val quiet = inputData.getBoolean(KEY_QUIET, false)
-        return ANALYSIS_MUTEX.withLock {
-            doWorkExclusive(config, slot, baseUrl, forceKey, s2LocalSkip, quiet, advisorLocalSkip)
+        // M12 分析范围：入队时带在 inputData 里的那份优先（点了「立即分析」就以当时的选择为准），
+        // 周期任务不带，回落 SharedPreferences 里落盘的那份；都没有 = 不限。
+        // forceKey（「立即分析本会话」）不受范围约束：单会话显式点名要的是整窗。
+        val scope = AnalysisScopeCore.immediateScope(forceKey != null, readScope())
+        if (!scope.range.isAll || scope.explicit) {
+            Log.i(TAG, "本轮范围: " + AnalysisScopeCore.summary(scope))
         }
+        return ANALYSIS_MUTEX.withLock {
+            doWorkExclusive(
+                config, slot, baseUrl, forceKey, s2LocalSkip, quiet, advisorLocalSkip,
+                scope, manual
+            )
+        }
+    }
+
+    /**
+     * 读本轮范围。两道来源：inputData（立即分析入队那一刻的显式选择）优先，
+     * 其次是 [AnalysisScopeStore]（周期任务每次跑时按当下重算）。
+     * 非自定义周期只带 period —— 区间由这里按「跑的那一刻」算，避免入队后跨天漂移。
+     */
+    private fun readScope(): AnalysisScopeCore.Scope {
+        val hasInput = inputData.keyValueMap.containsKey(AnalysisScopeCore.KEY_PERIOD)
+        if (!hasInput) return AnalysisScopeStore.load(applicationContext)
+        val period = AnalysisScopeCore.normalizePeriod(
+            inputData.getString(AnalysisScopeCore.KEY_PERIOD)
+        )
+        val from = inputData.getLong(AnalysisScopeCore.KEY_FROM, Long.MIN_VALUE)
+            .takeIf { it != Long.MIN_VALUE }
+        val to = inputData.getLong(AnalysisScopeCore.KEY_TO, Long.MAX_VALUE)
+            .takeIf { it != Long.MAX_VALUE }
+        val ids = AnalysisScopeCore.decodeConvIds(
+            inputData.getString(AnalysisScopeCore.KEY_CONV_IDS)
+        )
+        return AnalysisScopeCore.scope(
+            period,
+            System.currentTimeMillis(),
+            java.util.TimeZone.getDefault(),
+            from,
+            to,
+            ids
+        )
     }
 
     private suspend fun doWorkExclusive(
@@ -196,7 +234,9 @@ class AnalysisWorker(
         forceKey: ConvKey?,
         s2LocalSkip: String? = null,
         quiet: Boolean = false,
-        advisorLocalSkip: String? = null
+        advisorLocalSkip: String? = null,
+        scope: AnalysisScopeCore.Scope = AnalysisScopeCore.UNLIMITED,
+        manual: Boolean = false
     ): Result {
 
         // 按 (pkg, 会话名) 分组 -> 组 case -> 过滤重点关注 -> caseId 去重。
@@ -211,16 +251,25 @@ class AnalysisWorker(
         val byConversation = MessageStore.readRecent(applicationContext, 500)
             .groupBy { it.convKey }
 
+        // M12：范围里的「对象多选」。用户点名了会话 = 显式范围（与 forceKey 同口径），
+        // 跳过名单/标签门禁；但 caseId 去重只有手动轮才放开 —— 周期任务若也跳，
+        // 窗口没变也会每 15 分钟重算一遍，纯烧 token。
+        val forced = AnalysisScopeCore.forced(forceKey != null, scope)
+        val skipDedup = AnalysisScopeCore.skipDedup(forceKey != null, scope, manual)
+
         val cases = byConversation
             .asSequence()
             .filter { (key, _) ->
                 forceKey == null || key == forceKey
             }
+            .filter { (key, _) -> scope.acceptsConv(key) }
             // 与主页口径一致：自身/系统源永不分析；未开启采集的 App
             // 其历史会话也不进分析候选（force 显式指定除外）
             .filter { (key, _) ->
+                // M12：点名的会话与 forceKey 一样算显式指定，不受「未开启采集」拦截；
+                // 自身/系统源则任何时候都不放行，显式指定也不例外。
                 !AppSourceRegistry.isBlocked(key.pkg) &&
-                    (forceKey != null || AppSourceStore.isEnabled(applicationContext, key.pkg))
+                    (forced || AppSourceStore.isEnabled(applicationContext, key.pkg))
             }
             // 强制模式同样跳过关注名单过滤——用户在会话详情页点「立即分析本会话」
             // 是显式指定目标，不该被名单悄悄拦下（W1 真机实测发现）
@@ -232,7 +281,7 @@ class AnalysisWorker(
                 val pass = ConvTagCore.shouldAnalyze(
                     tag,
                     WatchlistStore.isWatchedId(key.id, unwatchedIds, watchedRaw),
-                    forceKey != null && !quiet
+                    forced && !quiet
                 )
                 // 两个拦截原因分开计数：只看名单不通过时全记成「标签拦截」会误导排查
                 if (!pass) {
@@ -240,9 +289,14 @@ class AnalysisWorker(
                 }
                 pass
             }
-            .mapNotNull { (key, list) -> AnalysisCase.fromMessages(key.pkg, key.conversation, list) }
-            // 强制模式跳过去重（用户显式要求重分析）；否则窗口没变就跳过
-            .filter { forceKey != null || it.caseId !in analyzedIds }
+            .mapNotNull { (key, list) ->
+                // M12 周期：只砍消息，不动门禁 —— 标了 ✅ 已办结的会话即便在「近 7 天」
+                // 里也照样不进分析（上面那道标签门禁已经把它拦掉了）。
+                val inRange = AnalysisScopeCore.keep(list, scope.range) { it.timestamp }
+                AnalysisCase.fromMessages(key.pkg, key.conversation, inRange)
+            }
+            // 强制/显式手动轮跳过去重（用户要求重分析）；否则窗口没变就跳过
+            .filter { skipDedup || it.caseId !in analyzedIds }
             .sortedBy { it.windowEnd } // 先旧后新
             .take(MAX_CONVERSATIONS_PER_ROUND)
             .toList()
@@ -250,15 +304,16 @@ class AnalysisWorker(
             TAG,
             "本轮分析开始: 入选 " + cases.size + " 个会话 (候选 " + byConversation.size +
                 " 个, 标签拦截 " + skippedByTag + " 个, 未关注拦截 " + skippedUnwatched +
-                " 个, force=" + forceKey?.conversation + ")"
+                " 个, force=" + forceKey?.conversation +
+                ", 范围=" + AnalysisScopeCore.summary(scope) + ")"
         )
 
         if (cases.isEmpty()) {
+            // 空结果的文案要能区分「真的没活」和「被范围筛空了」——后者要提示用户放宽范围，
+            // 否则用户看到「无待分析会话」只会以为分析坏了（M12）。
+            // 文案本体在 AnalysisScopeCore 里，能纯 JVM 单测覆盖。
             recordResultQuiet(
-                quiet,
-                config,
-                if (forceKey != null) "成功：本会话无新消息可分析"
-                else "成功：无待分析会话"
+                quiet, config, AnalysisScopeCore.emptyResultMessage(forceKey != null, scope)
             )
             return Result.success()
         }

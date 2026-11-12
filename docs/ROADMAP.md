@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 57 个 `.kt` / 711 条（`app/src/test`）+ 服务端 `server/test_*.py`（513 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 58 个 `.kt` / 741 条（`app/src/test`）+ 服务端 `server/test_*.py`（513 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -369,7 +369,7 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
 ## 11. M11 控制台/对话分离 + M12 分析范围（2026-10-07）
 
 - **M11 已完成**（3570f92 + e56952d + 8bded2e，251 单测全绿）：主界面纯对话化（☰ 菜单：控制台/刷新/清除；权限告警仅未授权显示）；控制台拆为入口卡片首页 + 采集/分析/提醒/隐私/悬浮五子页（subagent 迁移，控件 id 零改动）；来源白名单模式 + 应用选择器；对话详情页分析进度条 + 离线约束修复；来源 App 全量显示（含微信）；消息卡按会话头靠右缩进；App 改名 notifyme（beta=notifyme·测试）。
-- **M12 待实现**：分析范围筛选——周期（近1月/近7天/今天/自定义）+ 对象多选 + 显式范围跳过去重与名单 + 分析页 TAG_ON_DEMAND 进度条。
+- **M12 已完成**（feat/analysis-scope）：分析范围筛选四要素全部落地 —— ① 周期（不限/今天/近 7 天/近 1 月/自定义）：纯函数 `AnalysisScopeCore.range()` 算 `[fromMs, toMs]`，落盘只存选择不存算出来的毫秒，否则「近 7 天」会钉死在保存那天；② 对象多选：设置页「选择会话（可多选）」列出最近 500 条消息里出现过的会话，选中集合走 `Scope.convIds`；③ 显式范围跳过去重与名单：`forced()` / `skipDedup()` 两个纯函数 —— 点名的会话跳过 `AppSourceStore` 启用集合与 `ConvTagCore` 的 DONE/NOISE 拦截，手动轮再跳 `caseId` 去重；周期轮仍走去重，否则窗口没变也会每 15 分钟重算一遍；④ 分析页 `TAG_ON_DEMAND` 进度条：`AnalysisListActivity` 订阅 `AnalysisProgressBus`，复用 `AnalysisProgressUi`，轮次结束自动刷列表。 四条口径都有纯 JVM 单测：`AnalysisScopeCoreTest` 30 条。
 - 真机测试成果与修复：llama KV cache（557f640）、强制分析双拦截（81cc283）、S1 模型名 jev-latest 勘误（31c60ee）；评测记录 docs/评测-分析判定-20261007.md。
 - **M11.4 会话级定时分析**（b61ccf4）：已关注会话详情页可设独立分析周期（开关 + 15/30/60/120 分钟，WorkManager 每会话 unique periodic + quiet 静默标记——空结果不覆写全局状态；取消关注后 syncAll 清孤儿任务）。真机验证：liquidjoker 15 分钟排期持久化 + 立即首轮分析。升级链路真机闭环：Laya S1（need_action 0.76-0.98）→ GLM S2 深分析 → ⚡角标 + 悬浮卡弹出（真实数据截图验证）。
 
