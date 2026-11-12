@@ -56,6 +56,8 @@ window.__WX_DIR = (function () {
     --surface-2: #eef1f3;
     --text: #1f2328;
     --muted: #5b6570;
+    /* 次级辅助文字色（分区副标题用）：比 --muted 淡一档，浅色下对比度仍 >= 4.5:1 */
+    --muted-2: #646e79;
     --border: #d8dee3;
     --accent: #07c160;
     --accent-text: #0b7a43;
@@ -106,6 +108,7 @@ window.__WX_DIR = (function () {
     --surface-2: #1e242c;
     --text: #e9edf1;
     --muted: #a9b4c0;
+    --muted-2: #8b96a3;
     --border: #2a323b;
     --accent: #2fbf72;
     --accent-text: #5cd992;
@@ -264,6 +267,11 @@ window.__WX_DIR = (function () {
     font-weight: 700;
   }
   .sec-head.warn { color: var(--warn); }
+  /* 次级分区头（来源 App 分区）：小一号字号 + 次级色，层级低于 .sec-head */
+  .sec-head.sub {
+    font-size: var(--fs-xs); color: var(--muted-2); font-weight: 600;
+    margin: var(--sp-2) var(--sp-1) var(--sp-1);
+  }
   .conv-row { display: flex; align-items: center; gap: var(--sp-1); }
   .conv-head {
     flex: 1; min-width: 0; min-height: var(--tap);
@@ -304,6 +312,18 @@ window.__WX_DIR = (function () {
     color: var(--info); font-weight: 700; cursor: pointer;
   }
   .date-body { padding-left: var(--sp-2); }
+  /* 发送者分组头：与 .date-head 同构（原生 button + 44px 热区 + 焦点环） */
+  .sender-head {
+    display: flex; align-items: center; gap: var(--sp-2); width: 100%;
+    min-height: var(--tap); font: inherit; font-size: var(--fs-xs); text-align: left;
+    background: none; border: none; border-bottom: 1px dashed var(--border);
+    color: var(--muted); font-weight: 700; cursor: pointer;
+  }
+  .sender-name {
+    font-weight: 700; font-size: var(--fs-sm); flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .sender-body { padding-left: var(--sp-2); }
   .badge {
     display: inline-block; border-radius: 4px; padding: 1px 6px;
     font-size: var(--fs-xs); color: var(--on-badge); margin-right: var(--sp-1);
@@ -630,6 +650,11 @@ window.__WX_DIR = (function () {
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <div id="live-status" class="sr-only" role="status" aria-live="polite"></div>
 
+<!-- 控制台归类规则（单一事实源：server/console_classify.js）。
+     本文件只放占位标记，规则正文由 server/app.py 在启动时内联进来；
+     页面取不到 window.ConsoleClassify 时会自动降级成平铺渲染。 -->
+<script>/*__CONSOLE_CLASSIFY_JS__*/</script>
+
 <script>
 // ---------- 存储包装（隐私模式下 localStorage 不可用时不致命）----------
 var LS = (function () {
@@ -656,6 +681,11 @@ var LS = (function () {
     }
   };
 })();
+
+// ---------- 归类规则（单一事实源：server/console_classify.js）----------
+// 服务端启动时把 console_classify.js 内联到本页（占位标记在 console_ui.py 里）。
+// 取不到时（老缓存页面 / 源文件缺失）保持旧版平铺渲染，不抛异常、不产生坏 DOM。
+var CC = window.ConsoleClassify || null;
 
 // ---------- token 管理：query -> localStorage -> X-Token 头 ----------
 (function initToken() {
@@ -747,8 +777,8 @@ var APP_FILTER = '';
 var QUERY = '';
 // 鉴权态：令牌无效后固定显示鉴权框，避免把错误态渲染成普通列表
 var AUTH_MODE = false;
-// 折叠状态（key 形如 c:<pkg><SEP><会话名> 或 <key>|<日期键>，
-// true = 展开，默认折叠；持久化到 localStorage）
+// 折叠状态（key 形如 c:<pkg><SEP><会话名>、<会话key>|<日期键>、
+// <会话key>|<日期键>|<发送者key>；true = 展开，默认折叠；持久化到 localStorage）
 var COLLAPSE = {};
 try { COLLAPSE = JSON.parse(LS.get('wx_collapse_v1') || '{}') || {}; } catch (e) { COLLAPSE = {}; }
 var CONV_CARDS = {};   // 会话 key -> 会话名（复制会话名用；key 含 SEP，编码后进 data-*）
@@ -786,9 +816,16 @@ var PKG_LABELS = {
 // 会话复合身份（对齐安卓端 ConvKey）：pkg + SEP + 会话名。
 // SEP 用 U+0001（构造方式避免源码里出现裸控制字符）
 var SEP = String.fromCharCode(1);
-function normPkg(p) { return p || PKG_WX; }
-function pkgLabel(p) { return PKG_LABELS[normPkg(p)] || normPkg(p); }
-function ckOf(o) { return normPkg(o.pkg) + SEP + (o.conversation == null ? '' : o.conversation); }
+// 口径统一交给 console_classify.js（规则只写一份）；
+// 规则脚本缺失时用下面的兜底实现，行为与旧版一致。
+function normPkg(p) { return CC ? CC.normPkg(p) : (p || PKG_WX); }
+function pkgLabel(p) {
+  return CC ? CC.pkgLabel(p, PKG_LABELS) : (PKG_LABELS[normPkg(p)] || normPkg(p));
+}
+function ckOf(o) {
+  return CC ? CC.ckOf(o) :
+    (normPkg(o.pkg) + SEP + (o.conversation == null ? '' : o.conversation));
+}
 
 // 需要行动：优先看 s1.need_action.value（端上上报结构），
 // s1 缺失时退回接口顶层归一后的 need_action 布尔值
@@ -1575,6 +1612,34 @@ function initThemeControl() {
   });
 }
 
+// ---------- 归类辅助：规则统一走 console_classify.js ----------
+// 下面几个函数在规则脚本缺失（CC 为 null）时统一返回 null，
+// 调用方据此退回改造前的平铺渲染：不抛异常、不产生坏 DOM。
+// 按来源 App 分组会话
+function groupConvsByPkg(items) {
+  if (!CC || !CC.groupByPkg) return null;
+  try {
+    return CC.groupByPkg(items || [], PKG_LABELS, function (it) {
+      return it && it.pkg;
+    });
+  } catch (e) { return null; }
+}
+// 按发送者分组消息（归一化规则在规则层：去控制字符、去「名字:」前缀）
+function groupMsgsBySender(msgs) {
+  if (!CC || !CC.groupBySender) return null;
+  try { return CC.groupBySender(msgs || []); } catch (e) { return null; }
+}
+// 按重要度分区待办
+function groupTodosByImportance(todos) {
+  if (!CC || !CC.groupTodosByImportance) return null;
+  try {
+    // 重要度先过 impLabel 归一（端上可能上报 0-9 数值），再交给规则层分区
+    return CC.groupTodosByImportance(todos || [], function (a) {
+      return impLabel(importanceOf(a));
+    });
+  } catch (e) { return null; }
+}
+
 // ---------- 会话 tab：需关注分区 + 会话/日期分层折叠 ----------
 // 返回 section 列表：每张会话卡是独立 section，
 // 只有内容真的变了的那张卡才会被替换，折叠/展开其它卡片不受影响。
@@ -1601,7 +1666,7 @@ function renderConvs() {
         if (!list.length) return;
       }
     }
-    var item = { ck: ck, name: name, list: list };
+    var item = { ck: ck, name: name, list: list, pkg: normPkg(list[0].pkg) };
     if (todoByConv[ck]) watch.push(item);
     else rest.push(item);
   });
@@ -1628,15 +1693,43 @@ function renderConvs() {
       html: '<div class="sec-head">全部会话（' + rest.length + '）</div>',
       full: true
     });
-    rest.forEach(function (item) {
-      CONV_CARDS[item.ck] = item.name;
-      out.push({ key: 'card:' + encKey(item.ck), html: renderConvCard(item) });
-    });
+    // 「全部会话」再按来源 App 二次分区：
+    // 选中了某个 App 时不分区（只剩一个来源，分区没意义），直接平铺。
+    var restGroups = APP_FILTER ? null : groupConvsByPkg(rest);
+    if (restGroups) {
+      restGroups.forEach(function (g) {
+        out.push({
+          key: 'conv-pkg:' + encKey(g.pkg),
+          html: '<div class="sec-head sub">' + esc(g.label) + ' · ' + g.count + ' 个会话</div>',
+          full: true
+        });
+        g.items.forEach(function (item) {
+          CONV_CARDS[item.ck] = item.name;
+          out.push({ key: 'card:' + encKey(item.ck), html: renderConvCard(item) });
+        });
+      });
+    } else {
+      rest.forEach(function (item) {
+        CONV_CARDS[item.ck] = item.name;
+        out.push({ key: 'card:' + encKey(item.ck), html: renderConvCard(item) });
+      });
+    }
   }
   // 分页：按 next_before 游标翻页；游标为空就是「没有更多」
   out.push({ key: 'conv-more', html: moreHtml('msg'), full: true });
   out.push({ key: 'conv-note', html: refreshNote(), full: true });
   return out;
+}
+
+// 单条消息的 HTML（会话卡内复用）
+function msgHtml(m) {
+  var badges = (m.is_group ? '<span class="badge b-grp">群</span>' : '') +
+    (normPkg(m.pkg) !== PKG_WX ? '<span class="badge b-app">' +
+      esc(pkgLabel(m.pkg)) + '</span>' : '') +
+    (m.source === 'android-db' ? '<span class="badge b-db">库</span>' : '');
+  return '<div class="msg"><div class="m-meta">' + badges + esc(m.sender) +
+    ' · ' + esc(fmtTime(m.timestamp)) + '</div>' +
+    '<div class="m-text">' + esc(m.text) + '</div></div>';
 }
 
 // 一级折叠组：会话（默认折叠，显示名称 + 条数 + 最新摘要 + 相对时间）；
@@ -1674,7 +1767,8 @@ function renderConvCard(item) {
     '<div class="msg-list" id="panel-' + ek + '" data-panel="' + ek + '"' +
     (open ? '' : ' hidden') + '>';
   if (todo) html += renderAnalysisBlock(todo);
-  // 二级折叠组：按日期分组（list 已按时间倒序，日期组同样倒序）
+  // 二级折叠组：按日期分组（list 已按时间倒序，日期组同样倒序）；
+  // 日期组内若有多个人说话，再分三级（发送者）折叠组
   var byDate = {}, dOrder = [];
   list.forEach(function (m) {
     var d = dateKey(m.timestamp);
@@ -1685,23 +1779,38 @@ function renderConvCard(item) {
     var dkey = key + '|' + d;
     var edk = encKey(dkey);
     var dOpen = !!COLLAPSE[dkey];
+    var dayMsgs = byDate[d];
     html += '<button type="button" class="date-head" aria-expanded="' +
       (dOpen ? 'true' : 'false') + '" data-action="toggle" data-key="' + edk + '"' +
       ' data-head="' + edk + '" aria-controls="panel-' + edk + '">' +
       '<span class="caret" data-caret="' + edk + '" aria-hidden="true">' + (dOpen ? '▾' : '▸') + '</span>' +
-      '<span class="conv-name">' + esc(fmtDate(byDate[d][0].timestamp)) + '</span>' +
-      '<span class="conv-count">' + byDate[d].length + ' 条</span></button>' +
+      '<span class="conv-name">' + esc(fmtDate(dayMsgs[0].timestamp)) + '</span>' +
+      '<span class="conv-count">' + dayMsgs.length + ' 条</span></button>' +
       '<div class="date-body" id="panel-' + edk + '" data-panel="' + edk + '"' +
       (dOpen ? '' : ' hidden') + '>';
-    byDate[d].forEach(function (m) {
-      var badges = (m.is_group ? '<span class="badge b-grp">群</span>' : '') +
-        (normPkg(m.pkg) !== PKG_WX ? '<span class="badge b-app">' +
-          esc(pkgLabel(m.pkg)) + '</span>' : '') +
-        (m.source === 'android-db' ? '<span class="badge b-db">库</span>' : '');
-      html += '<div class="msg"><div class="m-meta">' + badges + esc(m.sender) +
-        ' · ' + esc(fmtTime(m.timestamp)) + '</div>' +
-        '<div class="m-text">' + esc(m.text) + '</div></div>';
-    });
+    // 三级折叠组：日期组里发送者超过一个才分组（单人会话保持平铺，不啰嗦）
+    var senders = groupMsgsBySender(dayMsgs);
+    if (senders && senders.length > 1) {
+      senders.forEach(function (g) {
+        // 折叠 key：<会话key>|<日期键>|<发送者key>，复用日期组同一套事件委托
+        var skey = dkey + '|' + g.key;
+        var esk = encKey(skey);
+        var sOpen = !!COLLAPSE[skey];
+        html += '<button type="button" class="sender-head" aria-expanded="' +
+          (sOpen ? 'true' : 'false') + '" data-action="toggle" data-key="' + esk + '"' +
+          ' data-head="' + esk + '" aria-controls="panel-' + esk + '"' +
+          ' aria-label="' + esc('发送者 ' + g.name + '，' + g.count + ' 条消息') + '">' +
+          '<span class="caret" data-caret="' + esk + '" aria-hidden="true">' + (sOpen ? '▾' : '▸') + '</span>' +
+          '<span class="sender-name">' + esc(g.name) + '</span>' +
+          '<span class="conv-count">· ' + g.count + ' 条</span></button>' +
+          '<div class="sender-body" id="panel-' + esk + '" data-panel="' + esk + '"' +
+          (sOpen ? '' : ' hidden') + '>';
+        g.messages.forEach(function (m) { html += msgHtml(m); });
+        html += '</div>';
+      });
+    } else {
+      dayMsgs.forEach(function (m) { html += msgHtml(m); });
+    }
     html += '</div>';
   });
   return html + '</div></div>';
@@ -1778,6 +1887,27 @@ function renderAnalysisBlock(a) {
   return html + '</div>';
 }
 
+// 单条待办的 section：每条一个 section，key 稳定，改一条不会带动其它条重绘
+function todoSection(a) {
+  var appBadge = normPkg(a.pkg) === PKG_WX ? '' :
+    '<span class="badge b-app">' + esc(pkgLabel(a.pkg)) + '</span>';
+  var html = '<div class="card">' +
+    '<div class="conv-row"><div class="conv-head">' +
+    '<span class="conv-main"><span class="conv-title-row">' + appBadge +
+    '<span class="conv-name">' + esc(a.conversation) + '</span>' +
+    '<span class="' + impCls(importanceOf(a)) + '">' +
+    esc(importanceOf(a)) + '</span></span></span>' +
+    '<span class="conv-count">窗口消息 ' + esc(a.message_count == null ? 0 : a.message_count) + ' 条</span>' +
+    '</div></div>' +
+    renderAnalysisBlock(a) +
+    '<div class="ana-meta">分析于 ' + esc(a.analyzed_at || '') +
+    ' · case ' + esc(a.case_id || '') + '</div></div>';
+  return {
+    key: 'todo:' + encKey(analysisKey(a)) + ':' + encKey(String(a.received_at || 0)),
+    html: html
+  };
+}
+
 // ---------- 待办 tab ----------
 function renderTodos() {
   var q = QUERY.trim().toLowerCase();
@@ -1801,26 +1931,21 @@ function renderTodos() {
     out.push({ key: 'todo-note', html: refreshNote(), full: true });
     return out;
   }
-  todos.forEach(function (a) {
-    var appBadge = normPkg(a.pkg) === PKG_WX ? '' :
-      '<span class="badge b-app">' + esc(pkgLabel(a.pkg)) + '</span>';
-    var html = '<div class="card">' +
-      '<div class="conv-row"><div class="conv-head">' +
-      '<span class="conv-main"><span class="conv-title-row">' + appBadge +
-      '<span class="conv-name">' + esc(a.conversation) + '</span>' +
-      '<span class="' + impCls(importanceOf(a)) + '">' +
-      esc(importanceOf(a)) + '</span></span></span>' +
-      '<span class="conv-count">窗口消息 ' + esc(a.message_count == null ? 0 : a.message_count) + ' 条</span>' +
-      '</div></div>' +
-      renderAnalysisBlock(a) +
-      '<div class="ana-meta">分析于 ' + esc(a.analyzed_at || '') +
-      ' · case ' + esc(a.case_id || '') + '</div></div>';
-    // 每条待办一个 section：key 稳定，改一条不会带动其它条重绘
-    out.push({
-      key: 'todo:' + encKey(analysisKey(a)) + ':' + encKey(String(a.received_at || 0)),
-      html: html
+  // 按重要度分区（高 → 中 → 低 → 未标）：CC 不可用时返回 null，退回旧版平铺
+  var todoGroups = groupTodosByImportance(todos);
+  if (todoGroups) {
+    todoGroups.forEach(function (g) {
+      // 分区头单独一个 section：key 稳定唯一（重要度 key 固定）
+      out.push({
+        key: 'todo-sec:' + encKey(g.key || 'none'),
+        html: '<div class="sec-head">' + esc(g.label) + '（' + g.count + '）</div>',
+        full: true
+      });
+      g.items.forEach(function (a) { out.push(todoSection(a)); });
     });
-  });
+  } else {
+    todos.forEach(function (a) { out.push(todoSection(a)); });
+  }
   // 分析结果同样按 next_before 游标翻页
   out.push({ key: 'todo-more', html: moreHtml('ana'), full: true });
   out.push({ key: 'todo-note', html: refreshNote(), full: true });
@@ -1947,14 +2072,27 @@ function renderAdvisor() {
   }
   reports.forEach(function (r, i) {
     var html = '';
-    // 建议按 type 分组展示
-    var groups = {}, order = [];
-    (r.suggestions || []).forEach(function (s) {
-      if (!s) return;
-      var t = ADV_TYPE_META[s.type] ? s.type : 'other';
-      if (!groups[t]) { groups[t] = []; order.push(t); }
-      groups[t].push(s);
-    });
+    // 建议按 type 分组：类型优先序固定（watchlist → threshold → prompt → other，
+    // 未知类型排最后），组内按 title 升序。规则来自 console_classify.js；
+    // 取不到规则脚本时退回旧口径（顺序 = 数据出现顺序），行为与改造前一致。
+    var groups = null;
+    if (CC && CC.groupSuggestions) {
+      try { groups = CC.groupSuggestions(r.suggestions || []); } catch (e) { groups = null; }
+    }
+    if (!groups) {
+      // 降级路径：本地旧分组（未知类型落到 other，顺序 = 数据出现顺序）
+      groups = [];
+      var localGroups = {}, localOrder = [];
+      (r.suggestions || []).forEach(function (s) {
+        if (!s) return;
+        var t = ADV_TYPE_META[s.type] ? s.type : 'other';
+        if (!localGroups[t]) { localGroups[t] = []; localOrder.push(t); }
+        localGroups[t].push(s);
+      });
+      localOrder.forEach(function (t) {
+        groups.push({ type: t, items: localGroups[t] });
+      });
+    }
     html += '<div class="card">' +
       '<div class="conv-row"><div class="conv-head">' +
       '<span class="conv-main"><span class="conv-title-row">' +
@@ -1973,11 +2111,13 @@ function renderAdvisor() {
       html += '<div class="s2"><div class="row"><span class="label">复盘摘要</span><br>' +
         esc(r.summary) + '</div></div>';
     }
-    order.forEach(function (t) {
-      var meta = ADV_TYPE_META[t];
+    groups.forEach(function (g) {
+      // 未知类型统一落到 other 的图标/中文名
+      var meta = ADV_TYPE_META[g.type] || ADV_TYPE_META.other;
       html += '<div class="s2"><div class="row"><span class="label">' +
         meta.ico + ' ' + meta.label + '</span><ul>';
-      groups[t].forEach(function (s) {
+      (g.items || []).forEach(function (s) {
+        if (!s) return;
         html += '<li><b>' + esc(s.title || '') + '</b>' +
           (s.detail ? ' — ' + esc(s.detail) : '') + '</li>';
       });

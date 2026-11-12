@@ -434,6 +434,32 @@ CONSOLE_HTML = _CONSOLE_UI.CONSOLE_HTML
 CONSOLE_MANIFEST = _CONSOLE_UI.CONSOLE_MANIFEST
 CONSOLE_SW = _CONSOLE_UI.CONSOLE_SW
 
+# 归类规则的占位标记：必须与 console_ui.py 里的字面量完全一致。
+# console_ui.py 只留标记，规则正文在 console_classify.js（单一事实源）。
+CONSOLE_CLASSIFY_MARKER = '/*__CONSOLE_CLASSIFY_JS__*/'
+
+
+def _read_console_classify_js():
+    """读取控制台归类规则源文件 server/console_classify.js。
+
+    读不到就返回空串并记一条告警，绝不抛异常打断服务启动：
+    前端拿不到 window.ConsoleClassify 时会自动退化成「平铺渲染」，
+    控制台照常可用，只是没有来源 App 分区 / 发送者归类这些增强。
+    """
+    path = os.path.join(BASE_DIR, 'console_classify.js')
+    try:
+        with open(path, 'r', encoding='utf-8') as fh:
+            return fh.read()
+    except Exception as exc:
+        logger.warning('console_classify.js 读取失败，控制台将退化为平铺渲染：%s', exc)
+        return ''
+
+
+# 规则内联进控制台 HTML：占位标记只在 console_ui.py 里出现一次，
+# 启动时替换一次即可（不要每个请求都 replace 一遍 70KB+ 的字符串）。
+CONSOLE_CLASSIFY_JS = _read_console_classify_js()
+CONSOLE_HTML_READY = CONSOLE_HTML.replace(CONSOLE_CLASSIFY_MARKER, CONSOLE_CLASSIFY_JS)
+
 # manifest 图标：PNG 放 pwa_icons/（由 gen_icons.py 生成），经 /console/icons/<name> 提供。
 # manifest 里的 src 用相对路径，相对 manifest 自身 URL 解析
 # （/console/manifest.json -> /console/icons/...；
@@ -476,7 +502,7 @@ def console_page():
     真正的数据接口（/messages、/analysis、/advisor）仍然走 X-Token 鉴权。
     """
     # no-cache：让 SW 每次都能拿到最新骨架（SW 离线时回缓存）
-    return Response(CONSOLE_HTML, mimetype="text/html",
+    return Response(CONSOLE_HTML_READY, mimetype="text/html",
                     headers={"Cache-Control": "no-cache"})
 
 
