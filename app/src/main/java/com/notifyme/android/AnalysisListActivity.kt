@@ -166,15 +166,14 @@ class AnalysisListActivity : Activity() {
      * 消息已被裁剪的旧记录自然无原文（隐藏该行）。
      */
     private fun buildSourceMap(records: List<AnalysisCaseRecord>): Map<String, String> {
-        val byConv = MessageStore.readRecent(this, 500).groupBy { it.convKey }
+        // 按会话各读一次窗口（ConvWindowCore）：不能拿跨会话的 readRecent(500) 去切 ——
+        // 别的会话刷满 500 条后本会话在窗口里一条都没有，原文行会整块消失（数据仍在文件里）
+        val windows = ConvWindowCore.sourceKeys(records).associateWith { key ->
+            MessageStore.readWindow(this, key)
+        }
         val prefix = getString(R.string.analysis_source_prefix)
-        return records.mapNotNull { record ->
-            val window = AnalysisCase.windowOf(
-                byConv[record.convKey].orEmpty(), record.windowEnd, record.messageCount
-            )
-            val text = AnalysisCase.formatWindowSource(window)
-            if (text.isEmpty()) null else record.caseId to "$prefix\n$text"
-        }.toMap()
+        return ConvWindowCore.sourceMap(records, windows)
+            .mapValues { (_, text) -> "$prefix\n$text" }
     }
 
     /** 分析结果 Adapter（case 版）：会话/主题/摘要/截止/窗口原文/分析时间。 */
