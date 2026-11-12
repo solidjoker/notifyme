@@ -29,6 +29,11 @@ APP_PY = os.path.join(SERVER_DIR, "app.py")
 UTIL_PY = os.path.join(SERVER_DIR, "util.py")
 STORAGE_PY = os.path.join(SERVER_DIR, "storage.py")
 ROUTES_PY = os.path.join(SERVER_DIR, "routes.py")
+STATS_PY = os.path.join(SERVER_DIR, "stats_api.py")
+SUGGESTS_PY = os.path.join(SERVER_DIR, "suggests.py")
+
+# 参与「一份实现只在一个模块」比对的模块清单（新增只读模块也要登记进来）
+ALL_MODULES = (APP_PY, UTIL_PY, STORAGE_PY, ROUTES_PY, STATS_PY, SUGGESTS_PY)
 
 LOCK_TYPE = type(threading.Lock())
 
@@ -79,6 +84,8 @@ EXPECTED_RULES = {
     ("/queue", "GET", "query_queue"),
     ("/queue", "POST", "receive_queue"),
     ("/static/<path:filename>", "GET", "static"),
+    ("/stats", "GET", "query_stats"),
+    ("/suggests/next", "GET", "query_suggests_next"),
     ("/sw.js", "GET", "console_sw"),
     ("/weixin", "POST", "receive_weixin"),
 }
@@ -127,6 +134,17 @@ EXPECTED_OWNER = {
     "query_advisor": "routes.py",
     "admin_extract": "routes.py",
     "admin_extract_status": "routes.py",
+    # stats_api.py / suggests.py：只读聚合与建议（各自模块自带 register）
+    "query_stats": "stats_api.py",
+    "_messages_block": "stats_api.py",
+    "_analysis_block": "stats_api.py",
+    "_queue_block": "stats_api.py",
+    "query_suggests_next": "suggests.py",
+    "_advisor_state": "suggests.py",
+    "_queue_state": "suggests.py",
+    "_todo_counts": "suggests.py",
+    "_convs_without_analysis": "suggests.py",
+    "_pick": "suggests.py",
     # app.py：Flask 壳 + 鉴权 + 控制台 / 落地页
     "create_app": "app.py",
     "check_token": "app.py",
@@ -203,7 +221,7 @@ def test_import_paths_still_work():
     """约束：from app import app 与 import app as app_module 都要继续可用。"""
     assert app_module.app is flask_app
     assert isinstance(flask_app, Flask)
-    for mod_name in ("util", "storage", "routes"):
+    for mod_name in ("util", "storage", "routes", "stats_api", "suggests"):
         assert mod_name in sys.modules, "%s 没有被导入" % mod_name
 
 
@@ -232,7 +250,7 @@ def test_app_py_is_shorter():
 def test_no_duplicate_implementation(name, owner):
     """同一个实现只允许存在一份，且必须待在约定的模块里。"""
     homes = []
-    for path in (APP_PY, UTIL_PY, STORAGE_PY, ROUTES_PY):
+    for path in ALL_MODULES:
         defs, _ = _top_level_names(path)
         if name in defs:
             homes.append(os.path.basename(path))
@@ -242,7 +260,7 @@ def test_no_duplicate_implementation(name, owner):
 @pytest.mark.parametrize("state_name", RUNTIME_STATE, ids=RUNTIME_STATE)
 def test_runtime_state_only_lives_in_app_module(state_name):
     """运行期可变状态只能有一份，且只能在 app 模块里定义。"""
-    for path in (UTIL_PY, STORAGE_PY, ROUTES_PY):
+    for path in (UTIL_PY, STORAGE_PY, ROUTES_PY, STATS_PY, SUGGESTS_PY):
         _, assigns = _top_level_names(path)
         assert state_name not in assigns, (
             "%s 在 %s 里被重新赋值了，运行期状态必须只有一份"
@@ -252,7 +270,7 @@ def test_runtime_state_only_lives_in_app_module(state_name):
 
 def test_no_module_level_copy_of_runtime_state():
     """其它模块不能在 import 期拷贝路径 / 令牌等常量。"""
-    for path in (UTIL_PY, STORAGE_PY, ROUTES_PY):
+    for path in (UTIL_PY, STORAGE_PY, ROUTES_PY, STATS_PY, SUGGESTS_PY):
         src = _read(path)
         tree = ast.parse(src)
         for node in tree.body:
@@ -281,7 +299,7 @@ def test_storage_reads_paths_at_call_time(tmp_path, monkeypatch):
 
 
 def test_new_modules_exist_and_are_importable():
-    for path in (UTIL_PY, STORAGE_PY, ROUTES_PY):
+    for path in (UTIL_PY, STORAGE_PY, ROUTES_PY, STATS_PY, SUGGESTS_PY):
         assert os.path.exists(path), path
         assert len(_read(path).splitlines()) > 50, path
 
@@ -295,7 +313,7 @@ def test_no_forbidden_identifiers_in_new_modules():
         "Wei" + "xinAndroid",
         "we" + "ixin-monitor",
     ]
-    for path in (APP_PY, UTIL_PY, STORAGE_PY, ROUTES_PY):
+    for path in ALL_MODULES:
         src = _read(path)
         for token in forbidden:
             assert token not in src, "%s 里出现了禁用标识 %s" % (path, token)

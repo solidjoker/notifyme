@@ -61,6 +61,9 @@ from routes import (
     admin_extract, admin_extract_status, query_advisor, query_analysis, query_messages,
     receive_advisor, receive_analysis, receive_weixin, register,
 )
+# 聚合统计与「下一步建议」两条只读接口（都按模块自带 register(app) 挂载）
+import stats_api
+import suggests
 
 # 让 `python server/app.py` 直跑时，内部 `import app as app_module` 命中同一份模块，
 # 避免出现第二份 Flask 应用与第二份运行期状态。
@@ -84,6 +87,10 @@ app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 
 # 挂载数据面路由（/weixin、/messages、/analysis、/advisor、/admin/extract）
 register(app)
+
+# 挂载只读聚合接口（/stats 全库统计、/suggests/next 下一步建议）
+stats_api.register(app)
+suggests.register(app)
 
 
 # WSGI 部署（waitress / gunicorn / uwsgi）不会走 __main__，
