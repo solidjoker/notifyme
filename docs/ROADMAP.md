@@ -18,7 +18,7 @@
 | release 签名 | 环境变量 > 仓库根 `keystore.properties` > 降级为不签名；CI 用 `-PrequireReleaseSigning=true` 让签名缺失直接失败 | `app/build.gradle.kts:131-169` |
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
-| 测试 | 纯 JVM 单测 47 个 `.kt`（`app/src/test`）+ 服务端 `server/test_*.py`（477 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 48 个 `.kt`（`app/src/test`）+ 服务端 `server/test_*.py`（513 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -171,7 +171,7 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
    - 微信源：现有 MessagingStyle 解析 + 群聊/私聊判定 + a11y 控件 id 表（5 个 id 移进配置）
    - 飞书/钉钉源：`PrefixImParser`（全角/半角冒号、长发送者名折叠等均有单测）；未收录 App 回落 `GenericNotificationParser`
 3. [x] **监听器改造**：`WeChatNotificationListener` → `NotifyMeListener`，去掉单包判定，改为按 `AppSourceStore` 启用集合过滤
-4. [x] **a11y 直读**：仅微信启用（其余 App 无稳定控件 id），注册表里 `a11yConfig == null` 即跳过；服务类改名 `A11yExtractService`
+4. [x] **a11y 直读**：仅微信启用（其余 App 无稳定控件 id），注册表里 `a11yConfig == null` 即跳过；服务类改名 `A11yExtractService`——**飞书/钉钉的聊天页控件 id 仍未取证，故 `a11yConfig` 留 null（宁可不直读也不猜 id）**，取证命令见 [通知形状取证记录](通知形状取证记录.md) §2.2 / §4
 5. [x] **UI**：控制台新增「通知来源」管理页 `SourcesActivity`（勾选启停，已观察来源自动出现）；PWA 加「全部/微信/飞书/钉钉」筛选；关注名单 `WatchlistStore` 的 key 升级为复合键 id
 6. [x] **数据一致性**：`AnalysisStore`/`PromptStore`/`ReminderStore`/`PendingQueue`/折叠态/提醒链全部升级为 `ConvKey`，删除路径跟着改；String 兼容重载全部删除，不留两套口径
 
@@ -179,11 +179,12 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
 
 验收：
 - [x] 微信链路代码级回归：五项删除功能 + 分析 + 提醒全部走 ConvKey 且 201 单测全绿（真机端到端回归留待下一个调试装机轮次）
-- [x] 非微信解析器单测入库/分组/群私聊判定全绿（飞书/钉钉合成通知样本）；**真机通知形状取证仍待办**——真实 `dumpsys notification` 形状未抓，解析器刻意保守，取证方法见各文件注释
+- [x] 非微信解析器单测入库/分组/群私聊判定全绿（飞书/钉钉合成通知样本）；
+  **真机通知形状取证：解析口径已固化（[通知形状取证记录](通知形状取证记录.md) + `NotificationShapeEvidenceTest` 10 条），真实 `dumpsys` dump 仍待真机**——取证命令、已知口径副作用与待补清单见该文档 §2/§3.1/§4
 - [x] 老 `messages.jsonl`（无 `pkg`）读时回填默认微信，可正常读、删、同步，不丢行（`SchemaV2Test` 覆盖同名会话跨 App 删除隔离）
 - [x] M1 单测扩充到复合键路径并全绿（189 → 201）
 
-遗留：真机飞书/钉钉通知实测验证（列入下一轮设备调试）；首页/控制台安卓端尚未加 App 筛选 chips（PWA 已有，安卓端入口是来源管理页）。
+遗留：真机飞书/钉钉通知实测验证（**解析口径已固化成测试**，缺的只是真机 dump 原文；清单与命令见 [通知形状取证记录](通知形状取证记录.md) §4）；首页/控制台安卓端尚未加 App 筛选 chips（PWA 已有，安卓端入口是来源管理页）。
 
 ---
 
