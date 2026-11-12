@@ -182,6 +182,22 @@ object MessageStore {
     ): ConvWindowCore.Window = core(context).readWindow(key, limit)
 
     /**
+     * 按会话分组取「分析候选」：每会话只留最近 [CandidateWindowCore.PER_CONV] 条。
+     *
+     * 为什么不能沿用 `readRecent(500).groupBy { it.convKey }`：那个窗口是**跨会话**的
+     * 最近 500 条，几个群刷满窗口，安静却有待办的会话在候选里一条都没有，永远排不进分析。
+     * 这里改成「尾部行窗口（[MessageStoreCore.TAIL_LINES]）+ 每会话自带上限」，
+     * 单个会话再吵也只会占掉自己的 [CandidateWindowCore.PER_CONV] 条。
+     *
+     * 口径（分组顺序 / 升序 / ts<=0 归零 / 超过上限保留最近）全在 [CandidateWindowCore]。
+     */
+    @Synchronized
+    internal fun candidateGroups(
+        context: Context,
+        perConv: Int = CandidateWindowCore.PER_CONV
+    ): Map<ConvKey, List<ChatMessage>> = core(context).candidateGroups(perConv)
+
+    /**
      * 删除 [cutoffMs]（毫秒时间戳）之前的消息（数据保留策略：本地只留 7 天）。
      * timestamp ≤0 与损坏行保守保留。返回实际删除条数。
      */
@@ -384,6 +400,25 @@ internal class MessageStoreCore(
             .sortedByDescending { it.timestamp }
             .take(limit - undatedSlots)
         return dated + undated.take(undatedSlots)
+    }
+
+    /**
+     * 按会话分组取「分析候选」：每会话只留最近 [perConv] 条，按时间升序。
+     *
+     * 与 [readRecent] 的差别是保留名额的**粒度**：readRecent 的 limit 是跨会话总名额，
+     * 活跃会话会挤掉安静会话；这里每个会话各自保留，谁的活跃度也不影响别人。
+     * 排序口径与 [ConvWindowCore.slice] 一致（ts<=0 归 0 排最前），分组顺序保持首次出现序。
+     */
+    fun candidateGroups(perConv: Int = CandidateWindowCore.PER_CONV): Map<ConvKey, List<ChatMessage>> {
+        if (!store.exists()) return emptyMap()
+        val parsed = store.readTailLines(TAIL_LINES).mapNotNull { line ->
+            try {
+                ChatMessage.fromJson(JSONObject(line))
+            } catch (e: Exception) {
+                null // 单行损坏不影响整体读取
+            }
+        }
+        return CandidateWindowCore.group(parsed, perConv)
     }
 
     /**
