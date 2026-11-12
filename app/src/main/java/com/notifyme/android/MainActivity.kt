@@ -951,24 +951,7 @@ class MainActivity : Activity() {
      * 必须放在 Activity 级、且只收一个 String：`buildFeed` 里把它当 `labelOf: (String) -> String` 传给
      * SearchCore。挂在 Adapter 里并带 Context 参数就匹配不上这个函数类型。
      */
-    private fun searchLabel(code: String): String = when (code) {
-        "work_task", "schedule", "notice", "smalltalk", "risk" ->
-            getString(
-                when (code) {
-                    "work_task" -> R.string.topic_work_task
-                    "schedule" -> R.string.topic_schedule
-                    "notice" -> R.string.topic_notice
-                    "smalltalk" -> R.string.topic_smalltalk
-                    else -> R.string.topic_risk
-                }
-            )
-        "today" -> getString(R.string.due_today)
-        "tomorrow" -> getString(R.string.due_tomorrow)
-        "this_week" -> getString(R.string.due_this_week)
-        "later" -> getString(R.string.due_later)
-        "none" -> getString(R.string.due_none)
-        else -> code
-    }
+    private fun searchLabel(code: String): String = TopicLabelCore.anyLabel(this, code)
 
     /** 主线程渲染：提交列表数据 + 空态提示 + 来源 chips + 导航栏顶端待办区（M12）。 */
     private fun applyFeed(result: FeedResult, query: String) {
@@ -1071,14 +1054,17 @@ class MainActivity : Activity() {
         for (rec in todos) {
             val row = layoutInflater.inflate(R.layout.item_home_todo, rows, false)
             row.findViewById<TextView>(R.id.tvHomeTodoText).text = rec.displayTodo()
-            val due = rec.displayDue()
-            row.findViewById<TextView>(R.id.tvHomeTodoMeta).text = if (due.isEmpty()) {
+            val hasDue = TopicLabelCore.hasDisplayDue(rec.todoDue, rec.s2DueTime, rec.s1DueWindow)
+            row.findViewById<TextView>(R.id.tvHomeTodoMeta).text = if (!hasDue) {
                 rec.conversation
             } else {
                 getString(
                     R.string.todo_meta_format,
                     rec.conversation,
-                    getString(R.string.todo_due_prefix, due)
+                    getString(
+                        R.string.todo_due_prefix,
+                        TopicLabelCore.displayDueLabel(this@MainActivity, rec.todoDue, rec.s2DueTime, rec.s1DueWindow)
+                    )
                 )
             }
             // 点文本区进会话（与会话头交互一致）；按钮各自处理本行
@@ -1115,7 +1101,8 @@ class MainActivity : Activity() {
         }
         val etDue = EditText(this).apply {
             hint = getString(R.string.todo_edit_hint_due)
-            setText(rec.displayDue())
+            // 只回填用户自己写过的那份（todoDue）；留空 = 沿用分析结果，别把兜底值预填成硬覆盖
+            setText(TopicLabelCore.editDueLabel(this@MainActivity, rec.todoDue))
             inputType = InputType.TYPE_CLASS_TEXT
             filters = arrayOf(InputFilter.LengthFilter(50))
             isSingleLine = true
@@ -1191,7 +1178,8 @@ class MainActivity : Activity() {
                 sender = last?.sender.orEmpty(),
                 sourceText = last?.text.orEmpty(),
                 summary = rec.displayTodo(),
-                dueTimeText = rec.displayDue(),
+                // 提醒链入参保持码值：CalendarHelper 只认中文，码值落进「解析不出 -> +1h」既有分支
+                dueTimeText = TopicLabelCore.displayDueCode(rec.todoDue, rec.s2DueTime, rec.s1DueWindow),
                 baseTime = System.currentTimeMillis(),
                 leadMinutes = config.reminderLeadMinutes
             )
@@ -1622,9 +1610,15 @@ class MainActivity : Activity() {
                     val summary = analysis.displayTodo().ifEmpty {
                         msg.text.replace("\n", " ").take(15)
                     }
-                    val dueText = analysis.displayDue()
-                    val due = if (dueText.isNotEmpty() && dueText != "none") {
-                        " · " + ctx.getString(R.string.analysis_due_prefix) + dueText
+                    // 旧实现拿 displayDue() 的原始码值去比中文串（none != 无明确时间 永远成立），
+                    // 未编辑过的待办卡会显示成「· 截止：none」；现在统一问 TopicLabelCore
+                    val due = if (TopicLabelCore.hasDisplayDue(
+                            analysis.todoDue, analysis.s2DueTime, analysis.s1DueWindow
+                        )
+                    ) {
+                        " · " + ctx.getString(R.string.analysis_due_prefix) + TopicLabelCore.displayDueLabel(
+                            ctx, analysis.todoDue, analysis.s2DueTime, analysis.s1DueWindow
+                        )
                     } else ""
                     holder.tvAnalysis.text = ctx.getString(
                         R.string.analysis_label_todo_item,
@@ -1659,14 +1653,7 @@ class MainActivity : Activity() {
 
         /** topic 取值本地化（未知值原样显示，兼容端侧模型自由输出；与分析结果页同映射） */
         private fun topicLabel(ctx: android.content.Context, topic: String): String =
-            when (topic) {
-                "work_task" -> ctx.getString(R.string.topic_work_task)
-                "schedule" -> ctx.getString(R.string.topic_schedule)
-                "notice" -> ctx.getString(R.string.topic_notice)
-                "smalltalk" -> ctx.getString(R.string.topic_smalltalk)
-                "risk" -> ctx.getString(R.string.topic_risk)
-                else -> topic
-            }
+            TopicLabelCore.topicLabel(ctx, topic)
 
         override fun getItemCount(): Int = items.size
 

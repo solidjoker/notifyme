@@ -561,14 +561,15 @@
     <string name="s2_task_format">%1$s：%2$s（%3$s）</string>
     <string name="s2_task_format_no_when">%1$s：%2$s</string>
 
-    <!-- topic 取值 -> 中文（未知值原样显示） -->
+    <!-- topic 取值 -> 中文（未知值原样显示）；码值与中文桶名的归一化在 TopicLabelCore -->
     <string name="topic_work_task">工作任务</string>
     <string name="topic_schedule">日程安排</string>
     <string name="topic_notice">通知公告</string>
     <string name="topic_smalltalk">闲聊</string>
     <string name="topic_risk">风险信号</string>
+    <string name="topic_filtered">已预筛过滤</string>
 
-    <!-- due_window 取值 -> 中文（未知值原样显示） -->
+    <!-- due_window 取值 -> 中文（未知值原样显示）；归一化与「有没有截止」的判定在 TopicLabelCore -->
     <string name="due_none">无明确时间</string>
     <string name="due_today">今天</string>
     <string name="due_tomorrow">明天</string>
