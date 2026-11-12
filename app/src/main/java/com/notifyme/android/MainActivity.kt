@@ -226,6 +226,7 @@ class MainActivity : Activity() {
             popup.menu.add(getString(R.string.menu_console))
             popup.menu.add(getString(R.string.menu_refresh))
             popup.menu.add(getString(R.string.menu_clear))
+            popup.menu.add(getString(R.string.menu_dedupe))
             popup.menu.add(getString(R.string.menu_version))
             popup.setOnMenuItemClickListener { item ->
                 when (item.title) {
@@ -239,6 +240,10 @@ class MainActivity : Activity() {
                     }
                     getString(R.string.menu_clear) -> {
                         confirmClearAll()
+                        true
+                    }
+                    getString(R.string.menu_dedupe) -> {
+                        showDedupeDialog()
                         true
                     }
                     getString(R.string.menu_version) -> {
@@ -299,6 +304,61 @@ class MainActivity : Activity() {
                 Toast.makeText(this, R.string.clear_done, Toast.LENGTH_SHORT).show()
             }
             .show()
+    }
+
+    /**
+     * 「归并重复消息」：先只读扫描并把预计删除量摊给用户看，确认后才真正重写文件。
+     *
+     * 归并口径见 [MessageDedupeCore]（宁可少删不可误删），因此没有重复时不会碰文件。
+     */
+    private fun showDedupeDialog() {
+        val plan = MessageStore.repeatedPlan(this)
+        if (plan.isEmpty) {
+            Toast.makeText(this, R.string.dedupe_none, Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.menu_dedupe)
+            .setMessage(dedupeMessage(plan))
+            .setNegativeButton(R.string.common_cancel, null)
+            .setPositiveButton(R.string.dedupe_confirm) { _, _ -> runDedupe() }
+            .show()
+    }
+
+    /** 确认框正文：总量 + 前几组样例（让用户自己判断是不是同一句话）。 */
+    private fun dedupeMessage(plan: MessageDedupeCore.Plan): String {
+        val sb = StringBuilder()
+        sb.append(getString(R.string.dedupe_body, plan.removed, plan.groups.size))
+        plan.groups.take(3).forEach { group ->
+            sb.append('\n').append(getString(R.string.dedupe_sample, group.count, group.preview))
+        }
+        if (plan.groups.size > 3) {
+            sb.append('\n').append(getString(R.string.dedupe_more, plan.groups.size - 3))
+        }
+        return sb.toString()
+    }
+
+    /** 后台执行归并，完成后刷新列表并回报实际删除量。 */
+    private fun runDedupe() {
+        Thread {
+            val done = try {
+                MessageStore.dedupeRepeated(this)
+            } catch (e: Exception) {
+                null
+            }
+            runOnUiThread {
+                if (done == null) {
+                    Toast.makeText(this, R.string.dedupe_failed, Toast.LENGTH_LONG).show()
+                } else {
+                    refreshMessages()
+                    Toast.makeText(
+                        this,
+                        getString(R.string.dedupe_done, done.removed),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }.start()
     }
 
     override fun onResume() {
