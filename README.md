@@ -157,6 +157,8 @@ App 端的令牌存在本机 SharedPreferences（首次可用 beta flavor 的默
 | GET | `/advisor` | 查顾问报告，最新在前；`limit` 默认 20、上限 100 |
 | POST | `/queue` | 上报手机端排队任务快照（整份覆盖，坏条目单独拒） |
 | GET | `/queue` | 查排队任务：`device_id` / `state` / `limit`≤500，返回 `{ok, tasks, summary, devices}`（`devices` = 设备台数与各设备活跃任务数） |
+| GET | `/stats` | 全库聚合真值：消息段（含按 App / 来源分布）+ 分析段（含脱敏证据 `redacted_cases` / `redaction_hits`）+ 排队段；`pkg` 只过滤消息段 |
+| GET | `/suggests/next` | 最多 3 条下一步建议，按优先级降序；每条带「为什么 / 怎么做 / 证据 / 该去哪个 Tab」 |
 | GET | `/console` | PWA 控制台（iPhone 用 Safari 打开这个地址） |
 
 #### 游标翻页（`next_before`）

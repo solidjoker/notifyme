@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **92 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 99 个，`app/src/test` 48 个），服务端已拆成 **5+1 模块**（`app.py` 711 行 / `util.py` 290 / `storage.py` 759 / `routes.py` 1037 / `console_ui.py` 3218 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **99 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 106 个，`app/src/test` 52 个），服务端已拆成 **7+1 模块**（`app.py` 605 / `util.py` 255 / `storage.py` 705 / `routes.py` 978 / `console_ui.py` 3341 / `stats_api.py` 157 / `suggests.py` 260 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -14,13 +14,13 @@
 
 | # | 图 | 回答的问题 | 尺寸 (px) |
 |---|---|---|---|
-| 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3970 × 1656 |
-| 02 | [Android 分层架构](#02-android-分层架构) | 92 个顶层 Kotlin 文件各自属于哪一层？ | 6856 × 1986 |
+| 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3970 × 1701 |
+| 02 | [Android 分层架构](#02-android-分层架构) | 99 个顶层 Kotlin 文件各自属于哪一层？ | 6856 × 1986 |
 | 03 | [三条采集通道](#03-三条采集通道) | 消息是怎么进来的？为什么需要三条路？ | 3386 × 1048 |
 | 04 | [分析决策流水线](#04-分析决策流水线) | 一条消息如何变成一条待办？ | 2510 × 5315 |
-| 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1954 × 3185 |
+| 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1973 × 3290 |
 | 06 | [功能全景脑图](#06-功能全景脑图) | 这个 App 到底有哪些功能？ | 3135 × 1556 |
-| 07 | [服务端架构](#07-服务端架构) | 服务端 5+1 模块里各装了什么？路由在哪一行？ | 6473 × 3492 |
+| 07 | [服务端架构](#07-服务端架构) | 服务端 7+1 模块里各装了什么？路由在哪一行？ | 6768 × 3555 |
 | 08 | [构建与部署](#08-构建与部署) | 从源码到手机、从手机到公网的完整链路 | 6850 × 4895 |
 | 09 | [同步时序](#09-同步时序) | 冷启动回填与三通道上报的精确行为 | 5769 × 7926 |
 
@@ -50,7 +50,7 @@
 
 五层 + Application 入口。**刻意不引 Compose**：全部传统 View + RecyclerView，运行时依赖只有 5 个（core-ktx / recyclerview / work-runtime-ktx / okhttp / **litert-api**——`com.google.ai.edge.litert:litert:2.2.0`，端侧 LiteRT 推理用），把首次构建失败风险降到最低。JSON 用平台内置 `org.json`，不引 Gson/Moshi。
 
-源码规模：`app/src/main/java/com/notifyme/android/` **顶层 92 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 99 个；`app/src/test` 48 个 .kt（纯 JVM 单测）。
+源码规模：`app/src/main/java/com/notifyme/android/` **顶层 99 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 106 个；`app/src/test` 52 个 .kt（纯 JVM 单测）。
 
 ![Android 分层架构图](diagrams/02-android-layers.png)
 
@@ -59,10 +59,10 @@
 | ① UI 层 | **18 个 Activity**：Main（首页）· Console（控制台 8 卡）· Conversation（会话详情+分析面板）· AnalysisList · **AnalysisSettings（S1/S2 槽位）** · Watchlist · Sources（通知来源）· ReminderList · **ReminderSettings** · PromptEdit · ModelList · Onboarding · **Capture** · **CaptureDiagnostics** · **EngineSmoke** · **OverlaySettings** · **PrivacySettings** · **RedactorPreview** |
 | ② 采集与常驻层 | `NotifyMeListener`（通知监听）· `A11yExtractService`（无障碍直读，仅微信）· `KeepAliveService`（60s 看门狗 requestRebind）· `BootReceiver` · `ReminderReceiver` · **`OverlayService`**（悬浮窗）· **`OverlayActionReceiver`** |
 | ③ 后台任务层 | 4 个 Worker：Sync（三通道上报）· Analysis（逐会话窗口 case）· Advisor（近 7 天复盘）· ModelDownload（.part 断点续传）；3 个 Scheduler 全部 `enqueueUniquePeriodicWork` + UPDATE 策略 |
-| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 15 个 Core 逻辑内核**（见下表） |
+| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 16 个 Core 逻辑内核**（见下表） |
 | ⑤ 存储层 | 5 个 JSONL + `files/models/` 目录 + **19 个** SharedPreferences 文件（见下方存储清单） |
 
-**④ 层本轮新增的 15 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
+**④ 层本轮新增的 16 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
 
 | 主题 | 类 | 职责 |
 |---|---|---|
@@ -70,7 +70,7 @@
 | 拒绝与隔离 | `AnalysisRejectCore`（238）· `AdvisorRejectCore`（213）· `PendingRejectCore`（66） | 被拒次数累计 + 超限隔离，顾问通道复用分析通道实现 |
 | 扫描与调度 | `AnalysisScanCursor`（265）· `AnalysisScheduleSummaryCore`（71） | 持久化字节游标 + 环形重扫 · 调度健康（Health）自愈阈值 |
 | 脱敏与标签 | `RedactorCore`（250）· `ConvTagCore`（47） | 身份证/手机号/姓名等规则脱敏 · 会话标签 NONE/TODO/TRACK/DONE/NOISE |
-| 交互与面板 | `ManualReminderCore`（117）· `TodoPanelCore`（27） | 手动提醒**先解析成功再落库** · 待办面板（DEFAULT_LIMIT=8）与首页联动 |
+| 交互与提醒 | `ManualReminderCore`（117）· `ReminderChainCore`（106）· `TodoPanelCore`（27） | 手动提醒**先解析成功再落库** · 三级降级决策（L1 日历 → L2 唤起 → L3 闹钟，13 条单测） · 待办面板（DEFAULT_LIMIT=8）与首页联动 |
 
 **本地存储全清单**
 
@@ -174,6 +174,8 @@ prefs retention_state           Retention.kt:25           保留期清理状态
 
 **手动提醒**（不经过分析链路）：用户在会话页手填提醒时间，走 `ManualReminderCore`（117 行）。`EVENT_TIME_PATTERN = yyyy-MM-dd HH:mm`，**先解析成功再落库**——解析失败就不写 `reminders.jsonl`，提示格式错误，不产生「僵尸记录」；解析成功才写记录并进入同一条三级降级链。
 
+**三级链的决策现在是纯函数**：`ReminderChainCore`（106 行，`internal object`）把「该走哪一级」抽成 `calendarAction(env)` / `shouldTryIntent(env)` / `decide(env, …)` 三个纯判定，输入是 `Env(hasCalendarPermission, hasWritableCalendar, eventAlreadyExists, inForeground, canOpenCalendar)` 五个布尔。`CalendarHelper.runReminderChain` 退化成「采集环境事实 → 执行副作用 → 把 `Outcome` 翻回 `ChainResult`」，因此这条链第一次有了 13 条纯 JVM 单测（`ReminderChainCoreTest.kt`）覆盖：L1 插入成功 / 插入失败降级 / 无权限降级 / 无可写账户降级 / L2 必须前台 / 后台直接落 L3 / L3 成功 / 三级全失败 / 日历已有同事件跳过且不越级 / 五条终态文案仍能被 `ReminderRecord.fromJson` 的旧记录推断认出来。
+
 ---
 
 ## 06 功能全景脑图
@@ -205,16 +207,18 @@ prefs retention_state           Retention.kt:25           保留期清理状态
 
 ## 07 服务端架构
 
-服务端已从早期单文件拆成 **5+1 个模块**（5 个 Python 模块 + 1 个 JS 规则模块），依赖仍然只有 `flask==3.1.3`（另有 waitress / pycryptodome / Pillow）。下面表格的行号是**当前源码的真实行号**，与图 07 标注一致。
+服务端已从早期单文件拆成 **7+1 个模块**（7 个 Python 模块 + 1 个 JS 规则模块），依赖仍然只有 `flask==3.1.3`（另有 waitress / pycryptodome / Pillow）。下面表格的行号是**当前源码的真实行号**，与图 07 标注一致。
 
 | 模块 | 行数 | 装什么 | 关键行 |
 |---|---|---|---|
-| `server/app.py` | 710 | Flask 壳：鉴权、错误处理、`/console` 与落地页、`create_app` | `check_token` @268 · `MAX_CONTENT_LENGTH`=8 MiB @83 · `_handle_too_large` @137 · `console_page` @496 · `create_app` @664 |
+| `server/app.py` | 717 | Flask 壳：鉴权、错误处理、`/console` 与落地页、`create_app` | `check_token` @275 · `MAX_CONTENT_LENGTH`=8 MiB @86 · `_handle_too_large` @144 · `console_page` @503 · `create_app` @671 |
 | `server/util.py` | 289 | 纯函数工具层（校验、转义、时区、格式化） | `_validate_item` @257 · `_safe_int` @49 · `_esc_html` @220 · `_fmt_ts` @170 |
-| `server/storage.py` | 758 | SQLite / JSONL 存档 / 顾问存档 / 抽库后台 / 排队任务表 | `init_db` @58 · `_append_jsonl` @197 · `_advisor_jsonl_path` @216 · `_run_extract_bg` @437 · `upsert_queue_tasks` @613 · `query_queue_tasks` @659 · `queue_devices` @718 |
+| `server/storage.py` | 758 | SQLite / JSONL 存档 / 顾问存档 / 抽库后台 / 排队任务表 | `init_db` @58 · `_append_jsonl` @197 · `_advisor_jsonl_path` @216 · `_run_extract_bg` @437 · `_probe_main_db_writable` @479 · `upsert_queue_tasks` @613 · `query_queue_tasks` @659 · `queue_devices` @718 |
 | `server/routes.py` | 1036 | 数据面路由，`register(app)` 挂载 10 条 | `register` @1024 · `add_url_rule` 映射 @1026-1035 · `receive_queue` @903 · `query_queue` @976 |
-| `server/console_ui.py` | 3218 | 控制台前端常量（HTML/CSS/JS 全内联，5 个 Tab） | `CONSOLE_HTML` @13 · `CONSOLE_MANIFEST` @2962 · `CONSOLE_SW` @3008 |
-> 行数为当前源码的**文件总行数**（wc -l 口径）；若只计非空行，依次为 app.py 599 / util.py 255 / storage.py 705 / routes.py 978 / console_ui.py 3128 / console_classify.js 407 / android_db_extract.py **1095** / pc_db_extract.py **981**。
+| `server/console_ui.py` | 3430 | 控制台前端常量（HTML/CSS/JS 全内联，5 个 Tab，aura 设计语言） | `CONSOLE_HTML` @13 · `CONSOLE_MANIFEST` @3246 · `CONSOLE_SW` @3292 |
+| `server/stats_api.py` | 180 | 全库聚合 `/stats`（消息 / 分析 / 排队三段） | `query_stats` @145 · `_messages_block` @32 · `_analysis_block` @71 · `_queue_block` @106 · `register` @178 |
+| `server/suggests.py` | 304 | 下一步建议 `/suggests/next`（规则优先级队列） | `query_suggests_next` @189 · `_advisor_state` @38 · `_queue_state` @64 · `_todo_counts` @94 · `_pick` @177 · `register` @301 |
+> 行数为当前源码的**文件总行数**（wc -l 口径）；若只计非空行，依次为 app.py 605 / util.py 255 / storage.py 705 / routes.py 978 / console_ui.py 3341 / stats_api.py 157 / suggests.py 260 / console_classify.js 407 / android_db_extract.py **1095** / pc_db_extract.py **981**。
 
 ![服务端架构图](diagrams/07-server-architecture.png)
 
@@ -232,13 +236,15 @@ prefs retention_state           Retention.kt:25           保留期清理状态
 | GET | `/admin/extract/status` | `admin_extract_status` @routes.py:889 | `{ok, running, last}` |
 | POST | `/queue` | `receive_queue` @routes.py:903 | 手机端上报排队任务快照（整份覆盖，非法条目逐条拒收） |
 | GET | `/queue` | `query_queue` @routes.py:976 | `device_id` / `state` / `limit`≤500，返回 `{ok, tasks, summary, devices}`（`devices` 是按 `device_id` 聚合的设备清单：`total` / `active`） |
-| GET | `/console` | `console_page` @app.py:496 | PWA 单页，HTML/CSS/JS 全在 `console_ui.py` 的 `CONSOLE_HTML` @console_ui.py:13 |
-| GET | `/console/manifest.json` | @app.py:510 | 免鉴权 |
-| GET | `/console/icons/<path>` | @app.py:516 | |
-| GET | `/sw.js` | `console_sw` @app.py:524 | 免鉴权；骨架 cache-first，API 永远走网络 |
-| GET | `/` | `index` @app.py:536 | 极简网页，最近 100 条倒序 |
+| GET | `/stats` | `query_stats` @stats_api.py:145 | 全库真值：消息段（含 `by_pkg` / `by_source` 对象数组）+ 分析段（含 `redacted_cases` / `redaction_hits`）+ 排队段；**分析段不接受 `pkg` 过滤** |
+| GET | `/suggests/next` | `query_suggests_next` @suggests.py:189 | 最多 3 条下一步建议，按 `priority` 降序；每条含 `type` / `title` / `why` / `how` / `evidence` / `jump` |
+| GET | `/console` | `console_page` @app.py:503 | PWA 单页，HTML/CSS/JS 全在 `console_ui.py` 的 `CONSOLE_HTML` @console_ui.py:13 |
+| GET | `/console/manifest.json` | @app.py:517 | 免鉴权 |
+| GET | `/console/icons/<path>` | @app.py:523 | |
+| GET | `/sw.js` | `console_sw` @app.py:531 | 免鉴权；骨架 cache-first，`/stats` 与 `/suggests` 也永远走网络 |
+| GET | `/` | `index` @app.py:543 | 极简网页，最近 100 条倒序 |
 
-**鉴权**：`check_token()` @app.py:268 接受 Header `X-Token` **或** Query `?token=`。设置 `WEIXIN_TOKEN` 后除 `/console/manifest.json` 与 `/sw.js` 外全部需要鉴权。
+**鉴权**：`check_token()` @app.py:275 接受 Header `X-Token` **或** Query `?token=`。设置 `WEIXIN_TOKEN` 后除 `/console/manifest.json` 与 `/sw.js` 外全部需要鉴权。
 
 **数据库 schema**（`init_db` @storage.py:58）
 
