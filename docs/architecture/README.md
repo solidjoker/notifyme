@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **110 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 117 个，`app/src/test` 63 个 / 909 条），服务端已拆成 **7+1 模块**（`app.py` 605 / `util.py` 255 / `storage.py` 705 / `routes.py` 978 / `console_ui.py` 3341 / `stats_api.py` 157 / `suggests.py` 260 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **110 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 117 个，`app/src/test` 63 个 / 910 条），服务端已拆成 **7+1 模块**（`app.py` 605 / `util.py` 255 / `storage.py` 705 / `routes.py` 978 / `console_ui.py` 3341 / `stats_api.py` 157 / `suggests.py` 260 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -50,7 +50,7 @@
 
 五层 + Application 入口。**刻意不引 Compose**：全部传统 View + RecyclerView，运行时依赖只有 5 个（core-ktx / recyclerview / work-runtime-ktx / okhttp / **litert-api**——`com.google.ai.edge.litert:litert:2.2.0`，端侧 LiteRT 推理用），把首次构建失败风险降到最低。JSON 用平台内置 `org.json`，不引 Gson/Moshi。
 
-源码规模：`app/src/main/java/com/notifyme/android/` **顶层 110 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 117 个；`app/src/test` 63 个 .kt / 909 条（纯 JVM 单测）。
+源码规模：`app/src/main/java/com/notifyme/android/` **顶层 110 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 117 个；`app/src/test` 63 个 .kt / 910 条（纯 JVM 单测）。
 
 ![Android 分层架构图](diagrams/02-android-layers.png)
 
@@ -79,7 +79,7 @@
 | 分析范围 | `AnalysisScopeCore`（286） | 分析范围筛选口径：周期（不限/今天/近 7 天/近 1 月/自定义）由纯函数算区间，「近 N 天」含今天、自定义结束日取 23:59:59.999、落盘只存选择不存毫秒；点名会话走 `forced()` 跳名单与标签门禁、`skipDedup()` 只在手动轮跳 caseId 去重；会话 id 用 JSONArray 序列化（会话名含 `|` 与逗号，逗号拼接会被切坏）；空结果文案区分「被范围筛空」与「真的没活」 |
 | 搜索与视图 | `SearchCore`（137） | 首页搜索命中口径：会话名 ∪ 来源 App 名 ∪ 消息 ∪ 该会话全部历史分析结论（`caseParts` 是字段清单唯一出处，码值先翻中文标签再匹配、`none` 码值排除）；搜索态下会话级与日期级折叠一律走 `forcedExpand` 强制展开；`hitKind` 只回码值供会话头提示，文案与本地化留在 Activity |
 | 文案与本地化 | `TopicLabelCore`（229） | topic / due_window 码值↔中文档名的唯一归一处（四处重复实现已全部删除）：`normalizeTopic` / `normalizeDue` 双向归一 + `topicRes` / `dueRes` 回资源 id，空值回落 notice / none、未知值原样显示；`displayDueCode` / `hasDisplayDue` / `displayDueLabel` / `editDueLabel` 统一「该显示哪一份截止」的优先序（todoDue → s2DueTime → s1DueWindow），修掉首页「截止：none」码值泄漏；`filtered` 单独映射为「已预筛过滤」 |
-| 提醒列表 | `ReminderListCore`（171） | 提醒列表的分组与排序：三组「需要处理 → 生效中 → 已过期」，组内按事件时间（attention/active 升序、expired 降序、无时间垫底）；chip 筛选只做一次分组判定、不动原则如下 —— 两条保守语义：`event_time <= 0` 不算过期（否则用户会删掉可能有效的记录）、`failed` 永不算过期（语义是「等你重试」）|
+| 提醒列表 | `ReminderListCore`（175） | 提醒列表的分组与排序：三组「需要处理 → 生效中 → 已过期」，组内按事件时间（attention/active 升序、expired 降序、无时间垫底）；chip 筛选只做一次分组判定、不动原则如下 —— 两条保守语义：`event_time <= 0` 不算过期（否则用户会删掉可能有效的记录）、`failed` 永不算过期（语义是「等你重试」）|
 | 交互与提醒 | `ManualReminderCore`（117）· `ReminderChainCore`（106）· `TodoPanelCore`（27） | 手动提醒**先解析成功再落库** · 三级降级决策（L1 日历 → L2 唤起 → L3 闹钟，13 条单测） · 待办面板（DEFAULT_LIMIT=8）与首页联动 |
 
 **本地存储全清单**
