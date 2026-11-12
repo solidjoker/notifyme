@@ -404,3 +404,80 @@ def test_wide_screen_main_fills_its_grid_column():
     wide = _block(css, "@media (min-width: 900px)")
     assert "main { max-width: none; margin: 0; width: 100%; }" in wide, (
         "宽屏 main 必须撑满第二栏")
+
+
+# ------------------------------------------- 洞察层：/stats + /suggests + 脱敏证据 + skipped
+
+def test_stats_api_is_wired_into_the_console_data_layer():
+    """概览与统计必须优先用服务端聚合真值，不能只吃「已加载的那一页」。"""
+    html = _ui().CONSOLE_HTML
+    assert "async function fetchStats(" in html
+    assert "async function fetchSuggests(" in html
+    assert "api('stats', { signal: signal })" in html
+    assert "api('suggests/next', { signal: signal })" in html
+    assert "var STATS = null;" in html, "聚合真值要有独立全局，拿不到时回退估算"
+    assert "var SUGGESTS = [];" in html
+    assert "fetchStats(ctrl.signal).catch" in html, "聚合接口失败不能拖垮主数据流"
+    assert "fetchSuggests(ctrl.signal).catch" in html
+
+
+def test_overview_falls_back_to_local_estimate_with_a_label():
+    """拿不到 /stats 时要退回本地估算，并且必须标注「估算」，不能把估算当全库真值。"""
+    html = _ui().CONSOLE_HTML
+    assert "function statNum(path)" in html
+    assert "var useSrv = !!(STATS && !APP_FILTER && !QUERY.trim());" in html
+    assert "'估算 · 仅已加载 '" in html
+    assert "'全库真值 · 已加载 '" in html
+    assert "（估算）" in html, "排队概览估算时也要标注"
+
+
+def test_stats_tab_shows_redaction_and_queue_truth():
+    """统计 Tab 要回答整库口径：脱敏证据、排队任务分布。"""
+    html = _ui().CONSOLE_HTML
+    assert "key: 'stat-redact'" in html
+    assert "key: 'stat-queue'" in html
+    assert "redacted_cases" in html and "redaction_hits" in html
+    assert "STATS.queue.by_kind" in html
+    assert "消息总数（全库）" in html, "有真值时标签必须标明是全库口径"
+
+
+def test_redaction_evidence_is_rendered_and_searchable():
+    """redacted / redaction_rules / redaction_hits 要展示出来，也要能被搜到。"""
+    html = _ui().CONSOLE_HTML
+    assert "function redactBadge(a)" in html
+    assert "function redactDetail(a)" in html
+    assert "redactBadge(a)" in html and "redactDetail(a)" in html
+    assert "已脱敏" in html
+    assert "if (a.redacted) parts.push('已脱敏');" in html
+    assert "if (a.redaction_hits != null) parts.push(String(a.redaction_hits));" in html
+
+
+def test_skipped_rows_are_surfaced_instead_of_silently_dropped():
+    """接口返回的 skipped（脏行）必须告诉用户，否则分不清「没有更多」和「被跳过」。"""
+    html = _ui().CONSOLE_HTML
+    assert "var SKIP_NOTICE = { msg: 0, ana: 0 };" in html
+    assert "skipped: Number(r.skipped || 0)" in html
+    assert "function skipNoticeHtml()" in html
+    assert "function skipSections()" in html
+    assert "因格式损坏被跳过" in html
+    assert "SKIP_NOTICE.ana = (SKIP_NOTICE.ana || 0) + (r.skipped || 0);" in html
+    assert "SKIP_NOTICE.msg = (SKIP_NOTICE.msg || 0) + (r.skipped || 0);" in html
+
+
+def test_next_step_suggestions_render_with_jump_actions():
+    """建议要能一键跳过去处理，且必须走 #data 上的事件委托。"""
+    html = _ui().CONSOLE_HTML
+    assert "function suggestHtml(s)" in html
+    assert "function suggestSections()" in html
+    assert 'data-action="jump"' in html
+    assert "if (action === 'jump')" in html
+    assert "switchTab(btn.getAttribute('data-jump') || 'conv')" in html
+    assert "下一步建议（" in html
+    assert ".suggest-card {" in _css(html)
+
+
+def test_service_worker_never_caches_the_insight_endpoints():
+    """聚合与建议是实时数据，不能被 SW 缓存策略吞掉。"""
+    sw = _ui().CONSOLE_SW
+    assert "url.pathname.indexOf('/stats') >= 0" in sw
+    assert "url.pathname.indexOf('/suggests') >= 0" in sw
