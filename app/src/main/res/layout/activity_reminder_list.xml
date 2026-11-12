@@ -38,6 +38,26 @@
         android:layout_height="1dp"
         android:background="@color/divider" />
 
+    <!-- 分组筛选 chips：全部 / 需要处理 / 生效中 / 已过期，口径见 ReminderListCore。
+         放在 divider 之下、列表之上，横滑不换行（与首页来源 chips 同一套 chip 样式）。 -->
+    <HorizontalScrollView
+        android:id="@+id/svReminderChips"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/card_bg"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/llReminderChips"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal" />
+    </HorizontalScrollView>
+
     <TextView
         android:id="@+id/tvReminderEmpty"
         android:layout_width="match_parent"
