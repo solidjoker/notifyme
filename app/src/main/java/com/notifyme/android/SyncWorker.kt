@@ -614,12 +614,21 @@ class SyncWorker(
         val reports = AdvisorStore.readUnsynced(applicationContext)
         if (reports.isEmpty()) return
 
-        // M3 CLOUD_REDACT：报告是模型产出的聚合文本，没有窗口发送者名单可做
-        // 姓名映射；用无 nameMap 的脱敏器过一遍自由文本字段（summary 与
-        // suggestions 的 title/detail），手机号/身份证/银行卡/邮箱/链接/金额/
-        // 地址七类仍被遮盖；type/report_id/model_used 等结构字段不动。
+        // M3 CLOUD_REDACT：报告正文是模型产出的聚合文本，本身不含窗口发送者名单，
+        // 所以姓名映射只能从**最近消息窗口**反推（同 AdvisorWorker 摘要侧同一口径，
+        // 见 AdvisorDigestCore.mergedNameMap）。窗口里出现过的会话名 / 发送者会被换成
+        // 稳定别名（[人名xxxxxx] / [群xxxxxx]），其余自由文本走七类规则兜底；
+        // type/report_id/model_used 等结构字段不动。
         val reportCore = if (privacy.cloudRedact) {
-            RedactorCore(privacy.enabledRules, emptyMap())
+            val messages = MessageStore.readRecent(
+                applicationContext,
+                AdvisorDigestCore.DEFAULT_MESSAGE_WINDOW
+            )
+            val nameMap = AdvisorDigestCore.mergedNameMap(
+                AdvisorDigestCore.windows(messages),
+                AliasSaltStore.salt(applicationContext)
+            )
+            RedactorCore(privacy.enabledRules, nameMap)
         } else null
 
         var base = serverUrl.trim().trimEnd('/')
