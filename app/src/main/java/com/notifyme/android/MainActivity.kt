@@ -684,7 +684,7 @@ class MainActivity : Activity() {
         Thread {
             while (true) {
                 val token = ++refreshToken
-                val query = searchQuery.trim().lowercase()
+                val query = SearchCore.normalize(searchQuery)
                 val result = buildFeed(query, appFilter)
                 runOnUiThread {
                     if (token != refreshToken || isFinishing || isDestroyed) return@runOnUiThread
@@ -749,13 +749,26 @@ class MainActivity : Activity() {
             .map { (k, list) -> k to list.sortedBy { it.timestamp } }
             .sortedByDescending { (_, list) -> list.last().timestamp }
 
-        // 搜索过滤：会话名 / 发送者/消息文本任一命中即保留
+        // M14：全部分析记录（不只每会话最新一条）——历史天的消息也要挂各自窗口的结果；
+        // 搜索也要用到它，所以提前算：只查最新一条会漏掉历史窗口里的结论
+        val casesByConv = allCases.groupBy { it.convKey }
+
+        // 搜索过滤：口径全在 SearchCore（会话名 / 来源 App / 消息 / 分析结论四类命中）。
+        // 命中原因顺带记下来——会话头要说明「为什么这条会话在结果里」
+        val convHitKinds = HashMap<ConvKey, SearchCore.HitKind?>()
         if (query.isNotEmpty()) {
             groups = groups.filter { (k, list) ->
-                k.conversation.lowercase().contains(query) || list.any {
-                    it.sender.lowercase().contains(query) ||
-                        it.text.lowercase().contains(query)
-                }
+                val label = k.displayLabel(list.lastOrNull()?.appLabel.orEmpty())
+                val kind = SearchCore.hitKind(
+                    conversation = k.conversation,
+                    label = label,
+                    messages = list,
+                    cases = casesByConv[k].orEmpty(),
+                    query = query,
+                    labelOf = ::searchLabel
+                )
+                convHitKinds[k] = kind
+                kind != null
             }
         }
 
@@ -826,8 +839,6 @@ class MainActivity : Activity() {
         }
 
         val items = mutableListOf<FeedItem>()
-        // M14：全部分析记录（不只每会话最新一条）——历史天的消息也要挂各自窗口的结果
-        val casesByConv = allCases.groupBy { it.convKey }
         // M14：「全部折叠/展开」作用的天组全集（搜索过滤前口径，主线程按钮直接读，不再起线程读盘）
         feedDayPairs = visibleGroups.flatMap { (k, l) ->
             l.map { if (it.timestamp > 0) dayKeyFormat.format(Date(it.timestamp)) else DAY_KEY_UNKNOWN }
@@ -837,11 +848,14 @@ class MainActivity : Activity() {
             if (sectionTitle != null) items += FeedItem.Section(sectionTitle)
             for ((key, list) in sectionGroups) {
                 val case = latestCases[key]
+                // 搜索：这条会话为什么出现在搜索结果里（未搜索时恒为 null）
+                val hitKind = convHitKinds[key]
                 // M16：会话级折叠。收起时只保留会话头（名称/角标/最新一条预览仍有信息量）；
-                // 搜索态强制展开——否则命中内容被整组挡住，搜索框就成了「搜得到看不见」。
+                // 搜索态命中即强制展开——否则命中内容被整组挡住，搜索框就成了「搜得到看不见」。
+                // 判定走 SearchCore.forcedExpand，与日期级同口径。
                 val convCollapsed =
                     CollapseStore.isConversationCollapsed(collapsedConversations, key) &&
-                        query.isEmpty()
+                        !SearchCore.forcedExpand(query, hitKind != null)
                 items += FeedItem.Header(
                     key = key,
                     appLabel = list.last().appLabel,
@@ -852,15 +866,14 @@ class MainActivity : Activity() {
                     hasReminder = key in reminderKeys,
                     watched = WatchlistStore.isWatchedId(key.id, unwatchedIds, watchedRaw),
                     collapsed = convCollapsed,
-                    tagCode = tagMap[key.id].orEmpty()
+                    tagCode = tagMap[key.id].orEmpty(),
+                    hitHint = hitKind
                 )
                 if (convCollapsed) continue
 
                 // 二级分组：按日期切分（groupBy 保序，组内消息已是时间正序）。
                 // 时间戳兜底：a11y 直读等来源可能带来 ts<=0 的估算失败值，归「未标注日期」组，
                 // 避免被格式化成 1970 年。
-                val convNameHit = query.isNotEmpty() &&
-                    key.conversation.lowercase().contains(query)
                 val byDate = list.groupBy {
                     if (it.timestamp > 0) dayKeyFormat.format(Date(it.timestamp))
                     else DAY_KEY_UNKNOWN
@@ -887,13 +900,18 @@ class MainActivity : Activity() {
                 casesOfDay.replaceAll { _, list2 -> list2.sortedBy { it.windowEnd } }
 
                 for ((dayKey, dayMessages) in byDate) {
-                    val dateHit = query.isNotEmpty() && dayMessages.any {
-                        it.sender.lowercase().contains(query) ||
-                            it.text.lowercase().contains(query)
-                    }
+                    // 搜索态：该天（或其覆盖的分析窗口）命中就强制展开，否则「搜得到看不见」
+                    val dateHit = SearchCore.dayHit(
+                        conversation = key.conversation,
+                        label = key.displayLabel(list.lastOrNull()?.appLabel.orEmpty()),
+                        dayMessages = dayMessages,
+                        dayCases = casesOfDay[dayKey].orEmpty(),
+                        query = query,
+                        labelOf = ::searchLabel
+                    )
                     val dateCollapsed = CollapseStore.isDateCollapsed(
                         collapsedDates, expandedDates, key, dayKey, latestDay
-                    ) && !(query.isNotEmpty() && (dateHit || convNameHit))
+                    ) && !SearchCore.forcedExpand(query, dateHit)
                     val label = if (dayKey == DAY_KEY_UNKNOWN) {
                         getString(R.string.date_unknown_label)
                     } else if (dayKey.startsWith(currentYear)) {
@@ -912,10 +930,7 @@ class MainActivity : Activity() {
                     val dayCases = casesOfDay[dayKey].orEmpty()
                     val topCase = dayCases.lastOrNull()
                     dayMessages.forEach { msg ->
-                        val hit = query.isNotEmpty() && (
-                            msg.sender.lowercase().contains(query) ||
-                                msg.text.lowercase().contains(query)
-                            )
+                        val hit = SearchCore.messageHit(msg, query)
                         items += FeedItem.Msg(
                             message = msg,
                             // M14：该天被分析窗口覆盖时，每条消息旁直接显示结果内容
@@ -928,6 +943,31 @@ class MainActivity : Activity() {
             }
         }
         return FeedResult(items, visibleGroups.isEmpty(), todos, remindedCaseIds, chips, effectiveFilter)
+    }
+
+    /**
+     * 把分析结论里的码值翻成展示文案，供搜索匹配中文标签（口径来自 [SearchCore.caseParts]）。
+     *
+     * 必须放在 Activity 级、且只收一个 String：`buildFeed` 里把它当 `labelOf: (String) -> String` 传给
+     * SearchCore。挂在 Adapter 里并带 Context 参数就匹配不上这个函数类型。
+     */
+    private fun searchLabel(code: String): String = when (code) {
+        "work_task", "schedule", "notice", "smalltalk", "risk" ->
+            getString(
+                when (code) {
+                    "work_task" -> R.string.topic_work_task
+                    "schedule" -> R.string.topic_schedule
+                    "notice" -> R.string.topic_notice
+                    "smalltalk" -> R.string.topic_smalltalk
+                    else -> R.string.topic_risk
+                }
+            )
+        "today" -> getString(R.string.due_today)
+        "tomorrow" -> getString(R.string.due_tomorrow)
+        "this_week" -> getString(R.string.due_this_week)
+        "later" -> getString(R.string.due_later)
+        "none" -> getString(R.string.due_none)
+        else -> code
     }
 
     /** 主线程渲染：提交列表数据 + 空态提示 + 来源 chips + 导航栏顶端待办区（M12）。 */
@@ -1253,7 +1293,10 @@ class MainActivity : Activity() {
             /** M16：会话级折叠态（内容字段）——同一 Header 需重绑才能翻转箭头 ▼/▶ */
             val collapsed: Boolean,
             /** M19：会话标签码（""=未标记）。内容字段：改标签后 DiffUtil 判 change 重绑徽标 */
-            val tagCode: String
+            val tagCode: String,
+            /** 搜索命中来源（会话头说明「为什么这条会话在结果里」；未搜索/只命中会话名=null）。
+             *  内容字段：换搜索词后 DiffUtil 判 change 重绑提示行。 */
+            val hitHint: SearchCore.HitKind? = null
         ) : FeedItem()
 
         data class DateHeader(
@@ -1405,6 +1448,11 @@ class MainActivity : Activity() {
             holder.tvArrow.visibility = if (selectionActive) View.GONE else View.VISIBLE
             holder.tvArrow.text = if (header.collapsed) "▶" else "▼"
             holder.tvArrow.setOnClickListener { onToggleConversation(key, header.collapsed) }
+
+            // 搜索命中提示——分析结论命中时特意标出来，否则用户只看到「这条会话在结果里」
+            val hint = hitHintLabel(ctx, header.hitHint)
+            holder.tvHitHint.visibility = if (hint == null) View.GONE else View.VISIBLE
+            holder.tvHitHint.text = hint.orEmpty()
 
             // 来源 App 标记（M11：所有 App 都显示，含微信——多来源场景下来源必须可见）
             holder.tvApp.visibility = View.VISIBLE
@@ -1600,6 +1648,15 @@ class MainActivity : Activity() {
             }
         }
 
+        /** 会话头的命中来源提示文案（null=不显示；只命中会话名也不显示：名字就在标题上） */
+        private fun hitHintLabel(ctx: android.content.Context, kind: SearchCore.HitKind?): String? =
+            when (kind) {
+                SearchCore.HitKind.ANALYSIS -> ctx.getString(R.string.search_hit_analysis)
+                SearchCore.HitKind.APP -> ctx.getString(R.string.search_hit_app)
+                SearchCore.HitKind.MESSAGE -> ctx.getString(R.string.search_hit_message)
+                else -> null
+            }
+
         /** topic 取值本地化（未知值原样显示，兼容端侧模型自由输出；与分析结果页同映射） */
         private fun topicLabel(ctx: android.content.Context, topic: String): String =
             when (topic) {
@@ -1664,6 +1721,7 @@ class MainActivity : Activity() {
             val tvTagBadge: TextView = itemView.findViewById(R.id.tvTagBadge)
             val tvCount: TextView = itemView.findViewById(R.id.tvCount)
             val tvPreview: TextView = itemView.findViewById(R.id.tvPreview)
+            val tvHitHint: TextView = itemView.findViewById(R.id.tvHitHint)
             val tvArrow: TextView = itemView.findViewById(R.id.tvArrow)
             val btnQuickWatch: TextView = itemView.findViewById(R.id.btnQuickWatch)
             val btnQuickPrompt: TextView = itemView.findViewById(R.id.btnQuickPrompt)
