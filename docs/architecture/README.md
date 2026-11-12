@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **92 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 99 个，`app/src/test` 47 个），服务端已拆成 **5+1 模块**（`app.py` 710 行 / `util.py` 289 / `storage.py` 708 / `routes.py` 1025 / `console_ui.py` 3065 + `console_classify.js` 292），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **92 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 99 个，`app/src/test` 47 个），服务端已拆成 **5+1 模块**（`app.py` 710 行 / `util.py` 289 / `storage.py` 758 / `routes.py` 1036 / `console_ui.py` 3144 + `console_classify.js` 434），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -20,7 +20,7 @@
 | 04 | [分析决策流水线](#04-分析决策流水线) | 一条消息如何变成一条待办？ | 2510 × 5315 |
 | 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1954 × 3185 |
 | 06 | [功能全景脑图](#06-功能全景脑图) | 这个 App 到底有哪些功能？ | 3135 × 1556 |
-| 07 | [服务端架构](#07-服务端架构) | 服务端 5+1 模块里各装了什么？路由在哪一行？ | 6473 × 3471 |
+| 07 | [服务端架构](#07-服务端架构) | 服务端 5+1 模块里各装了什么？路由在哪一行？ | 6473 × 3492 |
 | 08 | [构建与部署](#08-构建与部署) | 从源码到手机、从手机到公网的完整链路 | 6850 × 4895 |
 | 09 | [同步时序](#09-同步时序) | 冷启动回填与三通道上报的精确行为 | 5769 × 7926 |
 
@@ -211,10 +211,10 @@ prefs retention_state           Retention.kt:25           保留期清理状态
 |---|---|---|---|
 | `server/app.py` | 710 | Flask 壳：鉴权、错误处理、`/console` 与落地页、`create_app` | `check_token` @268 · `MAX_CONTENT_LENGTH`=8 MiB @83 · `_handle_too_large` @137 · `console_page` @496 · `create_app` @664 |
 | `server/util.py` | 289 | 纯函数工具层（校验、转义、时区、格式化） | `_validate_item` @257 · `_safe_int` @49 · `_esc_html` @220 · `_fmt_ts` @170 |
-| `server/storage.py` | 708 | SQLite / JSONL 存档 / 顾问存档 / 抽库后台 / 排队任务表 | `init_db` @58 · `_append_jsonl` @197 · `_advisor_jsonl_path` @216 · `_run_extract_bg` @437 · `upsert_queue_tasks` @604 · `query_queue_tasks` @650 |
-| `server/routes.py` | 1025 | 数据面路由，`register(app)` 挂载 10 条 | `register` @1013 · `add_url_rule` 映射 @1015-1024 · `receive_queue` @903 · `query_queue` @976 |
-| `server/console_ui.py` | 3065 | 控制台前端常量（HTML/CSS/JS 全内联，5 个 Tab） | `CONSOLE_HTML` @13 · `CONSOLE_MANIFEST` @2883 · `CONSOLE_SW` @2929 |
-> 行数为当前源码的**文件总行数**（wc -l 口径）；若只计非空行，依次为 app.py 599 / util.py 255 / storage.py 659 / routes.py 969 / console_ui.py 2980 / android_db_extract.py **1095** / pc_db_extract.py **981**。
+| `server/storage.py` | 758 | SQLite / JSONL 存档 / 顾问存档 / 抽库后台 / 排队任务表 | `init_db` @58 · `_append_jsonl` @197 · `_advisor_jsonl_path` @216 · `_run_extract_bg` @437 · `upsert_queue_tasks` @613 · `query_queue_tasks` @659 · `queue_devices` @718 |
+| `server/routes.py` | 1036 | 数据面路由，`register(app)` 挂载 10 条 | `register` @1024 · `add_url_rule` 映射 @1026-1035 · `receive_queue` @903 · `query_queue` @976 |
+| `server/console_ui.py` | 3144 | 控制台前端常量（HTML/CSS/JS 全内联，5 个 Tab） | `CONSOLE_HTML` @13 · `CONSOLE_MANIFEST` @2962 · `CONSOLE_SW` @3008 |
+> 行数为当前源码的**文件总行数**（wc -l 口径）；若只计非空行，依次为 app.py 599 / util.py 255 / storage.py 705 / routes.py 978 / console_ui.py 3058 / console_classify.js 407 / android_db_extract.py **1095** / pc_db_extract.py **981**。
 
 ![服务端架构图](diagrams/07-server-architecture.png)
 
@@ -231,7 +231,7 @@ prefs retention_state           Retention.kt:25           保留期清理状态
 | POST | `/admin/extract` | `admin_extract` @routes.py:844 | `full=1` + `source ∈ android\|pc\|all`，409 = 已在跑 |
 | GET | `/admin/extract/status` | `admin_extract_status` @routes.py:889 | `{ok, running, last}` |
 | POST | `/queue` | `receive_queue` @routes.py:903 | 手机端上报排队任务快照（整份覆盖，非法条目逐条拒收） |
-| GET | `/queue` | `query_queue` @routes.py:976 | `device_id` / `state` / `limit`≤500，返回 `{ok, tasks, summary}` |
+| GET | `/queue` | `query_queue` @routes.py:976 | `device_id` / `state` / `limit`≤500，返回 `{ok, tasks, summary, devices}`（`devices` 是按 `device_id` 聚合的设备清单：`total` / `active`） |
 | GET | `/console` | `console_page` @app.py:496 | PWA 单页，HTML/CSS/JS 全在 `console_ui.py` 的 `CONSOLE_HTML` @console_ui.py:13 |
 | GET | `/console/manifest.json` | @app.py:510 | 免鉴权 |
 | GET | `/console/icons/<path>` | @app.py:516 | |

@@ -19,10 +19,10 @@ subgraph APP["server/app.py · Flask 壳 710 行<br/>app.run host=0.0.0.0 port=P
     subgraph MODS["其余 4 个模块（拆自旧单文件）+ console_classify.js"]
         direction LR
         MU["util.py · 289 行<br/>纯函数工具层<br/>_validate_item @257 · _safe_int @49 · _clamp_int @68<br/>_esc_html @220 · _fmt_ts @170 · _parse_tz_offset @111"]:::mod
-        MS["storage.py · 708 行<br/>存储层<br/>init_db @58 · _append_jsonl @197<br/>顾问存档 @216 · _run_extract_bg @437<br/>排队任务 upsert @604 · query @650"]:::mod
-        MR["routes.py · 1025 行<br/>数据面路由<br/>register @1013 · add_url_rule 映射 @1015-1024"]:::mod
-        MC["console_ui.py · 3065 行<br/>控制台前端常量（5 个 Tab）<br/>CONSOLE_HTML @13 · CONSOLE_MANIFEST @2883<br/>CONSOLE_SW @2929"]:::mod
-        CC["console_classify.js · 292 行<br/>归类规则单一事实源（UMD）<br/>normPkg · ckOf · senderKey · groupBySender<br/>groupTodosByImportance · groupSuggestions"]:::mod
+        MS["storage.py · 758 行<br/>存储层<br/>init_db @58 · _append_jsonl @197<br/>顾问存档 @216 · _run_extract_bg @437<br/>排队任务 upsert @613 · query @659<br/>设备聚合 queue_devices @718"]:::mod
+        MR["routes.py · 1036 行<br/>数据面路由<br/>register @1024 · add_url_rule 映射 @1026-1035"]:::mod
+        MC["console_ui.py · 3144 行<br/>控制台前端常量（5 个 Tab）<br/>CONSOLE_HTML @13 · CONSOLE_MANIFEST @2962<br/>CONSOLE_SW @3008"]:::mod
+        CC["console_classify.js · 434 行<br/>归类规则单一事实源（UMD）<br/>normPkg · ckOf · senderKey · groupBySender<br/>groupTodosByImportance · groupSuggestions<br/>groupMessages 两级分组 · groupQueueTasksByDevice"]:::mod
     end
 
     subgraph WRITE["写入 API · Android 上报（routes.py）"]
@@ -38,7 +38,7 @@ subgraph APP["server/app.py · Flask 壳 710 行<br/>app.run host=0.0.0.0 port=P
         QM["GET /messages  @routes.py:169<br/>conversation 模糊 · date · limit≤1000<br/>timestamp DESC + source 徽标 + 翻页游标"]:::srv
         QA["GET /analysis  @routes.py:548<br/>todo_only=1 只看待办<br/>s1/s2 反解析为对象"]:::srv
         QAD["GET /advisor  @routes.py:807"]:::srv
-        QQ["GET /queue  @routes.py:976<br/>query_queue()<br/>{ok, tasks[], summary{queued,running,failed,done,stale,total}}<br/>stale = 30 分钟未更新"]:::srv
+        QQ["GET /queue  @routes.py:976<br/>query_queue()<br/>{ok, tasks[], summary{queued,running,failed,done,stale,total}}<br/>devices[] 设备聚合（device_id/total/active）<br/>stale = 30 分钟未更新"]:::srv
     end
 
     subgraph PARTIAL["部分接受 207 · 路由层语义"]
