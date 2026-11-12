@@ -139,6 +139,16 @@
 
                 <Button
                     style="@style/AppButtonSecondary"
+                    android:id="@+id/btnPrivacyAliasSalt"
+                    android:layout_width="match_parent"
+                    android:layout_height="44dp"
+                    android:layout_marginTop="8dp"
+                    android:minHeight="0dp"
+                    android:text="@string/privacy_alias_btn_unset"
+                    android:textSize="13sp" />
+
+                <Button
+                    style="@style/AppButtonSecondary"
                     android:id="@+id/btnPrivacyPreview"
                     android:layout_width="match_parent"
                     android:layout_height="44dp"

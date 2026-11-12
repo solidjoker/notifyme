@@ -131,6 +131,13 @@
     <string name="privacy_rules_btn">脱敏规则（%1$d/%2$d）</string>
     <string name="privacy_bypass_btn">不脱敏白名单会话（%1$d）</string>
     <string name="privacy_preview_btn">预览脱敏效果</string>
+    <string name="privacy_alias_btn_set">别名盐：已生成（点此重置）</string>
+    <string name="privacy_alias_btn_unset">别名盐：未生成（首次脱敏时自动生成）</string>
+    <string name="privacy_alias_reset_title">重置姓名别名盐？</string>
+    <string name="privacy_alias_reset_msg">重置后，此后出设备的名字 / 群名会换一批新别名，旧别名再也对不上新文本。已经脱敏存档的历史文本不会改变。设备被他人短暂拿过、或怀疑盐外泄时用这个。</string>
+    <string name="privacy_alias_reset_done">已重置，别名全部换新</string>
+    <string name="privacy_alias_reset_empty">还没生成过盐，首次脱敏时会自动生成</string>
+    <string name="privacy_alias_reset">重置</string>
     <string name="privacy_rules_dialog_title">勾选启用的脱敏规则</string>
     <string name="privacy_bypass_dialog_title">勾选允许原文发送的会话</string>
     <string name="privacy_bypass_empty">暂无会话（先等一条通知进来）</string>
