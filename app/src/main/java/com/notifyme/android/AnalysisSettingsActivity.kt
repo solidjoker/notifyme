@@ -78,6 +78,17 @@ class AnalysisSettingsActivity : Activity() {
     private lateinit var btnTestAdvisorConnection: Button
     private lateinit var spinnerAnalysisInterval: Spinner
     private lateinit var tvAnalysisStatus: TextView
+
+    /** M12 分析范围：周期 spinner + 自定义起止日 + 点名会话 + 摘要 */
+    private lateinit var spinnerScopePeriod: Spinner
+    private lateinit var rowScopeCustom: android.view.ViewGroup
+    private lateinit var etScopeFrom: EditText
+    private lateinit var etScopeTo: EditText
+    private lateinit var btnScopePickConvs: Button
+    private lateinit var tvScopeSummary: TextView
+
+    /** 页面上的点名会话（保存/立即分析共用；null 之外一律非空集合） */
+    private var scopeConvIds: Set<String> = emptySet()
     private lateinit var tvAnalysisStats: TextView
 
     /** M15：分析运行中的实时进度条（与 tvAnalysisStatus 文案联动） */
@@ -125,6 +136,7 @@ class AnalysisSettingsActivity : Activity() {
         findViewById<TextView>(R.id.btnBack).setOnClickListener { finish() }
 
         bindViews()
+        setupScopeSection()
         setupAnalysisSection()
         setupAdvisorSection()
     }
@@ -203,6 +215,12 @@ class AnalysisSettingsActivity : Activity() {
         btnTestAdvisorConnection = findViewById(R.id.btnTestAdvisorConnection)
         btnTestConnection = findViewById(R.id.btnTestConnection)
         spinnerAnalysisInterval = findViewById(R.id.spinnerAnalysisInterval)
+        spinnerScopePeriod = findViewById(R.id.spinnerScopePeriod)
+        rowScopeCustom = findViewById(R.id.rowScopeCustom)
+        etScopeFrom = findViewById(R.id.etScopeFrom)
+        etScopeTo = findViewById(R.id.etScopeTo)
+        btnScopePickConvs = findViewById(R.id.btnScopePickConvs)
+        tvScopeSummary = findViewById(R.id.tvScopeSummary)
         tvAnalysisStatus = findViewById(R.id.tvAnalysisStatus)
         tvAnalysisStats = findViewById(R.id.tvAnalysisStats)
         progressAnalysis = findViewById(R.id.progressAnalysis)
@@ -210,6 +228,154 @@ class AnalysisSettingsActivity : Activity() {
         switchAdvisorAuto = findViewById(R.id.switchAdvisorAuto)
         tvAdvisorStatus = findViewById(R.id.tvAdvisorStatus)
         tvAdvisorReport = findViewById(R.id.tvAdvisorReport)
+    }
+
+    // ---------- 分析范围（M12） ----------
+
+    /** 页面上「未保存」的范围选择。保存与立即分析都先落这一层，避免两处各读一套。 */
+    private data class ScopeUiState(
+        val period: String,
+        val fromMs: Long?,
+        val toMs: Long?,
+        val convIds: Set<String>
+    ) {
+        fun scope(): AnalysisScopeCore.Scope = AnalysisScopeCore.scope(
+            period, System.currentTimeMillis(), java.util.TimeZone.getDefault(),
+            fromMs, toMs, convIds
+        )
+    }
+
+    private fun setupScopeSection() {
+        spinnerScopePeriod.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            resources.getStringArray(R.array.scope_period_labels)
+        )
+        val stored = AnalysisScopeStore.loadStored(this)
+        spinnerInitializing = true
+        scopeConvIds = stored.convIds
+        spinnerScopePeriod.setSelection(
+            AnalysisScopeCore.PERIODS.indexOf(stored.period).coerceAtLeast(0)
+        )
+        stored.customFromMs?.let { etScopeFrom.setText(AnalysisScopeCore.formatDay(it)) }
+        stored.customToMs?.let { etScopeTo.setText(AnalysisScopeCore.formatDay(it)) }
+        spinnerInitializing = false
+        applyScopeCustomVisible()
+        updateScopeSummary()
+
+        spinnerScopePeriod.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(
+                parent: AdapterView<*>?,
+                view: View?,
+                position: Int,
+                id: Long
+            ) {
+                if (spinnerInitializing) return
+                applyScopeCustomVisible()
+                // 切到「自定义」而两个框都空着时，先给一个近 7 天的默认值 ——
+                // 空着的自定义区间等于「不限」，用户会以为筛选没生效。
+                if (currentPeriod() == AnalysisScopeCore.PERIOD_CUSTOM &&
+                    etScopeFrom.text.isBlank() && etScopeTo.text.isBlank()
+                ) {
+                    val now = System.currentTimeMillis()
+                    val zone = java.util.TimeZone.getDefault()
+                    val today = AnalysisScopeCore.dayStart(now, zone)
+                    etScopeFrom.setText(AnalysisScopeCore.formatDay(today - 6 * AnalysisScopeCore.DAY_MS, zone))
+                    etScopeTo.setText(AnalysisScopeCore.formatDay(today, zone))
+                }
+                updateScopeSummary()
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+        btnScopePickConvs.setOnClickListener { showScopeConvPicker() }
+    }
+
+    private fun currentPeriod(): String =
+        AnalysisScopeCore.PERIODS[spinnerScopePeriod.selectedItemPosition]
+
+    private fun applyScopeCustomVisible() {
+        rowScopeCustom.visibility =
+            if (currentPeriod() == AnalysisScopeCore.PERIOD_CUSTOM) View.VISIBLE else View.GONE
+    }
+
+    private fun updateScopeSummary() {
+        val state = readScopeUi(quiet = true) ?: return
+        tvScopeSummary.text = AnalysisScopeCore.summary(state.scope())
+        btnScopePickConvs.text = if (state.convIds.isEmpty()) {
+            getString(R.string.scope_pick_convs)
+        } else {
+            getString(R.string.scope_pick_convs_n, state.convIds.size)
+        }
+    }
+
+    /**
+     * 读页面上的范围。[quiet] = true 时不弹 Toast（摘要刷新用），只返回 null；
+     * 保存/立即分析要弹一次提示，否则用户不知道为什么点不动。
+     */
+    private fun readScopeUi(quiet: Boolean = false): ScopeUiState? {
+        val zone = java.util.TimeZone.getDefault()
+        val period = currentPeriod()
+        var from: Long? = null
+        var to: Long? = null
+        if (period == AnalysisScopeCore.PERIOD_CUSTOM) {
+            val fromText = etScopeFrom.text.toString().trim()
+            val toText = etScopeTo.text.toString().trim()
+            if (fromText.isNotEmpty()) {
+                from = AnalysisScopeCore.parseDay(fromText, zone)
+                if (from == null) {
+                    if (!quiet) Toast.makeText(this, R.string.scope_bad_day, Toast.LENGTH_LONG).show()
+                    return null
+                }
+            }
+            if (toText.isNotEmpty()) {
+                to = AnalysisScopeCore.parseDay(toText, zone)
+                if (to == null) {
+                    if (!quiet) Toast.makeText(this, R.string.scope_bad_day, Toast.LENGTH_LONG).show()
+                    return null
+                }
+            }
+        }
+        return ScopeUiState(period, from, to, scopeConvIds)
+    }
+
+    /** 只分析这些会话：从最近消息里出现过的会话多选（与首页 chips 同口径：不列全集）。 */
+    private fun showScopeConvPicker() {
+        thread {
+            val recent = MessageStore.readRecent(this, 500)
+            val rows = recent
+                .groupBy { it.convKey }
+                .map { (key, list) ->
+                    val sample = list.last()
+                    key to (key.displayLabel(sample.appLabel) + " · " + key.conversation)
+                }
+                .sortedWith(compareBy({ it.first.pkg }, { it.first.conversation }))
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (rows.isEmpty()) {
+                    Toast.makeText(this, R.string.scope_no_convs, Toast.LENGTH_SHORT).show()
+                    return@runOnUiThread
+                }
+                val labels = rows.map { it.second }.toTypedArray()
+                val checked = rows.map { it.first.id in scopeConvIds }.toBooleanArray()
+                android.app.AlertDialog.Builder(this)
+                    .setTitle(R.string.scope_convs_title)
+                    .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                        checked[which] = isChecked
+                    }
+                    .setPositiveButton(android.R.string.ok) { _, _ ->
+                        scopeConvIds = rows.filterIndexed { idx, _ -> checked[idx] }
+                            .map { it.first.id }.toSet()
+                        updateScopeSummary()
+                    }
+                    .setNeutralButton(R.string.scope_clear_convs) { _, _ ->
+                        scopeConvIds = emptySet()
+                        updateScopeSummary()
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+            }
+        }
     }
 
     // ---------- 后端分析 ----------
@@ -375,6 +541,11 @@ class AnalysisSettingsActivity : Activity() {
             analysisConfig.intervalMinutes =
                 AnalysisConfig.INTERVAL_OPTIONS[spinnerAnalysisInterval.selectedItemPosition]
 
+            // M12 分析范围：只落「选择」，区间每次跑时按当下重算
+            readScopeUi()?.let { state ->
+                AnalysisScopeStore.save(this, state.period, state.fromMs, state.toMs, state.convIds)
+            }
+
             // 调度条件：本地模型类型不看地址（worker 内自查模型就绪并降级），
             // 其余类型要求 S1 地址非空
             val s1Configured =
@@ -433,7 +604,13 @@ class AnalysisSettingsActivity : Activity() {
         }
 
         findViewById<Button>(R.id.btnAnalysisNow).setOnClickListener {
-            AnalysisScheduler.enqueueAnalysisNow(this)
+            // M12：立即分析按页面上此刻的选择跑（不必先点保存）；
+            // 未保存的选择顺手落盘，否则任务与下文的周期任务会拿到两套不同范围。
+            val state = readScopeUi()
+            if (state != null) {
+                AnalysisScopeStore.save(this, state.period, state.fromMs, state.toMs, state.convIds)
+                AnalysisScheduler.enqueueAnalysisNow(this, scope = state.scope())
+            }
             Toast.makeText(this, R.string.analysis_enqueued, Toast.LENGTH_SHORT).show()
         }
 

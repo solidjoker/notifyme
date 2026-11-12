@@ -95,8 +95,14 @@ object AnalysisScheduler {
      * 立即分析一次（不等周期到点），结果同样写回 AnalysisConfig。
      * @param forceKey 非空时只分析该会话并跳过窗口去重
      *   （会话详情页「立即分析本会话」用）；null 走常规去重流程。
+     * @param scope 显式范围（周期 + 对象多选）。null = 取 [AnalysisScopeStore] 里存的
+     *   （周期任务与「立即分析」共用同一份选择，见 [AnalysisWorker] 的读取顺序）。
      */
-    fun enqueueAnalysisNow(context: Context, forceKey: ConvKey? = null) {
+    fun enqueueAnalysisNow(
+        context: Context,
+        forceKey: ConvKey? = null,
+        scope: AnalysisScopeCore.Scope? = null
+    ) {
         // 用户显式要求分析：若排程已被系统丢弃，抢先重注册救活整个队列，
         // 否则新排队的一次性任务同样不会被调度（W2 真机实测「点了没反应」）
         ScheduleSelfHeal.repairIfNeeded(context, "立即分析请求")
@@ -116,6 +122,32 @@ object AnalysisScheduler {
         if (forceKey != null) {
             data.putString(AnalysisWorker.KEY_FORCE_PKG, forceKey.pkg)
                 .putString(AnalysisWorker.KEY_FORCE_CONVERSATION, forceKey.conversation)
+        }
+        // M12 显式范围随任务带走：入队那一刻的选择就是这一轮的口径，
+        // 不随后台期间用户再改设置而漂移（周期任务不带，落盘存的那份由 Worker 自己读）。
+        // forceKey（「立即分析本会话」）不同：那是单会话的显式点名，用户要的是这一整窗，
+        // 不该被设置页里存着的「今天 / 近 7 天」悄悄砍掉后半截。
+        val effective = AnalysisScopeCore.immediateScope(
+            forceKey != null, scope ?: AnalysisScopeStore.load(context)
+        )
+        if (!effective.range.isAll || effective.explicit) {
+            data.putString(AnalysisScopeCore.KEY_PERIOD, effective.period)
+            // 自定义区间只带边界；非自定义类的 range 由 Worker 按「跑的那一刻」重算，
+            // 否则晚上 20 点入队的「今天」到第二天才跑就会把范围钉死在昨天
+            if (effective.period == AnalysisScopeCore.PERIOD_CUSTOM) {
+                if (effective.range.fromMs != Long.MIN_VALUE) {
+                    data.putLong(AnalysisScopeCore.KEY_FROM, effective.range.fromMs)
+                }
+                if (effective.range.toMs != Long.MAX_VALUE) {
+                    data.putLong(AnalysisScopeCore.KEY_TO, effective.range.toMs)
+                }
+            }
+            if (effective.explicit) {
+                data.putString(
+                    AnalysisScopeCore.KEY_CONV_IDS,
+                    AnalysisScopeCore.encodeConvIds(effective.convIds)
+                )
+            }
         }
         builder
             // 通用 tag：所有立即分析；UI 可观察整体/单会话进度
