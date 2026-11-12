@@ -172,8 +172,10 @@ class A11yExtractService : AccessibilityService() {
         // 群/私聊标记优先沿用本地已有记录（界面本身拿不到可靠的群标记）；
         // 首次提取的会话先按私聊解析，采集结束后再按「是否存在他人昵称」回推，
         // 否则首次提取的群聊会被整段写死成私聊。
-        val knownIsGroup = MessageStore.readRecent(this, 500)
-            .firstOrNull { it.convKey == convKey }?.isGroup
+        // 取「本会话窗口里最新一条」的标记，而不是跨会话 readRecent(500).firstOrNull ——
+        // 后者别的会话刷满窗口就取不到，群聊会被当成首次提取、白白丢一次回推机会。
+        // 窗口里没有任何本会话消息时返回 null（= 首次提取），不是 false。
+        val knownIsGroup = ConvWindowCore.knownIsGroup(MessageStore.readWindow(this, convKey))
         val isGroup = knownIsGroup ?: false
 
         // 起始屏必须能找到消息列表，否则说明不在聊天页（如登录页/通讯录），直接中止。
