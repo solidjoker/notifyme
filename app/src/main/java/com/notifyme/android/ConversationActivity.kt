@@ -620,13 +620,13 @@ class ConversationActivity : Activity() {
             normalColor = getColor(R.color.text_secondary)
         )
         addChip(
-            text = getString(R.string.chip_due_window, localizeDueWindow(record.s1DueWindow)),
+            text = getString(R.string.chip_due_window, TopicLabelCore.dueLabel(this, record.s1DueWindow)),
             highlight = false,
             highlightColor = getColor(R.color.accent_orange),
             normalColor = getColor(R.color.text_secondary)
         )
         addChip(
-            text = getString(R.string.chip_topic, localizeTopic(record.s1Topic)),
+            text = getString(R.string.chip_topic, TopicLabelCore.topicLabel(this, record.s1Topic)),
             highlight = false,
             highlightColor = getColor(R.color.accent_orange),
             normalColor = getColor(R.color.text_secondary)
@@ -703,26 +703,6 @@ class ConversationActivity : Activity() {
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { marginEnd = 16 }
         chipContainer.addView(chip, params)
-    }
-
-    /** topic 取值本地化（未知值原样显示，兼容 laya 自由输出）。 */
-    private fun localizeTopic(topic: String): String = when (topic) {
-        "work_task" -> getString(R.string.topic_work_task)
-        "schedule" -> getString(R.string.topic_schedule)
-        "notice" -> getString(R.string.topic_notice)
-        "smalltalk" -> getString(R.string.topic_smalltalk)
-        "risk" -> getString(R.string.topic_risk)
-        else -> topic.ifEmpty { getString(R.string.topic_notice) }
-    }
-
-    /** due_window 取值本地化（兼容英文桶与 laya 中文桶名，未知值原样显示）。 */
-    private fun localizeDueWindow(dueWindow: String): String = when (dueWindow) {
-        "none", "无明确时间" -> getString(R.string.due_none)
-        "today", "今天" -> getString(R.string.due_today)
-        "tomorrow", "明天" -> getString(R.string.due_tomorrow)
-        "this_week", "本周" -> getString(R.string.due_this_week)
-        "later" -> getString(R.string.due_later)
-        else -> dueWindow.ifEmpty { getString(R.string.due_none) }
     }
 
     // ---------- M17 会话内自建提醒（写系统日历 + 提前量，无日历时降级） ----------

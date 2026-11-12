@@ -234,7 +234,7 @@ class AnalysisListActivity : Activity() {
             // 发送者行复用为主题行：主题 + 重要度（S1 判定要点）
             holder.tvSender.text = ctx.getString(
                 R.string.analysis_sender_line,
-                localizeTopic(ctx, record.s1Topic),
+                TopicLabelCore.topicLabel(ctx, record.s1Topic),
                 ctx.getString(R.string.chip_importance, record.s1Importance)
             )
             // 摘要：S2 深分析摘要优先，否则给 S1 判定概率
@@ -242,9 +242,12 @@ class AnalysisListActivity : Activity() {
             else ctx.getString(R.string.analysis_prob_fmt, record.s1NeedActionProb * 100)
             // 截止：S2 具体时间优先，其次 S1 截止桶（none 不显示）
             val dueText = record.s2DueTime.ifEmpty {
-                localizeDueWindow(ctx, record.s1DueWindow)
+                TopicLabelCore.dueLabel(ctx, record.s1DueWindow)
             }
-            if (dueText.isNotEmpty() && dueText != ctx.getString(R.string.due_none)) {
+            // 「有没有截止」只能问 TopicLabelCore：旧实现拿码值比中文串（none != 无明确时间）永远不等，
+            // 于是未编辑过的卡片会显示成「截止：无明确时间」
+            val showDue = record.s2DueTime.isNotEmpty() || !TopicLabelCore.isNoDue(record.s1DueWindow)
+            if (showDue) {
                 holder.tvDue.visibility = View.VISIBLE
                 holder.tvDue.text = ctx.getString(
                     R.string.analysis_due_line,
@@ -280,28 +283,6 @@ class AnalysisListActivity : Activity() {
             }
             holder.tvTime.text = timeFormat.format(Date(record.analyzedAt))
         }
-
-        /** topic 取值本地化（未知值原样显示，兼容 laya 自由输出） */
-        private fun localizeTopic(ctx: android.content.Context, topic: String): String =
-            when (topic) {
-                "work_task" -> ctx.getString(R.string.topic_work_task)
-                "schedule" -> ctx.getString(R.string.topic_schedule)
-                "notice" -> ctx.getString(R.string.topic_notice)
-                "smalltalk" -> ctx.getString(R.string.topic_smalltalk)
-                "risk" -> ctx.getString(R.string.topic_risk)
-                else -> topic
-            }
-
-        /** due_window 取值本地化（兼容英文桶与中文桶名） */
-        private fun localizeDueWindow(ctx: android.content.Context, dueWindow: String): String =
-            when (dueWindow) {
-                "none", "无明确时间" -> ctx.getString(R.string.due_none)
-                "today", "今天" -> ctx.getString(R.string.due_today)
-                "tomorrow", "明天" -> ctx.getString(R.string.due_tomorrow)
-                "this_week", "本周" -> ctx.getString(R.string.due_this_week)
-                "later" -> ctx.getString(R.string.due_later)
-                else -> dueWindow
-            }
 
         override fun getItemCount(): Int = items.size
 
