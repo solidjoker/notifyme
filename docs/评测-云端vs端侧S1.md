@@ -112,7 +112,12 @@ LOCAL_KEY=
 LOCAL_MODEL=qwen25-0.5b-q4km.gguf
 OUT=../docs/eval-s1-cloud-vs-local.md
 LABEL_PATH=src/test/resources/eval-labels.json
+# 时间预算（可选，缺省即下面这两个值）：
+CALL_TIMEOUT_MS=90000      # 单次调用上限 90s
+TOTAL_BUDGET_MS=900000     # 整轮预算 15min，到期即停
 ```
+
+**为什么必须有时间预算**：2026-11-12 全量自检挂死 40 分钟，根因就是 8080 端点「TCP 能连、`/v1/chat/completions` 迟迟不回」，而旧实现只有单次 `readTimeout=180s`、没有整轮上限（20 条 × 2 侧 × 180s = 最坏 2 小时），最后靠 `jstack` 才定位到 `S1EvalHttpTest.chat` 卡在 `Net.poll`。现在预算算术收在 `S1EvalBudgetCore`（纯函数、14 条单测）：预算耗尽就停止发起新调用，剩余样本记进报告「四之二、预算耗尽未测试」，**不会**让整轮构建无限等。
 
 跑法（Gradle 必须绕过增量与缓存，否则测试会被判 UP-TO-DATE，评测根本不执行）：
 
@@ -132,6 +137,8 @@ Remove-Item -Recurse -Force app\build\test-results\testOpenDebugUnitTest -ErrorA
 | `app/src/test/java/com/notifyme/android/S1AgreementTest.kt` | 一致率判定口径单测 |
 | `app/src/main/java/com/notifyme/android/S1Accuracy.kt` | 标注样本解析 + 单侧准确率统计 + Markdown |
 | `app/src/main/java/com/notifyme/android/S1Agreement.kt` | 两侧配对与一致率汇总 |
+| `app/src/main/java/com/notifyme/android/S1EvalBudgetCore.kt` | 评测时间预算内核（单次上限 / 整轮预算 / 耗尽判定，纯函数） |
+| `app/src/test/java/com/notifyme/android/S1EvalBudgetCoreTest.kt` | 预算口径单测（14 条：配置容错 / 夹边界 / 剩余预算 / 耗尽） |
 | `app/src/main/java/com/notifyme/android/S1Eval.kt` / `S1EvalRunner.kt` | 真机采集入口与采集器 |
 | `app/src/debug/java/com/notifyme/android/S1EvalActivity.kt` | 真机采集触发 Activity（debug 源集） |
 | `app/src/test/resources/eval-labels.json` | 20 条人工标注合成样本 |

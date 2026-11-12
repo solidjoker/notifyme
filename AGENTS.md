@@ -48,6 +48,7 @@ Remove-Item -Recurse -Force app\build\test-results\testOpenDebugUnitTest -ErrorA
 ```
 
 **必须先删 test-results 再加 `--no-build-cache`**：否则 Gradle 判 UP-TO-DATE，评测根本不执行（改 properties 不算 task input，cleanTest 是 no-op）。
+**评测必须留着时间预算**（`S1EvalBudgetCore`）：properties 里 `CALL_TIMEOUT_MS`（默认 90000）与 `TOTAL_BUDGET_MS`（默认 900000 = 15min）到期即停止发起新调用，剩余样本写进报告「预算耗尽未测试」而不是让构建无限等。2026-11-12 就因端点「TCP 通、chat 不回」+ 旧实现的 readTimeout=180s × 40 次调用，把整轮 `testOpenDebugUnitTest` 挂死 40 分钟，只能 jstack 定位。**跑评测前先确认端点真能出 chat 响应**（本机 176B 模型冷启动单条可达 85s）。
 
 ### 一条命令自检（开 PR 前跑这个）
 
