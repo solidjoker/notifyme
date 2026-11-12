@@ -29,6 +29,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.TextView
@@ -86,6 +87,12 @@ class MainActivity : Activity() {
 
     /** 当前搜索关键词（空串 = 不过滤）；由搜索框 TextWatcher 维护 */
     private var searchQuery = ""
+
+    /**
+     * 当前来源 App 筛选（空串 = 全部），与 PWA 控制台的 APP_FILTER 同口径。
+     * 启动时从 [AppFilterStore] 恢复；选中项若已没有消息，[buildFeed] 会回落「全部」并在主线程落盘。
+     */
+    private var appFilter = ""
 
     /** 刷新代次：后台装载完成时若已有更新的刷新，丢弃过期结果（旧查询不覆盖新列表） */
     @Volatile
@@ -156,6 +163,9 @@ class MainActivity : Activity() {
         tvPermissionStatus = findViewById(R.id.tvPermissionStatus)
         tvEmpty = findViewById(R.id.tvEmpty)
         recyclerMessages = findViewById(R.id.recyclerMessages)
+
+        // 首页来源筛选形态是「上次退出时看哪个来源」，跨进程恢复（onResume 会再刷列表校正）
+        appFilter = AppFilterStore.load(this)
 
         // M11 标题栏 ☰ 菜单：控制台 / 刷新 / 清除记录（主界面纯对话化）
         setupMainMenu()
@@ -675,7 +685,7 @@ class MainActivity : Activity() {
             while (true) {
                 val token = ++refreshToken
                 val query = searchQuery.trim().lowercase()
-                val result = buildFeed(query)
+                val result = buildFeed(query, appFilter)
                 runOnUiThread {
                     if (token != refreshToken || isFinishing || isDestroyed) return@runOnUiThread
                     applyFeed(result, query)
@@ -699,15 +709,20 @@ class MainActivity : Activity() {
     private var feedDayPairs: List<Pair<ConvKey, String>> = emptyList()
 
     /** 后台装载结果：列表项 + 是否为空态 + 主页待办区数据（M12）。 */
-    private class FeedResult(        val items: List<FeedItem>,
+    private class FeedResult(
+        val items: List<FeedItem>,
         val empty: Boolean,
         val todos: List<AnalysisCaseRecord>,
         /** 已有生效提醒的 caseId 集合：待办行「日历」按钮显示「已加日历」 */
-        val remindedCaseIds: Set<String>
+        val remindedCaseIds: Set<String>,
+        /** 来源筛选 chips（第一项恒为「全部」） */
+        val chips: List<AppFilterCore.Tab>,
+        /** 校正后的生效筛选（选中来源已无消息时回落空串） */
+        val filter: String
     )
 
     /** 后台线程执行：读存储 + 过滤 + 组装 [FeedItem]（不碰视图）。 */
-    private fun buildFeed(query: String): FeedResult {
+    private fun buildFeed(query: String, filter: String): FeedResult {
         val messages = MessageStore.readRecent(this, 500)
         // M14：天级三态（显式折叠/显式展开/默认非最新天折叠）；M16：再叠加会话级折叠
         val collapsedDates = CollapseStore.loadCollapsedDates(this)
@@ -750,11 +765,31 @@ class MainActivity : Activity() {
         val tagMap = ConvTagStore.readRaw(this)
         // 按采集开关过滤：黑名单勾选 / 白名单外的 App，其会话不进主页；
         // 自身与系统源（如 a11y 自抓噪声）同样不展示
-        val visibleGroups = groups.filter { it.first.id !in unwatchedIds }
+        val enabledGroups = groups.filter { it.first.id !in unwatchedIds }
             .filter {
                 !AppSourceRegistry.isBlocked(it.first.pkg) &&
                     AppSourceStore.isEnabled(this, it.first.pkg)
             }
+
+        // 来源筛选 chips：候选只取「本窗口内确实还有消息」的来源；
+        // 搜索词也参与候选计算——搜索态下用户看到的就是这些来源，给别的来源 chip 只会导向空白列表。
+        val chips = AppFilterCore.tabs(
+            pkgs = enabledGroups.map { it.first.pkg },
+            labelOf = { pkg ->
+                AppSourceRegistry.labelFor(pkg)
+                    ?: enabledGroups.firstOrNull { it.first.pkg == pkg }
+                        ?.second?.lastOrNull()?.appLabel?.takeIf { it.isNotBlank() }
+                    ?: AppSourceRegistry.displayLabel(pkg)
+            },
+            allLabel = getString(R.string.app_filter_all)
+        )
+        // 存下来的选中来源若已没有任何会话，回落「全部」——否则列表整体空掉且无从点回
+        val effectiveFilter = AppFilterCore.resolve(filter, chips.map { it.pkg })
+        val visibleGroups = if (effectiveFilter.isEmpty()) {
+            enabledGroups
+        } else {
+            enabledGroups.filter { AppFilterCore.matches(it.first.pkg, effectiveFilter) }
+        }
 
         // M12「最近待办」区：与悬浮面板同口径（TodoPanelCore），但必须在搜索过滤前算——
         // 待办区不受搜索框影响；可见集用未过滤的 groups 口径，与会话头角标一致
@@ -762,7 +797,8 @@ class MainActivity : Activity() {
             .filter {
                 it.id !in unwatchedIds &&
                     !AppSourceRegistry.isBlocked(it.pkg) &&
-                    AppSourceStore.isEnabled(this, it.pkg)
+                    AppSourceStore.isEnabled(this, it.pkg) &&
+                    AppFilterCore.matches(it.pkg, effectiveFilter)
             }
             .toSet()
         val todos = TodoPanelCore.selectTodos(latestCases, todoVisibleKeys, HOME_TODO_LIMIT)
@@ -891,21 +927,88 @@ class MainActivity : Activity() {
                 }
             }
         }
-        return FeedResult(items, visibleGroups.isEmpty(), todos, remindedCaseIds)
+        return FeedResult(items, visibleGroups.isEmpty(), todos, remindedCaseIds, chips, effectiveFilter)
     }
 
-    /** 主线程渲染：提交列表数据 + 空态提示 + 导航栏顶端待办区（M12）。 */
+    /** 主线程渲染：提交列表数据 + 空态提示 + 来源 chips + 导航栏顶端待办区（M12）。 */
     private fun applyFeed(result: FeedResult, query: String) {
+        // 选中来源在数据里已不存在时，[buildFeed] 回落成「全部」；这里把回落结果落盘，
+        // 否则下次启动又读回那个失效包名，再回落一次（列表没问题但状态一直不同步）
+        if (result.filter != appFilter) {
+            appFilter = result.filter
+            AppFilterStore.save(this, result.filter)
+        }
         adapter.submit(result.items)
         if (result.empty) {
             tvEmpty.text = getString(
-                if (query.isNotEmpty()) R.string.search_no_result else R.string.empty_hint
+                when {
+                    query.isNotEmpty() -> R.string.search_no_result
+                    result.filter.isNotEmpty() -> R.string.app_filter_empty
+                    else -> R.string.empty_hint
+                }
             )
             tvEmpty.visibility = View.VISIBLE
         } else {
             tvEmpty.visibility = View.GONE
         }
+        renderAppChips(result.chips, result.filter)
         renderTodos(result.todos, result.remindedCaseIds)
+    }
+
+    /**
+     * 来源筛选 chips：一个来源都没有时整行隐藏（只有「全部」的 chip 没有信息量）。
+     * 选中态用 bg_chip_selected + 反白字，未选中用 bg_chip；无障碍用 contentDescription + selected。
+     */
+    private fun renderAppChips(chips: List<AppFilterCore.Tab>, filter: String) {
+        val row = findViewById<LinearLayout>(R.id.llAppChips)
+        val scroller = findViewById<HorizontalScrollView>(R.id.svAppChips)
+        row.removeAllViews()
+        // chips 恒含「全部」，所以 size <= 1 意味着当前没有任何来源可选
+        if (chips.size <= 1) {
+            scroller.visibility = View.GONE
+            return
+        }
+        scroller.visibility = View.VISIBLE
+        scroller.contentDescription = getString(R.string.app_filter_desc)
+        chips.forEach { tab ->
+            val selected = AppFilterCore.chipSelected(tab.pkg, filter)
+            val chip = TextView(this)
+            chip.text = tab.label
+            chip.textSize = 13f
+            chip.gravity = android.view.Gravity.CENTER
+            chip.setPadding(dp(12), dp(6), dp(12), dp(6))
+            chip.background = getDrawable(
+                if (selected) R.drawable.bg_chip_selected else R.drawable.bg_chip
+            )
+            chip.setTextColor(
+                getColor(if (selected) R.color.card_bg else R.color.text_secondary)
+            )
+            // isSelected 会让 TalkBack 读「已选中」；contentDescription 只补来源名，不重复标状态
+            chip.isSelected = selected
+            chip.contentDescription = getString(R.string.app_filter_chip_desc, tab.label)
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lp.marginEnd = dp(8)
+            chip.layoutParams = lp
+            chip.setOnClickListener {
+                val next = if (tab.isAll) "" else tab.pkg
+                if (next == appFilter) return@setOnClickListener
+                appFilter = next
+                AppFilterStore.save(this, next)
+                Toast.makeText(
+                    this,
+                    getString(
+                        if (next.isEmpty()) R.string.app_filter_cleared else R.string.app_filter_selected,
+                        tab.label
+                    ),
+                    Toast.LENGTH_SHORT
+                ).show()
+                refreshMessages()
+            }
+            row.addView(chip)
+        }
     }
 
     /**

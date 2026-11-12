@@ -146,6 +146,25 @@
         android:textColorHint="@color/time_gray"
         android:textSize="14sp" />
 
+    <!-- 来源 App 筛选 chips：与 PWA 控制台的 app-chips 同口径（全部 → 微信 → 其余按展示名）；
+         只有一个来源时整行隐藏，避免给用户一个点了没任何变化的按钮。 -->
+    <HorizontalScrollView
+        android:id="@+id/svAppChips"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="8dp"
+        android:scrollbars="none"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:id="@+id/llAppChips"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal" />
+    </HorizontalScrollView>
+
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
