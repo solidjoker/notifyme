@@ -176,6 +176,11 @@ copy keystore.properties.example keystore.properties
 校验标签与 `versionName` 一致 → 用 Secrets 里的密钥库签名 `assembleOpenRelease` →
 `apksigner verify` → 生成 `.sha256` → `gh release create` 发布为 latest。
 
+> **发版现状（2026-11-12 核对）**：最近一次公开 Release 是 `v0.3.8`（2026-10-13），此后 `versionName` 一路升到 `0.3.19` 但没有再打 tag，所以 `0.3.9`–`0.3.19` 都是**未发布版本**。
+> 这不影响任何自动化：`release.yml` 只在**推送 tag 时**触发，`android.yml` 的版本校验只要求 `versionName` 与 `versionCode` 自洽。
+> 想发版就 `git tag v0.3.19 && git push origin v0.3.19`——tag 必须与 `versionName` 逐字一致，否则第一步就失败。
+> 升不升 `versionName` 由维护者决定（见 [ROADMAP.md](ROADMAP.md) 的硬约束：未经明确要求不推送/不发版）。
+
 需要的 4 个仓库 Secrets（Settings → Secrets and variables → Actions）：
 `NOTIFYME_KEYSTORE_BASE64`（`[Convert]::ToBase64String([IO.File]::ReadAllBytes("notifyme-release.jks"))`）、
 `NOTIFYME_KEYSTORE_PASSWORD`、`NOTIFYME_KEY_ALIAS`、`NOTIFYME_KEY_PASSWORD`。
@@ -254,12 +259,14 @@ Android 单测 + 双 flavor 构建 + Lint，并额外汇总 Lint 报告里的 is
 │       │   ├── res/                     # 布局、图标、主题、服务配置 XML
 │       │   ├── cpp/                     # M4 端侧推理 JNI（llama.cpp）
 │       │   └── java/com/notifyme/android/  # Kotlin 主源码（99 个 .kt）
-│       └── test/java/com/notifyme/android/  # 纯 JVM 单元测试（48 个 .kt）
+│       └── test/java/com/notifyme/android/  # 纯 JVM 单元测试（52 个 .kt）
 ├── server/                     # 可选配套 Flask 服务端（见 server/README.md）
 │   ├── app.py                  # Flask 壳：鉴权、错误处理、/console 与落地页、create_app 工厂
 │   ├── util.py                 # 纯函数工具层（数值归一、时间格式化、文本转义）
 │   ├── storage.py              # 存储层（SQLite、JSONL 存档、顾问存档、排队任务表、抽库后台）
 │   ├── routes.py               # 数据面路由（/weixin、/messages、/analysis、/advisor、/admin/extract、/queue）
+│   ├── stats_api.py            # 全库聚合 /stats（消息段 + 分析段 + 排队段）
+│   ├── suggests.py             # 下一步建议 /suggests/next（规则优先级队列）
 │   ├── console_ui.py           # 内嵌 PWA 控制台前端（HTML/CSS/JS，5 个 Tab，aura 设计语言，无外部依赖）
 │   ├── console_classify.js     # 控制台归类规则单一事实源（UMD：浏览器 + node 共用，node 可单测；含会话两级分组 groupMessages 与设备分组 groupQueueTasksByDevice）
 │   ├── android_db_extract.py / pc_db_extract.py / gen_icons.py  # 本地库提取与图标脚本

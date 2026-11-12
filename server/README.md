@@ -4,14 +4,16 @@
 
 ## 目录结构
 
-服务端已从单文件拆成 4 个模块 + 控制台前端：
+服务端已从单文件拆成 6 个模块 + 控制台前端：
 
 | 文件 | 职责 |
 |---|---|
 | `app.py` | 启动入口与 Flask 壳：鉴权（`check_token`）、错误处理（404/413/500）、`/console` 与落地页、`create_app()` 工厂 |
 | `util.py` | 纯函数工具层：数值归一、时间戳格式化、文本转义、来源包名映射 |
 | `storage.py` | 存储层：SQLite 连接与建库、JSONL 存档与轮转、顾问存档读写、抽库后台任务 |
-| `routes.py` | 数据面路由：`/weixin`、`/messages`、`/analysis`、`/advisor`、`/admin/extract`，由 `register(app)` 挂载 |
+| `routes.py` | 数据面路由：`/weixin`、`/messages`、`/analysis`、`/advisor`、`/queue`、`/admin/extract`，由 `register(app)` 挂载 |
+| `stats_api.py` | 全库聚合 `/stats`：消息段（含 `by_pkg` / `by_source`）、分析段（含脱敏证据）、排队段；**分析段不接受 `pkg` 过滤** |
+| `suggests.py` | 下一步建议 `/suggests/next`：6 条规则按 `priority` 降序取前 3，带 `why` / `how` / `evidence` / `jump` |
 | `console_ui.py` | 内嵌 PWA 控制台前端（HTML/CSS/JS，无外部依赖） |
 | `android_db_extract.py` / `pc_db_extract.py` / `gen_icons.py` | 安卓 / PC 本地库解密提取与图标生成脚本 |
 | `test_*.py` | pytest 用例（`python -m pytest server/` 全量跑） |

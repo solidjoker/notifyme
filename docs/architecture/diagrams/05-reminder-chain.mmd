@@ -17,7 +17,7 @@ flowchart TB
     PARSE --> D1{"① dedupKey 已存在于<br/>ReminderStore？"}:::dec
     D1 -->|"是"| DUP["去重跳过<br/>同一窗口永不重复创建<br/>（成功/失败都只建一次）"]:::st
 
-    D1 -->|"否"| CHAIN["runReminderChain()"]:::in
+    D1 -->|"否"| CHAIN["runReminderChain()<br/>决策抽到 ReminderChainCore.kt 106（纯函数 · 13 条单测）<br/>CalendarHelper 只采集环境事实 + 执行副作用"]:::in
 
     CHAIN --> L1{"Level 1<br/>findWritableCalendar()<br/>CALENDAR_ACCESS_LEVEL 可写？"}:::dec
     L1 -->|"有可写日历账户"| D2{"② eventExists()<br/>CalendarContract.Events<br/>按 title + dtstart 查重"}:::dec

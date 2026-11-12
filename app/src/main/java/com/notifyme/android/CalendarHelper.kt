@@ -174,6 +174,9 @@ object CalendarHelper {
 
     /**
      * 三级降级链主体（createReminder 与列表页「重试」共用）。
+     *
+     * 决策本身在 [ReminderChainCore]（纯函数、可单测）；这里只做三件事：
+     * 采集环境事实 → 执行该级别对应的副作用 → 把结果翻译回 [ChainResult]。
      */
     private fun runReminderChain(
         context: Context,
@@ -186,59 +189,64 @@ object CalendarHelper {
         eventTime: Long,
         leadMinutes: Long
     ): ChainResult {
-        // Level 1：直接写入系统日历（有权限 + 有可写日历账户才走）
-        if (hasCalendarPermission(context)) {
-            val calendarId = findWritableCalendar(context)
-            if (calendarId != null) {
-                // 防重 2：系统日历里已存在同标题同起始时间的事件
-                if (eventExists(context, title, eventTime)) {
-                    Log.i(TAG, "L1 跳过：系统日历已存在相同事件")
-                    return ChainResult(
-                        ReminderRecord.STATUS_CALENDAR,
-                        "跳过：系统日历已存在相同事件（去重）"
-                    )
-                }
-                val eventId = insertEvent(context, calendarId, title, description, eventTime, leadMinutes)
+        // Level 1 事实采集：权限 + 可写日历账户 + 系统日历里是否已有同标题同起始时间的事件（防重 2）
+        val hasPermission = hasCalendarPermission(context)
+        val calendarId = if (hasPermission) findWritableCalendar(context) else null
+        val duplicate = if (calendarId != null) eventExists(context, title, eventTime) else false
+        val env = ReminderChainCore.Env(
+            hasCalendarPermission = hasPermission,
+            hasWritableCalendar = calendarId != null,
+            eventAlreadyExists = duplicate
+        )
+        when (ReminderChainCore.calendarAction(env)) {
+            ReminderChainCore.CalendarAction.SKIP_DUPLICATE -> {
+                Log.i(TAG, "L1 跳过：系统日历已存在相同事件")
+                return chain(ReminderChainCore.duplicateSkip())
+            }
+            ReminderChainCore.CalendarAction.INSERT -> {
+                val eventId = insertEvent(
+                    context, calendarId!!, title, description, eventTime, leadMinutes
+                )
                 if (eventId != null) {
                     Log.i(TAG, "L1 日历事件已创建: id=$eventId title=$title")
-                    return ChainResult(
-                        ReminderRecord.STATUS_CALENDAR,
-                        "成功：已写入系统日历",
-                        eventId
-                    )
+                    return chain(ReminderChainCore.calendarSuccess(eventId))
                 }
                 Log.w(TAG, "L1 插入失败，降级 L2")
-            } else {
-                Log.i(TAG, "L1 跳过：无可写日历账户，降级 L2")
             }
-        } else {
-            Log.i(TAG, "L1 跳过：无日历权限，降级 L2")
+            ReminderChainCore.CalendarAction.UNAVAILABLE -> {
+                if (hasPermission) Log.i(TAG, "L1 跳过：无可写日历账户，降级 L2")
+                else Log.i(TAG, "L1 跳过：无日历权限，降级 L2")
+            }
         }
 
         // Level 2：唤起系统日历 App（预填，用户手动保存）
         // 仅在 App 有可见界面时尝试：后台（Worker / 通知回调）里 startActivity 会被
         // Android 10+ 的「后台启动 Activity」限制静默拦截，却让链路误记为已提醒成功。
-        if (MainApplication.isInForeground &&
-            openCalendarInsert(context, title, description, eventTime)
-        ) {
+        // openCalendarInsert 内部先 resolveActivity 再 startActivity，"能否唤起" 直接取它的返回值，
+        // 不再单独做一次包查询（重复查询没有额外信息，只会让 L2 多一次 IPC）。
+        val inForeground = MainApplication.isInForeground
+        val intentShown = inForeground && openCalendarInsert(context, title, description, eventTime)
+        val envL2 = env.copy(inForeground = inForeground, canOpenCalendar = intentShown)
+        if (intentShown) {
             Log.i(TAG, "L2 已唤起日历 App: title=$title")
-            return ChainResult(ReminderRecord.STATUS_INTENT, "已唤起日历，待手动保存")
+            return chain(ReminderChainCore.intentOpened())
         }
         Log.i(TAG, "L2 跳过：App 不在前台或无日历 App，降级 L3")
 
         // Level 3：App 内闹钟到点通知兜底
-        return if (AlarmHelper.scheduleReminder(
-                context, dedupKey, title, summary, pkg, conversation, eventTime, leadMinutes
-            )
-        ) {
-            ChainResult(ReminderRecord.STATUS_ALARM, "已设App内提醒")
-        } else {
-            ChainResult(
-                ReminderRecord.STATUS_FAILED,
-                "失败：无日历账户、无日历App、闹钟设置异常"
-            )
-        }
+        val alarmSet = AlarmHelper.scheduleReminder(
+            context, dedupKey, title, summary, pkg, conversation, eventTime, leadMinutes
+        )
+        val outcome = ReminderChainCore.decide(
+            envL2, insertedEventId = null, intentShown = intentShown, alarmSet = alarmSet
+        )
+        if (alarmSet) Log.i(TAG, "L3 已设 App 内闹钟") else Log.w(TAG, "L3 闹钟设置失败")
+        return chain(outcome)
     }
+
+    /** 纯函数结果 → 链路内部结果（eventId 必须继续传到 ReminderRecord，否则提醒管理删不掉日历事件）。 */
+    private fun chain(outcome: ReminderChainCore.Outcome): ChainResult =
+        ChainResult(outcome.status, outcome.note, outcome.eventId)
 
     /**
      * 列表页「重试」：用记录里已存的标题/描述/时间重跑三级链。
