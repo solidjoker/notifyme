@@ -192,6 +192,74 @@ class NotificationShapeEvidenceTest {
         assertEquals(null, parsed(AppSourceRegistry.PKG_DINGTALK, title = "群", text = ""))
     }
 
+    // ---------------- 微信：无 MessagingStyle 的真机形态（2026-11-12 取证） ----------------
+
+    @Test
+    fun `微信 未读计数前缀加发言人 半角冒号无空格 判群聊`() {
+        val m = parsed(
+            AppSourceRegistry.PKG_WECHAT,
+            title = "家长群",
+            text = "[11条]张三: 好的，谢谢"
+        )!!
+        assertEquals("张三", m.sender)
+        assertEquals("好的，谢谢", m.text)
+        assertEquals("家长群", m.conversation)
+        assertTrue(m.isGroup)
+    }
+
+    @Test
+    fun `微信 未读数变化不产生第二条消息`() {
+        // 真机上的实际损失：未读数从 [3条] 涨到 [4条]，正文变了，去重键跟着变 → 同一句话入库两次
+        val first = parsed(AppSourceRegistry.PKG_WECHAT, title = "家长群", text = "[3条]张三: 收到")!!
+        val second = parsed(AppSourceRegistry.PKG_WECHAT, title = "家长群", text = "[4条]张三: 收到")!!
+        assertEquals(first.text, second.text)
+        assertEquals(first.sender, second.sender)
+    }
+
+    @Test
+    fun `微信 未读前缀后没有正文时保留原文不丢消息`() {
+        val m = parsed(AppSourceRegistry.PKG_WECHAT, title = "家长群", text = "[3条]")!!
+        assertEquals("[3条]", m.text)
+        assertEquals("家长群", m.sender)
+        assertTrue(!m.isGroup)
+    }
+
+    @Test
+    fun `微信 私聊 昵称等于会话名 且带未读前缀 判私聊`() {
+        val m = parsed(AppSourceRegistry.PKG_WECHAT, title = "张三", text = "[2条]张三: 明天见")!!
+        assertEquals("张三", m.sender)
+        assertEquals("明天见", m.text)
+        assertTrue(!m.isGroup)
+    }
+
+    @Test
+    fun `微信 会话名是昵称拼接时 前缀只是其中一段 判私聊`() {
+        val m = parsed(AppSourceRegistry.PKG_WECHAT, title = "张三_某机构_某班", text = "[2条]张三: 收到")!!
+        assertEquals("张三", m.sender)
+        assertEquals("收到", m.text)
+        assertTrue(!m.isGroup)
+    }
+
+    @Test
+    fun `钉钉 小米推送代发 昵称带角色括号 半角冒号无空格`() {
+        // 真机 extras：android.title = "钉钉｜<群名>"，android.text = "<昵称>(<角色>):正文"
+        val m = parsed(
+            AppSourceRegistry.PKG_DINGTALK,
+            title = "钉钉｜2025级1班",
+            text = "李四(老师):「明天交作业」通知确认情况"
+        )!!
+        assertEquals("李四(老师)", m.sender)
+        assertEquals("「明天交作业」通知确认情况", m.text)
+        assertTrue(m.isGroup)
+    }
+
+    @Test
+    fun `正文里的 十点三十 不被当发言人`() {
+        val m = parsed(AppSourceRegistry.PKG_WECHAT, title = "项目群", text = "10:30 在三楼开会")!!
+        assertEquals("项目群", m.sender)
+        assertEquals("10:30 在三楼开会", m.text)
+    }
+
     private companion object {
         const val POST_TIME = 1_762_000_000_000L
     }

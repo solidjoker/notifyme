@@ -74,8 +74,11 @@ data class AppSource(
 
 /**
  * 微信解析器：与改造前 `WeChatNotificationListener.parseMessage` 的语义逐条对齐
- * （MessagingStyle 有消息 → 群聊取最后一条；否则 → 私聊用 title/text），
+ * （MessagingStyle 有消息 → 群聊取最后一条；否则走 [NotificationTextCore] 切正文），
  * 只是把「取 Android 类型」与「决定字段含义」拆开了，前者留在监听器里。
+ *
+ * 无 MessagingStyle 的分支不再是「私聊写死」：真机取证（2026-11-12）显示微信绝大多数
+ * 通知不带 style，正文却是「[11条]发言人: 正文」，按私聊处理会把群聊判错、把发言人丢掉。
  */
 internal object WeChatNotificationParser : NotificationParser {
 
@@ -94,14 +97,17 @@ internal object WeChatNotificationParser : NotificationParser {
                 appLabel = raw.appLabel
             )
         } else {
+            // 无 MessagingStyle：真机上微信正文常见「[11条]发言人: 正文」，
+            // 未读计数与发言人都得在这里剥离（见 NotificationTextCore 的类注释）
             val text = raw.text.trim()
             if (text.isEmpty()) return null
+            val split = NotificationTextCore.splitSender(text, raw.title)
             ChatMessage(
-                sender = raw.title,
-                text = text,
+                sender = split.sender ?: raw.title,
+                text = split.text,
                 timestamp = raw.postTime,
                 conversation = raw.title,
-                isGroup = false,
+                isGroup = split.isGroup,
                 pkg = raw.pkg,
                 appLabel = raw.appLabel
             )
@@ -139,7 +145,11 @@ internal object GenericNotificationParser : NotificationParser {
             )
         }
 
-        val text = raw.bigText.ifBlank { raw.text }.ifBlank { raw.subText }.trim()
+        // 未读计数前缀（[3条]）随未读数变化，留在正文里会让去重键跟着变、同一句话重复入库；
+        // 这里只剥前缀，不猜发言人 —— 未收录 App 的「X: 正文」形态无从校验，猜错成本高于收益
+        val text = NotificationTextCore.stripUnreadPrefix(
+            raw.bigText.ifBlank { raw.text }.ifBlank { raw.subText }
+        ).trim()
         if (text.isEmpty()) return null
         return ChatMessage(
             sender = conversation,
@@ -158,10 +168,13 @@ internal object GenericNotificationParser : NotificationParser {
  * 而系统并不总给出 MessagingStyle，所以要把发言人从正文前缀里切出来，
  * 否则分析 prompt 里会出现「群名说了一句话」这种错误归属。
  *
- * 切前缀的保守条件（任何一条不满足就当普通正文，不切）：
- *  - 分隔符只认全角「：」或半角「: 」（冒号+空格）；
- *  - 前缀长度 ≤ [MAX_SENDER_PREFIX_LEN]，且不含换行；
- *  - 前缀与会话名不同（相同说明这就是私聊，标题已经是发言人）；
+ * 切分规则统一在 [NotificationTextCore]（与微信解析器共用同一份口径），要点：
+ *  - 先剥微信未读计数前缀「[11条]」；
+ *  - 分隔符：全角「：」→ 半角「: 」（冒号+空格）→ 半角「:」（真机钉钉代发通知就是这种，
+ *    冒号后没有空格）；
+ *  - 前缀长度 ≤ [NotificationTextCore.MAX_SENDER_PREFIX_LEN]，且不含换行；
+ *  - 前缀与会话名相同 → 私聊；前缀是会话名的子串 → 同一个人的两种叫法，仍按私聊；
+ *  - 半角无空格这条额外收紧：单字前缀、纯数字前缀（「10:30」）、「https://」都不切；
  *  - 切完的正文非空。
  *
  * 已知误判面：正文本身以「提醒：」「注意:」开头时会被当成发言人。
@@ -169,11 +182,6 @@ internal object GenericNotificationParser : NotificationParser {
  * 就把它的 parser 换回 [GenericNotificationParser]。
  */
 internal object PrefixImParser : NotificationParser {
-
-    private const val MAX_SENDER_PREFIX_LEN = 20
-
-    /** 全角冒号优先：中文 IM 的群消息前缀基本是全角。 */
-    private val SEPARATORS = listOf("：", ": ")
 
     override fun parse(raw: RawNotification): ChatMessage? {
         val conversation = raw.title.ifBlank { raw.appLabel }.ifBlank { raw.pkg }
@@ -198,32 +206,18 @@ internal object PrefixImParser : NotificationParser {
         val body = raw.bigText.ifBlank { raw.text }.ifBlank { raw.subText }.trim()
         if (body.isEmpty()) return null
 
-        val split = splitSenderPrefix(body)
-        val sender = split?.first?.takeIf { it.isNotEmpty() && it != conversation }
+        // 切分规则统一在 NotificationTextCore（含未读计数前缀剥离与半角冒号收紧），
+        // 与微信解析器共用同一份口径，避免两条路径各自漂移
+        val split = NotificationTextCore.splitSender(body, conversation)
         return ChatMessage(
-            sender = sender ?: conversation,
-            text = split?.second ?: body,
+            sender = split.sender ?: conversation,
+            text = split.text,
             timestamp = raw.postTime,
             conversation = conversation,
-            // 切出发言人 → 群聊；否则按私聊（标题即对方昵称）
-            isGroup = sender != null,
+            isGroup = split.isGroup,
             pkg = raw.pkg,
             appLabel = raw.appLabel
         )
-    }
-
-    /** 返回 (发言人, 正文)；不符合保守条件时返回 null。 */
-    private fun splitSenderPrefix(body: String): Pair<String, String>? {
-        for (sep in SEPARATORS) {
-            val idx = body.indexOf(sep)
-            if (idx <= 0 || idx > MAX_SENDER_PREFIX_LEN) continue
-            val prefix = body.substring(0, idx).trim()
-            val rest = body.substring(idx + sep.length).trim()
-            if (prefix.isEmpty() || rest.isEmpty()) continue
-            if (prefix.contains('\n') || prefix.contains('\r')) continue
-            return prefix to rest
-        }
-        return null
     }
 }
 
