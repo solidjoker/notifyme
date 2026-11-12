@@ -411,6 +411,43 @@
                     android:text="@string/btn_battery_whitelist"
                     android:textSize="13sp" />
             </LinearLayout>
+
+            <!-- 版本信息卡片：版本 / 渠道 / 构建 / 架构 / 系统 / 设备，一键复制贴进 issue -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/bg_card"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:id="@+id/tvVersionSectionTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/version_section_title"
+                    android:textColor="@color/text_primary"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvVersionDetail"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+
+                <Button
+                    style="@style/AppButtonSecondary"
+                    android:id="@+id/btnCopyVersion"
+                    android:layout_width="match_parent"
+                    android:layout_height="46dp"
+                    android:layout_marginTop="12dp"
+                    android:minHeight="0dp"
+                    android:text="@string/version_copy_btn"
+                    android:textSize="13sp" />
+            </LinearLayout>
         </LinearLayout>
 
         </LinearLayout>

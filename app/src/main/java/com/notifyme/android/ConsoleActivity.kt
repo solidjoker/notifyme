@@ -5,6 +5,8 @@ package com.notifyme.android
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -51,6 +53,9 @@ class ConsoleActivity : Activity() {
     private lateinit var tvScheduleTags: TextView
     private lateinit var btnBatteryWhitelist: Button
 
+    // 版本信息卡片
+    private lateinit var tvVersionDetail: TextView
+
     // M21 后台分析实时进度行
     private lateinit var tvRunProgress: TextView
     private lateinit var progressRun: ProgressBar
@@ -91,6 +96,7 @@ class ConsoleActivity : Activity() {
 
         setupKeepAliveSection()
         setupScheduleSection()
+        setupVersionSection()
 
         // 快捷按钮：全部折叠 / 全部展开（M16：与主页标题栏同口径——会话级 + 天级一起写）
         findViewById<Button>(R.id.btnCollapseAll).setOnClickListener {
@@ -106,6 +112,38 @@ class ConsoleActivity : Activity() {
             finish()
         }
 
+    }
+
+    /**
+     * 版本信息卡：版本 / 渠道 / 构建 / 应用 ID / 架构 / 系统 / 设备，外加「复制版本信息」。
+     *
+     * 口径全部来自 [VersionInfoCore]（纯函数，有单测），这里只负责把 BuildConfig 与
+     * Build.* 采集出来交给它渲染 —— 用户报障时贴过来的那一段就是 [VersionInfoCore.copyText]。
+     */
+    private fun setupVersionSection() {
+        tvVersionDetail = findViewById(R.id.tvVersionDetail)
+        val entries = VersionInfoCore.entries(
+            versionName = BuildConfig.VERSION_NAME,
+            versionCode = BuildConfig.VERSION_CODE,
+            flavor = BuildConfig.FLAVOR,
+            buildType = BuildConfig.BUILD_TYPE,
+            applicationId = packageName,
+            abis = Build.SUPPORTED_ABIS?.toList() ?: emptyList(),
+            androidRelease = Build.VERSION.RELEASE ?: "",
+            deviceModel = Build.MODEL ?: ""
+        )
+        tvVersionDetail.text = VersionInfoCore.detailText(entries)
+
+        findViewById<Button>(R.id.btnCopyVersion).setOnClickListener {
+            val text = VersionInfoCore.copyText(BuildConfig.VERSION_NAME, entries)
+            val cm = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager
+            if (cm == null) {
+                Toast.makeText(this, R.string.version_copy_done, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            cm.setPrimaryClip(ClipData.newPlainText(getString(R.string.version_copy_label), text))
+            Toast.makeText(this, R.string.version_copy_done, Toast.LENGTH_SHORT).show()
+        }
     }
 
     /**
