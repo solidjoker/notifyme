@@ -603,4 +603,12 @@
     <string name="reminder_no_time">无时间</string>
     <string name="sources_pkg_a11y">%1$s · 直读</string>
     <string name="analysis_due_line">%1$s%2$s</string>
+    <!-- 版本信息（控制台底部卡片）：版本/渠道/构建/架构/系统/设备 + 一键复制 -->
+    <string name="version_section_title">ℹ 版本信息</string>
+    <string name="version_copy_btn">复制版本信息</string>
+    <string name="version_copy_done">版本信息已复制，可直接贴进 issue</string>
+    <string name="version_copy_label">notifyme 版本信息</string>
+    <string name="menu_version">版本信息</string>
+    <string name="version_dialog_title">版本信息</string>
+    <string name="common_close">关闭</string>
 </resources>

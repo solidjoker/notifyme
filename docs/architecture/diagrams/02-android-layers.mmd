@@ -59,7 +59,7 @@ flowchart TB
         ENGINE2["LocalLlmEngine · LayaTfliteEngine<br/>端侧推理抽象 · LiteRT 2.2.0"]:::dom
     end
 
-    subgraph L4B["④-2 本轮新增 Core 逻辑内核 ×20（纯 JVM · 无 Android 依赖 · app/src/test 54 个 .kt / 664 条覆盖）"]
+    subgraph L4B["④-2 本轮新增 Core 逻辑内核 ×21（纯 JVM · 无 Android 依赖 · app/src/test 55 个 .kt / 678 条覆盖）"]
         direction LR
         C1["同步与上报<br/>SyncOutcome.kt 192（207 先于 2xx）<br/>SyncBatchCore.kt 84（200 条 / 1 MiB · 二分）<br/>SyncWatermarkCore.kt 57（已结算前缀）<br/>AnalysisSyncCore.kt 60 · AdvisorSyncCore.kt 44<br/>HistorySyncCore.kt 62（隐私门控 · MAX_PAGES=20）"]:::dom
         C2["拒绝与隔离<br/>AnalysisRejectCore.kt 238（被拒计数 + 隔离）<br/>AdvisorRejectCore.kt 213（复用 AnalysisRejectCore）<br/>PendingRejectCore.kt 66（被拒计数 + 丢弃上限）"]:::dom
@@ -67,6 +67,7 @@ flowchart TB
         C4["脱敏与标签<br/>RedactorCore.kt 250（ID_CARD/PHONE/NAME 规则）<br/>ConvTagCore.kt 47（NONE/TODO/TRACK/DONE/NOISE）"]:::dom
         C5["交互与提醒<br/>ManualReminderCore.kt 117（先解析成功再落库）<br/>ReminderChainCore.kt 106（三级降级决策：L1 日历 → L2 唤起 → L3 闹钟）<br/>TodoPanelCore.kt 27（DEFAULT_LIMIT=8 · 首页联动）"]:::dom
         C6["解析与评测口径<br/>NotificationTextCore.kt 124（剥未读前缀 · 切发言人 · 判群聊）<br/>QueueStateCore.kt 156（排队上报口径）<br/>S1EvalBudgetCore.kt 83（单次 90s · 整轮 15min 预算）"]:::dom
+    C7["版本与元信息<br/>VersionInfoCore.kt 95（版本行带 versionCode · 渠道/构建文案 · 复制报障信息）"]:::dom
     end
 
     subgraph L5["⑤ 存储层 · app 私有目录（卸载即删）"]

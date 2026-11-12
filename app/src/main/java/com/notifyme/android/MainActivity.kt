@@ -226,6 +226,7 @@ class MainActivity : Activity() {
             popup.menu.add(getString(R.string.menu_console))
             popup.menu.add(getString(R.string.menu_refresh))
             popup.menu.add(getString(R.string.menu_clear))
+            popup.menu.add(getString(R.string.menu_version))
             popup.setOnMenuItemClickListener { item ->
                 when (item.title) {
                     getString(R.string.menu_console) -> {
@@ -240,11 +241,45 @@ class MainActivity : Activity() {
                         confirmClearAll()
                         true
                     }
+                    getString(R.string.menu_version) -> {
+                        showVersionInfo()
+                        true
+                    }
                     else -> false
                 }
             }
             popup.show()
         }
+    }
+
+    /**
+     * 版本信息弹窗：内容与「控制台 → 版本信息」卡同源（[VersionInfoCore]），
+     * 用户报障时点「复制」直接贴进 issue，省去问「你是哪个包」的来回。
+     */
+    private fun showVersionInfo() {
+        val entries = VersionInfoCore.entries(
+            versionName = BuildConfig.VERSION_NAME,
+            versionCode = BuildConfig.VERSION_CODE,
+            flavor = BuildConfig.FLAVOR,
+            buildType = BuildConfig.BUILD_TYPE,
+            applicationId = packageName,
+            abis = Build.SUPPORTED_ABIS?.toList() ?: emptyList(),
+            androidRelease = Build.VERSION.RELEASE ?: "",
+            deviceModel = Build.MODEL ?: ""
+        )
+        AlertDialog.Builder(this)
+            .setTitle(R.string.version_dialog_title)
+            .setMessage(VersionInfoCore.detailText(entries))
+            .setNegativeButton(R.string.common_close, null)
+            .setPositiveButton(R.string.version_copy_btn) { _, _ ->
+                val text = VersionInfoCore.copyText(BuildConfig.VERSION_NAME, entries)
+                val cm = getSystemService(CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                cm?.setPrimaryClip(
+                    android.content.ClipData.newPlainText(getString(R.string.version_copy_label), text)
+                )
+                Toast.makeText(this, R.string.version_copy_done, Toast.LENGTH_SHORT).show()
+            }
+            .show()
     }
 
     /**
