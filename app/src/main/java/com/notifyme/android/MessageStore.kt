@@ -216,6 +216,24 @@ object MessageStore {
     fun normalizeSchema(context: Context): Int = core(context).normalizeSchema()
 
     /**
+     * 只读扫描历史重复（未读计数变化导致的重复入库），不碰文件。
+     *
+     * 归并口径见 [MessageDedupeCore]：同 App + 同会话 + 同发送者 + 剥掉未读前缀后同正文，
+     * 且组内至少一行带未读前缀，才判为重复；保留组内最早的一条。
+     */
+    @Synchronized
+    internal fun repeatedPlan(context: Context): MessageDedupeCore.Plan =
+        core(context).repeatedPlan()
+
+    /**
+     * 执行历史重复归并（二次确认后由用户手动触发），返回实际执行结果。
+     * 没有重复时不碰文件、不发变更通知。
+     */
+    @Synchronized
+    internal fun dedupeRepeated(context: Context): MessageDedupeCore.Plan =
+        core(context).dedupeRepeated()
+
+    /**
      * 存储层诊断（W4）：原始行数 / 可解析行数 / 损坏行数 / 文件字节数。
      * 加锁：追加写与全量读并发时可能读到写了一半的行，被误计为「损坏行」。
      */
@@ -434,6 +452,26 @@ internal class MessageStoreCore(
                 true
             }
         }
+    }
+
+    /**
+     * 只读扫描历史重复，不碰文件（UI 弹确认框前先拿预计删除条数与样例）。
+     */
+    fun repeatedPlan(): MessageDedupeCore.Plan {
+        if (!store.exists()) return MessageDedupeCore.Plan(emptyList(), 0, emptyList())
+        return MessageDedupeCore.plan(store.readRawLines())
+    }
+
+    /**
+     * 执行历史重复归并：只删「剥掉未读前缀后正文完全相同」的后来者，保留最早一条。
+     * 没有重复时不重写文件、不发变更通知。
+     */
+    fun dedupeRepeated(): MessageDedupeCore.Plan {
+        val plan = repeatedPlan()
+        if (plan.removed <= 0) return plan
+        store.overwrite(plan.kept)
+        onChange()
+        return plan
     }
 
     /** 合并外部来源消息，返回实际新增条数。 */

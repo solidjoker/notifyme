@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **102 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 109 个，`app/src/test` 55 个 / 678 条），服务端已拆成 **7+1 模块**（`app.py` 605 / `util.py` 255 / `storage.py` 705 / `routes.py` 978 / `console_ui.py` 3341 / `stats_api.py` 157 / `suggests.py` 260 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **103 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 110 个，`app/src/test` 56 个 / 695 条），服务端已拆成 **7+1 模块**（`app.py` 605 / `util.py` 255 / `storage.py` 705 / `routes.py` 978 / `console_ui.py` 3341 / `stats_api.py` 157 / `suggests.py` 260 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -15,7 +15,7 @@
 | # | 图 | 回答的问题 | 尺寸 (px) |
 |---|---|---|---|
 | 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3970 × 1701 |
-| 02 | [Android 分层架构](#02-android-分层架构) | 102 个顶层 Kotlin 文件各自属于哪一层？ | 7476 × 1986 |
+| 02 | [Android 分层架构](#02-android-分层架构) | 103 个顶层 Kotlin 文件各自属于哪一层？ | 7786 × 1986 |
 | 03 | [三条采集通道](#03-三条采集通道) | 消息是怎么进来的？为什么需要三条路？ | 3386 × 1048 |
 | 04 | [分析决策流水线](#04-分析决策流水线) | 一条消息如何变成一条待办？ | 2510 × 5315 |
 | 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1973 × 3290 |
@@ -50,7 +50,7 @@
 
 五层 + Application 入口。**刻意不引 Compose**：全部传统 View + RecyclerView，运行时依赖只有 5 个（core-ktx / recyclerview / work-runtime-ktx / okhttp / **litert-api**——`com.google.ai.edge.litert:litert:2.2.0`，端侧 LiteRT 推理用），把首次构建失败风险降到最低。JSON 用平台内置 `org.json`，不引 Gson/Moshi。
 
-源码规模：`app/src/main/java/com/notifyme/android/` **顶层 102 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 109 个；`app/src/test` 55 个 .kt / 678 条（纯 JVM 单测）。
+源码规模：`app/src/main/java/com/notifyme/android/` **顶层 103 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 110 个；`app/src/test` 56 个 .kt / 695 条（纯 JVM 单测）。
 
 ![Android 分层架构图](diagrams/02-android-layers.png)
 
@@ -59,10 +59,10 @@
 | ① UI 层 | **18 个 Activity**：Main（首页）· Console（控制台 8 卡）· Conversation（会话详情+分析面板）· AnalysisList · **AnalysisSettings（S1/S2 槽位）** · Watchlist · Sources（通知来源）· ReminderList · **ReminderSettings** · PromptEdit · ModelList · Onboarding · **Capture** · **CaptureDiagnostics** · **EngineSmoke** · **OverlaySettings** · **PrivacySettings** · **RedactorPreview** |
 | ② 采集与常驻层 | `NotifyMeListener`（通知监听）· `A11yExtractService`（无障碍直读，仅微信）· `KeepAliveService`（60s 看门狗 requestRebind）· `BootReceiver` · `ReminderReceiver` · **`OverlayService`**（悬浮窗）· **`OverlayActionReceiver`** |
 | ③ 后台任务层 | 4 个 Worker：Sync（三通道上报）· Analysis（逐会话窗口 case）· Advisor（近 7 天复盘）· ModelDownload（.part 断点续传）；3 个 Scheduler 全部 `enqueueUniquePeriodicWork` + UPDATE 策略 |
-| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 21 个 Core 逻辑内核**（见下表） |
+| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 22 个 Core 逻辑内核**（见下表） |
 | ⑤ 存储层 | 5 个 JSONL + `files/models/` 目录 + **19 个** SharedPreferences 文件（见下方存储清单） |
 
-**④ 层本轮新增的 21 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
+**④ 层本轮新增的 22 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
 
 | 主题 | 类 | 职责 |
 |---|---|---|
@@ -73,6 +73,7 @@
 | 解析与口径 | `NotificationTextCore`（124）· `ConvNormalize`（82） | 未读前缀剥离（`[11条]`）+ 发言人切分（全角/半角冒号）+ 群聊判定（前缀是否等于/包含于会话名）· 会话名规范化（评测与展示共用） |
 | 版本与元信息 | `VersionInfoCore`（95） | 版本行必须带 versionCode（覆盖安装时 versionName 可能不变）+ 渠道/构建文案 + 空值条目不渲染 + 复制文本（报障时直接贴进 issue） |
 | 评测预算 | `S1EvalBudgetCore`（83） | 单次调用上限（默认 90s）+ 整轮预算（默认 15min），到期不再发起调用并把剩余样本写进报告 |
+| 去重与清理 | `MessageDedupeCore`（174） | 历史重复归并：同 App + 同会话 + 同发送者 + 剥掉未读前缀后同正文，且组内至少一行带未读计数才归并；保留每组最早一条；裸正文相同文本、损坏行、空正文一律不动 |
 | 交互与提醒 | `ManualReminderCore`（117）· `ReminderChainCore`（106）· `TodoPanelCore`（27） | 手动提醒**先解析成功再落库** · 三级降级决策（L1 日历 → L2 唤起 → L3 闹钟，13 条单测） · 待办面板（DEFAULT_LIMIT=8）与首页联动 |
 
 **本地存储全清单**

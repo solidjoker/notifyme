@@ -611,4 +611,13 @@
     <string name="menu_version">版本信息</string>
     <string name="version_dialog_title">版本信息</string>
     <string name="common_close">关闭</string>
+    <!-- 归并重复消息：历史遗留（未读计数变化导致的重复入库）一次性清理 -->
+    <string name="menu_dedupe">归并重复消息</string>
+    <string name="dedupe_body">将删除 %1$d 行重复捕获，涉及 %2$d 组。保留每组最早的一条，其余原文相同的后来者删除。</string>
+    <string name="dedupe_sample">· 第 %1$d 条重复：%2$s</string>
+    <string name="dedupe_more">…另有 %1$d 组</string>
+    <string name="dedupe_confirm">归并</string>
+    <string name="dedupe_done">已删除 %1$d 行重复消息</string>
+    <string name="dedupe_none">没有发现重复消息</string>
+    <string name="dedupe_failed">归并失败，文件未改动</string>
 </resources>
