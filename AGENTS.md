@@ -229,3 +229,10 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ④ **不拿 `created_at` 兜底**：比较器只比到 `event_time`，完全同键时靠 JVM 稳定排序保证传入顺序（`ReminderStore.readAll` 已是 `created_at` 倒序）。之前加了 `createdAtOf` 兜底一度把「同键保序」单测弄红，别加回去。
   ⑤ **筛选到某一组时不插分组标题**（整页同组时标题是噪音），但 chip 本身始终全四个（`FILTERS` 顺序 = 全部 / 需要处理 / 生效中 / 已过期）；空态文案区分「一条记录都没有」（`emptyFilter` 返 null）与「本组没有」，否则点了 chip 看到空白会以为数据丢了；`emptyFilter(totalCount, visibleCount, filter)` 的第二个参数是**筛选后可见条数**，只判 `totalCount > 0 && filter != ALL` 就返回码值会让「命中多条」的页面同时显示列表和空态横幅（真机复现过）。
   改分组语义、组内方向或筛选键前先跑 `app/src/test/java/com/notifyme/android/ReminderListCoreTest.kt`（36 条）。
+
+- **会话可见性的四层门槛只有一份口径：`ConvVisibilityCore`**（internal object，纯函数 + 28 条单测），别在 `MainActivity` / `OverlayService` / `AnalysisWorker` 里各写一套：
+  ① **顺序是契约**：关注名单（`WatchlistStore.getUnwatched` 的会话 id，形如 `pkg|会话名`，精确匹配）→ 自身/系统源（`AppSourceRegistry.isBlocked`）→ 启用集合（`AppSourceStore.isEnabled`）→ 首页来源筛选（`AppFilterCore.matches`，空串＝全部恒通过）。顺序只影响 `why()` 把拦截原因归到哪一类，四层全是 AND。
+  ② **`forced` 只放宽「启用集合」这一层**。自身/系统源任何情况都拦 —— `isEnabled` 内部虽然也判过 `isBlocked`，但 forced 分支根本不走 `isEnabled`，那条判断此时失效，所以 Core 里这一行不是冗余，删掉就会出现「立即分析」把 a11y 自抓噪声喂给模型。
+  ③ **分析门禁传 `AppFilterCore.ALL`**：首页来源筛选只影响展示，不能让「首页正在看飞书」把其它来源的周期分析悄悄停掉。同理分析链的关注名单**故意传 `emptySet()`** —— 该门禁在下面 `ConvTagCore.shouldAnalyze`（`forced && !quiet` 时放行），两处都判会把「立即分析本会话」一起拦掉，并把 `skippedUnwatched` 的计数拆成两份。
+  ④ **首页「最近待办」与悬浮面板必须同口径**（都走 `visibleKeys`）：悬浮面板曾漏接首页筛选，首页筛了飞书、面板还列微信待办（真机复现过）。面板的可选项要用「过了前三层门槛」的来源集算 `AppFilterCore.resolve` 的回落，不能拿未过滤的全集，否则停用来源会让筛选卡住、面板整页空白。
+  改门槛顺序、加第五层或改 forced 语义前先跑 `app/src/test/java/com/notifyme/android/ConvVisibilityCoreTest.kt`。
