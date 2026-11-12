@@ -243,4 +243,5 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ③ **`ts <= 0` 的未标注日期消息归 0 参与排序**（与旧 `sortedBy { it.timestamp }` 同口径），且超 `limit` 时保留最近若干条而不是最早。
   ④ **「共 N 条」只在 `preview().countedAll` 为真时才能报**：条数可信 = 已读到文件头（`linesRead < requested`，行数打满一律保守当没读全）**且** 命中未被 `limit` 砍掉（`visible < limit`）。否则提示文案走 `chat_truncated_window` / `chat_window_partial`，不要拿窗口内命中数冒充真实总数。
   ⑤ **`MAX_RENDER = 200` 只在 Core 里留一份**；`MessageStore.readWindow` 因返回 `internal` 类型而必须加 `internal`（不加会报 `'public' function exposes its 'internal' return type`）。
+  ⑥ **别再用 `readRecent(500)` 去挑「本会话的一条消息」**：`latest(window)`（= `messages.lastOrNull()`，`slice()` 已升序）给 `MainActivity.runTodoReminderChain` 补日历事件描述的发送者 / 原文，`knownIsGroup(window)` 给 `A11yExtractService` 判群聊。跨会话窗口被别的会话占满时两处都会取到 null（事件描述只剩任务行、群聊标记丢失），这是同源隐患的第二次复现。`knownIsGroup` 空窗口必须回 **null**（= 没有历史可参考，按首次提取处理）而不是 false（= 历史判定私聊，写死就再也不会按昵称回推）。
   改窗口大小、排序方向或可信度判据前先跑 `app/src/test/java/com/notifyme/android/ConvWindowCoreTest.kt`（31 条，含 600 条噪声 + 5 条本会话的回归）。
