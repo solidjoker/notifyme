@@ -34,7 +34,14 @@ import java.util.Properties
  * NOTIFYME_EVAL_LOCAL_KEY=
  * NOTIFYME_EVAL_LOCAL_MODEL=qwen25-0.5b-q4km.gguf
  * NOTIFYME_EVAL_OUT=../docs/评测-云端vs端侧S1-<日期>.md
+ * NOTIFYME_EVAL_CALL_TIMEOUT_MS=90000   # 单次调用上限（默认 90s）
+ * NOTIFYME_EVAL_TOTAL_BUDGET_MS=900000  # 整轮预算（默认 15min，耗尽即停并写进报告）
  * ```
+ *
+ * ## 必须有时间预算（2026-11-12 的实际事故）
+ * 端点「TCP 能连、chat 迟迟不回」时，旧实现只有 readTimeout=180s，20 条 × 2 侧最坏
+ * 两小时；实测把整轮 testOpenDebugUnitTest 挂死 40 分钟，最后靠 jstack 才定位到
+ * [chat] 卡在 Net.poll。预算算术抽在 [S1EvalBudgetCore]（纯函数、可单测）。
  *
  * ## 两条链路都用「生产同款 prompt」
  * 云端走 [AnalysisCase.buildS1OpenAiSystemPrompt]（英文 schema），
@@ -53,7 +60,8 @@ class S1EvalHttpTest {
         val cloud: Endpoint,
         val local: Endpoint,
         val out: File,
-        val labelPath: File?
+        val labelPath: File?,
+        val plan: S1EvalBudgetCore.Plan
     )
 
     @Test
@@ -77,6 +85,11 @@ class S1EvalHttpTest {
         val localRaw = LinkedHashMap<String, String>()
         val failures = ArrayList<String>()
 
+        // 整轮预算：端点「能连上但不回」时，没有这道闸会一直等到单次 readTimeout × 样本数，
+        // 实测把整个 testOpenDebugUnitTest 挂住 40 分钟。见 S1EvalBudgetCore 的类注释。
+        val startedAt = System.currentTimeMillis()
+        val skipped = ArrayList<String>()
+
         for (case in cases) {
             // 走生产窗口口径：取尾 WINDOW_SIZE、windowEnd 取末条时间、caseId 由 caseIdOf 生成
             val kase = AnalysisCase.fromMessages(case.pkg, case.conversation, case.messages)
@@ -86,29 +99,56 @@ class S1EvalHttpTest {
             }
             val user = kase.analysisUserPrompt(kase.windowEnd)
 
-            runCatching {
-                val raw = chat(
-                    c.cloud,
-                    AnalysisCase.buildS1OpenAiSystemPrompt("", kase.windowEnd),
-                    user
-                )
-                cloudRaw[case.caseId] = raw
-                cloudResults[case.caseId] = AnalysisParsing.parseS1Result(
-                    AnalysisParsing.extractJsonPayload(raw), "eval-cloud"
-                )
-            }.onFailure { failures.add(case.conversation + " [cloud] " + it.message) }
+            val cloudTimeout = S1EvalBudgetCore.callTimeoutMs(
+                c.plan,
+                S1EvalBudgetCore.remainingMs(startedAt, System.currentTimeMillis(), c.plan.totalBudgetMs)
+            )
+            if (cloudTimeout <= 0L) {
+                skipped.add(case.conversation + " [cloud] 预算耗尽未测试")
+            } else {
+                runCatching {
+                    val raw = chat(
+                        c.cloud,
+                        AnalysisCase.buildS1OpenAiSystemPrompt("", kase.windowEnd),
+                        user,
+                        cloudTimeout
+                    )
+                    cloudRaw[case.caseId] = raw
+                    cloudResults[case.caseId] = AnalysisParsing.parseS1Result(
+                        AnalysisParsing.extractJsonPayload(raw), "eval-cloud"
+                    )
+                }.onFailure { failures.add(case.conversation + " [cloud] " + it.message) }
+            }
 
-            runCatching {
-                val raw = chat(
-                    c.local,
-                    AnalysisCase.buildS1LocalSystemPrompt("", kase.windowEnd),
-                    user
-                )
-                localRaw[case.caseId] = raw
-                localResults[case.caseId] = AnalysisParsing.parseS1Result(
-                    AnalysisParsing.extractJsonFromText(raw), "eval-local"
-                )
-            }.onFailure { failures.add(case.conversation + " [local] " + it.message) }
+            val localTimeout = S1EvalBudgetCore.callTimeoutMs(
+                c.plan,
+                S1EvalBudgetCore.remainingMs(startedAt, System.currentTimeMillis(), c.plan.totalBudgetMs)
+            )
+            if (localTimeout <= 0L) {
+                skipped.add(case.conversation + " [local] 预算耗尽未测试")
+            } else {
+                runCatching {
+                    val raw = chat(
+                        c.local,
+                        AnalysisCase.buildS1LocalSystemPrompt("", kase.windowEnd),
+                        user,
+                        localTimeout
+                    )
+                    localRaw[case.caseId] = raw
+                    localResults[case.caseId] = AnalysisParsing.parseS1Result(
+                        AnalysisParsing.extractJsonFromText(raw), "eval-local"
+                    )
+                }.onFailure { failures.add(case.conversation + " [local] " + it.message) }
+            }
+
+            // 两侧都拿不到且预算已尽：后面每条都必然跳过，直接收尾，别再空转。
+            if (S1EvalBudgetCore.exhausted(startedAt, System.currentTimeMillis(), c.plan.totalBudgetMs)) {
+                val rest = cases.indexOf(case) + 1
+                for (i in rest until cases.size) {
+                    skipped.add(cases[i].conversation + " 预算耗尽未测试")
+                }
+                break
+            }
         }
 
         val cloudSide = S1Accuracy.score("云端", cases, cloudResults)
@@ -129,7 +169,7 @@ class S1EvalHttpTest {
         val rows = S1Accuracy.rows(cases, cloudResults, localResults)
 
         val md = render(
-            c, cases, cloudSide, localSide, summary, rows, cloudRaw, localRaw, failures
+            c, cases, cloudSide, localSide, summary, rows, cloudRaw, localRaw, failures, skipped
         )
         c.out.parentFile?.mkdirs()
         c.out.writeText(md)
@@ -140,16 +180,23 @@ class S1EvalHttpTest {
 
         // 断言的是「评测本身跑通」，不是「模型答对多少」——
         // 模型准确率是产出物，不该让构建挂掉。
-        assertTrue("云端一侧必须至少解析出 1 条判定", cloudResults.isNotEmpty())
-        assertTrue("端侧一侧必须至少解析出 1 条判定", localResults.isNotEmpty())
-        assertTrue(
-            "云端解析率过低（" + cloudResults.size + "/" + cases.size + "），先查端点与 prompt",
-            cloudResults.size * 2 >= cases.size
-        )
-        assertTrue(
-            "端侧解析率过低（" + localResults.size + "/" + cases.size + "），先查端点与 prompt",
-            localResults.size * 2 >= cases.size
-        )
+        //
+        // 预算耗尽时允许一侧为空：那时评测没有「跑不通」，只是没跑完，
+        // 报告里已写明剩余多少条未测试。真正要拦的是「端点通、样本在、却解析不出」。
+        if (skipped.isEmpty()) {
+            assertTrue("云端一侧必须至少解析出 1 条判定", cloudResults.isNotEmpty())
+            assertTrue("端侧一侧必须至少解析出 1 条判定", localResults.isNotEmpty())
+            assertTrue(
+                "云端解析率过低（" + cloudResults.size + "/" + cases.size + "），先查端点与 prompt",
+                cloudResults.size * 2 >= cases.size
+            )
+            assertTrue(
+                "端侧解析率过低（" + localResults.size + "/" + cases.size + "），先查端点与 prompt",
+                localResults.size * 2 >= cases.size
+            )
+        } else {
+            println(S1EvalBudgetCore.exhaustedNote(c.plan, skipped.size))
+        }
     }
 
     private fun render(
@@ -161,7 +208,8 @@ class S1EvalHttpTest {
         rows: List<S1Accuracy.Row>,
         cloudRaw: Map<String, String>,
         localRaw: Map<String, String>,
-        failures: List<String>
+        failures: List<String>,
+        skipped: List<String>
     ): String {
         val sb = StringBuilder()
         sb.append("# 云端 vs 端侧 S1 判定对比（ROADMAP M4 任务 6）\n\n")
@@ -169,7 +217,8 @@ class S1EvalHttpTest {
         sb.append("> 样本：").append(cases.size).append(" 条人工标注合成会话（非真机采集）\n")
         sb.append("> 云端端点：").append(cfg.cloud.model).append(" @ ").append(cfg.cloud.url).append("\n")
         sb.append("> 端侧端点：").append(cfg.local.model).append(" @ ").append(cfg.local.url).append("\n")
-        sb.append("> 判定口径：need_action = prob ≥ 0.5；escalate = prob ≥ 0.5 或 importance ≥ 6 或 confidence < 0.5\n\n")
+        sb.append("> 判定口径：need_action = prob ≥ 0.5；escalate = prob ≥ 0.5 或 importance ≥ 6 或 confidence < 0.5\n")
+        sb.append("> 时间预算：").append(S1EvalBudgetCore.describe(cfg.plan)).append("\n\n")
 
         sb.append("## 一、单侧准确率（相对人工标注）\n\n")
         sb.append(S1Accuracy.markdown(cloud, local))
@@ -207,6 +256,13 @@ class S1EvalHttpTest {
             sb.append("\n")
         }
 
+        if (skipped.isNotEmpty()) {
+            sb.append("## 四之二、预算耗尽未测试（不计入任何分母）\n\n")
+            sb.append(S1EvalBudgetCore.exhaustedNote(cfg.plan, skipped.size)).append("\n\n")
+            for (s in skipped) sb.append("- ").append(esc(s)).append("\n")
+            sb.append("\n")
+        }
+
         sb.append("## 五、原始输出（便于复核解析是否走形）\n\n")
         sb.append("### 云端样例\n\n")
         sb.append("\u0060\u0060\u0060json\n")
@@ -233,7 +289,7 @@ class S1EvalHttpTest {
     private fun esc(s: String?): String =
         (s ?: "").replace("|", "\\|").replace("\n", " ").take(80)
 
-    private fun chat(ep: Endpoint, system: String, user: String): String {
+    private fun chat(ep: Endpoint, system: String, user: String, timeoutMs: Long): String {
         var url = ep.url.trim().trimEnd('/')
         if (!url.endsWith("/chat/completions")) url += "/chat/completions"
         val body = org.json.JSONObject().apply {
@@ -249,8 +305,9 @@ class S1EvalHttpTest {
 
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
-            connectTimeout = 15_000
-            readTimeout = 180_000
+            // 连接超时同样受整轮预算约束：写死 15s 时端点不可达会白等 15s × 样本数。
+            connectTimeout = minOf(15_000L, timeoutMs).toInt()
+            readTimeout = timeoutMs.toInt()
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             if (ep.key.isNotBlank()) setRequestProperty("Authorization", "Bearer " + ep.key)
@@ -285,7 +342,11 @@ class S1EvalHttpTest {
             cloud = Endpoint(cloudUrl, get("CLOUD_KEY"), get("CLOUD_MODEL")),
             local = Endpoint(localUrl, get("LOCAL_KEY"), get("LOCAL_MODEL")),
             out = File(get("OUT", "../docs/评测-云端vs端侧S1.md")),
-            labelPath = labelPath
+            labelPath = labelPath,
+            plan = S1EvalBudgetCore.resolvePlan(
+                get("TOTAL_BUDGET_MS").takeIf { it.isNotBlank() },
+                get("CALL_TIMEOUT_MS").takeIf { it.isNotBlank() }
+            )
         )
     }
 }
