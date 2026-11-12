@@ -14,7 +14,9 @@
     <!-- 未超渲染上限、但窗口没读到文件头：更早的消息不在当前窗口内 -->
     <string name="chat_window_partial">窗口内 %1$d 条，更早的消息不在当前读取范围内</string>
     <string name="confirm_clear_all">将清空全部消息记录与待上报队列，且无法恢复。确定继续？</string>
-            <string name="msg_count">%1$d 条</string>
+    <string name="msg_count">%1$d 条</string>
+    <!-- 会话在首页窗口里被截断（还有更早的消息没进窗口）：条数是下限，不能写成确数 -->
+    <string name="msg_count_at_least">%1$d+ 条</string>
     <string name="date_unknown_label">未标注日期</string>
 
     <!-- 分析结果联动与列表页 -->

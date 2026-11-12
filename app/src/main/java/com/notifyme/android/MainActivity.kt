@@ -723,7 +723,13 @@ class MainActivity : Activity() {
 
     /** 后台线程执行：读存储 + 过滤 + 组装 [FeedItem]（不碰视图）。 */
     private fun buildFeed(query: String, filter: String): FeedResult {
-        val messages = MessageStore.readRecent(this, 500)
+        // 首页取样：按会话各留一窗（口径见 [FeedWindowCore]）。别退回 readRecent(500) ——
+        // 那是跨会话的最近 500 条，几个群刷满窗口后安静会话一条都进不来，首页待办区
+        // 也就永远看不到它（同源隐患第五处，前四处见 ConvWindowCore / CandidateWindowCore /
+        // AnalysisWindowCore）。
+        val feed = MessageStore.feedGroups(this)
+        // 每个会话在窗口里是否被截断（条数是下限，不是确数）
+        val truncatedKeys = feed.buckets.filter { it.truncated }.mapTo(HashSet()) { it.key }
         // M14：天级三态（显式折叠/显式展开/默认非最新天折叠）；M16：再叠加会话级折叠
         val collapsedDates = CollapseStore.loadCollapsedDates(this)
         val expandedDates = CollapseStore.loadExpandedDates(this)
@@ -746,9 +752,8 @@ class MainActivity : Activity() {
         val labelSameYear = SimpleDateFormat("M月d日", Locale.getDefault())
         val labelCrossYear = SimpleDateFormat("yyyy年M月d日", Locale.getDefault())
 
-        var groups = messages.groupBy { it.convKey }
-            .map { (k, list) -> k to list.sortedBy { it.timestamp } }
-            .sortedByDescending { (_, list) -> list.last().timestamp }
+        // feed.buckets 已按「最近一条」倒序、组内按时间升序，与旧实现的排序口径一致
+        var groups = feed.buckets.map { it.key to it.messages }
 
         // M14：全部分析记录（不只每会话最新一条）——历史天的消息也要挂各自窗口的结果；
         // 搜索也要用到它：只查最新一条会漏掉历史窗口里的结论。casesByConv 在上面按会话读时已算好
@@ -810,7 +815,7 @@ class MainActivity : Activity() {
         // M12「最近待办」区：与悬浮面板同口径（TodoPanelCore），但必须在搜索过滤前算——
         // 待办区不受搜索框影响；可见集用未过滤的 groups 口径，与会话头角标一致
         val todoVisibleKeys = ConvVisibilityCore.visibleKeys(
-            keys = messages.asSequence().map { it.convKey },
+            keys = feed.buckets.asSequence().map { it.key },
             unwatchedIds = unwatchedIds,
             appFilter = effectiveFilter,
             blockedOf = { AppSourceRegistry.isBlocked(it) },
@@ -863,6 +868,7 @@ class MainActivity : Activity() {
                     appLabel = list.last().appLabel,
                     isGroup = list.last().isGroup,
                     count = list.size,
+                    countAtLeast = key in truncatedKeys,
                     preview = "${list.last().sender}: ${list.last().text}",
                     analysis = case,
                     hasReminder = key in reminderKeys,
@@ -1277,6 +1283,8 @@ class MainActivity : Activity() {
             val appLabel: String,
             val isGroup: Boolean,
             val count: Int,
+            /** 该会话还有更早的消息没进首页窗口（[FeedWindowCore.Bucket.truncated]）：条数是下限 */
+            val countAtLeast: Boolean,
             val preview: String,
             val analysis: AnalysisCaseRecord?,
             val hasReminder: Boolean,
@@ -1435,7 +1443,11 @@ class MainActivity : Activity() {
             holder.boundConvKeyId = key.id
             bindTag(holder.tvTag, header.isGroup)
             holder.tvConversation.text = key.conversation
-            holder.tvCount.text = ctx.getString(R.string.msg_count, header.count)
+            holder.tvCount.text = if (header.countAtLeast) {
+                ctx.getString(R.string.msg_count_at_least, header.count)
+            } else {
+                ctx.getString(R.string.msg_count, header.count)
+            }
             holder.tvPreview.text = header.preview
             // M16：会话级折叠恢复——箭头可见可点，收起/展开整组；批量选择态隐藏箭头避免误点
             holder.tvArrow.visibility = if (selectionActive) View.GONE else View.VISIBLE

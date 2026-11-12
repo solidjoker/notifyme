@@ -342,12 +342,12 @@ class AnalysisSettingsActivity : Activity() {
     /** 只分析这些会话：从最近消息里出现过的会话多选（与首页 chips 同口径：不列全集）。 */
     private fun showScopeConvPicker() {
         thread {
-            val recent = MessageStore.readRecent(this, 500)
-            val rows = recent
-                .groupBy { it.convKey }
-                .map { (key, list) ->
-                    val sample = list.last()
-                    key to (key.displayLabel(sample.appLabel) + " · " + key.conversation)
+            // 按会话各留一窗（[FeedWindowCore]）：跨会话的最近 500 条会让安静会话
+            // 根本不出现在选择列表里，用户想「只分析它」都点不到（第五处同源隐患的选单侧）
+            val rows = MessageStore.feedGroups(this).buckets
+                .map { bucket ->
+                    val sample = bucket.messages.last()
+                    bucket.key to (bucket.key.displayLabel(sample.appLabel) + " · " + bucket.key.conversation)
                 }
                 .sortedWith(compareBy({ it.first.pkg }, { it.first.conversation }))
             runOnUiThread {

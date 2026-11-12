@@ -49,12 +49,9 @@ class WatchlistActivity : Activity() {
         // 从消息库收集会话键：readRecent 已按时间倒序，首个出现即最近活跃。
         // 整文件解析放后台线程，避免历史大时进页面就卡住。
         Thread {
-            val keys = mutableListOf<ConvKey>()
-            MessageStore.readRecent(this, 1000).forEach { msg ->
-                if (msg.conversation.isNotEmpty() && msg.convKey !in keys) {
-                    keys.add(msg.convKey)
-                }
-            }
+            // 按会话各留一窗（[FeedWindowCore]）：跨会话的最近 N 条会让安静会话整个消失，
+            // 用户就没法在关注名单里选它了（同源隐患第五处的选单侧）
+            val keys = MessageStore.feedGroups(this).keys().filter { it.conversation.isNotEmpty() }
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 keys.forEach { if (it !in allKeys) allKeys.add(it) }
