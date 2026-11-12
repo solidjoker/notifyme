@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 52 个 `.kt`（`app/src/test`）+ 服务端 `server/test_*.py`（513 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 54 个 `.kt` / 664 条（`app/src/test`）+ 服务端 `server/test_*.py`（513 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -171,6 +171,7 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
 2. [x] **应用源注册表** `AppSourceRegistry`：`AppSource(pkg, label, parser, a11yConfig?)`
    - 微信源：现有 MessagingStyle 解析 + 群聊/私聊判定 + a11y 控件 id 表（5 个 id 移进配置）
    - 飞书/钉钉源：`PrefixImParser`（全角/半角冒号、长发送者名折叠等均有单测）；未收录 App 回落 `GenericNotificationParser`
+   - 三个解析器的抽取口径（剥未读前缀 / 切发言人 / 驳可疑前缀 / 判群聊）统一在 `NotificationTextCore`（纯函数，19 条单测）——真机取证后从「每个 parser 各写一套」收成一套
 3. [x] **监听器改造**：`WeChatNotificationListener` → `NotifyMeListener`，去掉单包判定，改为按 `AppSourceStore` 启用集合过滤
 4. [x] **a11y 直读**：仅微信启用（其余 App 无稳定控件 id），注册表里 `a11yConfig == null` 即跳过；服务类改名 `A11yExtractService`——**飞书/钉钉的聊天页控件 id 仍未取证，故 `a11yConfig` 留 null（宁可不直读也不猜 id）**，取证命令见 [通知形状取证记录](通知形状取证记录.md) §2.2 / §4
 5. [x] **UI**：控制台新增「通知来源」管理页 `SourcesActivity`（勾选启停，已观察来源自动出现）；PWA 加「全部/微信/飞书/钉钉」筛选；关注名单 `WatchlistStore` 的 key 升级为复合键 id
@@ -181,11 +182,11 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
 验收：
 - [x] 微信链路代码级回归：五项删除功能 + 分析 + 提醒全部走 ConvKey 且 201 单测全绿（真机端到端回归留待下一个调试装机轮次）
 - [x] 非微信解析器单测入库/分组/群私聊判定全绿（飞书/钉钉合成通知样本）；
-  **真机通知形状取证：解析口径已固化（[通知形状取证记录](通知形状取证记录.md) + `NotificationShapeEvidenceTest` 10 条），真实 `dumpsys` dump 仍待真机**——取证命令、已知口径副作用与待补清单见该文档 §2/§3.1/§4
+  **真机通知形状取证：微信 + 钉钉已取到真实 `dumpsys` dump（2026-11-12，Xiaomi 25098PN5AC / Android 17），飞书仍待补**——取证结论见 [通知形状取证记录](通知形状取证记录.md) §3，口径由 `NotificationShapeEvidenceTest` 17 条 + `NotificationTextCoreTest` 19 条固化
 - [x] 老 `messages.jsonl`（无 `pkg`）读时回填默认微信，可正常读、删、同步，不丢行（`SchemaV2Test` 覆盖同名会话跨 App 删除隔离）
 - [x] M1 单测扩充到复合键路径并全绿（189 → 201）
 
-遗留：真机飞书/钉钉通知实测验证（**解析口径已固化成测试**，缺的只是真机 dump 原文；清单与命令见 [通知形状取证记录](通知形状取证记录.md) §4）；首页/控制台安卓端尚未加 App 筛选 chips（PWA 已有，安卓端入口是来源管理页）。
+遗留：飞书真机通知实测验证（微信/钉钉已取证，缺的只是飞书 dump 原文；清单与命令见 [通知形状取证记录](通知形状取证记录.md) §6）；首页/控制台安卓端尚未加 App 筛选 chips（PWA 已有，安卓端入口是来源管理页）；历史重复消息需人工核对后删除（口径修正只影响新消息）。
 
 ---
 
