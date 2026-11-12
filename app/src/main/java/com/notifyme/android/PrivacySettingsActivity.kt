@@ -13,6 +13,9 @@ import android.widget.Toast
 /** 隐私脱敏设置页（自 ConsoleActivity 拆出，行为不变）：三模式按钮 + 规则/白名单对话框 + 预览入口。 */
 class PrivacySettingsActivity : Activity() {
 
+    /** 由 [setupPrivacySection] 装上的刷新闭包：onResume 复用，从预览页返回时标签不会停在旧态。 */
+    private var refreshUi: (() -> Unit)? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_privacy_settings)
@@ -21,6 +24,13 @@ class PrivacySettingsActivity : Activity() {
         findViewById<TextView>(R.id.btnBack).setOnClickListener { finish() }
 
         setupPrivacySection()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 从预览页回来时，盐可能已经在那里被首次生成（PreviewActivity 走别名会 ensure），
+        // 不刷新的话「别名盐：未生成」会一直挂着，和实际落盘状态矛盾。
+        refreshUi?.invoke()
     }
 
     /** 隐私卡片初始化：三模式按钮 + 规则/白名单对话框 + 预览入口。 */
@@ -153,6 +163,7 @@ class PrivacySettingsActivity : Activity() {
             startActivity(Intent(this, RedactorPreviewActivity::class.java))
         }
 
+        refreshUi = { refresh() }
         refresh()
     }
 }
