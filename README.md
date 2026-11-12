@@ -27,6 +27,7 @@
 - 关注列表（⭐）：**新会话默认不关注**（只收录、不分析、不弹卡），点 ⭐ 精确指定或「全部关注」一键放开全部；PWA 控制台可按应用筛选
 - 多种删除方式：左滑会话/日期头、长按多选批量删除
 - PWA 控制台按「来源 App → 会话 → 日期 → 发送者」四级归类，待办按重要度分区、顾问建议按类型分区；归类规则集中在 `server/console_classify.js`，有独立单测覆盖
+- 控制台重做为两栏布局 + **五个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）**，顶部概览条汇总近 24 小时消息、待处理、排队任务、同步失败与最近同步；支持明暗主题与响应式（手机单列 / 平板两栏 / 宽屏三栏）
 
 **AI 分析**
 
@@ -154,6 +155,8 @@ App 端的令牌存在本机 SharedPreferences（首次可用 beta flavor 的默
 | GET | `/analysis` | 查分析结果：`todo_only=1` 只看需要行动的 |
 | POST | `/advisor` | 上报 AI 顾问复盘报告（`report_id` 是去重键） |
 | GET | `/advisor` | 查顾问报告，最新在前；`limit` 默认 20、上限 100 |
+| POST | `/queue` | 上报手机端排队任务快照（整份覆盖，坏条目单独拒） |
+| GET | `/queue` | 查排队任务：`device_id` / `state` / `limit`≤500，返回 `{ok, tasks, summary}` |
 | GET | `/console` | PWA 控制台（iPhone 用 Safari 打开这个地址） |
 
 #### 游标翻页（`next_before`）
@@ -205,7 +208,7 @@ App 端的令牌存在本机 SharedPreferences（首次可用 beta flavor 的默
 | 文件 | 内容 |
 |---|---|
 | `messages.jsonl` | 消息原文存档（与安卓端同格式），超过 64 MiB 轮转一份 `.jsonl.1` |
-| `messages.db` | SQLite 查询库（控制台检索、分页、时区过滤都走它） |
+| `messages.db` | SQLite 查询库（控制台检索、分页、时区过滤都走它）；另有 `queue_tasks` 表存手机端排队任务快照（保留 7 天） |
 | `advisor_reports.jsonl` | 顾问报告主存储，最多 1000 条，超出裁剪最旧的 |
 | `advisor_reports.json` | 顾问报告的 JSON 快照（兼容读取用） |
 

@@ -186,11 +186,11 @@ mindmap
         REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 引导
     服务端与查看端
       Flask 拆成 4 加 1 模块
-        app.py 684 行 壳 鉴权 控制台路由 落地页
+        app.py 710 行 壳 鉴权 控制台路由 落地页
         util.py 289 行 纯函数 校验 转义 时区
-        storage.py 484 行 SQLite JSONL 顾问存档
-        routes.py 913 行 数据面路由 register
-        console_ui.py 2243 行 控制台前端常量
+        storage.py 708 行 SQLite JSONL 顾问存档 排队任务表
+        routes.py 1025 行 数据面路由 register
+        console_ui.py 3065 行 控制台前端常量 5 个 Tab
       数据面路由
         POST /weixin 接收消息
         GET /messages 查询 翻页游标
@@ -200,6 +200,8 @@ mindmap
         GET /advisor 查询复盘
         POST /admin/extract 触发提取
         GET /admin/extract/status 状态
+        POST /queue 上报排队任务
+        GET /queue 查询排队任务
         GET / 极简网页查看
         GET /console PWA 单页
         GET /console/manifest.json
