@@ -401,6 +401,10 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 > 概览条就会写出「当前没有排队任务 · 2 台设备」（0 个任务却有 2 台设备在跑）。
 > 统计 Tab 的排队卡用 `deviceTallyText()` 同口径渲染，总台数与「在跑」台数不等时才补后半句；
 > 前端离线兜底走 `liveDeviceCount()`（数 `QUEUE_DEVICES` 里 `active > 0`）。
+>
+> 概览条「待处理」那格的副标题同理读 `analyses.todo_convs`（有待办的会话数），不是 `analyses.convs`（有分析结果的会话数）：
+> `/stats` 两个键都给，`/suggests/next` 的证据串也写的是「待办 N 条，分布在 M 个会话」；
+> 读 `convs` 时「待办 2 条 · 共 4 个会话」会让用户以为还有 2 条待办没显示出来。
 
 ### POST /admin/extract —— 触发安卓数据库提取（需 token）
 

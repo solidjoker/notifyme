@@ -436,6 +436,22 @@ def test_overview_falls_back_to_local_estimate_with_a_label():
     assert "（估算）" in html, "排队概览估算时也要标注"
 
 
+def test_overview_todo_sub_uses_todo_convs_not_all_analyzed_convs():
+    """概览条「待处理」下面那行会话数必须是「有待办的会话数」。
+
+    /stats 里 analyses 段有两个会话数：convs（有分析结果的会话数）与
+    todo_convs（其中有待办的会话数）。概览条上面那格写的是待办条数，下面跟着
+    「共 N 个会话」时必须读 todo_convs —— 读 convs 时「待办 2 条 · 共 4 个会话」
+    会让用户以为还有 2 条待办没显示出来，而 /suggests/next 同时报的是
+    「待办 2 条，分布在 2 个会话」，同一屏两个数字互相打架。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "statNum(['analyses', 'todo_convs'])" in html, \
+        "概览条待办的会话数没有读 todo_convs"
+    assert "statNum(['analyses', 'convs'])" not in html, \
+        "概览条仍拿「有分析结果的会话数」冒充「有待办的会话数」"
+
+
 def test_stats_tab_shows_redaction_and_queue_truth():
     """统计 Tab 要回答整库口径：脱敏证据、排队任务分布。"""
     html = _ui().CONSOLE_HTML
