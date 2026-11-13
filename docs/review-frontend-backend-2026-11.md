@@ -803,3 +803,17 @@ E-38｜S2 摘要可用性评测：六项判据 + 云端 70% vs 端侧替身 15%�
 **计数**　新增 `AllTimeStatsCore.kt`（124 行）+ `AllTimeStatsCoreTest.kt`（246 行 / 16 条）；`CaptureDiagnosticsActivity.kt` 277 行、`MessageStore.kt` 709 行；主源码顶层 121 → **122**（全树 129）、`app/src/test` 76 → **77 个 .kt**、全量单测 1192 → **1208 条**；Core 内核 40 → **41 个**；三张图重渲（01 `3970×1701`、02 `13069×2007`、08 `6850×4895`），README 索引表 02 行尺寸按新 viewBox 回写。
 
 **一处刻意没做**　诊断页的「每来源累计」现在扫的是文件尾部 5 万行，仍不是「遍历整个文件」。要真做到「不看窗口」得上流式游标（`JsonlStore.forEachRawLine` 已经在），但要处理「扫到一半文件被追加写」的一致性，且诊断页是**只读诊断、允许给出下限**（页面上写「仅统计最近 N 条（存储共 M 行）」）。本轮只把「静默偏小」变成「明示下限 + 判据正确」，没有引入第二套全量扫描语义。
+
+### E-40｜文本截断按码点切：`TextClipCore`（feat/text-clip-core，2026-11-13）
+
+**问题**　全仓 55 处 `.take(` / `.substring(0,` 里，有 32 处是「把一段文本截到前 N 个字符」，它们数的是 **UTF-16 code unit**。emoji（U+1F600 占 `\uD83D\uDE00` 两个 unit）、CJK 扩展 B（U+20000 起，占代理对）、国旗与 ZWJ 家族都会踩到 —— 截在中间就留下**孤立代理**，写文件 / 发 HTTP / 进 logcat / 转 UTF-8 时被替换成 `?`（U+FFFD）。JDK 17 实测（`ClipProbe.java`）：输入 `"123456789012345😀xy"`（19 unit / 18 码点），`take(16)` 末位 char 是 `d83d`（`Character.isHighSurrogate` 为 true），UTF-8 末字节 `0x3F`，roundtrip 成 `123456789012345?`；`offsetByCodePoints(0, 16)` 得 17 unit，UTF-8 末四字节 `f0 9f 98 80` 是完整 emoji。
+
+受影响的全是**出设备或落盘**的文本，不是纯界面瑕疵：① 顾问摘要（`AdvisorDigestCore` 会话名 20 / 摘要 30）与顾问请求体（`AnalysisWorker` 窗口摘要 300 / 模型回包 400 / 错误 200）—— 模型输入里出现 `?` 会污染归类；② `QueueStateCore` 上行标题 256 / 详情 512 —— 服务端与控制台照原样存显；③ 日历事件标题（12）、诊断与抓包文案（120 / 160）、通知标题（20）、消息卡预览（15）、a11y 文案（60）—— 用户直接看到。
+
+**修法**　新增纯函数内核 `TextClipCore`（65 行，`internal object`，**20 条单测**）：`codePoints()` / `clip(text, maxCodePoints, ellipsis = "")` / `clipWithEllipsis()` / `ELLIPSIS = "…"`。四条契约：① `clip` 是唯一入口，未超限**返回同一实例**；② 省略号**追加不占预算**（与旧 `take(n) + "…"` 逐字一致，预览文案不变）；③ ASCII 输入输出**逐字节不变**（历史断言不用改）；④ 已知边界：只保证不切断代理对，**不保证**不切断字素簇（国旗 / ZWJ 族末位会是 ZWJ，宁可少画一个 emoji 也不产出非法字符）。32 处站点 / 15 个文件全部改走它；刻意不套 `AnalysisCase` 的 `"%02x".format(...).take(16)`（hex 恒 ASCII）与各处列表 `take(n)`。
+
+**测试**　`TextClipCoreTest.kt` 20 条：`oldTakeLeavesLoneHighSurrogate`（断言 `take(16)` 末位高位代理 + UTF-8 末字节 `0x3F`）、`clipNeverLeavesLoneSurrogate`（n=1..18 逐码点扫，UTF-8 往返无损、不含 U+FFFD）、ASCII 与 `take` 在 n=0..28 全等、扩展 B、ZWJ 族切点、`assertSame`、省略号不占预算（20 → 21 码点）、`ELLIPSIS` 单码点 `0x2026`。
+
+**验证**　全量 `testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug lintOpenDebug` **1228 条 / 0 失败**（基线 1208，+20）；lint 仍只有刻意保留的三条 warning（`ChromeOsAbiSupport` / `ObsoleteLintCustomCheck` / `OldTargetApi`）、0 error；`static_check.py --strict` 0 命中；`local_check.ps1` 七步全 PASS。
+
+**计数**　新增 `TextClipCore.kt`（65 行）+ `TextClipCoreTest.kt`（182 行 / 20 条）；主源码顶层 122 → **123**（全树 130）、`app/src/test` 77 → **78 个 .kt**、全量单测 1208 → **1228 条**、Core 逻辑内核 41 → **42 个**。三张图重渲：01 `3970×1701`、02 `13379×2007`（索引表已回写）、08 `6850×4895`。
