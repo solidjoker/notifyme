@@ -203,6 +203,29 @@ def test_stats_pkg_filter_only_affects_messages(api):
     assert data["analyses"]["total"] == 1
 
 
+def test_stats_pkg_filter_applies_to_distributions(api):
+    """by_pkg / by_source 必须跟着 pkg 过滤走，别和同段的 total 混口径。
+
+    同一段里 total / convs 是过滤后的，分布却是全库的 —— 客户端把两个数并排渲染，
+    就会出现「共 2 条，应用分布加起来 3 条」这种自相矛盾的卡片。
+    """
+    now = _now_ms()
+    _insert_messages([
+        ("a", "hi", now - 1000, "c1", "微信", "com.tencent.mm"),
+        ("b", "yo", now - 2000, "c2", "微信", "com.tencent.mm"),
+        ("c", "ok", now - 3000, "c3", "微博", "com.sina.weibo"),
+    ])
+    all_msgs = api.get("/stats").get_json()["messages"]
+    assert sum(x["count"] for x in all_msgs["by_pkg"]) == 3
+    assert sum(x["count"] for x in all_msgs["by_source"]) == 3
+
+    msgs = api.get("/stats?pkg=com.tencent.mm").get_json()["messages"]
+    assert msgs["total"] == 2
+    assert msgs["by_pkg"] == [{"pkg": "com.tencent.mm", "count": 2}]
+    # 来源分布同样只剩微信的 2 条：分布之和必须等于同段的 total
+    assert sum(x["count"] for x in msgs["by_pkg"]) == msgs["total"]
+    assert sum(x["count"] for x in msgs["by_source"]) == msgs["total"]
+
 def test_stats_counts_analysis_todo_and_redaction(api):
     """分析段：总数 / 会话数 / 待办 / 脱敏命中。"""
     _insert_analyses([
