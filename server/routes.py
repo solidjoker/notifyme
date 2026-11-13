@@ -235,8 +235,10 @@ def query_messages():
     if date_str:
         try:
             day_start, day_end = app_module._day_bounds_ms(date_str, tz_offset_min)
-        except ValueError:
-            return jsonify({"ok": False, "error": "date must be YYYY-MM-DD"}), 400
+        except ValueError as exc:
+            # 两种失败文案都从 util 带出来：解析失败是 "date must be YYYY-MM-DD"，
+            # 日期整体落在 [MIN_TS_MS, MAX_TS_MS] 之外是 "date out of range"。
+            return jsonify({"ok": False, "error": str(exc)}), 400
         conditions.append("timestamp >= ? AND timestamp < ?")
         params.extend([day_start, day_end])
 
@@ -599,8 +601,10 @@ def query_analysis():
     if date_str:
         try:
             day_start, day_end = app_module._day_bounds_ms(date_str, tz_offset_min)
-        except ValueError:
-            return jsonify({"ok": False, "error": "date must be YYYY-MM-DD"}), 400
+        except ValueError as exc:
+            # 两种失败文案都从 util 带出来：解析失败是 "date must be YYYY-MM-DD"，
+            # 日期整体落在 [MIN_TS_MS, MAX_TS_MS] 之外是 "date out of range"。
+            return jsonify({"ok": False, "error": str(exc)}), 400
         next_day = (datetime.strptime(date_str, "%Y-%m-%d")
                     + timedelta(days=1)).strftime("%Y-%m-%d")
         conditions.append(
