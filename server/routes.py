@@ -814,7 +814,14 @@ def query_advisor():
             "detail": str(e),
         })
     reports = [r for r in reports if isinstance(r, dict)]
-    reports.sort(key=lambda r: r.get("received_at", 0), reverse=True)
+    # 排序键必须是数字：received_at 是写入路径自己赋的毫秒，但 JSONL 由人工修复 /
+    # 旧快照迁移 / 第三方脚本写入时可能是字符串或缺失，直接拿原值当键会让
+    # int 与 str 比较抛 TypeError → 整页 500（实测）。口径统一走 _advisor_ts。
+    reports.sort(
+        key=lambda r: (app_module._advisor_ts(r.get("received_at")),
+                       app_module._advisor_ts(r.get("created_at"))),
+        reverse=True)
+
     reports = reports[:limit]
     return jsonify({"ok": True, "count": len(reports), "reports": reports})
 

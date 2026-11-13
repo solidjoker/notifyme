@@ -84,6 +84,50 @@ def _clamp_int(value, lo=0, hi=None, default=0):
         return hi
     return n
 
+def _advisor_ts(value):
+    """顾问报告的时间字段（created_at / received_at）→ 毫秒整数，认不出返 0。
+
+    为什么需要它：顾问存档是 JSONL，写入路径之外（人工修复、旧快照迁移、
+    第三方脚本）可以塞进任意的值。created_at 上报时是毫秒数字，但
+    storage._normalize_advisor_item 会 _clip 成字符串；更老的部署写的是
+    "2026-11-10 08:00:00" 这种本地时间文本。routes.query_advisor 直接拿
+    原值当排序键 → int 与 str 比较抛 TypeError → 整页 500；
+    suggests._advisor_state 只认 int → 文本形态的老数据算不出「最近一次」。
+
+    口径（与 _safe_int 一致：认不出就回落，绝不抛）：
+      1. None / bool / 空串 / 认不出的文本 → 0；
+      2. 纯数字（int / float / 数字字符串）按毫秒；10**9..10**11 之间视为秒并乘 1000；
+      3. 越界（<=0 或 > MAX_TS_MS）→ 0；
+      4. 文本按 "%Y-%m-%d %H:%M:%S" / "%Y-%m-%dT%H:%M:%S" / "%Y-%m-%d" 按**本地时区**解析。
+    """
+    import app as app_module
+    if value is None or isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        num = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return 0
+        try:
+            num = float(text)
+        except (TypeError, ValueError):
+            num = None
+        if num is None:
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S",
+                        "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+                try:
+                    return app_module._safe_int(
+                        datetime.strptime(text, fmt).timestamp() * 1000,
+                        default=0, lo=1, hi=app_module.MAX_TS_MS)
+                except (TypeError, ValueError):
+                    continue
+            return 0
+    # 秒级时间戳（10 位）按秒解释：老版本与手工脚本会写成秒
+    if 1_000_000_000 <= num < 100_000_000_000:
+        num = num * 1000
+    return app_module._safe_int(num, default=0, lo=1, hi=app_module.MAX_TS_MS)
+
 def _safe_bool(value, default=False):
     """把任意来源的布尔值归一成 True/False。
 
