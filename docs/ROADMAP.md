@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（639 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（642 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -543,6 +543,11 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
     `test_queue.py` 新增 2 条（`/queue` 遇脏 `updated_at` 按过期保守处理、脏 `queued_at` 归一成 0）。
   - **计数**：服务端用例 625 → **631 条**；`stats_api.py` 191 / 168 → **212 / 187**，`storage.py` 816 / 759 → **819 / 762**，`routes.py` 1022 / 962 → **1034 / 974**。
 
+- **排队 Tab 的状态 chip 数的是「这一页」而不是全库（feat/queue-chip-scope）**
+  - 问题：`server/console_ui.py` 的 `queueFilterBar()` 在 chip 里遍历 `QUEUE`（当前页最多 500 条）数 `state`，而旁边的 `queueSummaryCard()` 读 `QUEUE_SUMMARY`（全库）。实测某设备 600 条排队中 + 20 条已完成，`GET /queue?limit=500` 的 `tasks` 全是排队中 → chip 显示「已完成 0」、汇总卡显示「已完成 20」，同一屏两个数字打架；列表按「已完成」筛完为空，空态还只说「当前没有排队任务」，用户以为任务丢了。
+  - 修法：① 新增 `queueStateTotal(st)` —— 优先读 `QUEUE_SUMMARY[st]`，`'total'` 退回 `QUEUE.length`，summary 缺失才降级数列表；② `queueFilterBar()` 的计数循环换成一行 `var cnt = queueStateTotal(st);`；③ 汇总卡脚注标明 chip 也是全库口径；④ 新增 `queueEmptyHtml()`：搜索 / 设备筛选命中 0 退回通用空态，否则全库有 N 条时报「当前页没有「已完成」任务 / 全库共有 N 条…它们不在这最近 500 条里」。
+  - 测试：`server/test_console_queue.py` 163 → **200 行**（+3 条：chip 走 summary 且旧循环已消失、脚注口径、空态区分当前页与全库）。node 侧实证 500 条列表下 `chips: queued=600 done=20`（修前 `done=0`），summary 置 null 时降级为 `done=0 total=500`。
+  - 计数：服务端用例 639 → **642 条**；`console_ui.py` 3480 → **3507 行 / 非空 3418**（`CONSOLE_MANIFEST` @3323 · `CONSOLE_SW` @3369 · `queueStateTotal` @3095 · `queueEmptyHtml` @3214）。
 - **排队过期行只在「有设备上报」时才清 + 设备维度 `active` 不看 TTL（feat/queue-retention-cleanup）**
   - 问题一：`DELETE FROM queue_tasks WHERE updated_at < ?` 只写在 `upsert_queue_tasks` 里 —— 所有设备停报（换机 / 卸载 / 关掉排队上报）之后过期行永远留着，`GET /queue` 的 `devices` 一直把早已离线的设备列成「有任务的设备」。实测：库里 4 行（1 fresh + 2 台 3 小时前的僵尸 + 1 行 9 天前的），一次都没 POST 过 → `summary.total=4`、`devices` 三台，9 天前的行仍在。
   - 问题二：`queue_devices()` 的 `active = SUM(CASE WHEN state IN (queued,running) ...)` 完全不看 `updated_at`，与 `queue_summary` / `/stats` / `/suggests` 的「过期只计 `stale`、不计四状态」口径冲突 —— 同一时刻设备 chip 说「2 活跃」而汇总说 `running 1`。

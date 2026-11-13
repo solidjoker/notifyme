@@ -23,7 +23,7 @@ subgraph APP["server/app.py · Flask 壳 742 行<br/>app.run host=0.0.0.0 port=P
         MR["routes.py · 1034 行<br/>数据面路由<br/>register @1022 · add_url_rule 映射 @1024-1033"]:::mod
         MST["stats_api.py · 212 行<br/>全库聚合 /stats · 会话数按 (pkg, conversation)<br/>数值列 typeof 守卫 · 分布 by_pkg/by_source 跟随 pkg 过滤<br/>query_stats @177 · INT_ONLY_TS @47 · MAX_TS @51<br/>_messages_block @54 · _analysis_block @102 · _queue_block @137"]:::mod
         MSN["suggests.py · 322 行<br/>下一步建议 /suggests/next<br/>query_suggests_next @203 · _pick @191<br/>pkg 只作用于 todo / convs_missing 两族<br/>排队按设备 · 顾问是全局报告"]:::mod
-        MC["console_ui.py · 3474 行<br/>控制台前端常量（5 个 Tab）<br/>CONSOLE_HTML @13 · CONSOLE_MANIFEST @3290<br/>CONSOLE_SW @3336 · refreshSuggests @1931"]:::mod
+        MC["console_ui.py · 3507 行<br/>控制台前端常量（5 个 Tab）<br/>CONSOLE_HTML @13 · CONSOLE_MANIFEST @3323<br/>CONSOLE_SW @3369 · refreshSuggests @1931<br/>排队 chip 计数与空态走 summary 全库口径<br/>queueStateTotal @3095 · queueEmptyHtml @3214"]:::mod
         CC["console_classify.js · 434 行<br/>归类规则单一事实源（UMD）<br/>normPkg · ckOf · senderKey · groupBySender<br/>groupTodosByImportance · groupSuggestions<br/>groupMessages 两级分组 · groupQueueTasksByDevice"]:::mod
     end
 
@@ -40,7 +40,7 @@ subgraph APP["server/app.py · Flask 壳 742 行<br/>app.run host=0.0.0.0 port=P
         QM["GET /messages  @routes.py:169<br/>conversation 模糊 · date · limit≤1000<br/>timestamp DESC + source 徽标 + 翻页游标<br/>typeof 守卫挡掉非数值脏行（防游标毒化）"]:::srv
         QA["GET /analysis  @routes.py:544<br/>todo_only=1 只看待办<br/>s1/s2 反解析为对象<br/>typeof(received_at) 常驻守卫"]:::srv
         QAD["GET /advisor  @routes.py:800"]:::srv
-        QQ["GET /queue  @routes.py:976<br/>query_queue()<br/>{ok, tasks[], summary{queued,running,failed,done,stale,total}}<br/>summary = 全库口径（不受 limit 截断），tasks = 当前页<br/>devices[] 设备聚合（total / active 过 TTL / stale）<br/>stale = 30 分钟未更新"]:::srv
+        QQ["GET /queue  @routes.py:976<br/>query_queue()<br/>{ok, tasks[], summary{queued,running,failed,done,stale,total}}<br/>summary = 全库口径（不受 limit 截断），tasks = 当前页<br/>devices[] 设备聚合（total / active 过 TTL / stale）<br/>stale = 30 分钟未更新<br/>控制台状态 chip 计数与汇总同源（全库），空态区分当前页/全库"]:::srv
     end
 
     subgraph PARTIAL["部分接受 207 · 路由层语义"]
@@ -61,8 +61,8 @@ subgraph APP["server/app.py · Flask 壳 742 行<br/>app.run host=0.0.0.0 port=P
     subgraph PWA["PWA 控制台 · 零 CDN 全内联"]
         direction LR
         CP["GET /console  @app.py:528<br/>console_page()<br/>HTML+CSS+JS 全在 console_ui.py 的 CONSOLE_HTML @13<br/>?token= 写 localStorage 后从地址栏抹除"]:::srv
-        MF["GET /console/manifest.json  @app.py:542<br/>CONSOLE_MANIFEST @console_ui.py:3296<br/>免鉴权"]:::srv
-        SW["GET /sw.js  @app.py:556<br/>console_sw()<br/>CONSOLE_SW @console_ui.py:3342 · CACHE wx-console-v5<br/>免鉴权 · 骨架 cache-first · API 永远走网络"]:::srv
+        MF["GET /console/manifest.json  @app.py:542<br/>CONSOLE_MANIFEST @console_ui.py:3323<br/>免鉴权"]:::srv
+        SW["GET /sw.js  @app.py:556<br/>console_sw()<br/>CONSOLE_SW @console_ui.py:3369 · CACHE wx-console-v5<br/>免鉴权 · 骨架 cache-first · API 永远走网络"]:::srv
         IC["GET /console/icons/&lt;path&gt;  @app.py:548"]:::srv
     end
 

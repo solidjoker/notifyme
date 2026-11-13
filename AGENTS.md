@@ -199,7 +199,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **会话卡内的「日期 / 发送者」两级分组**：规则在 `server/console_classify.js` 的 `groupMessages(msgs, dim, getTs, getSender)` —— **按 `getTs` 精确值分桶，不自己按天切**，调用方必须传当天零点对齐的时间戳（`console_ui.py` 的 `dayStartMs()`），传原始毫秒会一条一桶。状态存 `localStorage` 键 `wx_group_v1`；`setConvGroupDim` / `convDimBar` / `groupMsgsByDim` / `convGroupHtml` 四处一起改；折叠复用 `#data` 上的 `data-action="toggle"`（一级 key `baseKey|g.key`、子组 `gkey|c.key`）。
 - **排队 Tab 的「设备」维度有两套口径**：设备清单来自服务端 `GET /queue` 的 `devices` 聚合（`server/storage.py` 的 `queue_devices()`，`summary.devices` 是台数），控制台的设备 chip 用这一份；前端 `server/console_classify.js` 的 `groupQueueTasksByDevice` 是纯函数版本（对内存里的 task 列表分组），只在离线/单测场景用，两处别混算。
 - **端云排队字段有契约守卫**：`server/test_queue_contract.py` 直接读 `app/src/main/java/com/notifyme/android/QueueStateCore.kt` 的 `buildPayload` 与 `server/storage.py` 的 `_normalize_queue_task` 比对字段名 / 顶层键 / `state`+`kind` 枚举 / 长度上限 —— 端侧改字段忘改服务端，CI 直接红。写这个守卫时两个坑：Kotlin 源是 CRLF、Python 源是 LF（读文件先统一换行）；Kotlin 里的键名是转义引号，正则切出来的名字尾部会带一个反斜杠，记得 `rstrip`。
-- **版本信息只有一份口径：`VersionInfoCore`**（`internal object`，纯函数 + 14 条单测）。控制台「版本信息」卡与主界面 ☰ 菜单「版本信息」弹窗都调它，别各写一套。两条契约写进类注释：① `versionLine` 必须带 `versionCode`（debug 包原地覆盖安装时 `versionName` 可能不变，只有 code 能证明装上新包）；② beta 的 `versionName` 自带 `-test` 后缀（`app/build.gradle.kts` 的 `versionNameSuffix`），所以 `title()` 不再拼渠道后缀。改文案前先看 `app/src/test/java/com/notifyme/android/VersionInfoCoreTest.kt`。
+- **版本信息只有一份口径：`VersionInfoCore`**（`internal object`，纯函数 + 14 条）。控制台版本卡与 ☰ 菜单弹窗都调它，别各写一套。① `versionLine` 必须带 `versionCode`（debug 包原地覆盖时 `versionName` 可能不变，只有 code 能证明装上新包）；② beta 的 `versionName` 自带 `-test`（`versionNameSuffix`），`title()` 不再拼渠道后缀。改文案前看 `VersionInfoCoreTest.kt`。
 
 - **历史重复消息只能靠 `MessageDedupeCore` 归并，别在别处另写删行逻辑**：真机量化 78 组 / 271 行是「同一条通知被多次捕获」（微信正文形如 `[11条]发言人: 正文`，未读数一变正文就变，而入库去重键含正文原文）。
 口径保守：同 App + 同会话 + 同发送者 + 剥掉未读前缀后正文相同，**且组内至少一行带 `[N条]` 前缀**才归并；裸正文相同（用户真连发）不动，损坏行 / 空正文原位保留。两个坑：① 老行 `sender == conversation`，必须先 `NotificationTextCore.splitSender` 还原再算键；② 正文两侧都要剥前缀。`dedupeRepeated` 在 `removed == 0` 时不碰文件。
@@ -266,7 +266,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   改 `PER_CONV`、排序方向或分组语义前先跑 `app/src/test/java/com/notifyme/android/CandidateWindowCoreTest.kt`（16 条，含「600 条噪声 + 本会话仍在候选」与旧写法对照实验）。
 
 - **分析记录（`analysis.jsonl`）的取窗口口径全在 `AnalysisWindowCore`**（internal object，纯函数 + 23 条单测；文件级操作在同文件的 `internal class AnalysisWindowFile`，照 `AnalysisRejectFile` 范式），别在 Activity / Worker 里另写 `readRecent(N).filter{}` / `groupBy{}`：
-  ① **`AnalysisStore.readRecent(context, limit)` 是「文件尾部 limit 行」**，只留给本意就是全局最近 N 条的调用点（`AdvisorWorker` 摘要、`AnalysisSettingsActivity` 统计文案）。要「某会话全部记录 / 每会话最新一条 / 全库列表」必须走 `readGrouped` / `readForConversation` / `readRecentWindow` / `latestByConvKey` —— 否则尾部被别的会话占满，安静会话的 case 一条读不到（列表显示「暂无分析结果」、首页 `latestCases` 丢掉、轮询与悬浮面板取不到），而记录仍在文件里。这是 `readRecent` 同源隐患在分析侧的镜像，已出现三处。
+  ① **`AnalysisStore.readRecent(context, limit)` 是「文件尾部 limit 行」**，只留给本意就是全局最近 N 条的调用点。要「某会话全部 / 每会话最新一条 / 全库列表」必须走 `readGrouped` / `readForConversation` / `readRecentWindow` / `latestByConvKey` —— 否则尾部被别的会话占满，安静会话的 case 一条读不到（列表「暂无分析结果」、首页 `latestCases` 丢掉），而记录仍在文件里。这是分析侧的镜像，已出现三处。
   ② **窗口量级分两档，别合并成一个常量**：`TAIL_LINES = 5_000` 给列表与首页聚合（一次读、多处派生）；`POLL_LINES = 1_500` 给详情页轮询（`ConversationActivity` 每 4 秒）与悬浮面板（每次展开）—— 这两条路径调用频繁，窗口给到 5 000 等于每 4 秒解析 5 000 行 JSON。`LIST_LIMIT = 200` 只是列表展示上限，`UNLIMITED = -1` 是「本会话不限条数」。
   ③ **`group()` 保首次出现序、组内按 `windowEnd` 升序**：组内升序即「窗口推进顺序」，UI 与搜索直接当时间轴读；`latest()` 取每组末条，**同 `windowEnd` 取最后写入那条**（旧 `maxByOrNull` 取第一条，只在手工造数据 / 导入时能看出差别，别为它改语义）。
   ④ **不按会话设条数上限**（与 `CandidateWindowCore.PER_CONV` 不同）：聚合前不知道有多少会话，内存由 `TAIL_LINES` 兜住。已知局限写进类注释：窗口外的老 case 读不到，要更强公平性得上索引。别悄悄把 `TAIL_LINES` 涨到几十万来「修」它。
@@ -295,7 +295,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ⑤ **别把 `PendingRejectCore` 拉进来**：它是丢弃语义（达上限即 dropped），没有 quarantined / revive，`Decision` 只有 `dropped`；合并会逼出恒 false 的 `include` 和无意义参数。三兄弟里只有 Analysis / Advisor 是「隔离 + 复活」同构。
   改补丁语义（比如想改成「损坏行也重写」或「同 key 只改第一条」）前先跑 `JsonlPatchCoreTest.kt`（15 条），它用与业务无关的假记录证明内核与 schema 无关。
 
-- **日期分组 key 与日期组头文案只有一份口径：`DateKeyCore`**（internal object + 26 条单测，`app/src/test/java/com/notifyme/android/DateKeyCoreTest.kt`），别在 `MainActivity` / `ConsoleActivity` / `MessageStore` 里各写一套 `SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())`。以前四处各写一套、三处吃默认 Locale 历法：同一毫秒 `th-TH` 下是 `2569-11-12`、和历 `8-11-12`、`ar-EG` 下本地数字，而 `java.time` 恒公历 —— key 与 `MessageStore.dayKeyOf` 永不相等，左滑删天删不掉、`CollapseStore` 复合键全失效、跨年判定反。五条：
+- **日期分组 key 与日期组头文案只有一份口径：`DateKeyCore`**（internal object + 26 条，`DateKeyCoreTest.kt`），别在 `MainActivity` / `ConsoleActivity` / `MessageStore` 里各写一套 `SimpleDateFormat(_, getDefault())`：三处吃默认 Locale 历法（th-TH 下 `2569-11-12`、和历 `8-11-12`、ar-EG 本地数字）而 `java.time` 恒公历 —— key 与 `dayKeyOf` 永不相等，左滑删天删不掉、`CollapseStore` 复合键全失效、跨年判定反。五条：
   ① **key 恒公历 ISO**：`dayKeyOf(ts, zone)` 只走 `Instant.ofEpochMilli().atZone().toLocalDate().toString()`，`ts <= 0` 返 `UNKNOWN`。
   ② **解析要回读校验**：`parts()` 按位取数字后必须 `LocalDate.of` 回读，`2026-02-30` / `2026-13-01` 返 null，不许静默改成 3 月 2 日。
   ③ **跨年用年份数值比较，别用 `startsWith(currentYear)`**（佛历下 currentYear 是 2569、与公历 key 永不匹配）；Core 只回 `DayLabel` 数值，文案模板留 strings.xml（纯 JVM 单测无资源）。
@@ -324,7 +324,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **S2 摘要可用性只有一把尺子：`S2Usability`**（internal object，349 行 + 34 条）。① 可用 = 六项判据全过（`delivered`/`no_placeholder`/`summary`/`due`/`action`/`tasks`），措辞不进判据；② `due` 判「与 S1 同桶」+`PAST_TOLERANCE_MS=60s` 下限，桶复用 `TopicLabelCore.DUE_*`；③ 兜底摘要只有 `fallbackSummary(kase)`；④ 报告文件名必须纯 ASCII（Windows 中文名 latin-1 乱码）；⑤ 只断言跑通不断言答对。
 
 
-- **采集诊断页的累计统计只有一份口径：`AllTimeStatsCore`**（internal object + 16 条单测）。① 累计不是 `readRecent(N)`（内部窗口写死 5000 行，传 20 万也只覆盖尾部）：走 `MessageStoreCore.scanAll(limit = 50_000)` 边读边聚合；② 判截断只比扫描行数 `capped(totalLines, scannedLines)`，拿解析出的消息数比会让损坏行误报；③ 会话按 `ConvKey` 去重、群聊数是会话数不是消息数、`latest` 忽略 `ts <= 0`、`byPkg` 按包名升序；④ `MessageStore.allTimeStats` 必须 `internal`。改前跑 `AllTimeStatsCoreTest.kt`。
+- **采集诊断页的累计统计只有一份口径：`AllTimeStatsCore`**（internal object + 16 条）。① 累计不是 `readRecent(N)`（窗口写死 5000 行，传 20 万也只覆盖尾部）：走 `MessageStoreCore.scanAll(limit = 50_000)` 边读边聚合；② 判截断只比扫描行数 `capped(totalLines, scannedLines)`，拿解析出的消息数比会让损坏行误报；③ 会话按 `ConvKey` 去重、群聊数是会话数、`latest` 忽略 `ts <= 0`、`byPkg` 按包名升序；④ `MessageStore.allTimeStats` 必须 `internal`。改前跑 `AllTimeStatsCoreTest.kt`。
 
 - **文本截断只有一份口径：`TextClipCore`**（internal object + 20 条单测）。`take(n)` 数 **UTF-16 code unit**，emoji 会被切成孤立代理、UTF-8 落成 `?`。① `clip` / `clipWithEllipsis` 走 `offsetByCodePoints`，未超限返回同一实例、省略号追加不占预算；② ASCII 输出逐字节不变；③ 只保证不切断代理对，不保证不切断字素簇；④ 32 处站点已收口，hex 与列表 `take(n)` 刻意不套。改前跑 `TextClipCoreTest.kt`。
 
@@ -358,3 +358,4 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 ③ 加参数别只改回显：既有 `test_suggests_echoes_pkg` 只断言回显，621 条全绿照样漏了这个缺陷 —— 新过滤逻辑必须补「带/不带 pkg 结果不同」的用例。
 - **数值列的脏行守卫：`server/stats_api.INT_ONLY_TS` / `MAX_TS`**（`test_stats_api.py` 4 条 + `test_queue.py` 2 条守着）。SQLite 列有 INTEGER 亲和但**能存字符串**，单行脏值就让整页 500 / 游标毒化。① 过滤用 `typeof(timestamp) IN (`'integer','real'`)` 作**常驻条件**，聚合用 `MAX(CASE WHEN typeof(...) ... THEN x END)`；② **别换 CAST**：`EXPLAIN` 实测 typeof 仍走 `idx_messages_ts`，CAST 退化成全表 SCAN；③ 所有出参数字走 `_safe_int(...)`，`next_before` 毫秒段永远是数字。
 - **排队过期行的清理与设备维度过期口径：`storage.cleanup_queue_tasks` / `queue_devices`**（`test_queue.py` 6 条守着）。① 清理不能只挂在上报路径（原来只在 `upsert_queue_tasks` 里 DELETE）：所有设备停报后僵尸设备永远挂在 devices 上；读取路径 `_ensure_db_ready` 也要调 `_maybe_cleanup_queue`，按 `QUEUE_CLEANUP_INTERVAL_MS`（1 小时）节流。② 设备 chip 的 `active` 只算未过 TTL 的 queued+running，必须与 summary 同一套过期口径；另加第 4 键 `stale`。③ 用例 fixture 必须复位 `app_module._queue_cleanup_at`，否则随执行顺序飘。
+- **排队 Tab 的状态 chip / 空态与汇总同源**（`console_ui.queueStateTotal` / `queueEmptyHtml`）。① chip 计数必须走 `queueStateTotal(st)`（优先 `QUEUE_SUMMARY[st]`，降级才数 `QUEUE`）—— 数当前页时 600 排队 + 20 已完成会让 chip 显示「已完成 0」而汇总卡显示 20；② 列表空但全库有命中时 `queueEmptyHtml()` 要报「当前页没有…/全库共有 N 条…」，但搜索 / 设备筛选命中 0 必须退回通用空态；③ 加计数口径前先加「chip 与 summary 一致」的用例。
