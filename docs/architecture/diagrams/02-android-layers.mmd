@@ -65,7 +65,7 @@ flowchart TB
         C2["拒绝与隔离<br/>AnalysisRejectCore.kt 201（被拒计数 + 隔离）<br/>AdvisorRejectCore.kt 183（复用 AnalysisRejectCore）<br/>PendingRejectCore.kt 66（被拒计数 + 丢弃上限）"]:::dom
         C3["扫描与调度<br/>AnalysisScanCursor.kt 265（字节游标 + 环形重扫）<br/>AnalysisScheduleSummaryCore.kt 71（Health 自愈阈值）"]:::dom
         C4["脱敏与标签<br/>RedactorCore.kt 293（ID_CARD/PHONE/NAME 规则）<br/>AliasSaltCore.kt 143（姓名别名设备随机盐 · 可重置）<br/>ConvTagCore.kt 47（NONE/TODO/TRACK/DONE/NOISE）"]:::dom
-        C5["交互与提醒<br/>ManualReminderCore.kt 117（先解析成功再落库）<br/>ReminderChainCore.kt 106（三级降级决策：L1 日历 → L2 唤起 → L3 闹钟）<br/>TodoPanelCore.kt 27（DEFAULT_LIMIT=8 · 首页联动）"]:::dom
+        C5["交互与提醒<br/>ManualReminderCore.kt 128（先解析成功再落库 · 默认时间按本地整点）<br/>ReminderChainCore.kt 106（三级降级决策：L1 日历 → L2 唤起 → L3 闹钟）<br/>TodoPanelCore.kt 27（DEFAULT_LIMIT=8 · 首页联动）"]:::dom
         C6["解析与评测口径<br/>NotificationTextCore.kt 124（剥未读前缀 · 切发言人 · 判群聊）<br/>QueueStateCore.kt 156（排队上报口径）<br/>S1EvalBudgetCore.kt 83（单次 90s · 整轮 15min 预算）"]:::dom
         C7["版本与元信息<br/>VersionInfoCore.kt 95（版本行带 versionCode · 渠道/构建文案 · 复制报障信息）"]:::dom
         C8["去重与清理<br/>MessageDedupeCore.kt 174（历史重复归并 · 保留最早一条 · 裸正文不动）"]:::dom
@@ -82,7 +82,7 @@ flowchart TB
         C19["首页窗口<br/>FeedWindowCore.kt 191（按会话各留一窗 · perConvFor 按会话数摊薄 6000 总预算、单会话夹在 20~200 · 组内升序 · truncated 以「是否读到文件头」定真/下限 · 收掉首页 readRecent(500) 的第五处同源隐患）"]:::dom
         C20["JSONL 补丁<br/>JsonlPatchCore.kt 114（逐行打补丁 + 原子重写 · 损坏行原位保留 · 零命中与同值不重写 · 分析/顾问两份隔离实现各减 37/30 行）"]:::dom
         C21["日期分组<br/>DateKeyCore.kt 136（day key 恒公历 ISO（SimpleDateFormat 随 Locale 变佛历/和历）· parts 按位+回读校验 · labelOf 用年份数值比较判跨年 · latestOf 收掉折叠字典序）"]:::dom
-        C22["时间文本<br/>DueTimeCore.kt 213（公历时间文本↔毫秒唯一口径 · java.time 恒公历不走 Locale 历法 · 提醒弹窗/日期选择器/自定义范围日期三处接线 · 佛历 2569 与和历 8 年 回归已钉死）"]:::dom
+        C22["时间文本<br/>DueTimeCore.kt 222（公历时间文本↔毫秒唯一口径 · java.time 恒公历不走 Locale 历法 · 提醒弹窗/日期选择器/自定义范围日期三处接线 · 佛历 2569 与和历 8 年 回归已钉死 · nextWholeHour 按本地钟点对齐，+05:45/+09:30 下旧写法给 22:45）"]:::dom
         C23["数字与时间戳文本<br/>LocaleTextCore.kt 161（恒 ASCII 数字形态 · 短时间戳 minutes/seconds/hourMinute 走 Locale.ROOT（11 处 getDefault 已收口）· 小数 fixed/percent/bytes/binaryBytes 走 String.format(Locale.ROOT) · 顾问摘要进模型输入的字段结构与报告表格不再随语言变形）"]:::dom
         C24["评测口径<br/>S2Usability.kt 349（S2 输出可用性六项判据 · bucketOf 五桶复用 TopicLabelCore.DUE_* · fallbackSummary 与 parseS2Output 共用原文兜底 · 全过才算可用，措辞好坏不进判据）"]:::dom
         C25["JSONL 与统计边界<br/>AllTimeStatsCore.kt 124（诊断页各来源累计统计 · 扫描窗口由调用方指定 50000 行，readRecent 的 5000 行窗口此前让历史一长就静默偏小 · Accumulator 单遍聚合 · capped 只比扫描行数，损坏行不再误报截断）"]:::dom

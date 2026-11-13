@@ -193,7 +193,11 @@ class PromptTimeCoreTest {
         // 钉 Locale.US 在佛历默认 Locale 下仍给 2026 —— 安全边界来自 Locale→calendar 映射表，
         // 不是来自「钉了 Locale」。这条用例把这个前提固定下来：一旦 JDK 改表就会先红。
         Locale.setDefault(Locale.forLanguageTag("th-TH"))
-        val pinned = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(sunday))
+        // 时区也必须显式钉住：`SimpleDateFormat` 吃默认时区，本用例要证明的是「Locale 钉了就安全」，
+        // 不是「跑测试的机器是 +08」（Pacific/Midway 下 sunday 会落到 10-17）。
+        val pinned = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+            timeZone = java.util.TimeZone.getTimeZone(shanghai)
+        }.format(Date(sunday))
         assertEquals("2026-10-18", pinned)
     }
 

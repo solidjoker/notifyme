@@ -491,6 +491,10 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   测试夹具同步：`CalendarDueTimeTest` 的 `at()` / `fields()` / `sameWeekDay()` 与 `AnalysisCaseTest` 的三处 `Calendar.getInstance()`、`AnalysisWindowSourceTest` / `S1EvalHttpTest` 的 `SimpleDateFormat` 全部改 `java.time`（旧夹具用 `Calendar` 现算期望值，在佛历下自己也给出 1483）。
   验证：默认 Locale **1369 tests / FAIL 0**（基线 1347 + 22）；`-Duser.language=th -Duser.country=TH -Duser.timezone=Asia/Bangkok` 修前 **10 红**（AnalysisCaseTest 5 + CalendarDueTimeTest 5）、修后 **1369 / FAIL 0**；ar-EG / ja-JP 亦全绿。四类定向跑与 `static_check.py --strict`（issues=0）均绿。
 
+- **提醒默认时间与单测夹具的时区/历法依赖收口（feat/timezone-fixture-hardening）**：`DueTimeCore.nextWholeHour` 旧实现是 `(now / 3_600_000 + 1) * 3_600_000`（epoch 整除一小时），在偏移带 30/45 分钟的时区下**对齐不到本地整点** —— `Asia/Kathmandu`（+05:45）里 22:17 的下一个整点算出 `22:45`，`Australia/Adelaide`（+09:30）同理，真机上表现为手动提醒弹窗默认时间填成 22:45。修法：`nextWholeHour(now, zone)` 走 `Instant.atZone(zone).truncatedTo(ChronoUnit.HOURS)`，大于 now 即用、否则 `plusHours(1)`（DST 空档自动顺延）；`defaultEventTimeText` / `ManualReminderCore.nextWholeHour` 同步加 `zone` 参数。
+  同轮修三条**夹具**的隐式依赖：`DateKeyCoreTest` 的 `dayKeySurvivesNonGregorianDefaultLocale` 不再用写死的 `noon = 1794478200000L`（上海 11-12 15:30，UTC+14 下已是 11-13），改按 `ZoneId.systemDefault()` 现造；`PromptTimeCoreTest` 的 `SimpleDateFormat(_, Locale.US)` 对照用例补 `apply { timeZone = ... }`（UTC-11 下原来落到 10-17）；`ManualReminderCoreTest` 的 `at()` 增加 `atZone` 参数，并把「默认时间是下一个整点」改成对 `systemDefault` / `Asia/Kathmandu` / `Asia/Shanghai` 三时区循环断言，`DueTimeCoreTest` 补 Kathmandu / Adelaide 两时区循环。
+  验证：八个时区（default / `Pacific/Kiritimati`+14 / `Pacific/Midway`-11 / `Asia/Kathmandu`+5:45 / `Australia/Lord_Howe`+10:30 / `Asia/Shanghai` / `UTC` / `America/Santiago`）全量单测 **1369 tests / FAIL 0**；全量双 flavor 构建 + lint + ktlint 全绿（`issues=0`）。计数：`DueTimeCore.kt` 213 → **222 行**、`ManualReminderCore.kt` 127 → **128 行**、`DueTimeCoreTest.kt` 318 → **328 行**、`ManualReminderCoreTest.kt` 176 → **192 行**、`PromptTimeCoreTest.kt` 213 → **217 行**、`DateKeyCoreTest.kt` 244 → **249 行**；.kt 与用例总数不变（130 / 137 / 85 / 1369）。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：

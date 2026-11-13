@@ -293,13 +293,14 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ⑤ **`CollapseStore.latestDayKeyOf` 只是转发**，保留旧签名；「ISO 字典序即时间序」只在恒公历前提下成立。改前跑 `DateKeyCoreTest`（含 th-TH / 和历回归）。
 
 
-- **公历时间文本 ↔ 毫秒只有一份口径：`DueTimeCore`**（internal object + 31 条单测，`app/src/test/java/com/notifyme/android/DueTimeCoreTest.kt`）。手动提醒弹窗 / 日期选择器 / 自定义分析范围三处「文本 ↔ 毫秒」往返此前各吃**默认 Locale 的历法**（`SimpleDateFormat(_, getDefault())` 格式化 + `Calendar.getInstance()` 解析），与 `DateKeyCore` 同族。六条：
-  ① **只走 `java.time` + `Locale.ROOT`**：不许再 new `SimpleDateFormat`（固化创建时的 Locale 快照）、不许用 `Calendar` 的 `YEAR/MONTH/DAY_OF_MONTH`（泰语 2569 / 和历 8）。同一毫秒旧写法给 `2569-11-12` / `8-11-12`，Core 恒 `2026-11-12`。
+- **公历时间文本 ↔ 毫秒只有一份口径：`DueTimeCore`**（internal object + 31 条单测，`app/src/test/java/com/notifyme/android/DueTimeCoreTest.kt`）。手动提醒弹窗 / 日期选择器 / 自定义分析范围三处往返此前各吃**默认 Locale 的历法**，与 `DateKeyCore` 同族。七条：
+  ① **只走 `java.time` + `Locale.ROOT`**：不许 new `SimpleDateFormat`（固化创建时的 Locale 快照）、不许用 `Calendar` 的 `YEAR/MONTH/DAY`（泰语 2569 / 和历 8）；Core 恒 `2026-11-12`。
   ② **`parse` 解析不出返 null，不做兜底**：`+1h` 只在 `CalendarHelper.parseDueTime`（提醒链语义），手填提醒要「先解析成功再落库」。
   ③ **非法日期不许静默顺延**：`2026-02-30` / `2026-13-01` / 非闰年 `2-29` 返 null；`parseDay` 年份收在 `MIN_YEAR=1970 .. MAX_YEAR=2200`。
   ④ **`M月d日` 的「已过顺延明年」留 1 分钟容差**（`thisYear < baseTime - 60_000L`），与旧实现逐条对齐。
   ⑤ **DatePicker 年份按「改了多少年」平移**：`adjustPickedYear(pickedYear, shownYear, baseYear)`，不许写死 `-543` / `+1988`（和历偏移随年号变），也不许把 widget 年份直接 `LocalDate.of`（那就是 1484 年那条 bug）。
-  ⑥ **三处只是转发**：`CalendarHelper.tryParseDueTime` 一行委托（`+1h` 兜底不动）、`AnalysisScopeCore.dayStart/formatDay/parseDay` 保留 `java.util.TimeZone` 签名转发 `zone.toZoneId()`、`ManualReminderCore.eventTimeFormat()` 已删改用 `eventTimeText(ms)`（别加回来）。
+  ⑥ **三处只是转发**：`CalendarHelper.tryParseDueTime` 一行委托（`+1h` 兜底不动）、`AnalysisScopeCore.dayStart/formatDay/parseDay` 保留 `TimeZone` 签名转发 `zone.toZoneId()`、`ManualReminderCore` 用 `eventTimeText(ms)`。
+  ⑦ **`nextWholeHour(now, zone)` 必须按本地钟点对齐**，不是「epoch 整除 3_600_000 再加一」：+05:45 的 `Asia/Kathmandu` / +09:30 的 `Australia/Adelaide` 下旧写法把弹窗默认值填成 `22:45`。`ManualReminderCore.nextWholeHour` 同签名转发；夹具回归钉 `Asia/Kathmandu` / `Australia/Adelaide`。
   改前跑 `DueTimeCoreTest`（含 th-TH / 和历回归）、`ManualReminderCoreTest`、`CalendarDueTimeTest`、`AnalysisScopeCoreTest`。
 
 - **界面与模型输入里的数字 / 短时间戳文本只有一份口径：`LocaleTextCore`**（internal object + 16 条单测，`app/src/test/java/com/notifyme/android/LocaleTextCoreTest.kt`），`DateKeyCore` / `DueTimeCore` 之后同族第三代。五条：
@@ -325,4 +326,4 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **两条提取腿的共享内核只有一份口径：`server/extract_common.py`**（`android_db_extract.py` 1260→813 行、`pc_db_extract.py` 1122→673）。① 六个 env 常量必须继续在两侧脚本里定义（monkeypatch 要目标），common 内走 `_setting(name)`。② `_setting` 判 `None` 不判真值（`COMMIT_INTERVAL = 0` 合法）。③ `activate(module)` 登记 `_HOST`，**import 尾部 + 每个入口函数开头都要再调**（只登记一次时后导入的 pde 顶掉 ade，表现 `commits=1` 且锁写进真实 `server/data/`）。④ `_archive_path` / `_lock_path` 用 `_setting("MAIN_DB")` 调用时解析。⑤ 两侧脚本先 `sys.path.insert(...)` 再裸名导入（`storage.py` 按路径加载），16 个符号显式列。改前跑 `test_extract_common.py` + `test_extract.py` + `test_extract_cursor.py`。
 - **游标分页只有一份解析口径：`server/util._parse_cursor`**（`query_messages` 与 `query_analysis` 都走它；`test_module_split.py` 的 `EXPECTED_OWNER` 守着归属）。① **两段都校验**：毫秒在 `MIN_TS_MS..MAX_TS_MS`、rowid 在 `0..MAX_ROWID` —— 只补毫秒段时超 int64 的 rowid 会让 sqlite3 抛 `OverflowError`（整页 500），负 rowid 更阴（恒空页，客户端当成翻到底）。② 空值/纯空白返 `(None, None)`，调用方据此不追加游标条件。③ `_` 切分多于两段直接 400，别静默截断。④ 只给毫秒时 rowid 取 `MAX_ROWID` 兼容老客户端。⑤ `next_before` 的生成格式三端都在回传，不改。
-- **提示词 / 报告里的绝对时间文本只有一份口径：`PromptTimeCore`**（internal object + 22 条单测，`PromptTimeCoreTest.kt`）。`DateKeyCore`/`DueTimeCore`/`LocaleTextCore` 之后同族第四代，差别是它输出**给模型看**。四条：① **只走 `DateTimeFormatter` + `Instant.atZone(zone)`**：`SimpleDateFormat` 的历法随**默认 Locale** 走，钉 `Locale.US`/`CHINESE` 只钉语言、安全来自 Locale→calendar 映射表（巧合，已用对照用例固定）；th-TH 下 `Calendar.set(2026,9,25)` 落成公历 **1483**。② `zone` 参数可注入且**单测必须钉**（Asia/Shanghai + UTC）。③ 「同年省略年份」用 `ZonedDateTime.year` 数值比较，别比格式化后的 `yyyy` 字符串。④ 文案逐字保持 —— 题面文案是模型输入契约，改文案等于改模型输入。改前跑 `PromptTimeCoreTest` + `AnalysisCaseTest` + `CalendarDueTimeTest`，并在 `JAVA_TOOL_OPTIONS=-Duser.language=th -Duser.country=TH` 下再跑一次全量。
+- **提示词 / 报告里的绝对时间文本只有一份口径：`PromptTimeCore`**（internal object + 22 条单测，`PromptTimeCoreTest.kt`）。`DateKeyCore`/`DueTimeCore`/`LocaleTextCore` 之后同族第四代，差别是它输出**给模型看**。四条：① **只走 `DateTimeFormatter` + `Instant.atZone(zone)`**：`SimpleDateFormat` 历法随**默认 Locale** 走，钉 `Locale.US`/`CHINESE` 只钉语言、安全来自 Locale→calendar 映射表（巧合）；th-TH 下 `Calendar.set(2026,9,25)` 落成公历 **1483**。② `zone` 参数可注入且**单测必须钉**（Asia/Shanghai + UTC）。③ 「同年省略年份」用 `ZonedDateTime.year` 数值比较，别比格式化后的 `yyyy` 字符串。④ 文案逐字保持 —— 题面文案是模型输入契约，改文案等于改模型输入。改前跑 `PromptTimeCoreTest` + `AnalysisCaseTest` + `CalendarDueTimeTest`，并在 `JAVA_TOOL_OPTIONS=-Duser.language=th -Duser.country=TH` 下再跑一次全量。

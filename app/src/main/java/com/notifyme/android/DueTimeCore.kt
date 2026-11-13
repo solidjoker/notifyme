@@ -9,6 +9,7 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.util.Locale
 import java.util.regex.Pattern
 
@@ -58,19 +59,27 @@ internal object DueTimeCore {
 
     // ---------- 手动提醒：整点填充 + 文本 ↔ 毫秒 ----------
 
-    /** 取严格大于 [now] 的下一个整点（毫秒级）。 */
-    fun nextWholeHour(now: Long): Long {
-        val hourMillis = 60L * 60_000L
-        return (now / hourMillis + 1) * hourMillis
+    /**
+     * 取严格大于 [now] 的下一个**本地整点**（毫秒级）。
+     *
+     * 按 [zone] 的钟点对齐，不是「epoch 毫秒整除一小时再加一」：偏移带 30/45 分钟的时区
+     * （`Asia/Kathmandu` +05:45、`Australia/Adelaide` +09:30）下，旧写法会把弹窗默认时间
+     * 填成 22:45 —— 既不是整点，也不是用户预期的值。DST 跳变交给 [java.time.ZonedDateTime.plusHours]
+     * （落进空档时自动顺延到合法时刻）。
+     */
+    fun nextWholeHour(now: Long, zone: ZoneId = ZoneId.systemDefault()): Long {
+        val at = Instant.ofEpochMilli(now).atZone(zone).truncatedTo(ChronoUnit.HOURS)
+        val ceiling = if (at.toInstant().toEpochMilli() > now) at else at.plusHours(1)
+        return ceiling.toInstant().toEpochMilli()
     }
 
     /** 格式化提醒时间（公历 `yyyy-MM-dd HH:mm`）。 */
     fun formatEventTime(ms: Long, zone: ZoneId = ZoneId.systemDefault()): String =
         Instant.ofEpochMilli(ms).atZone(zone).format(formatter())
 
-    /** 弹窗默认时间文本：下一个整点，成为用户不用改就能保存的合法值。 */
+    /** 弹窗默认时间文本：下一个本地整点，成为用户不用改就能保存的合法值。 */
     fun defaultEventTimeText(now: Long, zone: ZoneId = ZoneId.systemDefault()): String =
-        formatEventTime(nextWholeHour(now), zone)
+        formatEventTime(nextWholeHour(now, zone), zone)
 
     /**
      * 解析用户/模型给的时间文本，**解析不出返回 null**（不在这里做 +1h 兜底，那是提醒链的选择）。

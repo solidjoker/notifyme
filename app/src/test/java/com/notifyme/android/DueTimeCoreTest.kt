@@ -68,10 +68,20 @@ class DueTimeCoreTest {
     }
 
     @Test
-    fun `默认时间是严格大于 now 的整点`() {
-        assertEquals(at(2026, 11, 12, 19, 0), DueTimeCore.nextWholeHour(nowMs))
-        assertEquals(at(2026, 11, 12, 19, 0), DueTimeCore.nextWholeHour(at(2026, 11, 12, 18, 0)))
+    fun `默认时间是严格大于 now 的本地整点`() {
+        assertEquals(at(2026, 11, 12, 19, 0), DueTimeCore.nextWholeHour(nowMs, zone))
+        assertEquals(at(2026, 11, 12, 19, 0), DueTimeCore.nextWholeHour(at(2026, 11, 12, 18, 0), zone))
         assertEquals("2026-11-12 19:00", DueTimeCore.defaultEventTimeText(nowMs, zone))
+        // 偏移带 30/45 分钟的时区：本地钟点对齐，不是 epoch 整除一小时
+        for (oddZone in listOf(ZoneId.of("Asia/Kathmandu"), ZoneId.of("Australia/Adelaide"))) {
+            val localNow = LocalDate.of(2026, 11, 12).atTime(22, 17).atZone(oddZone).toInstant().toEpochMilli()
+            assertEquals("2026-11-12 23:00", DueTimeCore.defaultEventTimeText(localNow, oddZone))
+            val boundary = LocalDate.of(2026, 11, 12).atTime(23, 0).atZone(oddZone).toInstant().toEpochMilli()
+            assertEquals(
+                LocalDate.of(2026, 11, 13).atTime(0, 0).atZone(oddZone).toInstant().toEpochMilli(),
+                DueTimeCore.nextWholeHour(boundary, oddZone)
+            )
+        }
     }
 
     @Test

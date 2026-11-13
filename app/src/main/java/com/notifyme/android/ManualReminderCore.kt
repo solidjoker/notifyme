@@ -24,8 +24,9 @@ object ManualReminderCore {
     fun defaultTimeText(now: Long, zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): String =
         DueTimeCore.defaultEventTimeText(now, zone)
 
-    /** 取严格大于 now 的下一个整点（毫秒级）。 */
-    fun nextWholeHour(now: Long): Long = DueTimeCore.nextWholeHour(now)
+    /** 取严格大于 now 的下一个本地整点（毫秒级；口径见 [DueTimeCore.nextWholeHour]）。 */
+    fun nextWholeHour(now: Long, zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): Long =
+        DueTimeCore.nextWholeHour(now, zone)
 
     /**
      * 手动提醒去重键：同会话 + 同标题 + 同时间 = 同一条提醒。
