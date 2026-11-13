@@ -22,9 +22,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
@@ -811,8 +808,7 @@ class AnalysisSettingsActivity : Activity() {
         tvAnalysisStatus.text = if (time <= 0L) {
             getString(R.string.analysis_status_none)
         } else {
-            val timeText = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
-                .format(Date(time))
+            val timeText = LocaleTextCore.seconds(time)
             "$timeText  ${analysisConfig.lastAnalysisResult}"
         }
         tintStatus(tvAnalysisStatus, analysisConfig.lastAnalysisResult)
@@ -880,8 +876,7 @@ class AnalysisSettingsActivity : Activity() {
         tvAdvisorStatus.text = if (time <= 0L) {
             getString(R.string.advisor_status_none)
         } else {
-            val timeText = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
-                .format(Date(time))
+            val timeText = LocaleTextCore.seconds(time)
             "$timeText  ${AdvisorStore.lastResult(this)}"
         }
         tintStatus(tvAdvisorStatus, AdvisorStore.lastResult(this))
@@ -891,8 +886,7 @@ class AnalysisSettingsActivity : Activity() {
             tvAdvisorReport.text = getString(R.string.advisor_report_none)
             tvAdvisorReport.setTextColor(getColor(R.color.status_gray))
         } else {
-            val timeText = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
-                .format(Date(report.createdAt))
+            val timeText = LocaleTextCore.minutes(report.createdAt)
             val sb = StringBuilder()
             sb.append("报告 ").append(timeText)
                 .append(" · 复盘 ").append(report.caseCount).append(" 个 case")

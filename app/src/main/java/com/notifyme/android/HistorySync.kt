@@ -9,9 +9,6 @@ import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
@@ -178,8 +175,7 @@ object HistorySync {
     // ---------- 内部工具 ----------
 
     private fun record(context: Context, result: String) {
-        val time = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
-            .format(Date())
+        val time = LocaleTextCore.seconds(System.currentTimeMillis())
         prefs(context).edit()
             .putString(KEY_LAST_STATUS, "$time  $result")
             .apply()

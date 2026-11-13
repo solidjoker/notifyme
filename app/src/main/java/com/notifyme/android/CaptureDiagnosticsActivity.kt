@@ -12,9 +12,6 @@ import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * 采集诊断页（W4）：回答「消息为什么没被抓到 / 现在链路通不通」。
@@ -38,7 +35,6 @@ class CaptureDiagnosticsActivity : Activity() {
     }
 
     private lateinit var container: LinearLayout
-    private val timeFormat = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
 
     /** 异步统计的世代号：刷新后旧线程的结果直接丢弃，避免重复渲染。 */
     private var allTimeToken = 0
@@ -92,7 +88,7 @@ class CaptureDiagnosticsActivity : Activity() {
         val last = CaptureStats.lastStoredAt
         valueRow(
             getString(R.string.diag_last_stored),
-            if (last > 0) timeFormat.format(Date(last)) else getString(R.string.diag_value_na)
+            if (last > 0) LocaleTextCore.seconds(last) else getString(R.string.diag_value_na)
         )
 
         section(getString(R.string.diag_section_dropped))
@@ -215,7 +211,7 @@ class CaptureDiagnosticsActivity : Activity() {
             valueRow(
                 getString(R.string.diag_pkg_latest),
                 if (st.latest > 0) {
-                    timeFormat.format(Date(st.latest))
+                    LocaleTextCore.seconds(st.latest)
                 } else {
                     getString(R.string.diag_value_na)
                 }
@@ -328,10 +324,7 @@ class CaptureDiagnosticsActivity : Activity() {
         }.getOrDefault(pkg)
     }
 
-    private fun formatBytes(bytes: Long): String =
-        if (bytes < 1024) "$bytes B"
-        else if (bytes < 1024 * 1024) "%.1f KB".format(bytes / 1024.0)
-        else "%.2f MB".format(bytes / (1024.0 * 1024.0))
+    private fun formatBytes(bytes: Long): String = LocaleTextCore.binaryBytes(bytes)
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 }

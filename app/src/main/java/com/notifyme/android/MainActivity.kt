@@ -42,9 +42,6 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * 主界面：
@@ -1331,7 +1328,6 @@ class MainActivity : Activity() {
 
         /** 当前数据集：submit() 整体替换，不再原地清空/追加。 */
         private var items: List<FeedItem> = emptyList()
-        private val timeFormat = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
 
         /** 批量选择态：由 MainActivity 在 ActionMode 开关时同步 */
         var selectionActive: Boolean = false
@@ -1594,7 +1590,7 @@ class MainActivity : Activity() {
             holder.tvText.text = msg.text
             // 时间戳兜底：ts<=0 显示「—」，避免出现 1970-01-01
             holder.tvTime.text =
-                if (msg.timestamp > 0) timeFormat.format(Date(msg.timestamp)) else "—"
+                if (msg.timestamp > 0) LocaleTextCore.seconds(msg.timestamp) else "—"
 
             // 搜索命中：卡片换橙底描边高亮；未命中恢复默认白卡
             holder.itemView.setBackgroundResource(

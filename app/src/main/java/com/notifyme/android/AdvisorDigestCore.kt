@@ -175,10 +175,10 @@ internal object AdvisorDigestCore {
             sb.append("- 「").append(conversation.take(CONVERSATION_TRUNCATE)).append("」")
                 .append(" ").append(timeLabel(rec.analyzedAt))
             if (rec.filtered) {
-                sb.append(" 预筛过滤(prob=%.2f)".format(rec.s1NeedActionProb))
+                sb.append(" 预筛过滤(prob=").append(LocaleTextCore.fixed(rec.s1NeedActionProb, 2)).append(")")
             } else {
-                sb.append(" need_action=%.2f".format(rec.s1NeedActionProb))
-                    .append(" importance=%.1f".format(rec.s1Importance))
+                sb.append(" need_action=").append(LocaleTextCore.fixed(rec.s1NeedActionProb, 2))
+                    .append(" importance=").append(LocaleTextCore.fixed(rec.s1Importance, 1))
                     .append(" topic=").append(topic)
                 if (rec.escalated) {
                     sb.append(" 已深分析 摘要=")

@@ -302,3 +302,12 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ⑤ **系统 DatePicker 的年份必须按「改了多少年」平移**：widget 显示的年份随默认 Locale 的历法走（佛历 2569 / 和历 8），所以 `pickDateTime` 只能把 widget 回的年份与初始显示的年份做差、加到基准公历年上（`adjustPickedYear(pickedYear, shownYear, baseYear)`）。不许写死 `-543` / `+1988` 之类的常数（和历的偏移随年号变化），也不许把 widget 的年份直接 `LocalDate.of`（那就是 1484 年那条 bug）。
   ⑥ **`AnalysisScopeCore` / `CalendarHelper` / `ManualReminderCore` 只是转发**：`CalendarHelper.tryParseDueTime` 一行委托（保留签名的 `zone` 缺省），`parseDueTime` 的 `+1h` 兜底不动；`AnalysisScopeCore.dayStart/formatDay/parseDay` 保留 `java.util.TimeZone` 签名转发 `zone.toZoneId()`（设置页与 30 条既有单测调用点不改）；`ManualReminderCore` 的 `eventTimeFormat()` 已删除，改用 `eventTimeText(ms)`，别再把它加回来。
   改格式、改解析分支或改年份换算前先跑 `DueTimeCoreTest.kt`（31 条，含 `th-TH` / 和历两条根因回归与往返一致）与 `ManualReminderCoreTest.kt`（15 条）、`CalendarDueTimeTest.kt`（7 条）、`AnalysisScopeCoreTest.kt`（30 条）。
+
+- **界面与模型输入里的数字 / 短时间戳文本只有一份口径：`LocaleTextCore`**（internal object，纯函数 + 16 条单测，`app/src/test/java/com/notifyme/android/LocaleTextCoreTest.kt`）。`DateKeyCore`（日期分组 key）、`DueTimeCore`（年-月-日 ↔ 毫秒）之后同族的第三代：数字形态与短时间戳也都吃默认 Locale。五条契约：
+  ① **时间戳只走 [minutes] / [seconds] / [hourMinute]**（`DateTimeFormatter.ofPattern(pattern, Locale.ROOT)`）：不许再在 Activity / Adapter / Worker 里 new `SimpleDateFormat(_, Locale.getDefault())` —— 它在 `ar-EG` / `ar-SA` / `fa-IR` / `bn-BD` / `ne-NP` 下把 `11-12 18:10` 渲染成阿拉伯-印度数字，而界面只有中文、混排既不可读也无法复述。旧写法的 11 处已全部收口（顾问摘要时间标签、列表时间列、状态行、抓包时间、控制台时刻、详情页日期分隔、通知文案、提醒列表）。
+  ② **小数只走 [fixed] / [percent] / [bytes] / [binaryBytes]**（一律 `String.format(Locale.ROOT, ...)`）：`"%.2f".format(...)` 在 de-DE 下是 `0,80`，会成为**模型输入**里的字段破坏（`need_action=0,80` 与行内 `,` 分隔混同）、也会把报告 Markdown 表格与落库的 `forks[].note` 写坏。`bytes`（十进制）与 `binaryBytes`（1024 进制）是两套故意不同的单位口径（模型下载 vs 诊断页），别合并。
+  ③ **`Locale.ROOT` 只固定数字形态，不改时区**：`zone` 缺省仍是 `ZoneId.systemDefault()`，「用户看到的是本地时间」这条语义不变；显式传 zone 才换区。
+  ④ **时间戳 `<= 0` 不在这里兜底**：调用方各自保留「—」/「无时间」文案，Core 只做格式化。
+  ⑤ **别把这条口径推广到 `getString(R.string.x, 数字)`**：资源里的 `%1$.1f`（`chip_importance`）与 `%1$.0f%%`（`analysis_prob_fmt`）走 `Configuration` 的 Locale，要固定得先改资源调用方式，属于另一件事（当前 `res/` 只有 `values/`、界面纯中文）。
+  另有三类**刻意的例外**，别顺手改：`"%02x".format(it)` 的 hex 摘要（盐编码 / 别名 / 校验和，十六进制不受 Locale 影响）、`AnalysisCase` 里已钉 `Locale.US` / `Locale.CHINESE` 的题面时间（钉了就安全）、`S1Eval` 的 `Locale.US` ISO 时间。改格式或加新站点前先跑 `LocaleTextCoreTest.kt`（16 条，含 `ar-EG` / `de-DE` 两条根因回归）。
+  写这类对照单测时有一个坑：「`Locale.US` 钉住就安全」只证明数字形态，不证明时区 —— `SimpleDateFormat` 取系统默认时区，CI runner 是 UTC、本机是 +08，不显式 `timeZone = TimeZone.getTimeZone(zone)` 就会得到 `10:10` 而非 `18:10`（本轮 CI 就是这条先红）。

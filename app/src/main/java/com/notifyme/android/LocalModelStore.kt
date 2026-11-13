@@ -183,10 +183,6 @@ object LocalModelStore {
             .apply()
     }
 
-    /** 人类可读字节数（MB/GB 一位小数）。 */
-    fun formatBytes(bytes: Long): String = when {
-        bytes >= 1_000_000_000L -> "%.2f GB".format(bytes / 1_000_000_000.0)
-        bytes >= 1_000_000L -> "%.1f MB".format(bytes / 1_000_000.0)
-        else -> "%.0f KB".format(bytes / 1_000.0)
-    }
+    /** 人类可读字节数（十进制 MB/GB，恒用 `.` 小数点，口径见 [LocaleTextCore]）。 */
+    fun formatBytes(bytes: Long): String = LocaleTextCore.bytes(bytes)
 }
