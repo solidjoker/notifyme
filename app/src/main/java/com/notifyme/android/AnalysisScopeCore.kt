@@ -70,16 +70,15 @@ object AnalysisScopeCore {
         return if (v in PERIODS) v else PERIOD_ALL
     }
 
-    /** 本地时区当天零点。单测必须显式传 zone，别依赖默认时区。 */
-    fun dayStart(nowMs: Long, zone: java.util.TimeZone): Long {
-        val c = java.util.Calendar.getInstance(zone)
-        c.timeInMillis = nowMs
-        c.set(java.util.Calendar.HOUR_OF_DAY, 0)
-        c.set(java.util.Calendar.MINUTE, 0)
-        c.set(java.util.Calendar.SECOND, 0)
-        c.set(java.util.Calendar.MILLISECOND, 0)
-        return c.timeInMillis
-    }
+    /**
+     * 本地时区当天零点。单测必须显式传 zone，别依赖默认时区。
+     *
+     * 口径在 [DueTimeCore.dayStart]（`java.time`）：以前用 `java.util.Calendar.getInstance(zone)`
+     * 太过默认 Locale 的历法，泰语（佛历）设备上「今天零点」会落到别的年份上。
+     * 这里保留 `java.util.TimeZone` 签名只是为了不改设置页与既有单测的调用点。
+     */
+    fun dayStart(nowMs: Long, zone: java.util.TimeZone): Long =
+        DueTimeCore.dayStart(nowMs, zone.toZoneId())
 
     /**
      * 周期 -> 区间。**明天/未来**的消息永不进范围：今天与自定义的右端都夹到 nowMs。
@@ -195,34 +194,16 @@ object AnalysisScopeCore {
         return head + " · " + tail
     }
 
-    /** yyyy-MM-dd（自定义日期输入框回填用）。 */
-    fun formatDay(ms: Long, zone: java.util.TimeZone = java.util.TimeZone.getDefault()): String {
-        val f = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
-        f.timeZone = zone
-        return f.format(java.util.Date(ms))
-    }
+    /** yyyy-MM-dd（自定义日期输入框回填用）。口径在 [DueTimeCore.formatDay]。 */
+    fun formatDay(ms: Long, zone: java.util.TimeZone = java.util.TimeZone.getDefault()): String =
+        DueTimeCore.formatDay(ms, zone.toZoneId())
 
     /**
      * 解析 yyyy-MM-dd（也接受 yyyy/MM/dd）。非法输入返回 null 而不是抛异常——
      * 输入框里随时可能是半截字符串，抛异常会把整页保存按钮打挂。
      */
-    fun parseDay(text: String?, zone: java.util.TimeZone = java.util.TimeZone.getDefault()): Long? {
-        val raw = text?.trim().orEmpty().replace('/', '-')
-        if (raw.isEmpty()) return null
-        val parts = raw.split('-')
-        if (parts.size != 3) return null
-        val y = parts[0].toIntOrNull() ?: return null
-        val m = parts[1].toIntOrNull() ?: return null
-        val d = parts[2].toIntOrNull() ?: return null
-        if (y < 1970 || m !in 1..12 || d !in 1..31) return null
-        val c = java.util.Calendar.getInstance(zone)
-        c.clear()
-        c.set(y, m - 1, d, 0, 0, 0)
-        c.set(java.util.Calendar.MILLISECOND, 0)
-        // Calendar 对 2 月 30 日这类日期会静默顺延，回读校验一次
-        if (c.get(java.util.Calendar.DAY_OF_MONTH) != d) return null
-        return c.timeInMillis
-    }
+    fun parseDay(text: String?, zone: java.util.TimeZone = java.util.TimeZone.getDefault()): Long? =
+        DueTimeCore.parseDay(text, zone.toZoneId())
 
     // ---------- Worker inputData 编解码 ----------
 

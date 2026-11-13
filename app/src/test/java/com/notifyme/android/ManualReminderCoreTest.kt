@@ -9,8 +9,9 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.Calendar
-import java.util.Date
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 
 /**
  * M17 会话内自建提醒的纯逻辑测试 + 时间解析新增语义回归。
@@ -22,21 +23,16 @@ import java.util.Date
  */
 class ManualReminderCoreTest {
 
-    private fun at(year: Int, month1: Int, day: Int, hour: Int, minute: Int): Long {
-        val c = Calendar.getInstance()
-        c.set(year, month1 - 1, day, hour, minute, 0)
-        c.set(Calendar.MILLISECOND, 0)
-        return c.timeInMillis
-    }
+    /** 造时间点：用 java.time（公历）而不是 `Calendar.getInstance()`，测试本身也别吃默认 Locale 的历法。 */
+    private fun at(year: Int, month1: Int, day: Int, hour: Int, minute: Int): Long =
+        LocalDate.of(year, month1, day).atTime(hour, minute).atZone(zone).toInstant().toEpochMilli()
 
     private fun fields(ms: Long): List<Int> {
-        val c = Calendar.getInstance()
-        c.timeInMillis = ms
-        return listOf(
-            c.get(Calendar.YEAR), c.get(Calendar.MONTH) + 1, c.get(Calendar.DAY_OF_MONTH),
-            c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE)
-        )
+        val t = Instant.ofEpochMilli(ms).atZone(zone)
+        return listOf(t.year, t.monthValue, t.dayOfMonth, t.hour, t.minute)
     }
+
+    private val zone: ZoneId = ZoneId.systemDefault()
 
     @Test
     fun `去重键稳定且随维度变化`() {
@@ -56,7 +52,7 @@ class ManualReminderCoreTest {
     @Test
     fun `弹窗时间文本能被日历解析原样往返`() {
         val millis = at(2026, 10, 24, 14, 30)
-        val text = ManualReminderCore.eventTimeFormat().format(Date(millis))
+        val text = ManualReminderCore.eventTimeText(millis)
         val parsed = CalendarHelper.tryParseDueTime(text, at(2026, 10, 22, 9, 0))
         assertNotNull(parsed)
         assertEquals(millis, parsed)

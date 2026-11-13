@@ -9,7 +9,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.CalendarContract
 import android.util.Log
-import java.util.Calendar
 import java.util.regex.Pattern
 
 /**
@@ -402,126 +401,18 @@ object CalendarHelper {
     }
 
     /**
-     * 解析中文截止时间文本，返回毫秒时间戳；解析不出回退为 baseTime + 1 小时。
-     *
-     * 支持模式：
-     *  - 「yyyy-MM-dd HH:mm」（也兼容 yyyy/M/d、yyyy年M月d日）
-     *  - 「M月d日[H点|HH:mm]」（缺年份取本年，已过去则取明年）
-     *  - 「今天/明天/后天 HH:mm」（无时间默认 9:00）
-     *  - 「周X/星期X HH:mm」（当天时刻未到取当天，已过才取下周）
-     *  - 时间部分支持「下午/晚上」加 12 小时
-     */
-    /**
      * 解析截止时间文本；**解析不出返回 null**。
+     *
+     * 口径全部搬进 [DueTimeCore]（`java.time`，恒公历）：这里以前用 `Calendar.getInstance()` +
+     * 默认 Locale 的历法，泰语（佛历）/ 和历设备上会把年份解释错、甚至静默丢掉日期。
      * 支持：完整年月日 / M月d日（已过顺延明年）/ 今天明天后天 / 周X / 下午晚上 +12 /
      * 纯 HH:mm（今天该时刻，已过顺延明天，M17 手动提醒常见写法）。
      */
-    fun tryParseDueTime(text: String, baseTime: Long): Long? {
-        val trimmed = text.trim()
-        if (trimmed.isEmpty()) return null
-
-        try {
-            val cal = Calendar.getInstance()
-            cal.timeInMillis = baseTime
-
-            // 时间部分（可选）：HH:mm / H点 / 下午H点
-            val timeMatcher = Pattern.compile("(\\d{1,2})\\s*[:：点时]\\s*(\\d{1,2})?").matcher(trimmed)
-            var hour = 9
-            var minute = 0
-            val hasTime = timeMatcher.find()
-            if (hasTime) {
-                hour = timeMatcher.group(1)?.toIntOrNull() ?: 9
-                minute = timeMatcher.group(2)?.toIntOrNull() ?: 0
-                if ((trimmed.contains("下午") || trimmed.contains("晚上") || trimmed.contains("傍晚")) && hour < 12) {
-                    hour += 12
-                }
-                if (hour > 23 || minute > 59) return null
-            }
-
-            fun buildTime(year: Int, month0: Int, day: Int): Long {
-                val c = Calendar.getInstance()
-                c.set(year, month0, day, hour, minute, 0)
-                c.set(Calendar.MILLISECOND, 0)
-                return c.timeInMillis
-            }
-
-            // 1) 带完整年月日：2025-01-01 / 2025/1/1 / 2025年1月1日
-            val full = Pattern.compile("(\\d{4})\\s*[-/年]\\s*(\\d{1,2})\\s*[-/月]\\s*(\\d{1,2})").matcher(trimmed)
-            if (full.find()) {
-                return buildTime(
-                    full.group(1)!!.toInt(),
-                    full.group(2)!!.toInt() - 1,
-                    full.group(3)!!.toInt()
-                )
-            }
-
-            // 2) M月d日（无年份，已过去则顺延到明年）
-            val md = Pattern.compile("(\\d{1,2})\\s*月\\s*(\\d{1,2})\\s*[日号]").matcher(trimmed)
-            if (md.find()) {
-                val year = cal.get(Calendar.YEAR)
-                var t = buildTime(year, md.group(1)!!.toInt() - 1, md.group(2)!!.toInt())
-                if (t < baseTime - 60_000L) t = buildTime(year + 1, md.group(1)!!.toInt() - 1, md.group(2)!!.toInt())
-                return t
-            }
-
-            // 3) 今天/明天/后天
-            val dayOffset = when {
-                trimmed.contains("后天") -> 2
-                trimmed.contains("明天") -> 1
-                trimmed.contains("今天") -> 0
-                else -> -1
-            }
-            if (dayOffset >= 0) {
-                val c = Calendar.getInstance()
-                c.timeInMillis = baseTime
-                c.add(Calendar.DAY_OF_YEAR, dayOffset)
-                return buildTime(c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH))
-            }
-
-            // 4) 周X / 星期X：取未来最近一次
-            val week = Pattern.compile("[周星]\\s*期?\\s*([一二三四五六日天1-7])").matcher(trimmed)
-            if (week.find()) {
-                val target = when (week.group(1)) {
-                    "一", "1" -> Calendar.MONDAY
-                    "二", "2" -> Calendar.TUESDAY
-                    "三", "3" -> Calendar.WEDNESDAY
-                    "四", "4" -> Calendar.THURSDAY
-                    "五", "5" -> Calendar.FRIDAY
-                    "六", "6" -> Calendar.SATURDAY
-                    else -> Calendar.SUNDAY
-                }
-                val c = Calendar.getInstance()
-                c.timeInMillis = baseTime
-                var diff = (target - c.get(Calendar.DAY_OF_WEEK) + 7) % 7
-                if (diff == 0) {
-                    // 就是今天：时刻还没到就用今天，已过才顺延到下周。
-                    // 原先一律顺延，会把「今天 16:30」的通知算成一周后。
-                    val todayAt = buildTime(
-                        c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)
-                    )
-                    if (todayAt <= baseTime) diff = 7
-                }
-                c.add(Calendar.DAY_OF_YEAR, diff)
-                return buildTime(c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH))
-            }
-
-            // 5) 只有时刻没有日期（「15:00」「晚上8点」）：今天该时刻，已过顺延明天
-            if (hasTime) {
-                val c = Calendar.getInstance()
-                c.timeInMillis = baseTime
-                var t = buildTime(c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH))
-                if (t <= baseTime) {
-                    c.add(Calendar.DAY_OF_YEAR, 1)
-                    t = buildTime(c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH))
-                }
-                return t
-            }
-            return null
-        } catch (e: Exception) {
-            Log.w(TAG, "截止时间解析失败: $trimmed", e)
-            return null
-        }
-    }
+    fun tryParseDueTime(
+        text: String,
+        baseTime: Long,
+        zone: java.time.ZoneId = java.time.ZoneId.systemDefault()
+    ): Long? = DueTimeCore.parse(text, baseTime, zone)
 
     /** 解析不出时回退 baseTime + 1 小时（分析链路沿用：模型没给时间也要有提醒时间）。 */
     fun parseDueTime(text: String, baseTime: Long): Long =
