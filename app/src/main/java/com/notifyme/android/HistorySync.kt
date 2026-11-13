@@ -181,20 +181,13 @@ object HistorySync {
             .apply()
     }
 
-    /** 与 ConsoleActivity.extractEndpoint 同一推导规则：去末尾 /weixin 再拼路径。 */
-    private fun endpoint(syncConfig: SyncConfig, path: String): String {
-        var base = syncConfig.serverUrl.trim().trimEnd('/')
-        if (base.endsWith("/weixin")) base = base.dropLast("/weixin".length)
-        return "$base/$path"
-    }
+    /** 地址推导与鉴权头的口径在 [SyncEndpointCore]（去末尾 /weixin 再拼路径）。 */
+    private fun endpoint(syncConfig: SyncConfig, path: String): String =
+        SyncEndpointCore.url(syncConfig.serverUrl, path)
 
-    private fun request(syncConfig: SyncConfig, url: String): Request.Builder {
-        val builder = Request.Builder().url(url)
-        if (syncConfig.authToken.isNotBlank()) {
-            builder.header("X-Token", syncConfig.authToken)
-        }
-        return builder
-    }
+    /** 请求统一带 X-Token 头（令牌空白则不带，与服务端不鉴权模式对应）。 */
+    private fun request(syncConfig: SyncConfig, url: String): Request.Builder =
+        SyncEndpointCore.authorized(Request.Builder().url(url), syncConfig.authToken)
 
     private fun fetchStatus(syncConfig: SyncConfig): JSONObject? {
         return try {
