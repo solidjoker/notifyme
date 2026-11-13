@@ -20,12 +20,12 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationManagerCompat
 import androidx.work.WorkManager
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
-import kotlin.concurrent.thread
 
 /**
  * 采集设置页（自 ConsoleActivity 拆出，行为不变）：

@@ -31,7 +31,7 @@ $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
 
 .\gradlew.bat testOpenDebugUnitTest                        # 单元测试（app/src/test，纯 JVM，无 Robolectric）
 .\gradlew.bat assembleOpenDebug assembleBetaDebug          # 双 flavor 构建
-.\gradlew.bat lintOpenDebug                                # Android Lint + ktlint
+.\gradlew.bat lintOpenDebug                                # Android Lint（ktlint 走 docs/scripts/static_check.py）
 .\gradlew.bat assembleOpenRelease                           # 发布包（R8 混淆 + 资源压缩）
 python -m pytest server/ -v --tb=short                     # 服务端全部用例
 python -m compileall -q server                              # 服务端语法检查（目录级，与 CI 一致）
@@ -53,7 +53,7 @@ Remove-Item -Recurse -Force app\build\test-results\testOpenDebugUnitTest -ErrorA
 ### 一条命令自检（开 PR 前跑这个）
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File docs/scripts/local_check.ps1                 # 全量：服务端用例 + 语法 + 守卫 + 版本 + Android 单测/双 flavor/Lint
+powershell -ExecutionPolicy Bypass -File docs/scripts/local_check.ps1                 # 全量：服务端用例 + 语法 + 守卫 + 版本 + Android 单测/双 flavor/Lint + Lint 基线 + ktlint
 powershell -ExecutionPolicy Bypass -File docs/scripts/local_check.ps1 -SkipAndroid    # 只跑服务端侧（改 Python 时用，秒级）
 ```
 
@@ -311,3 +311,5 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ⑤ **别把这条口径推广到 `getString(R.string.x, 数字)`**：资源里的 `%1$.1f`（`chip_importance`）与 `%1$.0f%%`（`analysis_prob_fmt`）走 `Configuration` 的 Locale，要固定得先改资源调用方式，属于另一件事（当前 `res/` 只有 `values/`、界面纯中文）。
   另有三类**刻意的例外**，别顺手改：`"%02x".format(it)` 的 hex 摘要（盐编码 / 别名 / 校验和，十六进制不受 Locale 影响）、`AnalysisCase` 里已钉 `Locale.US` / `Locale.CHINESE` 的题面时间（钉了就安全）、`S1Eval` 的 `Locale.US` ISO 时间。改格式或加新站点前先跑 `LocaleTextCoreTest.kt`（16 条，含 `ar-EG` / `de-DE` 两条根因回归）。
   写这类对照单测时有一个坑：「`Locale.US` 钉住就安全」只证明数字形态，不证明时区 —— `SimpleDateFormat` 取系统默认时区，CI runner 是 UTC、本机是 +08，不显式 `timeZone = TimeZone.getTimeZone(zone)` 就会得到 `10:10` 而非 `18:10`（本轮 CI 就是这条先红）。
+
+- **静态检查基线只有一份入口：`docs/scripts/static_check.py` + 仓库根 `.editorconfig`**（ktlint `1.8.0`，`sha256` 钉在脚本里）。① `ktlint_standard` 整体 disabled、只开 5 条（`import-ordering` / `no-unused-imports` / `final-newline` / `no-consecutive-blank-lines` / `string-template`）—— 官方全量在 205 个 `.kt` 上是 8134 条命中，重排只会把 diff 搅成噪声；加规则必须同时改 `.editorconfig` 与 `ENABLED_RULES`，不同步脚本强制 exit 1。② glob 是 gitignore 风格、从 cwd 起算，必须带 `!third_party/**`（否则多出 52 条噪声）。③ 三种模式别混：CI 默认 `--report`（不阻断）、`local_check.ps1` 第 7 步 `--strict`、批量清账 `--fix`。④ `app/lint.xml` 刻意不 ignore：那 3 条基线靠 `lint-summary` 断言 issue id 集合恰等于它们，多一条少一条都本地失败 —— 加 ignore 等于让第 4 条再也看不见。⑤ `local_check.ps1` 必须 UTF-8 + BOM，`tools.edit` 写回会丢 BOM 并让 PowerShell 5.1 把中文当 GBK 报一串 ParserError。改规则或加站点前先跑 `python docs/scripts/static_check.py --strict`。

@@ -189,4 +189,3 @@ internal object SyncOutcomeCore {
         return ids.filterIndexed { index, _ -> index !in rejectedPositions }.toSet()
     }
 }
-

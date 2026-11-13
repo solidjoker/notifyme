@@ -97,6 +97,14 @@ jobs:
           cache: pip
           cache-dependency-path: server/requirements.txt
 
+      - name: Kotlin 静态检查 (ktlint, 只报警不阻断)
+        # 规则集在仓库根的 .editorconfig 里被刻意收窄到 5 条（unused import / import 顺序 /
+        # 末行换行 / 连续空行 / 多余的 ${}），其余 standard 规则全部 disabled —— 详由见该文件头注释。
+        # 这里用默认 --report 模式：有命中会打印明细与 static-check-summary，但退出码仍是 0，
+        # 不阻断 PR。本地验收走 docs/scripts/local_check.ps1 的 --strict 口径。
+        # ktlint jar 由脚本按固定版本 + sha256 下载并缓存，不参与 Gradle 依赖图。
+        run: python3 docs/scripts/static_check.py
+
       - name: Python syntax check (server, 目录级)
         # 目录级发现：server/ 下新增 .py 自动纳入，不用再维护一份点死的文件清单
         run: python3 -m compileall -q server

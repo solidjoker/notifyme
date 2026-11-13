@@ -4,8 +4,8 @@
 package com.notifyme.android
 
 import android.content.Context
-import org.json.JSONObject
 import java.io.File
+import org.json.JSONObject
 
 /**
  * 一条提醒记录（三级降级链的产物）。

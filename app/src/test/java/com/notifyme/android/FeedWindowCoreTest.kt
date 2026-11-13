@@ -158,8 +158,8 @@ class FeedWindowCoreTest {
     @Test
     fun `group 别的会话刷屏时本会话仍自成一桶`() {
         // 600 条噪声（时间更近）+ 本会话 5 条较早 —— 旧写法 readRecent(500) 里本会话一条都读不到
-        val noise = (0 until 600).map { msg("噪声${it}", 1_000_000L + it * 1_000L, conversation = "闲聊群") }
-        val mine = (0 until 5).map { msg("我的${it}", 100_000L + it * 1_000L) }
+        val noise = (0 until 600).map { msg("噪声$it", 1_000_000L + it * 1_000L, conversation = "闲聊群") }
+        val mine = (0 until 5).map { msg("我的$it", 100_000L + it * 1_000L) }
 
         val result = FeedWindowCore.group(noise + mine)
 
@@ -183,7 +183,7 @@ class FeedWindowCoreTest {
 
     @Test
     fun `group 会话数超上限时只留最近的那些`() {
-        val messages = (0 until 10).map { msg("会话${it}", 1_000L + it * 1_000L, conversation = "会话${it}") }
+        val messages = (0 until 10).map { msg("会话$it", 1_000L + it * 1_000L, conversation = "会话$it") }
 
         val result = FeedWindowCore.group(messages, maxConversations = 3)
 
@@ -212,7 +212,7 @@ class FeedWindowCoreTest {
         val messages = ArrayList<ChatMessage>()
         for (c in 0 until 100) {
             for (i in 0 until 300) {
-                messages += msg("C${c}-$i", 1_000L + i * 1_000L, conversation = "群$c")
+                messages += msg("C$c-$i", 1_000L + i * 1_000L, conversation = "群$c")
             }
         }
 

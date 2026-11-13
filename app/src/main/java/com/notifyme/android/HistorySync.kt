@@ -5,12 +5,12 @@ package com.notifyme.android
 
 import android.content.Context
 import android.util.Log
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
-import kotlin.concurrent.thread
 
 /**
  * 启动时自动提取已有微信聊天记录（沿用服务端 /admin/extract 链路）：

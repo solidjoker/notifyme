@@ -7,7 +7,6 @@ import com.notifyme.android.laya.LayaCalibration
 import com.notifyme.android.laya.LayaDecoder
 import com.notifyme.android.laya.LayaJson
 import com.notifyme.android.laya.LayaPromptBuilder
-import com.notifyme.android.laya.LayaQuestion
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue

@@ -7,8 +7,8 @@ import android.app.Activity
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
-import kotlinx.coroutines.runBlocking
 import java.io.File
+import kotlinx.coroutines.runBlocking
 
 /**
  * 调试入口（仅 debug 源集）：跑一次「云端 vs 端侧 S1 一致率」采集。

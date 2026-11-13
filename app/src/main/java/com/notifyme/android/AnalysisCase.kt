@@ -3,12 +3,12 @@
 
 package com.notifyme.android
 
-import org.json.JSONArray
-import org.json.JSONObject
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * 分析 case：分析单位从「单条消息」升级为「会话窗口」。

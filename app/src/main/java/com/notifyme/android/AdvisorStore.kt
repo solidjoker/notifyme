@@ -4,9 +4,9 @@
 package com.notifyme.android
 
 import android.content.Context
+import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
 
 /**
  * 一份顾问复盘报告（Fable 层产物）。

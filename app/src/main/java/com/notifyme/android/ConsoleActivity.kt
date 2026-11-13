@@ -9,12 +9,12 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
-import android.graphics.Typeface
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout

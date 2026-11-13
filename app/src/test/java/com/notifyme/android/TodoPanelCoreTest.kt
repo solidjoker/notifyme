@@ -22,7 +22,7 @@ class TodoPanelCoreTest {
         pkg: String = "com.tencent.mm",
         windowEnd: Long = analyzedAt
     ) = AnalysisCaseRecord(
-        caseId = "${pkg}|$conv|$windowEnd",
+        caseId = "$pkg|$conv|$windowEnd",
         conversation = conv,
         windowEnd = windowEnd,
         messageCount = 3,

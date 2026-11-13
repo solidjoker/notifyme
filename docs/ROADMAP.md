@@ -139,7 +139,31 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
    - **可测性关键**：core 只吃 `File`，不吃 `Context`，所以 JVM 单元测试无需 Robolectric
    - `AnalysisStore`/`ReminderStore`/`AdvisorStore` 尚未迁到 `JsonlStore`（它们本轮没有被 M2 直接改动，留到 M2 顺手统一）
    - 顺带修掉一处类初始化地雷：`MessageStore.mainHandler` 改成 `by lazy { Handler(Looper.getMainLooper()) }`，否则 JVM 上一加载就抛 `getMainLooper not mocked`
-4. [ ] 可选：detekt/ktlint 基线（只报警不阻断），`lint.xml` 收口 —— **未做**，M1 收益低于噪声，留到有第二个贡献者时再上
+4. [x] 静态检查基线（只报警不阻断），`lint.xml` 收口 —— **已完成**（2026-11-13）
+   - **ktlint 侧**：仓库根新增 `.editorconfig`，把 `ktlint_standard` 整体 disabled 后只开 5 条 ——
+     `import-ordering` / `no-unused-imports` / `final-newline` / `no-consecutive-blank-lines` / `string-template`。
+     没有采用官方全量 standard：按默认规则集跑 `app/src/**/*.kt` 是 **8134 条命中 / 44 条规则**
+     （`function-signature` 1722、`indent` 1615、`trailing-comma-on-call-site` 1044、
+     `multiline-expression-wrapping` 997 …），这些都是格式化偏好而不是缺陷，一次性重排会把 205 个文件的
+     diff 搅成噪声；而且和本仓库既有事实冲突（最长行 259 字符、34 处 >120 字符、`.kt` 行尾 LF/CRLF 混用）。
+     收窄到这 5 条后，它们全部能被 `--format` 自动修干净，且每条都对应真实的可读性/合并冲突代价。
+   - **一次 `--format` 清账**：70 个文件、+102/−128 行（删 13 个 unused import、重排 34 个文件的 import 块、
+     补 29 个末行换行、删 12 处连续空行、9 处多余 `${}`）。修完 `testOpenDebugUnitTest` 仍是 **1157 条全绿**
+     —— 纯格式改动没碰语义。基线从此恒为 0，任何新增违规都必然可见。
+   - **`docs/scripts/static_check.py`**（217 行）是唯一入口：ktlint 版本 `1.8.0` 与 `sha256`
+     `369ad2b789f95a011f807e1fcb690ccef80bd7cd014fd139e73ae82dcc0baeab` 钉死在代码里（与 Maven Central 的 `.sha256` 一致，不符即删），
+     jar 缓存到 `~/.notifyme-tools/ktlint/1.8.0/`（`NOTIFYME_KTLINT_JAR` 可直接指定、`NOTIFYME_TOOLS_DIR` 换缓存根）。
+     三种模式：默认 `--report` 有命中仍 exit 0（CI 用，只报警不阻断）、`--strict` 有命中 exit 1（本地自检用）、
+     `--fix` 先 `--format` 再复查。末行固定输出 `static-check-summary issues=<n> files=<n> rules=<n> enabled=5`。
+     若出现 5 条之外的规则（说明 `.editorconfig` 与脚本不同步）会额外告警并强制 exit 1，防止规则悄悄漂移。
+   - **`app/lint.xml`**：刻意「什么都不改」—— 不 ignore、不降级。只接受 3 条已知 issue
+     （`ObsoleteLintCustomCheck` / `OldTargetApi` / `ChromeOsAbiSupport`），与其 ignore 掉让「第 4 条」
+     从报告里消失，不如让它们一直可见，由 `docs/scripts/local_check.ps1` 的 `lint-summary` 断言
+     「报告里的 issue id 集合恰好等于这三条」—— 多一条或少于三条都本地失败，等于给 lint 装了回归护栏。
+   - **接线**：`docs/scripts/local_check.ps1` 从六步变七步（第 7 步 `static-check --strict`），
+     `.github/workflows/android.yml` 加同名只读步骤（`python3 docs/scripts/static_check.py`，不阻断）。
+     **为什么不上 Gradle 插件**：`org.jlleitschuh.gradle:ktlint-gradle` 只在 Plugin Portal 有（Maven Central 404），
+     且会改 Gradle 依赖图与首次构建时长；独立 CLI jar 版本可控、sha256 可校验、不参与构建图，更符合「只报警」定位。
 
 ### M1 为 M2 铺好的三块垫子
 | 垫子 | M2 怎么用 |

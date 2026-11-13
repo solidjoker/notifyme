@@ -412,7 +412,6 @@ class OverlayService : Service() {
         )
     }
 
-
     private fun baseOverlayParams(width: Int, height: Int): WindowManager.LayoutParams {
         // minSdk 26（= O），TYPE_APPLICATION_OVERLAY 恒可用
         val type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY

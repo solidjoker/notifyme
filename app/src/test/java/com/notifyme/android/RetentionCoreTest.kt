@@ -44,7 +44,7 @@ class RetentionCoreTest {
 
     @Test
     fun `边界值cutoff当天保留`() {
-        val atCutoff = """{"text":"edge","timestamp":${cutoff}}"""
+        val atCutoff = """{"text":"edge","timestamp":$cutoff}"""
         val r = RetentionCore.prune(listOf(atCutoff), cutoff, ::tsOf)
         assertEquals(listOf(atCutoff), r.kept)
     }

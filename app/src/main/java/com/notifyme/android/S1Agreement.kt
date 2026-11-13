@@ -3,8 +3,6 @@
 
 package com.notifyme.android
 
-import org.json.JSONObject
-
 /**
  * 云端 vs 端侧 S1 判定一致率（ROADMAP M4 任务 6 / docs/ROADMAP.md:237）。
  *

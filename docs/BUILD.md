@@ -238,7 +238,16 @@ bash docs/scripts/local_check.sh --skip-android
 ```
 
 脚本依次执行：服务端 pytest → Python 语法检查 → 隐私守卫 → 版本校验 →
-Android 单测 + 双 flavor 构建 + Lint，并额外汇总 Lint 报告里的 issue / error 数量。
+Android 单测 + 双 flavor 构建 + Lint → Lint 汇总（issue / error / 基线漂移）→ Kotlin 静态检查（ktlint）。
+
+Lint 汇总那一步除了数 issue / error，还会断言「报告里的 issue id 集合恰好等于
+`ChromeOsAbiSupport` / `ObsoleteLintCustomCheck` / `OldTargetApi` 这三条」—— 多一条或少一条都判失败
+（`app/lint.xml` 只有注释、刻意不 ignore，就是要让新增问题一定被看见）。
+
+Kotlin 静态检查走 `docs/scripts/static_check.py --strict`：规则集在仓库根 `.editorconfig` 里被收窄到 5 条
+（`import-ordering` / `no-unused-imports` / `final-newline` / `no-consecutive-blank-lines` / `string-template`），
+本地是零容忍口径；CI 用默认 `--report` 模式（有命中只打印不阻断）。ktlint 1.8.0 的 jar 由脚本按固定
+sha256 下载并缓存到 `~/.notifyme-tools/ktlint/1.8.0/`，不参与 Gradle 依赖图 —— 首次跑需要联网一次。
 每一步的完整输出写到 `%TEMP%\notifyme-local-check-<时间戳>\`（POSIX 下在 `$TMPDIR`）。
 
 ---

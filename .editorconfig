@@ -1,0 +1,37 @@
+# 本文件只服务两个用途：
+# ① 给 IDE 一份统一的缩进 / 空白约定（Android Studio 会读它）；
+# ② 给 ktlint 一份「只开这 5 条规则」的开关表（CI 与 docs/scripts/local_check.ps1 都读它）。
+#
+# 为什么 ktlint 的默认规则集被整组关掉：
+# 本仓库 205 个 .kt 按 ktlint 默认（android_studio 风格 = 官方全量 standard 规则）跑一遍，
+# 共 8134 条命中，其中 function-signature 1722 / indent 1615 / trailing-comma-on-call-site 1044
+# / multiline-expression-wrapping 997 / argument-list-wrapping 522 …
+# 这些是「格式化偏好」而不是缺陷：一次性重排会把 205 个文件的 diff 搅成噪声，
+# 而且与本仓库既有事实冲突（最长行 259 字符、34 处 >120；.kt 行尾 LF 61 个 / CRLF 144 个混用）。
+#
+# 所以策略是：只开「能被 ktlint --format 全自动修干净、且与正确性相关」的 5 条规则，
+# 其余整组 disabled。这 5 条修完后基线恒为 0 条，新增违规必然可见 —— 才能真的拦住回归。
+# 详细口径见 AGENTS.md 第 6 节「静态检查基线」与 docs/ROADMAP.md M1 任务 4。
+root = true
+
+[*]
+charset = utf-8
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.{kt,kts}]
+ktlint_code_style = android_studio
+# 行宽交给 IDE 提示，不做成规则（最长行 259 字符，34 处 >120）。
+max_line_length = off
+# 先整组关掉，再逐条打开下面 5 条。
+ktlint_standard = disabled
+ktlint_standard_import-ordering = enabled
+ktlint_standard_no-unused-imports = enabled
+ktlint_standard_final-newline = enabled
+ktlint_standard_no-consecutive-blank-lines = enabled
+ktlint_standard_string-template = enabled
+
+[*.{xml,json,yml,yaml,md}]
+indent_size = 2

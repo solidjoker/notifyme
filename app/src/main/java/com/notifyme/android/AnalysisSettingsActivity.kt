@@ -16,14 +16,14 @@ import android.widget.Spinner
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import okhttp3.Credentials
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
-import kotlin.concurrent.thread
 
 /**
  * 分析设置页（自 ConsoleActivity 拆出，行为不变）：

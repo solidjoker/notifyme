@@ -322,4 +322,3 @@ class TopicLabelCoreTest {
         assertTrue(TopicLabelCore.topicRes(TopicLabelCore.TOPIC_FILTERED) != null)
     }
 }
-

@@ -29,10 +29,7 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.widget.NestedScrollView
-import java.text.SimpleDateFormat
 import java.util.Calendar
-import java.util.Date
-import java.util.Locale
 
 /**
  * 会话详情页：对话流 + 会话级分析面板（分析结果在对话后面显示）。
