@@ -6,7 +6,6 @@ package com.notifyme.android
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.provider.CalendarContract
 import android.util.Log
 
@@ -32,10 +31,11 @@ object CalendarHelper {
 
     /** 是否已持有日历读写权限。 */
     fun hasCalendarPermission(context: Context): Boolean {
-        return context.checkSelfPermission(android.Manifest.permission.READ_CALENDAR) ==
-            PackageManager.PERMISSION_GRANTED &&
-            context.checkSelfPermission(android.Manifest.permission.WRITE_CALENDAR) ==
-            PackageManager.PERMISSION_GRANTED
+        return PermissionGateCore.isGranted(
+            context.checkSelfPermission(android.Manifest.permission.READ_CALENDAR)
+        ) && PermissionGateCore.isGranted(
+            context.checkSelfPermission(android.Manifest.permission.WRITE_CALENDAR)
+        )
     }
 
     /**

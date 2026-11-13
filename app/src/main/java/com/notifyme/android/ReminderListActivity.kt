@@ -66,14 +66,11 @@ class ReminderListActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_reminder_list)
 
-        val conv = intent.getStringExtra(EXTRA_CONVERSATION)
-        filterKey = conv?.let {
-            ConvKey(
-                intent.getStringExtra(EXTRA_PKG)
-                    ?.takeIf { p -> p.isNotBlank() } ?: AppSourceRegistry.PKG_WECHAT,
-                it
-            )
-        }
+        // 空会话 = 不筛选（Intent 里的 extras 口径在 ConvExtrasCore）
+        filterKey = ConvExtrasCore.key(
+            intent.getStringExtra(EXTRA_CONVERSATION),
+            intent.getStringExtra(EXTRA_PKG)
+        )
         filter = ReminderListCore.normalizeFilter(savedInstanceState?.getString(STATE_FILTER))
 
         // 标题栏返回

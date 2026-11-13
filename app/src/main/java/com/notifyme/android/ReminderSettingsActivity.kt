@@ -5,7 +5,6 @@ package com.notifyme.android
 
 import android.app.Activity
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.View
 import android.widget.AdapterView
@@ -88,10 +87,7 @@ class ReminderSettingsActivity : Activity() {
     private fun requestCalendarPermission() {
         // minSdk 26（> M），日历权限可直接申请
         requestPermissions(
-            arrayOf(
-                android.Manifest.permission.READ_CALENDAR,
-                android.Manifest.permission.WRITE_CALENDAR
-            ),
+            PermissionGateCore.calendarPermissions(),
             REQ_CALENDAR
         )
     }
@@ -103,8 +99,7 @@ class ReminderSettingsActivity : Activity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQ_CALENDAR) {
-            val granted = grantResults.isNotEmpty() &&
-                grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+            val granted = PermissionGateCore.allGranted(grantResults)
             if (!granted) {
                 // 三级降级链下日历权限只影响 Level 1（直写系统日历）：
                 // 拒绝后不再回退开关，Level 2 唤起日历 App / Level 3 App 内闹钟仍可用

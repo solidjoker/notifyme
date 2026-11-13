@@ -8,7 +8,6 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
@@ -339,13 +338,14 @@ class ConsoleActivity : Activity() {
             )
         }
 
-        // Android 13+ 前台服务通知需要运行时权限，否则常驻通知不显示
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
+        // Android 13+ 前台服务通知需要运行时权限，否则常驻通知不显示（判定口径在 PermissionGateCore）
+        if (PermissionGateCore.needsPostNotifications(
+                Build.VERSION.SDK_INT,
+                checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+            )
         ) {
             requestPermissions(
-                arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                PermissionGateCore.postNotificationPermissions(),
                 REQ_POST_NOTIFICATIONS
             )
         }

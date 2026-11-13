@@ -164,14 +164,14 @@ class ConversationActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_conversation)
 
-        val conv = intent.getStringExtra(EXTRA_CONVERSATION).orEmpty()
-        if (conv.isEmpty()) {
+        // 缺会话名就关页；extras 口径在 ConvExtrasCore
+        key = ConvExtrasCore.key(
+            intent.getStringExtra(EXTRA_CONVERSATION),
+            intent.getStringExtra(EXTRA_PKG)
+        ) ?: run {
             finish()
             return
         }
-        val pkg = intent.getStringExtra(EXTRA_PKG)
-            ?.takeIf { it.isNotBlank() } ?: AppSourceRegistry.PKG_WECHAT
-        key = ConvKey(pkg, conv)
 
         scrollChat = findViewById(R.id.scrollChat)
         chatContainer = findViewById(R.id.chatContainer)
@@ -942,10 +942,7 @@ class ConversationActivity : Activity() {
         }
         pendingDraft = draft
         requestPermissions(
-            arrayOf(
-                android.Manifest.permission.READ_CALENDAR,
-                android.Manifest.permission.WRITE_CALENDAR
-            ),
+            PermissionGateCore.calendarPermissions(),
             REQ_CALENDAR_PERMISSION
         )
     }
