@@ -342,6 +342,12 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 `GET /advisor` 此时返回 200 + `{"ok": false, "reports": [], "error": "advisor archive is corrupted"}`（控制台不整页报错）。
 修好或删掉损坏文件后自动恢复。
 
+**`/suggests/next` 与 `/console` 的同一口径**：存档损坏时 `_advisor_state()` 返回的份数是 `None`（不是 `0`），
+所以`/suggests/next` 不会给「还没有顾问报告」这条误导性建议，改给 priority 85 的
+「顾问存档损坏，报告读不出来」（`evidence` = `顾问存档无法解析（advisor archive is corrupted）`）；
+控制台顾问 Tab 读 `res[2].ok === false` 置 `ADVISORS_ERR`，渲染 `errorState('advisor_archive')` 错误态并说明
+「修好之前新的顾问上报会一直失败、历史报告仍在服务器上」，**不再落进「还没有顾问报告」的空态**。
+
 ### GET /advisor —— 查询顾问报告（需 token）
 
 | 参数 | 说明 |
