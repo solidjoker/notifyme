@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（631 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（639 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -543,6 +543,11 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
     `test_queue.py` 新增 2 条（`/queue` 遇脏 `updated_at` 按过期保守处理、脏 `queued_at` 归一成 0）。
   - **计数**：服务端用例 625 → **631 条**；`stats_api.py` 191 / 168 → **212 / 187**，`storage.py` 816 / 759 → **819 / 762**，`routes.py` 1022 / 962 → **1034 / 974**。
 
+- **排队过期行只在「有设备上报」时才清 + 设备维度 `active` 不看 TTL（feat/queue-retention-cleanup）**
+  - 问题一：`DELETE FROM queue_tasks WHERE updated_at < ?` 只写在 `upsert_queue_tasks` 里 —— 所有设备停报（换机 / 卸载 / 关掉排队上报）之后过期行永远留着，`GET /queue` 的 `devices` 一直把早已离线的设备列成「有任务的设备」。实测：库里 4 行（1 fresh + 2 台 3 小时前的僵尸 + 1 行 9 天前的），一次都没 POST 过 → `summary.total=4`、`devices` 三台，9 天前的行仍在。
+  - 问题二：`queue_devices()` 的 `active = SUM(CASE WHEN state IN (queued,running) ...)` 完全不看 `updated_at`，与 `queue_summary` / `/stats` / `/suggests` 的「过期只计 `stale`、不计四状态」口径冲突 —— 同一时刻设备 chip 说「2 活跃」而汇总说 `running 1`。
+  - 修法：① `storage.cleanup_queue_tasks(now_ms=None)` 抽出保留期清理（`no such table` 返 0 不抛），`upsert_queue_tasks` 与 `app._maybe_cleanup_queue` 共用；② `app._ensure_db_ready` 在首次请求后按 `QUEUE_CLEANUP_INTERVAL_MS`（1 小时）节流清一次，清理抛异常只记日志不打断请求；③ `queue_devices()` 返回新增 `stale`，`active` 加 `typeof(updated_at) IN (integer, real) AND updated_at >= cutoff` 守卫（与 `stats_api` 的脏值口径一致）；④ 控制台设备 chip 渲染「· N 已过期」，脚注写明「7 天前的行会在读取或上报时顺带清掉」。
+  - 测试：`server/test_queue.py` 从 682 / 549 → **760 / 613** 行（+5 条：无写入也会清 / 保留期内不清 / 节流 / 清理失败不拖垮请求 / 脏 `updated_at` 的设备维度），`server/test_console_queue.py` 148 → **163 行**（+1 条设备 chip 文案），`server/test_stats_api.py` 662 → **670 行**（fixture 多复位一个节流戳，stale 行改成「1 小时前」而不是 1970）。服务端用例 **631 → 639 条**全绿；`storage.py` 819 → **864 行**、`app.py` 719 → **742 行**、`console_ui.py` 3474 → **3480 行**。
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：

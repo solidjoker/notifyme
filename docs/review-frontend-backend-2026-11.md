@@ -1089,3 +1089,54 @@ CONV_KEY_SQL = "pkg || char(1) || conversation"
 **计数**：`stats_api.py` 191 / 168 → **212 / 187**（非空行同改），`storage.py` 816 / 759 → **819 / 762**，`routes.py` 1022 / 962 → **1034 / 974**，
 `test_stats_api.py` 545 / 457 → **662 / 559**，`test_queue.py` 645 / 519 → **682 / 549**；服务端用例 625 → **631**。
 
+### E-56｜排队过期行只在「有设备上报」时才清 + 设备维度 `active` 不看 TTL（feat/queue-retention-cleanup，2026-11-14）
+
+**问题**：`server/README.md` 承诺「表 `queue_tasks` 保留 7 天」，但清理语句只写在 `server/storage.py` 的 `upsert_queue_tasks` 里，
+`app._ensure_db_ready` 首次请求只调 `init_db()`、不清理。所有设备停报之后（换机 / 卸载 / 关掉排队上报）过期行再也不会被清。
+同时 `queue_devices()` 的 `active` 是 `SUM(CASE WHEN state IN (queued,running) THEN 1 ELSE 0 END)`，完全不看 `updated_at`，
+与 `queue_summary()` / `/stats` 的 `queue` 段 / `suggests._queue_state()` 的「过期只计 `stale`、不计四状态」口径冲突。
+
+**复现**：三台设备造 4 行（1 条 fresh running + 2 台 3 小时前的僵尸 running + 1 行 9 天前的 done），一次都不 POST，直接 `GET /queue`：
+
+```
+summary = {devices: 3, done: 0, failed: 0, queued: 0, running: 1, stale: 3, total: 4}
+devices = [{active: 2, device_id: android-zombie, total: 2},
+           {active: 1, device_id: android-fresh,  total: 1},
+           {active: 0, device_id: android-old,    total: 1}]
+```
+
+9 天前的行仍在库里（保留期承诺不成立），僵尸设备的 `active=2` 与控制台汇总的 `running 1` 打架。
+
+**为什么 631 条全绿却没发现**：既有用例只验「写入时清理」（`test_old_rows_cleaned_on_write` 插 8 天前行 + POST → 只剩 fresh）；
+设备维度只有「`active` 只算 queued/running」（`test_devices_active_counts_only_queued_and_running`）和
+「过期行仍计入 total」（`test_devices_counts_stale_rows_in_total` 断言 `active == 2`）—— 后者把缺陷写成了期望。
+
+**修法**（四条）：
+
+1. `server/storage.py` 新增 `QUEUE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000` 与 `cleanup_queue_tasks(now_ms=None)`：
+   `cutoff = now_ms - QUEUE_RETENTION_MS`，`DELETE FROM queue_tasks WHERE updated_at < ?`，返回 `cur.rowcount`；
+   `no such table` 返 0（老库没跑过 `init_db`），其它 `OperationalError` 照旧抛。
+2. `server/app.py` 新增模块级 `_queue_cleanup_at = 0` 与 `_maybe_cleanup_queue(now_ms)`：未到间隔直接返回，
+   到了就更新戳并调 `cleanup_queue_tasks(now_ms)`，`except Exception: logger.warning(...)` 不打断请求；
+   由 `@app.before_request _ensure_db_ready()` 在 `init_db()` 之后无条件调一次。
+   **为什么节流**：`updated_at` 上没有索引，这条 `DELETE` 是全表扫描，一小时一次足够；不节流等于每个请求扫一遍排队表。
+3. `queue_devices()` 改成 `DELETE` 之外的全库聚合：`fresh = "typeof(updated_at) IN ('integer', 'real') AND updated_at >= ?"`，
+   `active` 加 `AND <fresh>`，新增 `SUM(CASE WHEN <fresh> THEN 0 ELSE 1 END) AS stale`，返回值多一个 `stale` 键。
+   `typeof` 守卫与 `stats_api.INT_ONLY_TS` 同口径：`updated_at` 被写成 TEXT 时按过期处理，不拿它冒充在跑。
+4. `server/console_ui.py` 设备 chip 读 `devices[].stale` 渲染「· N 已过期」，`queueSummaryCard()` 脚注补
+   「设备 chip 上的「活跃」只算未过期的条目……7 天前的行会在读取或上报时顺带清掉」。
+
+**测试**：`server/test_queue.py` 682 / 549 → **760 / 613**（+5 条：`test_old_rows_cleaned_without_any_write` /
+`test_rows_within_retention_survive_cleanup` / `test_cleanup_is_throttled_by_interval` / `test_cleanup_failure_does_not_break_requests` /
+脏 `updated_at` 的设备维度断言），两条既有期望改成 TTL 口径（`test_devices_counts_stale_rows_in_total` 现在断言 `total 2 / active 1 / stale 1`，
+并加「与 `summary` 对得上」）；`server/test_stats_api.py` 662 → **670 行**（fixture 的 `old` 元组从 7 项变 8 项、stale 行从 `updated_at=1` 改成「1 小时前」）；
+`server/test_console_queue.py` 148 → **163 行**（设备 chip 文案断言）；`server/test_module_split.py` 325 → **328 行**（登记 `cleanup_queue_tasks` → storage.py、`_maybe_cleanup_queue` → app.py、`_queue_cleanup_at` → `RUNTIME_STATE`）。
+
+**为什么 stale 行要改成「1 小时前」**：读取路径现在会清掉超过保留期（7 天）的行，`updated_at=1`（1970）的行在 `before_request` 就被删了，
+那条用例验的「过期但还在库里的中间态」就永远不成立 —— 测试夹具必须落在「超 TTL、但没超保留期」这条窄缝里。
+
+**验证**：`python -m pytest server/ -q` **639 passed in 28.75s**；`python -m compileall -q server` EXIT=0。
+
+**计数**：`storage.py` 819 → **864**（非空 762 → **803**），`app.py` 719 → **742**（607 → **627**），`console_ui.py` 3474 → **3480**（3385 → **3391**），
+`test_queue.py` 682 → **760**，`test_stats_api.py` 662 → **670**，`test_console_queue.py` 148 → **163**，`test_module_split.py` 325 → **328**；服务端用例 631 → **639**。
+

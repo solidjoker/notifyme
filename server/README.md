@@ -359,7 +359,7 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 返回 `{"ok": true, "accepted": n, "rejected": [{"index": i, "reason": "..."}]}`；
 非法条目**逐条拒收**，不影响同批其余条目（这里不走 207，而是 200 + `rejected` 清单）。
 
-存储：表 `queue_tasks` 保留 7 天，`updated_at` 超 30 分钟未更新的条目读时算 `stale`（不回报写）。
+存储：表 `queue_tasks` 保留 7 天，`updated_at` 超 30 分钟未更新的条目读时算 `stale`（不回报写）。清理有两处：**上报时顺带清**（`upsert_queue_tasks` 里的 `DELETE`），以及 **读取前顺带清**（`_ensure_db_ready` → `cleanup_queue_tasks`，按 `QUEUE_CLEANUP_INTERVAL_MS` 一小时一次节流）。只留上报那一处是不够的：所有设备停报（换机 / 卸载 / 关掉排队上报）之后过期行永远不会被清，`devices` 会一直挂着早已离线的设备。
 
 ### GET /queue —— 查询排队任务（需 token）
 
@@ -375,7 +375,7 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 - `summary` 是**全库口径** —— 只看 `device_id` / `state`，**不受 `limit` 截断**，与 `GET /stats` 的 `queue` 段同一套过期口径；
   `total` = 全库行数，过期行只计进 `stale`、不再计入四个状态位；
 - `devices` 是**全库设备清单** —— 不受任何过滤影响，`summary.devices = len(devices)`；
-  每项含 `device_id` / `total` / `active`（`active` = queued + running）。
+  每项含 `device_id` / `total` / `active` / `stale`：`total` 是库里现存条数（不做过期剔除），  `active` 只算**未过期**的 `queued` + `running`，`stale` 是过期（或 `updated_at` 认不出）的条数。  设备维度的 `active` 必须与 `summary` 同一套过期口径，否则同一时刻设备 chip 说「2 活跃」  而汇总说 `running 0`。
 
 > 为什么不按当前页统计：任务超一页（默认 200）时按页统计会把总数显示成 200，
 > 而同一时刻 `/stats` 与 `devices` 给的是全库真值，控制台「排队」Tab 与「统计」Tab 的数字就对不上。

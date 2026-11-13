@@ -93,6 +93,21 @@ def test_queue_summary_card_states_full_library_scope():
     assert "上方汇总为全库口径" in HTML, "排队汇总没有标注全库口径"
     assert "下方列表最多显示最近 500 条" in HTML, "排队列表没有标注条数上限"
 
+def test_queue_device_chip_shows_stale_and_retention_note():
+    """设备 chip 的「活跃」必须只算未过期，并把过期条数单独标出来。
+
+    设备维度以前直接数 state（不看 TTL）：同一时刻设备 chip 说「2 活跃」、
+    上方汇总说 running 0。现在 chip 走 devices[].active（已过 TTL 口径），
+    额外的 devices[].stale 渲染成「· N 已过期」，并在脚注说明保留期清理。
+    """
+    assert "var sl = Number((d && d.stale) || 0);" in HTML, \
+        "设备 chip 没有读 stale 计数"
+    assert "' + esc(sl) + ' 已过期'" in HTML, \
+        "设备 chip 没有渲染已过期条数"
+    assert "7 天前的行会在读取或上报时顺带清掉" in HTML, \
+        "排队脚注没有说明保留期清理"
+
+
 def test_queue_empty_state_registered():
     assert "emptyStateFor('queue')" in HTML, "排队 tab 没有空态"
 

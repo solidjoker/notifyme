@@ -519,6 +519,9 @@ QUEUE_TTL_MS = 30 * 60 * 1000
 # 行保留时长：任务状态只是「当下」的快照，7 天前的行没有参考价值，
 # 写入时顺带清掉，避免表无限膨胀。
 QUEUE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+# 读取路径的清理节流间隔：清理是一次 DELETE 全表扫描（updated_at 上没有索引），
+# 每个请求都做没必要 —— 一小时一次足够。
+QUEUE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
 # 单次查询返回条数上限（服务端也夹紧，防止一个 limit=999999 打爆内存）
 QUEUE_MAX_LIMIT = 500
 # 控制台默认一屏要看多少条
@@ -656,6 +659,36 @@ def upsert_queue_tasks(items, now_ms):
     return len(rows), rejected
 
 
+def cleanup_queue_tasks(now_ms=None):
+    """清掉超过 QUEUE_RETENTION_MS 的排队行，返回删除条数。
+
+    以前清理只写在 upsert_queue_tasks 里：只要有设备在报，「保留 7 天」就成立。
+    但所有设备都停报之后（换机 / 卸载 / 关掉排队上报），过期行再也不会被清 ——
+    库里留着几天前的任务，GET /queue 的 devices 聚合还把那些僵尸设备当成
+    「有任务的设备」列出来，控制台设备 chip 一直挂着一个早已离线的设备。
+    所以除了写入时顺带清，首次请求（app._ensure_db_ready）也按
+    QUEUE_CLEANUP_INTERVAL_MS 节流清一次。
+
+    now_ms 为空取当前时间（测试可注入）；表还没建返 0，不抛异常。
+    """
+    import app as app_module
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+    cutoff = int(now_ms) - QUEUE_RETENTION_MS
+    conn = app_module._connect()
+    try:
+        with conn:
+            cur = conn.execute("DELETE FROM queue_tasks WHERE updated_at < ?", (cutoff,))
+            removed = cur.rowcount
+    except sqlite3.OperationalError as e:
+        # 表还没建（老库没跑过 init_db）：当「没有可清的」
+        if "no such table" in str(e).lower():
+            return 0
+        raise
+    finally:
+        conn.close()
+    return max(0, removed)
+
 def query_queue_tasks(device_id=None, state=None, limit=QUEUE_DEFAULT_LIMIT):
     """查询排队任务（按 updated_at 倒序，最新的在前）。
 
@@ -779,24 +812,35 @@ def queue_summary(device_id=None, state=None):
 def queue_devices():
     """统计库里出现过哪几台设备（回答「有哪几台设备」）。
 
-    返回：[{"device_id": str, "total": int, "active": int}, ...]
-    - total ：该设备在队列表里的总条数（含各种状态）
-    - active：其中 state 为排队中 / 运行中的条数（还在跑的）
+    返回：[{"device_id": str, "total": int, "active": int, "stale": int}, ...]
+    - total ：该设备在队列表里的总条数（含各种状态、含过期行）
+    - active：其中「还在跑的」条数 —— state 为排队中 / 运行中，
+              **且 updated_at 未过期**（超过 QUEUE_TTL_MS 的行不算在跑）
+    - stale ：其中已过期（或 updated_at 认不出）的条数
     排序：active 倒序 -> total 倒序 -> device_id 升序（结果稳定可复现）。
 
     一条 SQL 搞定分组聚合：按 device_id 分组，COUNT(*) 给总数，
-    SUM(CASE WHEN state IN (...) THEN 1 ELSE 0 END) 给在跑数。
-    「在跑」判定引用模块常量 QUEUE_ACTIVE_STATES（queued / running），
-    不另写一份状态字面量。
+    两个 SUM(CASE ...) 给在跑数 / 过期数。「在跑」判定引用模块常量
+    QUEUE_ACTIVE_STATES（queued / running），不另写一份状态字面量。
+
+    active 必须过 TTL：queue_summary() 与 /stats 的 queue 段都是「过期只计
+    stale、不计四状态」，设备维度不跟着走就会出现同一时刻设备 chip 说
+    「2 活跃」而汇总说 running 1（真机复现过，两台设备都停报之后僵尸设备
+    永远挂着 active=2）。typeof 守卫与 stats_api 同口径：脏值（updated_at 被
+    写成 TEXT）一律按过期处理，不拿它冒充在跑。
     """
     import app as app_module
     placeholders = ",".join("?" * len(QUEUE_ACTIVE_STATES))
+    now_ms = int(time.time() * 1000)
+    cutoff = now_ms - QUEUE_TTL_MS
+    fresh = "typeof(updated_at) IN ('integer', 'real') AND updated_at >= ?"
     sql = (
         "SELECT device_id, COUNT(*) AS total, "
-        "SUM(CASE WHEN state IN (%s) THEN 1 ELSE 0 END) AS active "
+        "SUM(CASE WHEN state IN (" + placeholders + ") AND " + fresh + " THEN 1 ELSE 0 END) AS active, "
+        "SUM(CASE WHEN " + fresh + " THEN 0 ELSE 1 END) AS stale "
         "FROM queue_tasks GROUP BY device_id "
-        "ORDER BY active DESC, total DESC, device_id ASC" % placeholders)
-    params = list(QUEUE_ACTIVE_STATES)
+        "ORDER BY active DESC, total DESC, device_id ASC")
+    params = list(QUEUE_ACTIVE_STATES) + [cutoff, cutoff]
     conn = app_module._connect()
     try:
         rows = conn.execute(sql, params).fetchall()
@@ -813,6 +857,7 @@ def queue_devices():
             "device_id": row[0],
             "total": app_module._safe_int(row[1], default=0, lo=0),
             "active": app_module._safe_int(row[2], default=0, lo=0),
+            "stale": app_module._safe_int(row[3], default=0, lo=0),
         })
     return devices
 

@@ -57,7 +57,8 @@ from storage import (
     _connect, _ensure_index, _import_extract_module, _load_advisor_reports,
     _normalize_advisor_item, _probe_main_db_writable, _run_extract_bg,
     _save_advisor_reports, _trim_advisor_jsonl, _write_advisor_jsonl,
-    _write_advisor_snapshot, init_db,
+    _write_advisor_snapshot, QUEUE_CLEANUP_INTERVAL_MS, cleanup_queue_tasks,
+    init_db,
 )
 from routes import (
     admin_extract, admin_extract_status, query_advisor, query_analysis, query_messages,
@@ -101,18 +102,40 @@ suggests.register(app)
 # 改成：第一次请求前惰性初始化（幂等），任何启动方式都覆盖到。
 _db_ready = False
 _db_lock = threading.Lock()
+# 排队任务的过期行清理节流时间戳（毫秒）。清理只写在 upsert_queue_tasks 里时，
+# 所有设备都停报之后就再也没有人清 —— 库里留着几天前的任务，控制台的设备
+# chip 一直挂着一个早已离线的设备。这里按 QUEUE_CLEANUP_INTERVAL_MS 节流，
+# 每个进程每小时最多清一次。
+_queue_cleanup_at = 0
+
+
+def _maybe_cleanup_queue(now_ms):
+    """按节流间隔清一次排队任务的过期行；失败只记日志，不影响请求。
+
+    清理是一次 DELETE（updated_at 上没有索引，走全表扫），所以不能每请求都做。
+    调用点在 _ensure_db_ready 之后：表已建好，失败也不该把用户的请求打成 500。
+    """
+    global _queue_cleanup_at
+    if now_ms - _queue_cleanup_at < QUEUE_CLEANUP_INTERVAL_MS:
+        return None
+    _queue_cleanup_at = now_ms
+    try:
+        cleanup_queue_tasks(now_ms)
+    except Exception:  # noqa: BLE001 - 清理是维护任务，不能连累请求
+        logger.warning("queue cleanup failed", exc_info=True)
+    return None
 
 
 @app.before_request
 def _ensure_db_ready():
-    """首次请求前建表建索引；已初始化则直接放行（开销可忽略）。"""
+    """首次请求前建表建索引；之后按节流间隔清一次排队过期行。"""
     global _db_ready
-    if _db_ready:
-        return None
-    with _db_lock:
-        if not _db_ready:
-            init_db()
-            _db_ready = True
+    if not _db_ready:
+        with _db_lock:
+            if not _db_ready:
+                init_db()
+                _db_ready = True
+    _maybe_cleanup_queue(int(time.time() * 1000))
     return None
 
 
