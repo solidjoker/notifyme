@@ -696,6 +696,25 @@ E-36｜资源字符串的数字槽位统一走 `templateText`（feat/format-temp
 - `%N$d` 吃任何 `Number`（`String.format` 对 `%d` + `Double` 抛 `IllegalFormatConversionException`；`%.0f` + `Int` 同理 —— 现有调用点里 `analysis_prob_fmt` 传的是 `Double`、`chip_need_action_no` 传的是 `Int`，两边都得能过）；
 - 悬空 `%` / 未知占位 / 缺参降级不抛（宁可少一个数，也不让一条资源写坏把整屏文案吞掉）。
 
-**测试**：`app/src/test/java/com/notifyme/android/FormatTemplateTest.kt` **16 条**，其中两条是根因本身的正反对照 —— `integerSlotStaysAsciiUnderArabicLocale`（ar-EG 下 `format` 出 `200 条`，同一模板交给 `String.format` 出的是本地数字）、`decimalSlotKeepsDotUnderGermanLocale`（de-DE 下 `format` 出 `重要度 2.0`，旧写法出 `重要度 2,0`）。另 1 条**资源契约测试**直接读 `strings.xml`：扫到所有含数值槽位的模板（≥50 条），摘掉位置化槽位与 `%%` 后只要还剩 `%` 就判失败 —— 这条能拦住「新加资源时顺手写裸 `%d`」的回归。
+**测试**：`app/src/test/java/com/notifyme/android/FormatTemplateTest.kt` **15 条**，其中两条是根因本身的正反对照 —— `integerSlotStaysAsciiUnderArabicLocale`（ar-EG 下 `format` 出 `200 条`，同一模板交给 `String.format` 出的是本地数字）、`decimalSlotKeepsDotUnderGermanLocale`（de-DE 下 `format` 出 `重要度 2.0`，旧写法出 `重要度 2,0`）。另 1 条**资源契约测试**直接读 `strings.xml`：扫到所有含数值槽位的模板（≥50 条），摘掉位置化槽位与 `%%` 后只要还剩 `%` 就判失败 —— 这条能拦住「新加资源时顺手写裸 `%d`」的回归。
 
 **计数**：`LocaleTextCore.kt` 93 → **161 行**、新增 `ContextTemplateText.kt` 29 行；主源码顶层 119 → **120**（全树 127）、`app/src/test` 73 → **74 个 .kt**、全量单测 1142 → **1157 条**（`COUNT_FILES=73 TESTCASES=1157`，skip 仍是 `S1EvalHttpTest`）；lint 仍是刻意保留的三条 warning / 0 error。
+
+E-37｜静态检查基线落地：ktlint 只开 5 条 + lint 基线断言（feat/static-check-baseline，2026-11-13）
+
+**问题**：`docs/ROADMAP.md` 的 M1 任务 4「可选：detekt/ktlint 基线（只报警不阻断），lint.xml 收口」从 M1 起一直开着，是全仓库唯一没闭合的工程项。它留下三个具体后果：① `lintOpenDebug` 那 3 条 warning（`ObsoleteLintCustomCheck` / `OldTargetApi` / `ChromeOsAbiSupport`）此前只靠人记着「这是刻意的」，第 4 条警告混进来没人拦得住；② 仓库根本没有格式口径 —— 205 个 `.kt` 里 LF 61 / CRLF 144 混用、29 个文件缺末行换行、13 个文件有 unused import、12 处连续空行、9 处 `"${it}"` 这种字符串模板套单变量，纯噪音却每次 review 都要人眼过；③ 没有 `lint.xml`，任何依赖升级带来的新 lint 规则都会无声地变成噪音，久而久之「看报告」这件事就被放弃了。
+
+**为什么不采用 ktlint 官方全量规则集**：按默认 `android_studio`（= 官方全量 standard）跑 `app/src/**/*.kt` 是 **8134 条命中 / 44 条规则**（`function-signature` 1722、`indent` 1615、`trailing-comma-on-call-site` 1044、`multiline-expression-wrapping` 997、`argument-list-wrapping` 522、`chain-method-continuation` 485 …）。这些是格式化偏好而不是缺陷，一次性重排会把 205 个文件的 diff 搅成噪声；而且和本仓库既有事实直接冲突（最长行 259 字符、34 处 >120 字符）。收窄成 5 条之后，每一条都对应真实的可读性 / 合并冲突代价，且全部能被 `--format` 自动修干净：`import-ordering`（34）/ `final-newline`（29）/ `no-unused-imports`（13）/ `no-consecutive-blank-lines`（12）/ `string-template`（9）= **97 条**。
+
+**修法**：
+1. 仓库根新增 `.editorconfig`：`root = true`，`[*]` 定 utf-8 / space / 4 / trim trailing / final newline，`[*.{kt,kts}]` 里 `ktlint_code_style = android_studio`、`max_line_length = off`、`ktlint_standard = disabled` 后逐条启用上面 5 条，`[*.{xml,json,yml,yaml,md}]` 用 2 空格。头注释写明「默认规则集 8134 条」这句事实与拒绝理由 —— 免得后来者以为是漏配。
+2. 一次 `--format` 清账：70 个文件、**+102/−128 行**（删 13 个 unused import、重排 34 个文件的 import 块、补 29 个末行换行、删 12 处连续空行、9 处多余 `${}`）。修完 `testOpenDebugUnitTest` 仍是 **1157 条全绿** —— 纯格式改动没碰语义，基线从此恒为 0，任何新增违规都必然可见。
+3. `docs/scripts/static_check.py`（217 行）是唯一入口：ktlint 版本 `1.8.0` 与 `sha256 369ad2b789f95a011f807e1fcb690ccef80bd7cd014fd139e73ae82dcc0baeab` 钉死在代码里（与 Maven Central 的 `.sha256` 双向核对过，不符即删），jar 缓存在 `~/.notifyme-tools/ktlint/1.8.0/`（`NOTIFYME_KTLINT_JAR` 可直指、`NOTIFYME_TOOLS_DIR` 换缓存根）。三种模式：默认 `--report` 有命中仍 exit 0（CI 只报警）、`--strict` 有命中 exit 1（本地自检）、`--fix` 先 `--format` 再复查。末行固定 `static-check-summary issues=<n> files=<n> rules=<n> enabled=5`；出现 5 条之外的规则会额外告警并**强制 exit 1**，防 `.editorconfig` 与脚本悄悄漂移。
+4. `app/lint.xml` 刻意「什么都不改」：不 ignore、不降级。只接受那 3 条已知 issue，与其 ignore 掉让「第 4 条」从报告里消失，不如让它们一直可见，由 `local_check.ps1` 的 `lint-summary` 断言「报告里的 issue id 集合恰好等于这三条」—— 多一条或少一条都本地失败，等于给 lint 装了回归护栏。
+5. 接线：`docs/scripts/local_check.ps1` 从六步变**七步**（第 7 步 `static_check.py --strict`）；`.github/workflows/android.yml` 加同名只读步骤 `python3 docs/scripts/static_check.py`，插在「Python syntax check」之前。**不上 Gradle 插件**：`org.jlleitschuh.gradle:ktlint-gradle` 在 Maven Central 是 404、只在 Plugin Portal 有，且会改 Gradle 依赖图与首次构建时长；独立 CLI jar 版本可控、sha256 可校验、不参与构建图，更符合「只报警」定位。
+
+**验证**：`static_check.py --strict` → `issues=0 files=0 rules=0 enabled=5`、exit 0；`local_check.ps1` 七步全 PASS（`server-tests 513 passed` / `python-syntax` / `privacy-guard 已跟踪 376 + 未跟踪未忽略 3` / `version-check 0.3.19+25` / `android BUILD SUCCESSFUL in 26s` / `lint-summary issues=3 errors=0 baseline-drift=0` / `static-check PASS`），日志目录 `notifyme-local-check-20261113-131138`，打印「全部通过，可以开 PR。」。
+
+**两个踩坑（写进 AGENTS.md）**：① ktlint 的 glob 是 gitignore 风格、从 cwd 起算，`app/src/**/*.kt` 会连 `third_party/llama.cpp/examples/llama.android/app/src/...` 一起命中（多出 52 条噪声），必须加 `!third_party/**` 才回到 97；② `docs/scripts/local_check.ps1` 必须保持 **UTF-8 + BOM**，`tools.edit` 写回后 BOM 会丢，PowerShell 5.1 随即把中文当 GBK 解析、抛一串 `Missing closing '}' in statement block` 且 `CHECK_EXIT=1`。
+
+**口径变更**：从本轮起 `local_check.ps1` 是**七步**（原六步 + `static-check`），`lint-summary` 从「数 issue 条数」升级为「断言 id 集合 = 三条基线」。上文 E-28 ~ E-36 里出现的「六项全 PASS」是各自当时的真实状态（第 7 步尚未加入），不回改。
