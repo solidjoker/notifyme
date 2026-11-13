@@ -98,6 +98,7 @@ EXPECTED_OWNER = {
     "_safe_int": "util.py",
     "_clamp_int": "util.py",
     "_safe_bool": "util.py",
+    "_advisor_ts": "util.py",
     "_parse_cursor": "util.py",
     "_parse_tz_offset": "util.py",
     "_fmt_tz_offset": "util.py",

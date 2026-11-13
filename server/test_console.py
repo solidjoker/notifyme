@@ -205,7 +205,7 @@ def test_advisor_render_escapes_server_data():
         assert field in block, "顾问渲染缺少字段 %s" % field
         raw = "' + %s + '" % field
         assert raw not in block, "%s 未转义就拼进 HTML" % field
-    assert "esc(r.created_at || '')" in block
+    assert "esc(stampText(r.created_at))" in block
     assert "esc(r.model_used || '—')" in block
     assert "esc(r.summary)" in block
     assert "esc(s.title || '')" in block

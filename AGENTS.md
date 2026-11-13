@@ -203,7 +203,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **首页「按来源 App」筛选 chips 的口径在 `AppFilterCore`**（internal object + 16 条单测；`AppFilterStore` 只存 `app_filter` / `selected_pkg`）。四条契约：① chip 只列当前窗口内真出现过的来源（`MessageStore.readRecent(500)` 口径），不列 `AppSourceRegistry` 全集 —— 点了必然空白的 chip 比不给更差；② 顺序对齐 PWA `appTabList()`：全部 → 微信 → 其余按展示名码点（「钉钉」U+9489 在「飞书」U+98DE 之前，别按字母直觉排）；③ `resolve()` 渲染前把失效选中项回落「全部」并落盘，否则清库 / 停用 / 换机后整页空掉且没有能点的 chip；④ 首页待办 `todoVisibleKeys` 必须同口径过滤。改前跑 `AppFilterCoreTest.kt`。
 
-- **分析范围（M12）的口径全在 `AnalysisScopeCore`**（public object + 30 条单测；`AnalysisScopeStore` 是 internal，只负责落盘）。五条契约：① **落盘只存选择不存毫秒**（period + 自定义起止 + `convIds`）—— 存毫秒会把「近 7 天」钉死在保存那天；设置页回填用 `loadStored()`。② **forceKey 不受范围约束**：`immediateScope(hasForceKey, picked)` 直接返 `UNLIMITED`。③ **点名会话 = 显式**：`forced()` 跳过来源启用集合与 DONE/NOISE（`isBlocked` 任何情况不放行）；但 **`skipDedup()` 只在手动轮放开去重** —— 周期任务也跳会反复烧 token。④ 「近 N 天」含今天，自定义结束日取 23:59:59.999、反填自动交换；`parseDay` 回读校验，2 月 30 日返 null。⑤ 会话 id 用 JSONArray（`encodeConvIds` / `decodeConvIds`）—— 会话名含 `|` 与逗号，逗号拼接会切坏；坏 JSON 返空集。改前跑 `AnalysisScopeCoreTest.kt`。
+- **分析范围（M12）的口径全在 `AnalysisScopeCore`**（public object + 30 条单测；`AnalysisScopeStore` 是 internal，只负责落盘）。五条契约：① **落盘只存选择不存毫秒**（period + 自定义起止 + `convIds`）—— 存毫秒会把「近 7 天」钉死；回填用 `loadStored()`。② **forceKey 不受范围约束**：`immediateScope(hasForceKey, picked)` 直接返 `UNLIMITED`。③ **点名会话 = 显式**：`forced()` 跳过来源启用集合与 DONE/NOISE（`isBlocked` 任何情况不放行）；但 **`skipDedup()` 只在手动轮放开去重** —— 周期任务也跳会反复烧 token。④ 「近 N 天」含今天，自定义结束日取 23:59:59.999、反填自动交换；`parseDay` 回读校验，2 月 30 日返 null。⑤ 会话 id 用 JSONArray（`encodeConvIds` / `decodeConvIds`）—— 会话名含 `|` 与逗号，逗号拼接会切坏；坏 JSON 返空集。改前跑 `AnalysisScopeCoreTest.kt`。
 - **姓名别名的盐只有一份口径：`AliasSaltCore` / `AliasSaltStore`**（`AliasSaltCore` 是 `object` 纯函数 + 16 条单测；`AliasSaltStore` 是 internal，只负责落盘）。别名摘要输入是 `sha256(盐 ‖ 0x00 ‖ 名字)` 取前 6 位 hex，盐是本机 `SecureRandom` 32 字节、存 `privacy_config` 的 `alias_salt` 键（所以 `PrivacyConfig.PREFS_NAME` 是 `internal const`，别改回 private 另开 prefs 文件）。四条契约：
   ① **盐为空必须逐字节退化为 `sha256(名字)`**（`LEGACY_SALT = ByteArray(0)`）—— 老设备升级后历史别名不能变，改摘要输入等于让所有历史脱敏记录对不上号；
   ② `decode` 对非 64 字符 / 非 hex 返回 **null 而不是抛**，调用方就地重生成（`ensure` 第二项为 null 表示「无需落盘」，别无条件写回）；
@@ -216,7 +216,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **首页搜索的四类命中口径全在 `SearchCore`**（internal object + 44 条单测），别在 `buildFeed` 里写 inline `contains`。① 匹配面 = 会话名 ∪ 来源 App 名 ∪ 消息（发送者/正文）∪ 该会话**全部历史**分析结论；② `caseParts()` 是结论字段清单唯一出处，**码值必须先经 `labelOf` 翻中文再匹配**，`none` 排除，`caseId`/`rawJson` 不收；③ 折叠统一走 `forcedExpand(query, hit)`；④ `hitKind()` 只回码值，Core 不碰资源表。改前跑 `SearchCoreTest.kt`。
 
-- **topic / due_window 的码值→中文映射只有一份口径：`TopicLabelCore`**（internal object，纯函数 + 33 条单测）。以前四处各写一套（`AnalysisListActivity` 两个 private fun、`ConversationActivity` 同名两个、`MainActivity.searchLabel`、Adapter 内 `topicLabel`），空值策略三套、中文档名只有两处认，已全部删除。四条契约：
+- **topic / due_window 的码值→中文映射只有一份口径：`TopicLabelCore`**（internal object，纯函数 + 33 条单测）。以前四处各写一套、空值策略三套，已全部删除。四条契约：
   ① **归一与显示分开**：`normalizeTopic` / `normalizeDue` 只做码值↔中文档名的双向归一（返回英文码值），`topicRes` / `dueRes` 只回资源 id，`topicLabel` / `dueLabel` / `anyLabel` 才做 `getString` —— 因为单测是纯 JVM（无资源），Core 里不能出现中文字面量。
   ② **未知值原样显示，空值才回落**：`topicRes` / `dueRes` 对未知值返回 null（`topicLabel` 原样回显）；只有**空串**才回落 `topic_notice` / `due_none`。预筛结案写的 `s1Topic = "filtered"` 是第六种取值，单独映射为 `topic_filtered`=「已预筛过滤」；别把它归进 notice 桶。
   ③ **「该显示哪一份截止」的优先序只在 `displayDueCode`**：todoDue → s2DueTime → s1DueWindow（与 `AnalysisStore.displayDue()` 同序，改一处必须同时改另一处）；`hasDisplayDue` 把 `none` / 空串归为「不显示」。**别再写 `dueText != "none"` 这种拿码值比中文串的判定** —— 永远不相等，之前首页未编辑过的待办卡就渲染成「· 截止：none」；待办编辑框回填走 `editDueLabel`（只看 todoDue，不回落 s2/s1，否则保存就把分析结果变成硬覆盖）。
@@ -224,10 +224,10 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   改码值集合、回落策略或「截止」优先序前先跑 `app/src/test/java/com/notifyme/android/TopicLabelCoreTest.kt`（33 条）。
 - **提醒列表的分组 / 排序 / 筛选口径全在 `ReminderListCore`**（internal object，纯函数 + 36 条单测），别在 `ReminderListActivity` 或 Adapter 里另写一套：
   ① **三组顺序是契约**：「需要处理 → 生效中 → 已过期」（`groupRank`），`failed` 与 `intent` 都归「需要处理」但 **`failed` 排在 `intent` 之前**（`attentionRank`）——失败的需要重试，待保存的只是差一步。
-  ② **两条保守判定不能改**：`event_time <= 0` 不算过期（等于把「没写时间」当成「已过期」，用户会删掉可能有效的记录）；`failed` 永不算过期（它的语义是「等你重试」，不是「过去了」）。这两条与 `Retention.kt` 的 `ReminderRetentionCore.stillPending`（`status != failed && event_time > now`）口径一致，两处别把方向写反。
+  ② **两条保守判定不能改**：`event_time <= 0` 不算过期（否则用户会删掉有效记录）；`failed` 永不算过期（语义是「等你重试」）。与 `ReminderRetentionCore.stillPending` 口径一致，别把方向写反。
   ③ **组内方向不得统一**：attention / active 按事件时间**升序**（马上要到的在上），expired **降序**（刚过期的在上），无时间始终垫组内最后。实现是先把比较键算进 `Arranged` 包装再一次 `sortedWith`，**别在比较器里反复调 `groupOf`**（O(n log n) 次状态判定）。
   ④ **不拿 `created_at` 兜底**：比较器只比到 `event_time`，完全同键时靠 JVM 稳定排序保证传入顺序（`ReminderStore.readAll` 已是 `created_at` 倒序）。之前加了 `createdAtOf` 兜底一度把「同键保序」单测弄红，别加回去。
-  ⑤ **筛选到某一组时不插分组标题**（整页同组时标题是噪音），但 chip 本身始终全四个（`FILTERS` 顺序 = 全部 / 需要处理 / 生效中 / 已过期）；空态文案区分「一条记录都没有」（`emptyFilter` 返 null）与「本组没有」，否则点了 chip 看到空白会以为数据丢了；`emptyFilter(totalCount, visibleCount, filter)` 的第二个参数是**筛选后可见条数**，只判 `totalCount > 0 && filter != ALL` 就返回码值会让「命中多条」的页面同时显示列表和空态横幅（真机复现过）。
+  ⑤ **筛选到某一组时不插分组标题**，但 chip 始终全四个（`FILTERS` = 全部 / 需要处理 / 生效中 / 已过期）；空态区分「一条都没有」（`emptyFilter` 返 null）与「本组没有」；`emptyFilter(totalCount, visibleCount, filter)` 第二参是**筛选后可见条数**，只判总数会让「命中多条」的页面同时显示列表与空态横幅（真机复现过）。
   改分组语义、组内方向或筛选键前先跑 `app/src/test/java/com/notifyme/android/ReminderListCoreTest.kt`（36 条）。
 
 - **会话可见性的四层门槛只有一份口径：`ConvVisibilityCore`**（internal object，纯函数 + 28 条单测），别在 `MainActivity` / `OverlayService` / `AnalysisWorker` 里各写一套：
@@ -238,14 +238,14 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   改门槛顺序、加第五层或改 forced 语义前先跑 `app/src/test/java/com/notifyme/android/ConvVisibilityCoreTest.kt`。
 
 - **会话详情页的消息窗口口径全在 `ConvWindowCore`**（internal object，纯函数 + 38 条单测），别在 `ConversationActivity` 里另写一套：
-  ① **必须先按 `convKey` 过滤再排序**：旧写法是 `readRecent(500).filter { convKey }.sortedBy { timestamp }`，先在全库最近 500 条里选、再挑本会话，别的会话刷屏就把本会话历史挤掉；`slice()` 反过来做。
-  ② **请求行数必须封顶**：`requestLines(limit)` 取 8 倍（默认 4000，硬上限 50000）。`readTailLines` 是按行数向文件头扩容的，行数给爆（如 `Int.MAX_VALUE`）会一路读到文件头、退化成全量读，大文件直接 OOM。
-  ③ **`ts <= 0` 的未标注日期消息归 0 参与排序**（与旧 `sortedBy { it.timestamp }` 同口径），且超 `limit` 时保留最近若干条而不是最早。
-  ④ **「共 N 条」只在 `preview().countedAll` 为真时才能报**：条数可信 = 已读到文件头（`linesRead < requested`，行数打满一律保守当没读全）**且** 命中未被 `limit` 砍掉（`visible < limit`）。否则提示文案走 `chat_truncated_window` / `chat_window_partial`，不要拿窗口内命中数冒充真实总数。
-  ⑤ **`MAX_RENDER = 200` 只在 Core 里留一份**；`MessageStore.readWindow` 因返回 `internal` 类型而必须加 `internal`（不加会报 `'public' function exposes its 'internal' return type`）。
-  ⑥ **别再用 `readRecent(500)` 挑「本会话的一条消息」**：`latest(window)`（= `messages.lastOrNull()`，`slice()` 已升序）给 `MainActivity.runTodoReminderChain` 补日历事件描述，`knownIsGroup(window)` 给 `A11yExtractService` 判群聊；窗口被占满时两处都取 null（同源隐患第二次复现）。`knownIsGroup` 空窗口必须回 **null**（没有历史可参考）而不是 false（写死就再不会按昵称回推）。
-  ⑦ **回看原文（`AnalysisListActivity.buildSourceMap`）也不能拿跨会话窗口切**：`sourceKeys(records)` 给出要读窗口的会话键集合（去重保序、跳过空会话名的老记录），每键各读一次 `MessageStore.readWindow`，再交 `sourceMap(records, windows)` 逐条还原 case 窗口原文。这是同一个错误的第三次复现（详情页、`latest`/`knownIsGroup`、分析列表原文）：别的会话刷满窗口，本会话那几条就不在窗口里，`tvAnalysisSource` 整行消失而数据仍在文件里。取不满返回空串、调用方隐藏 —— 宁可不显示，也不拿别的窗口内容冒充原文。
-  改窗口大小、排序方向或可信度判据前先跑 `app/src/test/java/com/notifyme/android/ConvWindowCoreTest.kt`（38 条，含 600 条噪声 + 本会话的回归）。
+  ① **必须先按 `convKey` 过滤再排序**：旧写法 `readRecent(500).filter{convKey}.sortedBy{timestamp}` 先在全库最近 500 条里选、再挑本会话，别的会话刷屏就把本会话历史挤掉；`slice()` 反过来做。
+  ② **请求行数必须封顶**：`requestLines(limit)` 取 8 倍（默认 4000，硬上限 50000）。`readTailLines` 按行数向文件头扩容，给爆 `Int.MAX_VALUE` 会退化成全量读、大文件直接 OOM。
+  ③ **`ts <= 0` 的未标注日期消息归 0 参与排序**，超 `limit` 时保留最近若干条而不是最早。
+  ④ **「共 N 条」只在 `preview().countedAll` 为真时才能报**：条数可信 = 已读到文件头（`linesRead < requested`，打满一律当没读全）**且** 命中未被 `limit` 砍掉（`visible < limit`）；否则走 `chat_truncated_window` / `chat_window_partial`，别拿窗口内命中数冒充总数。
+  ⑤ **`MAX_RENDER = 200` 只留一份**；`MessageStore.readWindow` 因返回 `internal` 类型必须加 `internal`（否则报 `public function exposes its internal return type`）。
+  ⑥ **别再用 `readRecent(500)` 挑「本会话的一条消息」**：`latest(window)` 给 `MainActivity.runTodoReminderChain` 补日历描述、`knownIsGroup(window)` 给 `A11yExtractService` 判群聊，窗口占满时两处取 null（同源隐患第二次）。`knownIsGroup` 空窗口必须回 **null** 而不是 false。
+  ⑦ **`AnalysisListActivity.buildSourceMap` 同理**：`sourceKeys(records)` 给要读窗口的会话键集合（去重保序、跳过空会话名老记录），每键各读一次 `readWindow` 再交 `sourceMap` 还原原文。取不满返空串、调用方隐藏 —— 宁可不显示，也不拿别的窗口内容冒充原文（第三次复现）。
+  改窗口大小、排序方向或可信度判据前先跑 `ConvWindowCoreTest.kt`（38 条，含 600 条噪声 + 本会话回归）。
 
 - **分析候选的取样口径全在 `CandidateWindowCore`**（internal object，纯函数 + 16 条单测），别在 `AnalysisWorker` 里另写一套：
   ① **候选集合不是「全局最近 N 条」，而是「每会话留够用的几条」**：下游一个 case 只吃 `AnalysisCase.WINDOW_SIZE = 10` 条（`takeLast`），候选存在的意义只是决定「哪些会话值得开一轮」。用 `readRecent(500).groupBy { convKey }` 会让几个群刷屏时把安静会话整个挤出候选 —— 这是 `readRecent` 同源隐患的第四次复现（前三次是详情页 / `latest`+`knownIsGroup` / 分析列表原文），数据在 `messages.jsonl` 里却永远不被分析。
@@ -327,3 +327,5 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **两条提取腿的共享内核只有一份口径：`server/extract_common.py`**（`android_db_extract.py` 1260→813 行、`pc_db_extract.py` 1122→673）。① 六个 env 常量必须继续在两侧脚本里定义（monkeypatch 要目标），common 内走 `_setting(name)`。② `_setting` 判 `None` 不判真值（`COMMIT_INTERVAL = 0` 合法）。③ `activate(module)` 登记 `_HOST`，**import 尾部 + 每个入口函数开头都要再调**（只登记一次时后导入的 pde 顶掉 ade，表现 `commits=1` 且锁写进真实 `server/data/`）。④ `_archive_path` / `_lock_path` 用 `_setting("MAIN_DB")` 调用时解析。⑤ 两侧脚本先 `sys.path.insert(...)` 再裸名导入（`storage.py` 按路径加载），16 个符号显式列。改前跑 `test_extract_common.py` + `test_extract.py` + `test_extract_cursor.py`。
 - **游标分页只有一份解析口径：`server/util._parse_cursor`**（`query_messages` 与 `query_analysis` 都走它；`test_module_split.py` 的 `EXPECTED_OWNER` 守着归属）。① **两段都校验**：毫秒在 `MIN_TS_MS..MAX_TS_MS`、rowid 在 `0..MAX_ROWID` —— 只补毫秒段时超 int64 的 rowid 会让 sqlite3 抛 `OverflowError`（整页 500），负 rowid 更阴（恒空页，客户端当成翻到底）。② 空值/纯空白返 `(None, None)`，调用方据此不追加游标条件。③ `_` 切分多于两段直接 400，别静默截断。④ 只给毫秒时 rowid 取 `MAX_ROWID` 兼容老客户端。⑤ `next_before` 的生成格式三端都在回传，不改。
 - **提示词 / 报告里的绝对时间文本只有一份口径：`PromptTimeCore`**（internal object + 22 条单测，`PromptTimeCoreTest.kt`）。`DateKeyCore`/`DueTimeCore`/`LocaleTextCore` 之后同族第四代，差别是它输出**给模型看**。四条：① **只走 `DateTimeFormatter` + `Instant.atZone(zone)`**：`SimpleDateFormat` 历法随**默认 Locale** 走，钉 `Locale.US`/`CHINESE` 只钉语言、安全来自 Locale→calendar 映射表（巧合）；th-TH 下 `Calendar.set(2026,9,25)` 落成公历 **1483**。② `zone` 参数可注入且**单测必须钉**（Asia/Shanghai + UTC）。③ 「同年省略年份」用 `ZonedDateTime.year` 数值比较，别比格式化后的 `yyyy` 字符串。④ 文案逐字保持 —— 题面文案是模型输入契约，改文案等于改模型输入。改前跑 `PromptTimeCoreTest` + `AnalysisCaseTest` + `CalendarDueTimeTest`，并在 `JAVA_TOOL_OPTIONS=-Duser.language=th -Duser.country=TH` 下再跑一次全量。
+
+- **顾问报告的时间字段只有一份归一口径：`server/util._advisor_ts`**（`test_regression.py` 3 条 + `test_stats_api.py` 2 条守着）。① None/bool/空串/认不出的文本 → 0；纯数字当毫秒，`1e9 <= n < 1e11` 视为秒并 ×1000；越界（`<=0` 或 `> MAX_TS_MS`）→ 0；文本按 `%Y-%m-%d %H:%M:%S` / `T` 变体 / `%Y-%m-%d %H:%M` / `%Y-%m-%d` 本地时区 `strptime`。② `routes.query_advisor` 的排序键必须是 `(_advisor_ts(received_at), _advisor_ts(created_at))` —— 裸 `r.get("received_at", 0)` 遇 JSONL 里的字符串行抛 TypeError 整页 500。③ `suggests._advisor_state` 读 `created_at → createdAt → received_at` 三 fallback：端上 `AdvisorStore` / `SyncWorker` 上报的是**下划线**，读驼峰会让 priority 60/50 两条建议永不命中。④ 新增 util 函数必须加进 `app.py` 的 `from util import (...)`，否则 `app_module._advisor_ts` 直接 AttributeError；`test_module_split.EXPECTED_OWNER` 同步登记。

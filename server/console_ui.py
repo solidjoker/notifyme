@@ -1353,6 +1353,19 @@ function relTime(ms) {
   if (d.getFullYear() === n.getFullYear()) return fmtDate(t);
   return d.getFullYear() + '年' + fmtDate(t);
 }
+// 顾问报告的 created_at 既可能是毫秒（端上上报），也可能是老存档里的
+// "2026-11-10 08:00:00" 文本 —— 两种都要能显示成人话，认不出就原样显示。
+// 修前直接 esc(r.created_at) 会把 13 位毫秒原样打在卡片右上角。
+function stampText(v) {
+  if (v == null || v === "") return "";
+  var n = Number(v);
+  if (!isNaN(n) && n > 0) {
+    if (n < 1e11) n = n * 1000;  // 秒级时间戳按秒解释
+    var out = relTime(n);
+    if (out) return out;
+  }
+  return String(v);
+}
 function isToday(ms) {
   var t = Number(ms) || 0;
   if (!t) return false;
@@ -2978,7 +2991,7 @@ function renderAdvisor() {
       '<div class="conv-row"><div class="conv-head">' +
       '<span class="conv-main"><span class="conv-title-row">' +
       '<span class="conv-name">🧭 复盘报告</span></span></span>' +
-      '<span class="conv-count">' + esc(r.created_at || '') + '</span>' +
+      '<span class="conv-count">' + esc(stampText(r.created_at)) + '</span>' +
       '</div></div>' +
       '<div class="chips">' +
       '<span class="chip">模型 ' + esc(r.model_used || '—') + '</span>' +

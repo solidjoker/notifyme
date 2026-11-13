@@ -36,7 +36,7 @@ def _now_ms():
 
 
 def _advisor_state():
-    """顾问存档（JSONL，每行一份报告）的份数与最近一次 createdAt。
+    """顾问存档（JSONL，每行一份报告）的份数与最近一次 created_at。
 
     读取口径与 storage 的顾问存档一致（同一文件、同一 JSON 行格式），
     这里只关心份数与时间，不把报告正文载进来。
@@ -54,8 +54,12 @@ def _advisor_state():
     total = len(reports)
     last_ts = 0
     for item in reports:
-        ts = app_module._safe_int(item.get("createdAt"), 0,
-                                  lo=0, hi=app_module.MAX_TS_MS)
+        # 端上（AdvisorStore.toUploadJson / SyncWorker）上报的键是 created_at
+        # （下划线）；驼峰 createdAt 只出现在早期手写夹具与老部署里，保留兼容。
+        # 三个都认不出时退回服务端接收时间 received_at（写入路径必带）。
+        ts = (app_module._advisor_ts(item.get("created_at"))
+              or app_module._advisor_ts(item.get("createdAt"))
+              or app_module._advisor_ts(item.get("received_at")))
         if ts > last_ts:
             last_ts = ts
     return total, last_ts

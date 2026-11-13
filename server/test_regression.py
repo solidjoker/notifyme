@@ -966,6 +966,71 @@ def test_advisor_pkg_is_passthrough(client):
     assert "pkg" not in rep
 
 
+def _write_advisor_jsonl_raw(rows):
+    """直接往顾问 JSONL 塞行（模拟人工修复 / 第三方脚本 / 老部署）。"""
+    os.makedirs(app_module.DATA_DIR, exist_ok=True)
+    with open(_advisor_jsonl_path(), "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def test_advisor_sort_survives_string_received_at(client):
+    """E-49：JSONL 里 received_at 是字符串时 /advisor 不再 500。
+
+    修前 reports.sort(key=lambda r: r.get("received_at", 0)) 直接拿原值当键，
+    数字行与字符串行混在一起就抛 TypeError: '<' not supported between
+    instances of 'int' and 'str'，整页 500（控制台的顾问 Tab 随之整块空白）。
+    """
+    _write_advisor_jsonl_raw([
+        {"report_id": "old-int", "received_at": 1700000000000},
+        {"report_id": "dirty-str", "received_at": "1700000001000"},
+        {"report_id": "missing"},
+        {"report_id": "text-clock", "received_at": "2026-11-10 08:00:00"},
+    ])
+    resp = client.get("/advisor?limit=10")
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    body = resp.get_json()
+    assert body["ok"] is True
+    ids = [r["report_id"] for r in body["reports"]]
+    # 有时间的按数值倒序在前，缺时间的垫底（0）：
+    # text-clock = 2026-11-10 本地时间（毫秒远大于 1700000001000）→ 最新
+    assert ids[0] == "text-clock"
+    assert ids[1] == "dirty-str"
+    assert ids[-1] == "missing"
+    assert set(ids) == {"old-int", "dirty-str", "missing", "text-clock"}
+
+
+def test_advisor_sort_falls_back_to_created_at(client):
+    """received_at 缺失时退到 created_at 排序，不能全打平（等于没排）。"""
+    _write_advisor_jsonl_raw([
+        {"report_id": "old", "created_at": "1700000000000"},
+        {"report_id": "new", "created_at": "1799999999000"},
+    ])
+    body = client.get("/advisor?limit=10").get_json()
+    assert [r["report_id"] for r in body["reports"]] == ["new", "old"]
+
+
+def test_advisor_ts_parses_every_stored_shape():
+    """E-49：_advisor_ts 的口径（毫秒 / 秒 / 数字字符串 / 文本 / 脏值）。
+
+    这是 /advisor 排序与 /suggests/next 顾问规则共用的一把尺子：
+    任何形状都得给出可比较的数字，认不出回落 0，绝不抛。
+    """
+    ts = app_module._advisor_ts
+    assert ts(1700000000000) == 1700000000000
+    assert ts("1700000001000") == 1700000001000
+    assert ts(1700000000) == 1700000000000          # 秒级按秒解释
+    assert ts("1700000000.0") == 1700000000000
+    assert ts(None) == 0 and ts("") == 0 and ts("   ") == 0
+    assert ts(True) == 0 and ts(False) == 0          # bool 不当数字用
+    assert ts("not-a-time") == 0
+    assert ts(-1) == 0 and ts(10 ** 18) == 0         # 越界值回落，不抛
+    # 文本形态按本地时区解析（老存档写的就是本地时间）
+    local = datetime(2026, 11, 10, 8, 0, 0)
+    assert ts("2026-11-10 08:00:00") == int(local.timestamp() * 1000)
+    assert ts("2026-11-10T08:00:00") == int(local.timestamp() * 1000)
+
+
 def test_console_ui_module_is_integrated(client):
     """控制台前端资源已拆到 console_ui.py 并接进 app.py（可独立单测）。"""
     resp = client.get("/console")

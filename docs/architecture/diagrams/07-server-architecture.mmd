@@ -8,31 +8,31 @@ subgraph CLIENTS["客户端 · 三个入口"]
     BRW["浏览器<br/>GET / 最简消息页"]:::ext
 end
 
-subgraph APP["server/app.py · Flask 壳 717 行<br/>app.run host=0.0.0.0 port=PORT(默认8000) threaded=True<br/>create_app @app.py:672"]
+subgraph APP["server/app.py · Flask 壳 719 行<br/>app.run host=0.0.0.0 port=PORT(默认8000) threaded=True<br/>create_app @app.py:673"]
     direction TB
 
     subgraph AUTH["鉴权与错误处理 · 留在壳里"]
-        CK["check_token()  @app.py:276<br/>接受 Header X-Token 或 Query ?token=<br/>WEIXIN_TOKEN 未设置时全部放行<br/>例外：/console/manifest.json 与 /sw.js 免鉴权"]:::auth
-        EH["_security_headers @118 · _handle_not_found @138<br/>_handle_too_large @145（413 JSON）· _handle_internal_error @151<br/>MAX_CONTENT_LENGTH = 8 MiB @app.py:86"]:::auth
+        CK["check_token()  @app.py:277<br/>接受 Header X-Token 或 Query ?token=<br/>WEIXIN_TOKEN 未设置时全部放行<br/>例外：/console/manifest.json 与 /sw.js 免鉴权"]:::auth
+        EH["_security_headers @120 · _handle_not_found @140<br/>_handle_too_large @146（413 JSON）· _handle_internal_error @152<br/>MAX_CONTENT_LENGTH = 8 MiB @app.py:88"]:::auth
     end
 
     subgraph MODS["其余 6 个模块（拆自旧单文件）+ console_classify.js"]
         direction LR
-        MU["util.py · 322 行<br/>纯函数工具层<br/>_validate_item @290 · _safe_int @49 · _clamp_int @68<br/>_esc_html @253 · _fmt_ts @203 · _parse_tz_offset @111<br/>_parse_cursor @148（游标毫秒+rowid 双段校验）"]:::mod
+        MU["util.py · 366 行<br/>纯函数工具层<br/>_advisor_ts @87（顾问时间归一）· _validate_item @334 · _safe_int @49 · _clamp_int @68<br/>_esc_html @297 · _fmt_ts @247 · _parse_tz_offset @155<br/>_parse_cursor @192（游标毫秒+rowid 双段校验）"]:::mod
         MS["storage.py · 758 行<br/>存储层<br/>init_db @58 · _append_jsonl @197<br/>顾问存档 @216 · _run_extract_bg @437<br/>排队任务 upsert @613 · query @659<br/>设备聚合 queue_devices @718<br/>主库可写探测 _probe_main_db_writable @479"]:::mod
-        MR["routes.py · 1013 行<br/>数据面路由<br/>register @1001 · add_url_rule 映射 @1003-1012"]:::mod
+        MR["routes.py · 1020 行<br/>数据面路由<br/>register @1008 · add_url_rule 映射 @1010-1019"]:::mod
         MST["stats_api.py · 180 行<br/>全库聚合 /stats<br/>query_stats @145 · _messages_block @32<br/>_analysis_block @71 · _queue_block @106"]:::mod
-        MSN["suggests.py · 304 行<br/>下一步建议 /suggests/next<br/>query_suggests_next @189<br/>规则优先级 _pick @177"]:::mod
-        MC["console_ui.py · 3430 行<br/>控制台前端常量（5 个 Tab）<br/>CONSOLE_HTML @13 · CONSOLE_MANIFEST @3246<br/>CONSOLE_SW @3292"]:::mod
+        MSN["suggests.py · 308 行<br/>下一步建议 /suggests/next<br/>query_suggests_next @193<br/>规则优先级 _pick @181"]:::mod
+        MC["console_ui.py · 3443 行<br/>控制台前端常量（5 个 Tab）<br/>CONSOLE_HTML @13 · CONSOLE_MANIFEST @3259<br/>CONSOLE_SW @3305"]:::mod
         CC["console_classify.js · 434 行<br/>归类规则单一事实源（UMD）<br/>normPkg · ckOf · senderKey · groupBySender<br/>groupTodosByImportance · groupSuggestions<br/>groupMessages 两级分组 · groupQueueTasksByDevice"]:::mod
     end
 
     subgraph WRITE["写入 API · Android 上报（routes.py）"]
         direction LR
-        RWX["POST /weixin  @routes.py:20<br/>receive_weixin()<br/>_validate_item @util.py:257<br/>返回 received/duplicated/invalid"]:::srv
+        RWX["POST /weixin  @routes.py:20<br/>receive_weixin()<br/>_validate_item @util.py:334<br/>返回 received/duplicated/invalid"]:::srv
         RAN["POST /analysis  @routes.py:309<br/>receive_analysis()<br/>case_id 唯一键去重"]:::srv
         RAD["POST /advisor  @routes.py:695<br/>receive_advisor()<br/>report_id 去重"]:::srv
-        RQ["POST /queue  @routes.py:880<br/>receive_queue()<br/>device_id + tasks[] 整份覆盖<br/>非法条目逐条拒收 207"]:::srv
+        RQ["POST /queue  @routes.py:887<br/>receive_queue()<br/>device_id + tasks[] 整份覆盖<br/>非法条目逐条拒收 207"]:::srv
     end
 
     subgraph READ["查询 API · PWA / App 回读（routes.py）"]
@@ -40,19 +40,19 @@ subgraph APP["server/app.py · Flask 壳 717 行<br/>app.run host=0.0.0.0 port=P
         QM["GET /messages  @routes.py:169<br/>conversation 模糊 · date · limit≤1000<br/>timestamp DESC + source 徽标 + 翻页游标"]:::srv
         QA["GET /analysis  @routes.py:535<br/>todo_only=1 只看待办<br/>s1/s2 反解析为对象"]:::srv
         QAD["GET /advisor  @routes.py:784"]:::srv
-        QQ["GET /queue  @routes.py:953<br/>query_queue()<br/>{ok, tasks[], summary{queued,running,failed,done,stale,total}}<br/>devices[] 设备聚合（device_id/total/active）<br/>stale = 30 分钟未更新"]:::srv
+        QQ["GET /queue  @routes.py:960<br/>query_queue()<br/>{ok, tasks[], summary{queued,running,failed,done,stale,total}}<br/>devices[] 设备聚合（device_id/total/active）<br/>stale = 30 分钟未更新"]:::srv
     end
 
     subgraph PARTIAL["部分接受 207 · 路由层语义"]
-        PR["routes.py:149-160<br/>有条目校验失败 → 207<br/>{ok:false, rejected:[下标], error:...}<br/>其余条目照常入库"]:::auth
+        PR["routes.py:151-159<br/>有条目校验失败 → 207<br/>{ok:false, rejected:[下标], error:...}<br/>其余条目照常入库"]:::auth
     end
 
     subgraph EXTRACT["提取编排 · 服务端触发 DB 直读（routes.py + storage.py）"]
         direction TB
-        AE["POST /admin/extract  @routes.py:821<br/>admin_extract()<br/>full=1 全量 · source ∈ android|pc|all<br/>409 = 已在跑"]:::srv
+        AE["POST /admin/extract  @routes.py:828<br/>admin_extract()<br/>full=1 全量 · source ∈ android|pc|all<br/>409 = 已在跑"]:::srv
         ST["_extract_status 内存态<br/>{running, last} + _extract_lock"]:::srv
         BG["_run_extract_bg(full, source)  @storage.py:437<br/>daemon Thread<br/>mod = __import__(leg + '_db_extract')<br/>result[leg] = mod.run_extract(full=full)<br/>单腿失败不拖垮另一腿"]:::srv
-        AS["GET /admin/extract/status  @routes.py:866<br/>admin_extract_status()<br/>{ok, running, last}<br/>scanned/inserted/duplicated/skipped/elapsed_sec"]:::srv
+        AS["GET /admin/extract/status  @routes.py:873<br/>admin_extract_status()<br/>{ok, running, last}<br/>scanned/inserted/duplicated/skipped/elapsed_sec"]:::srv
         AE --> BG
         BG --> ST
         ST --> AS
@@ -60,13 +60,13 @@ subgraph APP["server/app.py · Flask 壳 717 行<br/>app.run host=0.0.0.0 port=P
 
     subgraph PWA["PWA 控制台 · 零 CDN 全内联"]
         direction LR
-        CP["GET /console  @app.py:504<br/>console_page()<br/>HTML+CSS+JS 全在 console_ui.py 的 CONSOLE_HTML @13<br/>?token= 写 localStorage 后从地址栏抹除"]:::srv
-        MF["GET /console/manifest.json  @app.py:518<br/>CONSOLE_MANIFEST @console_ui.py:3246<br/>免鉴权"]:::srv
-        SW["GET /sw.js  @app.py:532<br/>console_sw()<br/>CONSOLE_SW @console_ui.py:3292 · CACHE wx-console-v5<br/>免鉴权 · 骨架 cache-first · API 永远走网络"]:::srv
-        IC["GET /console/icons/&lt;path&gt;  @app.py:524"]:::srv
+        CP["GET /console  @app.py:505<br/>console_page()<br/>HTML+CSS+JS 全在 console_ui.py 的 CONSOLE_HTML @13<br/>?token= 写 localStorage 后从地址栏抹除"]:::srv
+        MF["GET /console/manifest.json  @app.py:519<br/>CONSOLE_MANIFEST @console_ui.py:3259<br/>免鉴权"]:::srv
+        SW["GET /sw.js  @app.py:533<br/>console_sw()<br/>CONSOLE_SW @console_ui.py:3305 · CACHE wx-console-v5<br/>免鉴权 · 骨架 cache-first · API 永远走网络"]:::srv
+        IC["GET /console/icons/&lt;path&gt;  @app.py:525"]:::srv
     end
 
-    IDX["GET /  @app.py:544<br/>index()<br/>最近 100 条倒序 · 群聊绿标<br/>来源徽标 橙=通知 / 蓝=数据库"]:::srv
+    IDX["GET /  @app.py:545<br/>index()<br/>最近 100 条倒序 · 群聊绿标<br/>来源徽标 橙=通知 / 蓝=数据库"]:::srv
 
     LOCK["_write_lock = threading.Lock()<br/>JSONL 追加写互斥"]:::srv
 end

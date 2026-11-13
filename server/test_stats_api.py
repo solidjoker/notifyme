@@ -325,10 +325,46 @@ def test_suggests_silent_when_everything_is_fine(api):
     _insert_queue([("dev-a", "t1", "sync", "同步", "done", "")])
     os.makedirs(app_module.DATA_DIR, exist_ok=True)
     with open(app_module._advisor_jsonl_path(), "w", encoding="utf-8") as fh:
-        fh.write(json.dumps({"report_id": "r1", "createdAt": now}) + "\n")
+        fh.write(json.dumps({"report_id": "r1", "created_at": str(now)}) + "\n")
     data = api.get("/suggests/next").get_json()
     assert data["suggests"] == []
     assert data["count"] == 0
+
+
+def _write_advisor(rows):
+    """直接写顾问 JSONL（端上上报后的落盘形状：created_at 被 _clip 成字符串）。"""
+    os.makedirs(app_module.DATA_DIR, exist_ok=True)
+    with open(app_module._advisor_jsonl_path(), "w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def test_suggests_advisor_age_rule_fires_on_snake_case_created_at(api):
+    """E-49：端上上报的键是 created_at（下划线），顾问过期规则必须命中。
+
+    修前 _advisor_state 读驼峰 createdAt，生产里永远读不到 → 最近一次顾问
+    报告时间恒为 0 → priority 60 的 advisor_age_days 与 priority 50 的
+    advisor_total 两条建议从未产出过（空库场景还会被前者「骗」过去）。
+    """
+    now = _now_ms()
+    _insert_messages([("a", "hi", now - 1000, "conv1", "微信", "com.tencent.mm")])
+    _insert_analyses([("c1", "conv1", 0, "com.tencent.mm", 0, 0)])
+    _insert_queue([("dev-a", "t1", "sync", "同步", "done", "")])
+    # created_at 落盘时是字符串（storage._normalize_advisor_item 的 _clip）
+    _write_advisor([{"report_id": "old", "created_at": str(now - 5 * DAY_MS)}])
+    data = api.get("/suggests/next").get_json()
+    adv = [item for item in data["suggests"] if item["jump"] == "adv"]
+    assert len(adv) == 1, data["suggests"]
+    assert adv[0]["priority"] == 60
+    assert "5" in adv[0]["evidence"]
+
+
+def test_suggests_advisor_total_rule_fires_when_archive_empty(api):
+    """没有顾问报告 → advisor_total == 0 的那条建议命中（jump=adv）。"""
+    data = api.get("/suggests/next").get_json()
+    adv = [item for item in data["suggests"] if item["jump"] == "adv"]
+    assert len(adv) == 1, data["suggests"]
+    assert adv[0]["priority"] == 50
 
 
 def test_suggests_returns_at_most_three(api):
