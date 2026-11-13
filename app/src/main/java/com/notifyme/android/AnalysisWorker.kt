@@ -1032,34 +1032,11 @@ class AnalysisWorker(
         systemPrompt: String,
         userContent: String
     ): String {
-        // URL 归一：用户填到 /v4（或任意前缀）为止就自动补 /chat/completions
-        var url = slot.url.trim().trimEnd('/')
-        if (!url.endsWith("/chat/completions")) url += "/chat/completions"
-
-        val requestJson = JSONObject().apply {
-            put("model", slot.model)
-            put("messages", org.json.JSONArray().apply {
-                put(JSONObject().apply {
-                    put("role", "system")
-                    put("content", systemPrompt)
-                })
-                put(JSONObject().apply {
-                    put("role", "user")
-                    put("content", userContent)
-                })
-            })
-            // GLM 支持 json_object 约束；不支持的服务端会忽略或报错（失败走 retry 记录）
-            put("response_format", JSONObject().put("type", "json_object"))
-            // glm-5.3 等推理模型的 reasoning_tokens 也占 max_tokens 额度，
-            // 1024 会被思考段吃满导致 content 空串（真机实测 finish_reason=length），
-            // 与 AdvisorWorker 同口径放宽到 4096。
-            put("max_tokens", 4096)
-            put("stream", false)
-        }
-
         val request = Request.Builder()
-            .url(url)
-            .post(requestJson.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .url(ChatRequestCore.endpoint(slot.url))
+            // 端点归一 / max_tokens / response_format 全在 ChatRequestCore（三通道同源）
+            .post(ChatRequestCore.payload(slot.model, systemPrompt, userContent)
+                .toRequestBody(JSON_MEDIA_TYPE))
             .apply {
                 if (slot.key.isNotEmpty()) {
                     header("Authorization", "Bearer ${slot.key}")

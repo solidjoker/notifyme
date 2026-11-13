@@ -12,8 +12,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
-import org.json.JSONObject
 
 /**
  * 云端 vs 端侧 S1 判定一致率采集器（ROADMAP M4 任务 6 / docs/ROADMAP.md:237）。
@@ -214,27 +212,10 @@ internal object S1EvalRunner {
         systemPrompt: String,
         userContent: String
     ): String {
-        var url = slot.url.trim().trimEnd('/')
-        if (!url.endsWith("/chat/completions")) url += "/chat/completions"
-        val body = JSONObject().apply {
-            put("model", slot.model)
-            put("messages", JSONArray().apply {
-                put(JSONObject().apply {
-                    put("role", "system")
-                    put("content", systemPrompt)
-                })
-                put(JSONObject().apply {
-                    put("role", "user")
-                    put("content", userContent)
-                })
-            })
-            put("response_format", JSONObject().put("type", "json_object"))
-            put("max_tokens", 4096)
-            put("stream", false)
-        }
         val request = Request.Builder()
-            .url(url)
-            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .url(ChatRequestCore.endpoint(slot.url))
+            .post(ChatRequestCore.payload(slot.model, systemPrompt, userContent)
+                .toRequestBody(JSON_MEDIA_TYPE))
             .apply { if (slot.key.isNotEmpty()) header("Authorization", "Bearer ${slot.key}") }
             .build()
         return client.newCall(request).execute().use { response ->

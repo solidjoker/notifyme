@@ -540,16 +540,8 @@ class CaptureActivity : Activity() {
         tintStatus(tvA11yStatus, text)
     }
 
-    /** 状态文字着色：含「成功/完成」绿，含「失败/鉴权」红，其余次要灰。 */
+    /** 状态文字着色：判定口径在 StatusTintCore（含「成功/完成」绿，含「失败/鉴权」红，其余灰）。 */
     private fun tintStatus(view: TextView, result: String) {
-        view.setTextColor(
-            getColor(
-                when {
-                    result.contains("失败") || result.contains("鉴权") -> R.color.status_error
-                    result.contains("成功") || result.contains("完成") -> R.color.status_ok
-                    else -> R.color.status_gray
-                }
-            )
-        )
+        view.setTextColor(getColor(StatusTintCore.colorRes(result)))
     }
 }
