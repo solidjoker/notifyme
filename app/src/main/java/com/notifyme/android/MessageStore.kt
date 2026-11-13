@@ -286,6 +286,14 @@ object MessageStore {
     fun storageStats(context: Context): StorageStats = core(context).storageStats()
 
     /**
+     * 全量累计统计（诊断页 W4）：五万行级别的尾部扫描，可能在后台线程跑几十毫秒到几百毫秒，
+     * 与追加写互斥（读到写了一半的行会被算作损坏行，统计值就偏小）。
+     */
+    @Synchronized
+    internal fun allTimeStats(context: Context): AllTimeStatsCore.Scan =
+        core(context).scanAll(AllTimeStatsCore.SCAN_LINES)
+
+    /**
      * 删除指定的消息集合（会话详情页多选删除用），返回实际删除条数。
      * 按完整字段匹配；文件里若有完全相同的重复消息，按选中条数依次删除。
      */
@@ -417,6 +425,31 @@ internal class MessageStoreCore(
             .sortedByDescending { it.timestamp }
             .take(limit - undatedSlots)
         return dated + undated.take(undatedSlots)
+    }
+
+    /**
+     * 全量累计统计（采集诊断页 W4 用）：扫文件尾部最多 [limit] 行，边读边聚合。
+     *
+     * 与 [readRecent] 的区别是「窗口由调用方指定」而不是写死 [TAIL_LINES]：
+     * 诊断页问的是「这个 App 一共来过多少条」；readRecent 的窗口写死 5000 行，
+     * 于是旧实现在历史超过 5000 行后静默给出偏小的数字（还自称「全量」）。
+     * 返回里的 scannedLines 是实际扫到的原始行数 —— 判截断要用它，
+     * 不是用解析出的消息数（损坏行会被误算成「没扫到」），见 [AllTimeStatsCore.capped]。
+     */
+    fun scanAll(limit: Int = AllTimeStatsCore.SCAN_LINES): AllTimeStatsCore.Scan {
+        if (!store.exists()) {
+            return AllTimeStatsCore.Scan(AllTimeStatsCore.Summary(0, 0, 0, emptyList()), 0)
+        }
+        val lines = store.readTailLines(limit)
+        val acc = AllTimeStatsCore.Accumulator()
+        for (line in lines) {
+            try {
+                acc.add(ChatMessage.fromJson(JSONObject(line)))
+            } catch (e: Exception) {
+                // 单行损坏不影响统计（损坏行只计数、不参与聚合，与 storageStats 同口径）
+            }
+        }
+        return AllTimeStatsCore.Scan(acc.finish(), lines.size)
     }
 
     /**
