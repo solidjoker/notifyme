@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 74 个 `.kt` / 1157 条（`app/src/test`）+ 服务端 `server/test_*.py`（513 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 76 个 `.kt` / 1192 条（`app/src/test`）+ 服务端 `server/test_*.py`（513 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -269,7 +269,7 @@ CI Guard 只能拦住「新增」的字面量，管不了已推送的历史。
 3. [x] 准入判定：`ActivityManager.memoryInfo` + `Build.SUPPORTED_ABIS` → S2（2.47 GB）仅在 8 GB+ RAM 且 arm64 时开放，否则引擎工厂返回带理由的不可用引擎（`LocalDeviceCapabilities`）
 4. [x] `LocalLlmEngines.releaseAll()` 接 `MainApplication.onTrimMemory`（≥MODERATE）/`onLowMemory`
 5. [x] `ModelDownloadWorker`/`ModelListActivity`：断点续传校验、下载失败重试文案 —— 复核（2026-10-05）确认已全部落地：`.part` + `Range` 续传且 206/200 兜底（`ModelDownloadWorker.kt` `downloadFile`）、按预期字节数最终校验（`doWork` 尾部 `bad` 过滤）、`runAttemptCount<1` 退避重试；UI 侧 `ModelListActivity.onResume` 杀进程自动续传检测、`model_status_error_resume`/`model_status_partial`/`model_btn_retry`/`model_no_space` 文案齐备（`strings.xml:266-279`）。`testOpenDebugUnitTest --rerun-tasks` 绕缓存真实执行 243 全绿，双 flavor assemble 通过
-6. [x] 分析质量对比：同一批会话，云端 vs 端侧 S1 判定一致率、S2 摘要可用性，写进 `docs/` 评测记录 → [docs/评测-云端vs端侧S1.md](评测-云端vs端侧S1.md)（S1 两侧已量化；S2 摘要可用性待真机端侧采集后补）
+6. [x] 分析质量对比：同一批会话，云端 vs 端侧 S1 判定一致率、S2 摘要可用性，写进 `docs/` 评测记录 → [docs/评测-云端vs端侧S1.md](评测-云端vs端侧S1.md)（S1 两侧已量化）、[docs/评测-云端vs端侧S2.md](评测-云端vs端侧S2.md)（S2 摘要可用性：六项判据全过 云端 14/20=70.0% vs 端侧替身 3/20=15.0%（三轮区间：云端 70~75%、端侧 10~15%；已钉 temperature=0 + seed 仍非确定）；端侧替身 0.5B 在 due 同桶 25%、分派条目完整 55% 两项崩得最彻底；真机端侧 MiniCPM5-2B 的数字待补）
 
 验收：飞行模式下 S1 分析全流程走通并出 ⚡ 标记；引擎不可用时降级文案正确、不崩；评测记录有真实数字。
 
@@ -449,6 +449,15 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   测试：`app/src/test/java/com/notifyme/android/FormatTemplateTest.kt` **16 条** —— ar-EG 下整数槽位恒 ASCII（并对照 `String.format` 确实出本地数字）、de-DE 下 `%1$.1f` 恒 `.`（并对照旧写法出 `2,0`）、精度由模板决定（`%.0f` / `%.2f` / 无精度按 6 位）、`%%` 转义、槽位按 N 取而非按参数顺序、同槽位可复用、无 `%` 模板同一实例原样返回、悬空 `%` 与未知占位原样、缺参 / `null` 参代入空串、`Double`/`Long` 进整数槽不抛、`requiredArgs` 取最大 N；另有 1 条**资源契约测试**直接读 `app/src/main/res/values/strings.xml`，断言扫到的 50+ 条数值模板全部是位置化 `%N$`（写成裸 `%d` 会被 `format` 原样漏出，用户看到字面 `%d`）。
   计数：`LocaleTextCore.kt` 93 → **161 行**、新增 `ContextTemplateText.kt` 29 行；主源码顶层 119 → **120**（全树 127）、`app/src/test` 73 → **74 个 .kt**、全量单测 1142 → **1157 条**；`local_check.ps1` 六项全 PASS，lint 仍是刻意保留的三条 warning（ObsoleteLintCustomCheck / OldTargetApi / ChromeOsAbiSupport）/ 0 error。
 
+- **S2 摘要可用性评测（feat/s2-usability-eval）**：`docs/ROADMAP.md` M4 任务 6 的最后一块 —— S1 那轮（PR #15）量化了「判得准不准」，但真正给摘要 / 截止时间 / 建议动作 / 待办分派的是 S2，端侧能不能顶上来一直没数字。
+  为什么要换一把尺子：摘要写得好不好没有唯一答案，抄「判对率」会退化成人工打分。改成**六项可机判的客观判据全过才算「可用」**（`delivered` / `no_placeholder` / `summary` / `due` / `action` / `tasks`），措辞好坏不进判据，留原始输出给人看。判据实现只有一份：`S2Usability.checks(...)`。
+  `due` 判「与 S1 同桶」而不是「等于标注」—— 摘要层允许把「明天上午十点」写成 `2026-11-14 10:00`，桶对了算对，具体时刻交给 `CalendarHelper` 的提醒链解释；另加 `PAST_TOLERANCE_MS = 60s` 防「给出过去时间」。`summary` 判「非空、不等于窗口末条原文兜底、码点 ≤ 20」，兜底口径从 `parseS2Output` 里抽出成 `S2Usability.fallbackSummary(kase)`，两处共用一份（各写一份迟早漂开）。
+  **S1 输入用人工标注，不用模型结论**：`labelAsS1` 把标注 `need_action` 转 prob 1.0/0.0、confidence 0.9。目的是把「S2 输出可不可用」和「S1 判得准不准」解耦，真实链路里 S1 误判让 S2 跟着歪是 S1 准确率的后果。
+  实测（20 条合成样本，云端 Qwen3.8-Flash-Next-176B @ 8080 vs 端侧替身 qwen2.5-0.5b @ 8082，最新一轮）：**六项全过 云端 14/20 = 70.0% vs 端侧 3/20 = 15.0%**，中位时延 7.0s vs 0.8s；分项 due 同桶 75% vs **25%**、分派条目完整 100% vs **55%**、摘要 95% vs 95%、建议动作 100% vs 80%、非占位照抄两边都 100%。连跑三轮（已钉 `temperature=0` + `seed=20261113`）仍是 14/15/14 与 2/2/3，说明不可复现来自 llama-server / ROCm 推理本身而不是请求参数，所以文档只能写「区间 + 单轮数字」（云端 70~75%、端侧替身 10~15%）。端侧本轮全过的 3 条是妈妈 / 快递 / 银行，而「本来没有待办」的系统通知与优惠通知反而挂在 `due` 上（S1 判 none、它硬给了一个时间）；真正的失效模式是**只要要它给时间点就把当前时刻或瞎猜的时间填进去、`tasks` 整段丢掉**。云端的失分则集中在把 `today`/`this_week` 具体化成某一天、桶落错。
+  记录：手写解说 [docs/评测-云端vs端侧S2.md](评测-云端vs端侧S2.md)（八节：为什么 / 六项判据口径 / 实测 / 六条限制（含「数字是区间」）/ 原始输出对比 / 复现 / 真机路径 / 文件表）+ 机器生成 [docs/eval-s2-cloud-vs-local.md](eval-s2-cloud-vs-local.md)。两条限制写死在文档里：端侧替身 0.5B 只能当**下限**（真机 S2 是 MiniCPM5-2B，本机没这个 gguf）、20 条样本单项差 1 条就是 5 个百分点。
+  **两处新发现的坑**：① 机器生成报告的文件名必须纯 ASCII —— 第一次写 `../docs/评测-云端vs端侧S2.md`，Windows 下 `java.io.File` 用平台编码往返路径，落盘成 `è¯æµ-äºç¯vsç¯ä¾§S2.md`（`S2EvalHttpTest` 的默认 `OUT_S2` 已改成 `eval-s2-cloud-vs-local.md` 并加注释）；② `no_placeholder` 判的是「与骨架常量**完全相等**」，端侧输出「给用户的建议动作」对常量「给用户的建议动作，≤20字」不完全相等 → 判据放过。刻意不收紧（改 contains 会误伤正常输出里恰好出现的「责任人」），代价是对「截断式照抄」不敏感，留作后续决策。
+  测试：`app/src/test/java/com/notifyme/android/S2UsabilityTest.kt` **34 条** —— `parseS2Output` 与 Core 兜底同一、六项逐条通过/失败（含 21 字越界与恰好 20 字、空 due 仅在 S1=none 时通过、due 早于 windowEnd、异桶挂且 note 带桶名、needAction 且 tasks 空要挂）、`score` 未交付不进分母、`bucketOf` 五桶与显式 zone（11-13 07:00 +08 在 UTC 下是 11-12 23:00）。`S2EvalHttpTest` 只断言「评测跑通」（每侧至少 1 条解析出且 `size*2 >= cases.size`），不断言答对多少 —— 它是测量工具，不是门禁。
+  计数：新增 `S2Usability.kt` 349 行 + `S2UsabilityTest.kt` + `S2EvalHttpTest.kt`；主源码顶层 120 → **121**（全树 128）、`app/src/test` 74 → **76 个 .kt**、全量单测 1157 → **1192 条**。
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：
