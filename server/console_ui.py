@@ -1907,7 +1907,9 @@ function skipNoticeHtml() {
 }
 // 排队任务（端上 WorkManager 队列 + 待同步消息队列）
 async function fetchQueue(signal) {
-  var r = await api('queue?limit=200', { signal: signal });
+  // 取服务端上限（QUEUE_MAX_LIMIT = 500）：排队任务没有游标翻页，
+  // 取一页就是全部可见范围，别在 200 就把更早的任务截掉。
+  var r = await api('queue?limit=500', { signal: signal });
   return { items: r.tasks || [], summary: r.summary || null, devices: r.devices || [] };
 }
 // 全库聚合真值：消息 / 分析 / 排队三段，与前端已加载多少条无关
@@ -3049,8 +3051,14 @@ function queueStateLabel(st) {
 function queueKindLabel(k) {
   return QUEUE_KIND_META[k || ''] || '其它';
 }
-// 活跃任务数（排队中 + 运行中）：概览条与 tab 角标都用它
+// 活跃任务数（排队中 + 运行中）：概览条与 tab 角标都用它。
+// 优先用 GET /queue 的 summary（服务端全库口径，与 /stats 的 queue 段同源），
+// 拿不到才退回「数已加载的列表」—— 否则一页 200 条时角标永远停在 200。
 function queueActiveCount() {
+  var sm = QUEUE_SUMMARY;
+  if (sm && typeof sm.queued === 'number' && typeof sm.running === 'number') {
+    return Number(sm.queued || 0) + Number(sm.running || 0);
+  }
   var n = 0;
   for (var i = 0; i < QUEUE.length; i++) {
     var st = QUEUE[i].state || '';
@@ -3103,7 +3111,8 @@ function queueSummaryCard() {
   if (QUEUE_ERR) {
     html += '<div class="q-note">排队任务接口暂不可用：' + esc(QUEUE_ERR) + '。其它数据不受影响。</div>';
   } else {
-    html += '<div class="q-note">数据来自手机端同步上报：分析任务的排队 / 运行 / 失败状态，以及待同步消息队列。超过 30 分钟未更新的条目算「已过期」。</div>';
+    html += '<div class="q-note">数据来自手机端同步上报：分析任务的排队 / 运行 / 失败状态，以及待同步消息队列。超过 30 分钟未更新的条目算「已过期」。' +
+      '上方汇总为全库口径（与「统计」Tab 一致），下方列表最多显示最近 500 条。</div>';
   }
   return html;
 }

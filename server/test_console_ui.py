@@ -252,7 +252,10 @@ def test_frontend_paginates_by_next_before_cursor():
 def test_frontend_no_longer_fetches_everything_at_once():
     html = _ui().CONSOLE_HTML
     assert "fetchAllMessages" not in html, "不能再一次性拉全量再前端切片"
-    assert "limit=500" not in html
+    # 消息 / 分析都必须走游标分页，不能一次性拉大页（PAGE_LIMIT 是唯一的页大小）
+    assert "messages?limit=500" not in html
+    assert "analysis?limit=500" not in html
+    assert "limit=PAGE_LIMIT" not in html
     assert "guard < 100" not in html
 
 

@@ -516,15 +516,75 @@ def test_get_invalid_state_does_not_500_and_keeps_devices(client):
 
 
 def test_limit_99999_clamped_to_max_limit(client):
-    """limit=99999 被夹到 QUEUE_MAX_LIMIT，devices 不受 limit 影响。"""
+    """limit=99999 被夹到 QUEUE_MAX_LIMIT；tasks 截断，summary 与 devices 不截断。"""
     now = int(time.time() * 1000)
     _insert_rows_bulk(DEVICE, 520, now)
     body = client.get("/queue?limit=99999").get_json()
     assert len(body["tasks"]) == storage_module.QUEUE_MAX_LIMIT
-    assert body["summary"]["total"] == storage_module.QUEUE_MAX_LIMIT
+    # summary 是全库口径：不能跟着 limit 一起被截成 500（真机 260 条任务
+    # 时列表页统计 200、统计 Tab 260，就是按页统计造成的）
+    assert body["summary"]["total"] == 520
+    assert body["summary"]["queued"] == 520
     # devices 统计的是全库，不被 limit 截断
     assert _devices_by_id(body["devices"])[DEVICE] == {"total": 520, "active": 520}
 
+
+def test_summary_counts_whole_table_not_current_page(client):
+    """summary 走全库口径：任务超一页时总数不能停在默认 limit（200）。
+
+    真机复现：库里 260 条排队任务时，GET /queue（默认 limit=200）的
+    summary.total 是 200，而同一响应的 devices[].total 与 /stats 的
+    queue.total 都是 260 —— 控制台「排队」Tab 概览条与「统计」Tab 对不上。
+    """
+    now = int(time.time() * 1000)
+    _insert_rows_bulk(DEVICE, 260, now)
+    body = client.get("/queue").get_json()
+    assert len(body["tasks"]) == storage_module.QUEUE_DEFAULT_LIMIT
+    assert body["summary"]["total"] == 260
+    assert body["summary"]["queued"] == 260
+    # 与同一响应的设备维度、以及 /stats 的 queue 段三方一致
+    assert _devices_by_id(body["devices"])[DEVICE] == {"total": 260, "active": 260}
+    stats = client.get("/stats").get_json()["queue"]
+    assert stats["total"] == body["summary"]["total"]
+    assert stats["queued"] == body["summary"]["queued"]
+    assert stats["active"] == 260
+
+
+def test_summary_respects_filters_but_devices_does_not(client):
+    """summary 跟着 device_id / state 过滤走，devices 恒为全库。"""
+    now = int(time.time() * 1000)
+    _post(client, [_task(task_id="a-q", state="queued"),
+                   _task(task_id="a-d", state="done")], device_id="android-a")
+    _post(client, [_task(task_id="b-r", state="running")], device_id="android-b")
+    by_dev = client.get("/queue?device_id=android-a").get_json()
+    assert by_dev["summary"]["total"] == 2
+    assert by_dev["summary"]["queued"] == 1
+    assert by_dev["summary"]["done"] == 1
+    assert by_dev["summary"]["running"] == 0
+    # 设备清单不受 device_id 过滤影响
+    assert set(_devices_by_id(by_dev["devices"])) == {"android-a", "android-b"}
+    assert by_dev["summary"]["devices"] == 2
+    by_state = client.get("/queue?state=running").get_json()
+    assert [t["task_id"] for t in by_state["tasks"]] == ["b-r"]
+    assert by_state["summary"]["total"] == 1
+    assert by_state["summary"]["running"] == 1
+    assert by_state["summary"]["queued"] == 0
+    assert by_state["summary"]["devices"] == 2
+
+
+def test_summary_excludes_stale_from_state_counts_over_whole_table(client):
+    """过期条目只计 stale，不计状态 —— 跨页时同样成立。"""
+    now = int(time.time() * 1000)
+    _insert_rows_bulk(DEVICE, 240, now)
+    for i in range(20):
+        _insert_row(DEVICE, "old-%02d" % i, now - storage_module.QUEUE_TTL_MS - 60000,
+                    state="running")
+    body = client.get("/queue?limit=100").get_json()
+    assert len(body["tasks"]) == 100
+    assert body["summary"]["total"] == 260
+    assert body["summary"]["stale"] == 20
+    assert body["summary"]["running"] == 0
+    assert body["summary"]["queued"] == 240
 
 def test_rejected_entries_do_not_enter_devices(client):
     """上报被拒的条目不进库，也不进 devices 清单。"""
