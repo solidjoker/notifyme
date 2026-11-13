@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **126 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 133 个，`app/src/test` 81 个 / 1289 条），服务端已拆成 **7+1 模块**（`app.py` 605 / `util.py` 255 / `storage.py` 705 / `routes.py` 978 / `console_ui.py` 3341 / `stats_api.py` 157 / `suggests.py` 260 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **128 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 135 个，`app/src/test` 83 个 / 1322 条），服务端已拆成 **7+1 模块**（`app.py` 605 / `util.py` 255 / `storage.py` 705 / `routes.py` 978 / `console_ui.py` 3341 / `stats_api.py` 157 / `suggests.py` 260 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -15,7 +15,7 @@
 | # | 图 | 回答的问题 | 尺寸 (px) |
 |---|---|---|---|
 | 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3970 × 1701 |
-| 02 | [Android 分层架构](#02-android-分层架构) | 126 个顶层 Kotlin 文件各自属于哪一层？ | 14152 × 2007 |
+| 02 | [Android 分层架构](#02-android-分层架构) | 128 个顶层 Kotlin 文件各自属于哪一层？ | 14530 × 2007 |
 | 03 | [三条采集通道](#03-三条采集通道) | 消息是怎么进来的？为什么需要三条路？ | 3386 × 1048 |
 | 04 | [分析决策流水线](#04-分析决策流水线) | 一条消息如何变成一条待办？ | 2510 × 5356 |
 | 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1973 × 3290 |
@@ -50,7 +50,7 @@
 
 五层 + Application 入口。**刻意不引 Compose**：全部传统 View + RecyclerView，运行时依赖只有 5 个（core-ktx / recyclerview / work-runtime-ktx / okhttp / **litert-api**——`com.google.ai.edge.litert:litert:2.2.0`，端侧 LiteRT 推理用），把首次构建失败风险降到最低。JSON 用平台内置 `org.json`，不引 Gson/Moshi。
 
-源码规模：`app/src/main/java/com/notifyme/android/` **顶层 126 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 133 个；`app/src/test` 81 个 .kt / 1289 条（纯 JVM 单测）。
+源码规模：`app/src/main/java/com/notifyme/android/` **顶层 128 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 135 个；`app/src/test` 83 个 .kt / 1322 条（纯 JVM 单测）。
 
 ![Android 分层架构图](diagrams/02-android-layers.png)
 
@@ -59,10 +59,10 @@
 | ① UI 层 | **18 个 Activity**：Main（首页）· Console（控制台 8 卡）· Conversation（会话详情+分析面板）· AnalysisList · **AnalysisSettings（S1/S2 槽位）** · Watchlist · Sources（通知来源）· ReminderList · **ReminderSettings** · PromptEdit · ModelList · Onboarding · **Capture** · **CaptureDiagnostics** · **EngineSmoke** · **OverlaySettings** · **PrivacySettings** · **RedactorPreview** |
 | ② 采集与常驻层 | `NotifyMeListener`（通知监听）· `A11yExtractService`（无障碍直读，仅微信）· `KeepAliveService`（60s 看门狗 requestRebind）· `BootReceiver` · `ReminderReceiver` · **`OverlayService`**（悬浮窗）· **`OverlayActionReceiver`** |
 | ③ 后台任务层 | 4 个 Worker：Sync（三通道上报）· Analysis（逐会话窗口 case）· Advisor（近 7 天复盘）· ModelDownload（.part 断点续传）；3 个 Scheduler 全部 `enqueueUniquePeriodicWork` + UPDATE 策略 |
-| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 45 个 Core 逻辑内核**（见下表） |
+| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 47 个 Core 逻辑内核**（见下表） |
 | ⑤ 存储层 | 5 个 JSONL + `files/models/` 目录 + **22 个** SharedPreferences 文件（见下方存储清单） |
 
-**④ 层本轮新增的 45 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
+**④ 层本轮新增的 47 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
 
 | 主题 | 类 | 职责 |
 |---|---|---|
@@ -87,6 +87,7 @@
 | 偏好存储 | `PrefsJsonCore`（135） | SharedPreferences 里「存 JSON 字符串」的读写口径：五处站点（`WatchlistStore` 的会话名单、`AppSourceStore` 的白名单/禁用/已观察、`ConvTagStore` 的标签映射、`ConvAnalysisScheduleStore` 的排期表、`AnalysisScopeCore` 的 Worker 会话 id 列表）此前各抄一份 `try { ... } catch (e: Exception) { }`，「损坏按空」只写在注释里、一条单测都没有。五条契约：① **读永不抛异常**且返回独立拷贝；② **只做形状裁剪、不做领域过滤**（`ConvTag.fromCode(v) != NONE` 这类语义判断留在 Store 层）；③ 元素走 `optString`（数字按文本取出，匹配不到任何包名等价于被忽略）；④ **写不做排序**（名单保持写入顺序，需要稳定输出显式 `sort = true`）；⑤ 与 `MessageStore` 的 JSONL 无关（那边逐行流式文件、这边单键整表）。`objects(raw, project)` 让单条坏数据只丢自己不牵连整表；29 条单测里有 3 条是与旧内联实现逐字对照的实验 |
 | 模型通道 | `ChatRequestCore`（61） | OpenAI 兼容 `chat/completions` 的**请求体构造口径**：`AnalysisWorker`（S1/S2 分析）、`AdvisorWorker`（顾问复盘）、`S1EvalRunner`（S1 评测）三处此前各抄一份同构的 ~20 行，URL 归一与 `max_tokens` 逐字相同，但注释里的实测值已经分叉（1024 / 1500 / 4096）、异常类型也不一致（前两处抛 `HttpException`、评测处抛 `IllegalStateException`）。三条契约：① **端点归一只有一个方向**（`trim` → 去尾斜杠 → 已带 `/chat/completions` 原样返回，否则追加），**不猜 provider 前缀**（不补 `/v1`，用户填到 `/v4` 就补在 `/v4` 后面）；② **`max_tokens` 只有一个默认值** `MAX_TOKENS = 4096`（推理模型的思考段计入额度，1024 被吃满后 `content` 是空串），要更小必须显式传参；③ **请求体键集合是契约**（`model` / `messages` / `response_format` / `max_tokens` / `stream`，`messages` 恒 `system` → `user` 两条），`payload()` 返回已序列化字符串。刻意不接管 HTTP、`Authorization` 与异常分类 —— 那是各通道的重试语义 |
 | 状态着色 | `StatusTintCore`（31） | 状态行文字的着色判定：`AnalysisSettingsActivity` 与 `CaptureActivity` 各有一份**逐字相同**的 `private fun tintStatus(view, result)`（11 行、连注释都一样，共 9 个调用点），改措辞判定必须两处同改，漏一处就是同一句「失败：…」在一页红、在另一页灰。四条契约：① **错误优先于成功**（`失败`/`鉴权` 先判，`成功`/`完成` 后判 —— `成功：轮询 3 次 + 鉴权失败(401)` 这类半成功文本取红更符合「有事要处理」）；② **判定面只有四个词**（UI 层已核实 `未成功`/`未完成` 在真实文案里 0 命中，不做正则、不加否定词表）；③ `跳过`/`已中断`/空串一律灰，其中 `已中断：完成 N 个会话…` 含「完成」故判绿是**索引前的既有行为，刻意保持不变**；④ **只回资源 id**（`getColor`/`setTextColor` 留在 Activity —— 纯 JVM 单测没有 `Context`）。不接管「待办数 0 才灰、有值才橙」这类语义化着色 |
+| 意图与权限 | `ConvExtrasCore`（43）· `PermissionGateCore`（78） | Intent extras → 会话键与运行时权限判定的唯一口径。`ConvExtrasCore`：六处 `getStringExtra(EXTRA_CONVERSATION/EXTRA_PKG)` 的 `takeIf { isNotBlank() } ?: 微信` 收口 —— 包名空白回落微信且**不 trim**（包名无空白语义）；会话名空白 = **无会话**返 `null`，不要构造空串键（`ConvKey("", pkg)` 永远匹配不到任何消息，详情页会静默空窗）。`PermissionGateCore`：POST_NOTIFICATIONS 必须**同时**看 `Build.VERSION.SDK_INT` 与授权结果（API < 33 该权限恒授予，只看结果会弹无效请求）；`allGranted(IntArray)` 对空结果返 false（别把「没申请」当「已授予」）；权限名用 `PERM_POST_NOTIFICATIONS` 字面量常量 —— 直接写 `Manifest.permission.POST_NOTIFICATIONS` 会触发 lint `InlinedApi`（编译期内联的 API 33 符号），基线从 3 条漂到 4 条 |
 | 评测口径 | `S2Usability`（349） | S2 深分析输出的**可用性判据**（六项：`delivered` 已交付 / `no_placeholder` 非占位照抄 / `summary` 摘要非空且非原文兜底且 ≤20 字 / `due` 可解析且与 S1 同桶且不早于窗口末条 60s / `action` 建议动作 ≤20 字 / `tasks` 分派条目完整），全过才算「可用」；`bucketOf` 五桶复用 `TopicLabelCore.DUE_*`，`fallbackSummary` 与 `parseS2Output` 共用同一份原文兜底口径；纯函数，34 条单测 |
 | 诊断统计 | `AllTimeStatsCore`（124） | 采集诊断页 W4「各来源累计统计」的取数与聚合口径：此前走 `MessageStore.readRecent(200_000)` —— 而 `readRecent` 的窗口写死 `TAIL_LINES = 5000` 行，历史一超就**静默给出偏小的数字**，截断提示的判据还是拿「文件行数」比「解析出的消息数」（损坏行会让人误以为没扫到）。现在 `MessageStoreCore.scanAll(limit)` 的窗口由调用方指定（`SCAN_LINES = 50_000` 行，边读边聚合、不为统计多驻留 `ChatMessage`），`Accumulator.add/finish` 单遍算累计条数 / 会话数（`ConvKey` 复合键去重）/ 自发消息数 / 每 App 的条数·会话数·群聊会话数·最近时间（`ts <= 0` 忽略），`capped(totalLines, scannedLines)` 只比**扫描行数**，损坏行不再误报截断 |
 | 提醒列表 | `ReminderListCore`（175） | 提醒列表的分组与排序：三组「需要处理 → 生效中 → 已过期」，组内按事件时间（attention/active 升序、expired 降序、无时间垫底）；chip 筛选只做一次分组判定、不动原则如下 —— 两条保守语义：`event_time <= 0` 不算过期（否则用户会删掉可能有效的记录）、`failed` 永不算过期（语义是「等你重试」）|
