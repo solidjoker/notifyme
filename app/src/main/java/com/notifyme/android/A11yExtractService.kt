@@ -128,7 +128,7 @@ class A11yExtractService : AccessibilityService() {
                 Log.e(TAG, "提取异常终止", t)
                 A11yExtractStore.finish(
                     this,
-                    "提取中断：${t.javaClass.simpleName}: ${t.message.orEmpty().take(60)}",
+                    "提取中断：${t.javaClass.simpleName}: ${TextClipCore.clip(t.message.orEmpty(), 60)}",
                     0, ""
                 )
             } finally {

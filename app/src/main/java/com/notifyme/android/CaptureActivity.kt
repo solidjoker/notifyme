@@ -392,7 +392,7 @@ class CaptureActivity : Activity() {
                     if (response.isSuccessful || response.code == 409) null
                     else "HTTP ${response.code}".let {
                         val body = response.body?.string().orEmpty()
-                        if (body.isEmpty()) it else "$it ${body.take(120)}"
+                        if (body.isEmpty()) it else "$it ${TextClipCore.clip(body, 120)}"
                     }
                 }
             } catch (e: Exception) {

@@ -401,7 +401,7 @@ class AnalysisWorker(
                             dedupKey = record.caseId,
                             message = kase.messages.last(),
                             summary = record.s2Summary.ifEmpty {
-                                kase.messages.last().text.replace("\n", " ").take(15)
+                                TextClipCore.clip(kase.messages.last().text.replace("\n", " "), 15)
                             },
                             dueTimeText = record.s2DueTime.ifEmpty { record.s1DueWindow },
                             baseTime = record.analyzedAt,
@@ -418,7 +418,7 @@ class AnalysisWorker(
                 Log.w(TAG, "分析失败: 网络错误", e)
                 return Result.retry()
             } catch (e: HttpException) {
-                val detail = if (e.body.isBlank()) "" else " ${e.body.take(120)}"
+                val detail = if (e.body.isBlank()) "" else " ${TextClipCore.clip(e.body, 120)}"
                 val msg = recordRetryFailure(config, "HTTP ${e.code}$detail", done)
                 recordResult(config, msg)
                 Log.w(TAG, "分析失败: HTTP ${e.code}$detail")
@@ -700,7 +700,7 @@ class AnalysisWorker(
         val tasksDigest = s2Tasks.joinToString("；") {
             it.what + (it.`when`.takeIf { w -> w.isNotBlank() }?.let { w -> "@$w" } ?: "")
         }
-        val windowDigest = sendCase.windowText().take(300)
+        val windowDigest = TextClipCore.clip(sendCase.windowText(), 300)
         return try {
             val advice = postChatCompletions(
                 advisorSlot,
@@ -714,7 +714,7 @@ class AnalysisWorker(
             )
             val content = AnalysisParsing.extractJsonPayload(advice)
                 ?.toString() ?: advice
-            val clean = content.trim().take(400)
+            val clean = TextClipCore.clip(content.trim(), 400)
             Log.i(TAG_FORK, "fork advisor advice | " + sendCase.conversation + " | " + clean)
             AnalysisCaseRecord.ForkRecord(
                 fork = "advisor",
@@ -728,7 +728,7 @@ class AnalysisWorker(
                 fork = "advisor",
                 prob = 0.0,
                 verdict = "advisor_error",
-                note = (e.message ?: "advisor 调用失败").take(200)
+                note = TextClipCore.clip(e.message ?: "advisor 调用失败", 200)
             )
         }
     }
@@ -748,7 +748,7 @@ class AnalysisWorker(
         val tasksDigest = s2Tasks.joinToString("；") {
             it.what + (it.`when`.takeIf { w -> w.isNotBlank() }?.let { w -> "@$w" } ?: "")
         }
-        val windowDigest = sendCase.windowText().take(300)
+        val windowDigest = TextClipCore.clip(sendCase.windowText(), 300)
         return try {
             val engine = LocalLlmEngines.forModel(applicationContext, LocalModelStore.MODEL_S2)
             val advice = engine.chat(
@@ -763,7 +763,7 @@ class AnalysisWorker(
                 onProgress
             )
             val content = AnalysisParsing.extractJsonPayload(advice)?.toString() ?: advice
-            val clean = content.trim().take(400)
+            val clean = TextClipCore.clip(content.trim(), 400)
             Log.i(TAG_FORK, "fork advisor(local) advice | " + sendCase.conversation + " | " + clean)
             AnalysisCaseRecord.ForkRecord(
                 fork = "advisor",
@@ -777,7 +777,7 @@ class AnalysisWorker(
                 fork = "advisor",
                 prob = 0.0,
                 verdict = "advisor_error",
-                note = (e.message ?: "advisor 调用失败").take(200)
+                note = TextClipCore.clip(e.message ?: "advisor 调用失败", 200)
             )
         }
     }
@@ -1113,14 +1113,14 @@ class AnalysisWorker(
                 if (!engine.isReady) return base
                 engine.chat(
                     AnalysisCase.buildAdvisorSystemPrompt(),
-                    AnalysisCase.buildAdvisorErrorContent(errorDigest.take(300)),
+                    AnalysisCase.buildAdvisorErrorContent(TextClipCore.clip(errorDigest, 300)),
                     1024
                 )
             } else {
                 postChatCompletions(
                     slot!!,
                     AnalysisCase.buildAdvisorSystemPrompt(),
-                    AnalysisCase.buildAdvisorErrorContent(errorDigest.take(300))
+                    AnalysisCase.buildAdvisorErrorContent(TextClipCore.clip(errorDigest, 300))
                 )
             }
         } catch (e: Exception) {
@@ -1128,7 +1128,7 @@ class AnalysisWorker(
             return base
         }
         val content = (AnalysisParsing.extractJsonPayload(advice)?.toString() ?: advice)
-            .trim().take(160)
+            .let { TextClipCore.clip(it.trim(), 160) }
         Log.i(TAG_FORK, "advisor error-repeats 诊断: $content")
         return "$base\nadvisor 诊断：$content"
     }

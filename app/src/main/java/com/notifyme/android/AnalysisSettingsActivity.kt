@@ -786,7 +786,7 @@ class AnalysisSettingsActivity : Activity() {
                     } else {
                         val body = response.body?.string().orEmpty()
                         if (body.isEmpty()) "连接失败：HTTP ${response.code}"
-                        else "连接失败：HTTP ${response.code} ${body.take(160)}"
+                        else "连接失败：HTTP ${response.code} ${TextClipCore.clip(body, 160)}"
                     }
                 }
             } catch (e: Exception) {

@@ -113,7 +113,7 @@ object CalendarHelper {
     ): ReminderOutcome {
         // 手动提醒（M17）用用户自己写的标题，不加「任务：」前缀；会话信息留在描述里
         val title = titleOverride.ifEmpty {
-            "任务：${summary.ifEmpty { sourceText.take(12) }}（$conversation）"
+            "任务：${summary.ifEmpty { TextClipCore.clip(sourceText, 12) }}（$conversation）"
         }
         val description = listOfNotNull(
             "发送者：$sender".takeIf { sender.isNotEmpty() },

@@ -130,5 +130,5 @@ internal object S1Eval {
 
     /** 表格单元格里的管道符会把 Markdown 结构打乱，统一转义。 */
     private fun escape(s: String): String =
-        s.replace("|", "\\|").replace("\n", " ").take(120)
+        TextClipCore.clip(s.replace("|", "\\|").replace("\n", " "), 120)
 }

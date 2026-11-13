@@ -42,7 +42,7 @@ object ManualReminderCore {
 
     /** 长按消息建提醒时的预填：折叠换行、去掉首尾空白、限长。 */
     fun prefillTitle(text: String, maxLen: Int = 40): String =
-        text.replace("\\s+".toRegex(), " ").trim().take(maxLen)
+        TextClipCore.clip(text.replace("\\s+".toRegex(), " ").trim(), maxLen)
 
     /** 标题长度上限（日历事件标题过长在通知栏会被截断）。 */
     const val MAX_TITLE_LEN = 60

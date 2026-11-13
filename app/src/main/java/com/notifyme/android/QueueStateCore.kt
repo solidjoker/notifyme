@@ -107,13 +107,9 @@ internal object QueueStateCore {
             if (id.isEmpty() || id.length > MAX_TASK_ID_LEN) continue
             val title = t.title.trim().let {
                 val base = if (it.isEmpty()) DEFAULT_TITLE else it
-                if (base.length > MAX_TITLE_LEN) base.substring(0, MAX_TITLE_LEN) else base
+                TextClipCore.clip(base, MAX_TITLE_LEN)
             }
-            val detail = if (t.detail.length > MAX_DETAIL_LEN) {
-                t.detail.substring(0, MAX_DETAIL_LEN)
-            } else {
-                t.detail
-            }
+            val detail = TextClipCore.clip(t.detail, MAX_DETAIL_LEN)
             val queuedAt = if (t.queuedAt < 0) 0L else t.queuedAt
             byId[id] = QueueTask(
                 taskId = id,

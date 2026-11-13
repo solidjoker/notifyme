@@ -1611,7 +1611,7 @@ class MainActivity : Activity() {
                     val summary = TopicLabelCore.todoLabel(
                         ctx, analysis.todoText, analysis.s2Summary, analysis.s1Topic
                     ).ifEmpty {
-                        msg.text.replace("\n", " ").take(15)
+                        TextClipCore.clip(msg.text.replace("\n", " "), 15)
                     }
                     // 旧实现拿 displayDue() 的原始码值去比中文串（none != 无明确时间 永远成立），
                     // 未编辑过的待办卡会显示成「· 截止：none」；现在统一问 TopicLabelCore
