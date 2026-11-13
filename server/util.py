@@ -11,6 +11,7 @@
 
 import json
 import re
+import time
 from datetime import datetime, timezone
 import logging
 
@@ -98,7 +99,9 @@ def _advisor_ts(value):
       1. None / bool / 空串 / 认不出的文本 → 0；
       2. 纯数字（int / float / 数字字符串）按毫秒；10**9..10**11 之间视为秒并乘 1000；
       3. 越界（<=0 或 > MAX_TS_MS）→ 0；
-      4. 文本按 "%Y-%m-%d %H:%M:%S" / "%Y-%m-%dT%H:%M:%S" / "%Y-%m-%d" 按**本地时区**解析。
+      4. 文本按 "%Y-%m-%d %H:%M:%S" / "%Y-%m-%dT%H:%M:%S" / "%Y-%m-%d" 按**本地时区**解析
+         （走 _local_ms：naive datetime.timestamp() 对 1970 之前 / 9999 边界
+         抛 OSError，见 _day_bounds_ms 的说明）。
     """
     import app as app_module
     if value is None or isinstance(value, bool):
@@ -118,9 +121,9 @@ def _advisor_ts(value):
                         "%Y-%m-%d %H:%M", "%Y-%m-%d"):
                 try:
                     return app_module._safe_int(
-                        datetime.strptime(text, fmt).timestamp() * 1000,
+                        _local_ms(datetime.strptime(text, fmt)),
                         default=0, lo=1, hi=app_module.MAX_TS_MS)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OSError, OverflowError):
                     continue
             return 0
     # 秒级时间戳（10 位）按秒解释：老版本与手工脚本会写成秒
@@ -230,19 +233,82 @@ def _fmt_tz_offset(minutes):
     minutes = abs(int(minutes))
     return "%s%02d:%02d" % (sign, minutes // 60, minutes % 60)
 
+def _utc_ms(day):
+    """naive datetime 当作 UTC → 毫秒整数。
+
+    必须走 replace(tzinfo=utc)：naive 的 datetime.timestamp() 按本机时区换算，
+    CPython 在 Windows 上对 1970 之前 / 9999 边界直接抛
+    OSError: [Errno 22] Invalid argument（实测 datetime(1970,1,1).timestamp() 就抛），
+    而 replace(tzinfo=utc).timestamp() 恒可用（0001-01-01 → -62135596800000，
+    9999-12-31 → 253402214400000）。
+    """
+    return int(day.replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+def _local_offset_min(ms):
+    """本机时区在某个毫秒时刻的偏移（分钟，东八区 +480）。
+
+    阶梯降级，绝不抛：① fromtimestamp + astimezone 拿真实偏移（含夏令时）；
+    ② 1970 之前 / 极远未来在 Windows 上 fromtimestamp 也抛 OSError，退回
+    time.localtime 的 tm_isdst 挑 time.timezone / time.altzone；③ 连 localtime
+    都抛时用标准时 time.timezone 兜底。time.timezone 是「西为正」的秒数，
+    转分钟偏移要取负号。
+    """
+    sec = ms / 1000.0
+    try:
+        off = datetime.fromtimestamp(sec).astimezone().utcoffset()
+        if off is not None:
+            return int(off.total_seconds() // 60)
+    except (OSError, OverflowError, ValueError):
+        pass
+    try:
+        zone = time.altzone if time.localtime(sec).tm_isdst > 0 else time.timezone
+        return -int(zone // 60)
+    except (OSError, OverflowError, ValueError):
+        pass
+    return -int(time.timezone // 60)
+
+def _local_ms(day):
+    """naive 本地时间 datetime → 毫秒整数，不抛 OSError。
+
+    等价于旧写法 int(day.timestamp() * 1000)，但改成「先按 UTC 求基准、再减
+    本地偏移」，绕开 naive timestamp() 在 1970 之前 / 9999 边界抛 OSError 的坑。
+    偏移求两轮：夏令时切换点上要用「减掉候选偏移后的时刻」再查一次才准。
+    """
+    base = _utc_ms(day)
+    off = _local_offset_min(base)
+    for _ in range(2):
+        off = _local_offset_min(base - off * 60000)
+    return base - off * 60000
+
 def _day_bounds_ms(date_str, tz_offset_min):
     """把 YYYY-MM-DD 换算成当天 [00:00, 次日00:00) 的毫秒区间。
 
     tz_offset_min 为 None 时用服务器本地时区（向后兼容的老行为）；
     否则按该固定偏移时区算（固定偏移没有夏令时，加 24h 精确）。
+
+    两种失败都以 ValueError 抛出、由调用方翻成 400（别让它们变 500）：
+    解析失败 → "date must be YYYY-MM-DD"；换算结果落在
+    [MIN_TS_MS, MAX_TS_MS] 之外 → "date out of range"。后一条是刻意的：
+    库里时间戳本来就被这两个常量卡住，越界日期只会返回一页永远为空的 200，
+    客户端会以为「当天没有消息」而不是「参数写错了」。
     """
-    day = datetime.strptime(date_str, "%Y-%m-%d")
+    import app as app_module
+    try:
+        day = datetime.strptime(str(date_str).strip(), "%Y-%m-%d")
+    except (TypeError, ValueError):
+        raise ValueError("date must be YYYY-MM-DD")
     if tz_offset_min is None:
-        day_start = int(day.timestamp() * 1000)
+        day_start = _local_ms(day)
     else:
-        day_start = int(day.replace(tzinfo=timezone.utc).timestamp() * 1000) \
-            - tz_offset_min * 60000
-    return day_start, day_start + 24 * 3600 * 1000
+        day_start = _utc_ms(day) - int(tz_offset_min) * 60000
+    day_end = day_start + 24 * 3600 * 1000
+    # 整日都落在库里能存的时间范围之外 → 400（别静默回一页永远为空的 200）；
+    # 只是与范围部分重叠时夹到边界：重叠之外的那截库里本来就不可能有数据。
+    if day_end <= app_module.MIN_TS_MS or day_start > app_module.MAX_TS_MS:
+        raise ValueError("date out of range")
+    day_start = max(day_start, app_module.MIN_TS_MS)
+    day_end = min(day_end, app_module.MAX_TS_MS + 1)
+    return day_start, day_end
 
 def _fmt_ts(ms):
     """毫秒时间戳 → 本地时间字符串；越界/非法返回「时间未知」。
