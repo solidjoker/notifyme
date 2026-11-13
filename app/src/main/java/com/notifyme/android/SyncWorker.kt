@@ -153,15 +153,11 @@ class SyncWorker(
      * 消息 / 分析 / 顾问 / 排队四条通道共用这里，保证「207 先于 2xx 判定」的口径一致。
      */
     private fun postJson(config: SyncConfig, url: String, body: String): BatchResult {
-        val request = Request.Builder()
-            .url(url)
-            .post(body.toRequestBody(JSON_MEDIA_TYPE))
-            .apply {
-                // 令牌非空时带 X-Token 头，与服务端 WEIXIN_TOKEN 鉴权对应
-                val token = config.authToken
-                if (token.isNotEmpty()) header("X-Token", token)
-            }
-            .build()
+        // 地址与鉴权头的口径在 SyncEndpointCore（令牌空白则不带 X-Token 头）
+        val request = SyncEndpointCore.authorized(
+            Request.Builder().url(url).post(body.toRequestBody(JSON_MEDIA_TYPE)),
+            config.authToken
+        ).build()
         return try {
             client.newCall(request).execute().use { response ->
                 val outcome = SyncOutcomeCore.classify(response.code)
@@ -407,9 +403,7 @@ class SyncWorker(
         }
         if (records.isEmpty()) return
 
-        var base = serverUrl.trim().trimEnd('/')
-        if (base.endsWith("/weixin")) base = base.dropLast("/weixin".length)
-        val url = "$base/analysis"
+        val url = SyncEndpointCore.url(serverUrl, "analysis")
 
         // 分批条目：case_id 做去重键，analyzedAt 供水位使用，json 是上报片段
         val entries = records.map { rec ->
@@ -629,9 +623,7 @@ class SyncWorker(
             RedactorCore(privacy.enabledRules, nameMap)
         } else null
 
-        var base = serverUrl.trim().trimEnd('/')
-        if (base.endsWith("/weixin")) base = base.dropLast("/weixin".length)
-        val url = "$base/advisor"
+        val url = SyncEndpointCore.url(serverUrl, "advisor")
 
         // 批次条目：report_id 是服务端去重键，createdAt 供水位使用
         val entries = reports.map { report ->
@@ -813,9 +805,7 @@ class SyncWorker(
         okParts: MutableList<String>,
         extraParts: MutableList<String>
     ) {
-        var base = serverUrl.trim().trimEnd('/')
-        if (base.endsWith("/weixin")) base = base.dropLast("/weixin".length)
-        val url = "$base/queue"
+        val url = SyncEndpointCore.url(serverUrl, "queue")
         try {
             val tasks = QueueStateCollector.collect(applicationContext, System.currentTimeMillis())
             val payload = QueueStateCore.buildPayload(

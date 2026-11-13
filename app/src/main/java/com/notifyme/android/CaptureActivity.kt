@@ -259,22 +259,14 @@ class CaptureActivity : Activity() {
 
     /**
      * 提取接口地址：serverUrl 去掉末尾 /weixin 再拼 /admin/<path>；
-     * 没有 /weixin 后缀时直接在原地址后拼（健壮处理）。
+     * 没有 /weixin 后缀时直接在原地址后拼（健壮处理）。口径在 [SyncEndpointCore]。
      */
-    private fun extractEndpoint(path: String): String {
-        var base = syncConfig.serverUrl.trim().trimEnd('/')
-        if (base.endsWith("/weixin")) base = base.dropLast("/weixin".length)
-        return "$base/admin/$path"
-    }
+    private fun extractEndpoint(path: String): String =
+        SyncEndpointCore.adminUrl(syncConfig.serverUrl, path)
 
-    /** 提取请求统一带 X-Token 头（令牌为空则不带，与服务端不鉴权模式对应）。 */
-    private fun extractRequest(url: String): Request.Builder {
-        val builder = Request.Builder().url(url)
-        if (syncConfig.authToken.isNotBlank()) {
-            builder.header("X-Token", syncConfig.authToken)
-        }
-        return builder
-    }
+    /** 提取请求统一带 X-Token 头（令牌空白则不带，与服务端不鉴权模式对应）。 */
+    private fun extractRequest(url: String): Request.Builder =
+        SyncEndpointCore.authorized(Request.Builder().url(url), syncConfig.authToken)
 
     private fun setupExtractSection() {
         btnExtractNow.setOnClickListener { startExtract() }
