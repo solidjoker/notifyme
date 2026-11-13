@@ -25,6 +25,11 @@ import androidx.recyclerview.widget.RecyclerView
  */
 class RedactorPreviewActivity : Activity() {
 
+    private companion object {
+        /** 预览列出的最近消息条数（与旧 `readRecent(this, 200)` 对齐）。 */
+        const val PREVIEW_LIMIT = 200
+    }
+
     private data class Row(
         val meta: String,
         val original: String,
@@ -46,7 +51,13 @@ class RedactorPreviewActivity : Activity() {
             }
         )
 
-        val messages = MessageStore.readRecent(this, 200).reversed() // 时间正序展示
+        // 逐条列出最近消息，但不能用跨会话的 readRecent(200)：活跃会话刷满尾部 200 行后，
+        // 安静会话的消息在预览里一条都看不到（用户无法核对它的规则效果）。
+        // 先按会话各留一窗、再轮流取样，口径见 [FeedWindowCore.sample]。
+        val messages = FeedWindowCore.sample(
+            MessageStore.feedGroups(this),
+            PREVIEW_LIMIT
+        ) // 已是时间正序
         val rows = messages.map { msg ->
             val display = if (msg.text.isNotEmpty()) msg.text else "(空文本)"
             val full = if (msg.isGroup && msg.sender.isNotEmpty())

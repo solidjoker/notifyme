@@ -312,4 +312,85 @@ class FeedWindowCoreTest {
         assertTrue(result.buckets.isEmpty())
         assertFalse(result.complete)
     }
+
+    // ---------------- sample（按会话轮流取样） ----------------
+
+    @Test
+    fun `sample 空结果或非正条数返回空表`() {
+        val empty = FeedWindowCore.Result(emptyList(), complete = true)
+        assertTrue(FeedWindowCore.sample(empty, 10).isEmpty())
+
+        val result = FeedWindowCore.group(listOf(msg("在吗", 1_000L)))
+        assertTrue(FeedWindowCore.sample(result, 0).isEmpty())
+        assertTrue(FeedWindowCore.sample(result, -5).isEmpty())
+    }
+
+    @Test
+    fun `sample 名额够时摊平后按时间升序`() {
+        val messages = listOf(
+            msg("甲1", 1_000L, conversation = "甲"),
+            msg("乙1", 2_000L, conversation = "乙"),
+            msg("甲2", 3_000L, conversation = "甲"),
+            msg("乙2", 4_000L, conversation = "乙")
+        )
+        val result = FeedWindowCore.group(messages)
+
+        assertEquals(
+            listOf("甲1", "乙1", "甲2", "乙2"),
+            FeedWindowCore.sample(result, 4).map { it.text }
+        )
+    }
+
+    @Test
+    fun `sample 名额不够时轮流取而不是按时间切尾`() {
+        val messages = listOf(
+            msg("甲1", 1_000L, conversation = "甲"),
+            msg("乙1", 2_000L, conversation = "乙"),
+            msg("甲2", 3_000L, conversation = "甲"),
+            msg("乙2", 4_000L, conversation = "乙")
+        )
+        val result = FeedWindowCore.group(messages)
+
+        // 只要 2 条：各会话各取最新一条（第 1 轮），不是「全表最近 2 条」
+        assertEquals(
+            listOf("甲2", "乙2"),
+            FeedWindowCore.sample(result, 2).map { it.text }
+        )
+        // 要 3 条：第 1 轮两桶各取最新（桶序按会话最近一条倒序 → 乙在前），第 2 轮轮到乙
+        assertEquals(
+            listOf("乙1", "甲2", "乙2"),
+            FeedWindowCore.sample(result, 3).map { it.text }
+        )
+    }
+
+    @Test
+    fun `sample 未标注日期的消息排在最前`() {
+        val messages = listOf(
+            msg("有时", 5_000L, conversation = "甲"),
+            msg("无时", 0L, conversation = "甲"),
+            msg("负时", -7L, conversation = "甲")
+        )
+        val result = FeedWindowCore.group(messages)
+
+        // 两条未标注日期的都归 0，并列时的先后由「取出的顺序」决定（本轮是从后往前取），
+        // 与 ConvWindowCore.slice 同口径 —— 别断言成输入顺序
+        assertEquals(
+            listOf("负时", "无时", "有时"),
+            FeedWindowCore.sample(result, 10).map { it.text }
+        )
+    }
+
+    @Test
+    fun `sample 在别的会话刷满行窗口时仍能看到安静会话`() {
+        repeat(600) { i -> core.append(msg("噪声$i", 1_000_000L + i * 1_000L, conversation = "闲聊群")) }
+        repeat(4) { i -> core.append(msg("我的$i", 100_000L + i * 1_000L)) }
+
+        val window = FeedWindowCore.sample(core.feedGroups(), 200)
+
+        assertEquals(4, window.count { it.conversation == "甲项目群" })
+        // 安静会话的 4 条一条不少（末条是噪声 599，因为整体按时间升序）
+        assertEquals("我的3", window.first { it.conversation == "甲项目群" && it.text == "我的3" }.text)
+        // 对照：旧写法只拿得到噪声
+        assertTrue(core.readRecent(200).none { it.conversation == "甲项目群" })
+    }
 }
