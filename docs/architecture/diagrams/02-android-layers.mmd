@@ -59,7 +59,7 @@ flowchart TB
         ENGINE2["LocalLlmEngine · LayaTfliteEngine<br/>端侧推理抽象 · LiteRT 2.2.0"]:::dom
     end
 
-    subgraph L4B["④-2 本轮新增 Core 逻辑内核 ×35（纯 JVM · 无 Android 依赖 · app/src/test 69 个 .kt / 1045 条覆盖）"]
+    subgraph L4B["④-2 本轮新增 Core 逻辑内核 ×35（纯 JVM · 无 Android 依赖 · app/src/test 69 个 .kt / 1054 条覆盖）"]
         direction LR
         C1["同步与上报<br/>SyncOutcome.kt 192（207 先于 2xx）<br/>SyncBatchCore.kt 84（200 条 / 1 MiB · 二分）<br/>SyncWatermarkCore.kt 57（已结算前缀）<br/>AnalysisSyncCore.kt 60 · AdvisorSyncCore.kt 44<br/>HistorySyncCore.kt 62（隐私门控 · MAX_PAGES=20）"]:::dom
         C2["拒绝与隔离<br/>AnalysisRejectCore.kt 238（被拒计数 + 隔离）<br/>AdvisorRejectCore.kt 213（复用 AnalysisRejectCore）<br/>PendingRejectCore.kt 66（被拒计数 + 丢弃上限）"]:::dom
@@ -78,8 +78,8 @@ flowchart TB
         C15["会话窗口<br/>ConvWindowCore.kt 187（按 convKey 取窗口 · requestLines 8 倍且封顶 50000 · slice 升序保最近 · preview 三态信度 · latest/knownIsGroup · sourceKeys/sourceMap 收掉三处跨会话取内容的同源隐患）"]:::dom
         C16["可见性门槛<br/>ConvVisibilityCore.kt 123（四层门槛：关注名单 → 自身/系统源 → 启用集合 → 首页来源筛选 · why 回原因码 · forced 只放宽启用 · 悬浮面板已接首页筛选）"]:::dom
         C17["候选窗口<br/>CandidateWindowCore.kt 69（按会话各留 50 条 · 5 倍 WINDOW_SIZE · ts≤0 归 0 排最前 · 收掉分析候选跨会话读 500 条的第四处同源隐患）"]:::dom
-        C18["分析窗口<br/>AnalysisWindowCore.kt 159（按会话取记录窗口 · group 组内按 windowEnd 升序 · latest/forConversation/recent 三档 · TAIL_LINES 5000 / POLL_LINES 1500 · 收掉 analysis.jsonl 侧 readRecent 尾部行窗口误用）"]:::dom
-        C19["首页窗口<br/>FeedWindowCore.kt 157（按会话各留一窗 · perConvFor 按会话数摊薄 6000 总预算、单会话夹在 20~200 · 组内升序 · truncated 以「是否读到文件头」定真/下限 · 收掉首页 readRecent(500) 的第五处同源隐患）"]:::dom
+        C18["分析窗口<br/>AnalysisWindowCore.kt 190（按会话取记录窗口 · group 组内按 windowEnd 升序 · latest/forConversation/recent 三档 · TAIL_LINES 5000 / POLL_LINES 1500 · 收掉 analysis.jsonl 侧 readRecent 尾部行窗口误用）"]:::dom
+        C19["首页窗口<br/>FeedWindowCore.kt 191（按会话各留一窗 · perConvFor 按会话数摊薄 6000 总预算、单会话夹在 20~200 · 组内升序 · truncated 以「是否读到文件头」定真/下限 · 收掉首页 readRecent(500) 的第五处同源隐患）"]:::dom
     end
 
     subgraph L5["⑤ 存储层 · app 私有目录（卸载即删）"]
