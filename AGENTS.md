@@ -265,13 +265,13 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ⑤ **分组顺序保首次出现（`LinkedHashMap`）**，后续 `sortedBy { windowEnd }` 是稳定排序 —— 同一份输入必须得到同一轮入选顺序，改排序方式前先想清楚「可复现」这条。
   改 `PER_CONV`、排序方向或分组语义前先跑 `app/src/test/java/com/notifyme/android/CandidateWindowCoreTest.kt`（16 条，含「600 条噪声 + 本会话仍在候选」与旧写法对照实验）。
 
-- **分析记录（`analysis.jsonl`）的取窗口口径全在 `AnalysisWindowCore`**（internal object，纯函数 + 23 条单测；文件级操作在同文件的 `internal class AnalysisWindowFile`，照 `AnalysisRejectFile` 范式），别在 Activity / Worker 里另写 `readRecent(N).filter{}` / `groupBy{}`：
-  ① **`AnalysisStore.readRecent(context, limit)` 是「文件尾部 limit 行」**，只留给本意就是全局最近 N 条的调用点。要「某会话全部 / 每会话最新一条 / 全库列表」必须走 `readGrouped` / `readForConversation` / `readRecentWindow` / `latestByConvKey` —— 否则尾部被别的会话占满，安静会话的 case 一条读不到（列表「暂无分析结果」、首页 `latestCases` 丢掉），而记录仍在文件里。这是分析侧的镜像，已出现三处。
-  ② **窗口量级分两档，别合并成一个常量**：`TAIL_LINES = 5_000` 给列表与首页聚合（一次读、多处派生）；`POLL_LINES = 1_500` 给详情页轮询（`ConversationActivity` 每 4 秒）与悬浮面板（每次展开）—— 这两条路径调用频繁，窗口给到 5 000 等于每 4 秒解析 5 000 行 JSON。`LIST_LIMIT = 200` 只是列表展示上限，`UNLIMITED = -1` 是「本会话不限条数」。
-  ③ **`group()` 保首次出现序、组内按 `windowEnd` 升序**：组内升序即「窗口推进顺序」，UI 与搜索直接当时间轴读；`latest()` 取每组末条，**同 `windowEnd` 取最后写入那条**（旧 `maxByOrNull` 取第一条，只在手工造数据 / 导入时能看出差别，别为它改语义）。
-  ④ **不按会话设条数上限**（与 `CandidateWindowCore.PER_CONV` 不同）：聚合前不知道有多少会话，内存由 `TAIL_LINES` 兜住。已知局限写进类注释：窗口外的老 case 读不到，要更强公平性得上索引。别悄悄把 `TAIL_LINES` 涨到几十万来「修」它。
-  ⑤ **新增返回这些内部类型的 `AnalysisStore` 方法必须 `@Synchronized` + 参数用 `JsonlStore(storeFile(context))` 现造**（与 `readRecent` / `readWindow` 同风格），否则并发追加时会读到半行。`AnalysisWindowFile` 自身只管读，不缓存。
-  改窗口量级、排序方向或「最新一条」的取舍前先跑 `app/src/test/java/com/notifyme/android/AnalysisWindowCoreTest.kt`（23 条，含 600 条噪声 + 本会话 3 条的对照回归）。
+- **分析记录（`analysis.jsonl`）的取窗口口径全在 `AnalysisWindowCore`**（internal object，纯函数 + 23 条单测；文件级操作在同文件的 `internal class AnalysisWindowFile`），别在 Activity / Worker 里另写 `readRecent(N).filter{}` / `groupBy{}`：
+  ① **`AnalysisStore.readRecent(context, limit)` 是「文件尾部 limit 行」**，只留给本意就是全局最近 N 条的调用点。要「某会话全部 / 每会话最新一条 / 全库列表」必须走 `readGrouped` / `readForConversation` / `readRecentWindow` / `latestByConvKey`，否则尾部被别的会话占满、安静会话的 case 一条读不到（列表「暂无分析结果」）。已出现三处。
+  ② **窗口量级分两档**：`TAIL_LINES = 5_000` 给列表与首页聚合；`POLL_LINES = 1_500` 给详情页轮询（每 4 秒）与悬浮面板 —— 这两条路径给 5 000 等于每 4 秒解析 5 000 行 JSON。`LIST_LIMIT = 200` 只是展示上限，`UNLIMITED = -1` 是「本会话不限条数」。
+  ③ **`group()` 保首次出现序、组内按 `windowEnd` 升序**（即窗口推进顺序）；`latest()` 取每组末条，**同 `windowEnd` 取最后写入那条**（旧 `maxByOrNull` 取第一条，别为它改语义）。
+  ④ **不按会话设条数上限**（与 `CandidateWindowCore.PER_CONV` 不同），内存由 `TAIL_LINES` 兜住；窗口外老 case 读不到是已知局限，别把 `TAIL_LINES` 涨到几十万来「修」它。
+  ⑤ **新增返回这些内部类型的 `AnalysisStore` 方法必须 `@Synchronized` + `JsonlStore(storeFile(context))` 现造**，否则并发追加会读到半行；`AnalysisWindowFile` 自身只管读、不缓存。
+  改前跑 `app/src/test/java/com/notifyme/android/AnalysisWindowCoreTest.kt`（23 条，含 600 条噪声 + 本会话 3 条）。
 
 - **首页信息流的取样口径全在 `FeedWindowCore`**（internal object，纯函数 + 22 条单测），别在 `MainActivity.buildFeed` 里另写一套：
   ① **首页取样不是「全局最近 500 条」**：旧写法 `readRecent(500).groupBy { convKey }` 会让几个群刷满窗口后安静会话一条都不出现，首页「最近待办」的可见集（`todoVisibleKeys`）随之看不到它 —— 这是 `readRecent` 同源隐患的**第五处**（前四处见上三条契约）。取会话集合 / 首页列表 / 悬浮面板窗口键 / 控制台折叠作用域 / 关注名单键 / 分析范围会话多选器，一律走 `MessageStore.feedGroups(context)`。
@@ -363,3 +363,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 ① 损坏时份数必须给 `None`（`return None, 0, True`），给 `0` 会让 priority 50 的「还没有顾问报告 / 顾问存档 0 份」规则命中 —— 真实状态是存档坏、历史报告还在盘上；
 ② 建议侧改出 priority 85 的「顾问存档损坏，报告读不出来」，夹在 80（待办）与 100（失败排队）之间；
 ③ 控制台按 `res[2].ok === false` 置 `ADVISORS_ERR`，错误分支必须排在 `if (!reports.length)` **之前**，否则落进通用空态把用户引去等端上跑复盘。
+- **设备台数有「总数」与「在跑数」两个口径：`storage.count_live_devices`**（`test_queue.py` 3 条 + `test_stats_api.py` 2 条 + `test_console_queue.py` 5 条守着）。
+① `summary.devices` / `/stats.queue.devices` 是**现存台数**，含只剩 failed/done、早已停报的僵尸设备（行要 7 天保留期后才清）；`devices_active` 才是「active > 0 的台数」—— 概览条写「N 台设备」必须读后者，否则 0 任务也报 2 台。
+② 前端两个入口：`liveDeviceCount()`（离线/估算档，数 `QUEUE_DEVICES` 的 active）与 `deviceTallyText(q)`（统计卡，`设备 N 台（在跑 M 台）`）；缺 `devices_active` 键时按「全在跑」保守回落，别渲染 `NaN`。
+③ 新增聚合键必须同时改 `stats_api._queue_block` 与 `routes.query_queue` 两处，并登记 `test_module_split.EXPECTED_OWNER`。

@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（646 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（659 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -559,6 +559,11 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 测试：`test_stats_api.py` +3 条（损坏时不出现「还没有顾问报告」、priority 排序 85 在 100 之后、健康态不提损坏）、`test_console_ui.py` +1 条（错误分支必须在空态之前）。真实 HTTP 冒烟：写坏存档后 `/suggests/next` 200 只给 priority 85 一条，`/advisor` 200 `ok:false`，`/console` 含 `ADVISORS_ERR` 与 `advisor_archive` 元数据。
   - 计数：`suggests.py` 322 → 344 行、`console_ui.py` 3507 → 3526 行、服务端用例 642 → 646 条。
 
+- **概览条的「N 台设备」把停报设备的僵尸行也算进去（feat/queue-devices-active）**
+  - 问题：`/stats` 的 `queue.devices` 与 `GET /queue` 的 `summary.devices` 都是 `len(queue_devices())` —— 那是「库里出现过哪几台设备」，不是「几台在跑」。设备停报（换机 / 卸载 / 关掉排队上报）后过期行要等 7 天保留期才清，这期间 `active` 恒为 0。实测 1 条 fresh running + 1 台设备 2 条超 TTL 行：`active 1` 却 `devices 2`，概览条渲染「当前没有排队任务 · 2 台设备」—— 0 个任务却有 2 台设备在跑。
+  - 修法：`storage.count_live_devices(devices=None)` 数 `active > 0` 的台数；`/stats` 的 `queue` 段与 `/queue` 的 `summary` 各加 `devices_active`（`devices` 保留原义）；控制台 `renderOverview` 改读 `statNum(['queue', 'devices_active'])`、离线兜底 `liveDeviceCount()`，统计 Tab 排队卡走新 helper `deviceTallyText()`（总台数与在跑台数不等才补「（在跑 M 台）」，缺 `devices_active` 的老服务端按「全在跑」保守处理），排队脚注补口径说明。
+  - 测试：`test_queue.py` +3 条（僵尸设备不计入 `devices_active`、全僵尸时 `devices_active == 0`、`count_live_devices` 吃预取列表 + 脏值归 0），空表全等断言补新键；`test_stats_api.py` +2 条 + 2 处断言（含「dev-a 有活跃、dev-b 只剩 failed/done → devices 2 / devices_active 1」）；`test_console_queue.py` +5 条静态契约；真实 HTTP 冒烟 `DEVICES_MATCH True True`。服务端 646 → 659 条。
+  - 计数：`storage.py` 864 → 885 行、`routes.py` 1034 → 1039、`stats_api.py` 212 → 220、`console_ui.py` 3526 → 3555；`test_queue.py` 760 → 812、`test_stats_api.py` 716 → 778、`test_console_queue.py` 200 → 248。
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：

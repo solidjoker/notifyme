@@ -20,6 +20,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import app as app_module  # noqa: E402
+import storage as storage_module  # noqa: E402
 from app import app as flask_app  # noqa: E402
 
 
@@ -153,6 +154,7 @@ def test_empty_database_stats_are_zero(api):
     assert data["analyses"]["age_days"] is None
     assert data["queue"]["total"] == 0
     assert data["queue"]["devices"] == 0
+    assert data["queue"]["devices_active"] == 0
 
 
 def test_empty_database_suggests_still_gives_advisor_hint(api):
@@ -318,6 +320,9 @@ def test_stats_counts_queue_by_state_and_device(api):
     assert queue["done"] == 1
     assert queue["active"] == 2
     assert queue["devices"] == 2
+    # dev-a 有 running+queued（活跃 2）、dev-b 只剩 failed+done（活跃 0）：
+    # 设备台数是 2，但「还在跑的设备」只有 1 台
+    assert queue["devices_active"] == 1
     assert queue["stale"] == 0
     kinds = {item["kind"]: item["count"] for item in queue["by_kind"]}
     assert kinds == {"analysis": 2, "sync": 1, "model": 1}
@@ -346,6 +351,63 @@ def test_stats_marks_stale_queue_tasks_and_excludes_from_state(api):
     assert queue["total"] == 1
     assert queue["stale"] == 1
     assert queue["running"] == 0
+    assert queue["active"] == 0
+    # 这台设备只剩过期行，不算「还在跑的设备」
+    assert queue["devices"] == 1
+    assert queue["devices_active"] == 0
+
+
+def test_stats_devices_active_excludes_zombie_device(api):
+    """设备停报后过期行还在库里：devices 报 2 台，devices_active 只能是 1 台。
+
+    缺陷现场：概览条读 devices 就会写出「当前没有排队任务 · 2 台设备」——
+    0 个任务却有 2 台设备在跑，自相矛盾（真机复现过）。
+    """
+    _insert_queue([("dev-live", "t1", "sync", "在跑", "running", "")])
+    with app_module._write_lock:
+        conn = app_module._connect()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO queue_tasks"
+                " (device_id, task_id, kind, title, state, detail, queued_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("dev-zombie", "z1", "sync", "僵尸", "running", "", 0,
+                 _now_ms() - storage_module.QUEUE_TTL_MS - 60 * 1000))
+            conn.commit()
+        finally:
+            conn.close()
+    queue = api.get("/stats").get_json()["queue"]
+    assert queue["devices"] == 2
+    assert queue["devices_active"] == 1
+    # 过期行只计 stale，不进 running
+    assert queue["running"] == 1
+    assert queue["stale"] == 1
+
+
+def test_stats_devices_active_zero_when_every_device_is_zombie(api):
+    """全部设备都停报：devices 仍报台数，devices_active 必须是 0。"""
+    with app_module._write_lock:
+        conn = app_module._connect()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO queue_tasks"
+                " (device_id, task_id, kind, title, state, detail, queued_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("dev-a", "z1", "sync", "僵尸1", "running", "", 0,
+                 _now_ms() - storage_module.QUEUE_TTL_MS - 60 * 1000))
+            conn.execute(
+                "INSERT OR REPLACE INTO queue_tasks"
+                " (device_id, task_id, kind, title, state, detail, queued_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("dev-b", "z2", "sync", "僵尸2", "queued", "", 0,
+                 _now_ms() - storage_module.QUEUE_TTL_MS - 60 * 1000))
+            conn.commit()
+        finally:
+            conn.close()
+    queue = api.get("/stats").get_json()["queue"]
+    assert queue["devices"] == 2
+    assert queue["devices_active"] == 0
+    assert queue["stale"] == 2
     assert queue["active"] == 0
 
 

@@ -16,7 +16,8 @@
 返回：{ok, generated_at, tz, tz_offset_minutes,
        messages: {total, convs, last_24h, last_ts, last_received_at, age_days, by_pkg, by_source},
        analyses: {total, convs, todo, todo_convs, redacted_cases, redaction_hits, last_report, age_days},
-       queue:    {total, active, queued, running, failed, done, stale, devices, by_kind}}
+       queue:    {total, active, queued, running, failed, done, stale,
+                  devices, devices_active, by_kind}}
 """
 
 import time
@@ -140,7 +141,9 @@ def _queue_block():
     import storage as storage_module
     now_ms = int(time.time() * 1000)
     out = {"total": 0, "active": 0, "queued": 0, "running": 0,
-           "failed": 0, "done": 0, "stale": 0, "devices": 0, "by_kind": []}
+           "failed": 0, "done": 0, "stale": 0, "devices": 0,
+           "devices_active": 0, "by_kind": []}
+
     conn = app_module._connect()
     try:
         rows = conn.execute(
@@ -167,8 +170,13 @@ def _queue_block():
             out[state] += 1
         if state in storage_module.QUEUE_ACTIVE_STATES:
             out["active"] += 1
-    # 设备数走 storage.queue_devices()，与 /queue 的 devices 同一口径
-    out["devices"] = len(storage_module.queue_devices())
+    # 设备数走 storage.queue_devices()，与 /queue 的 devices 同一口径。
+    # devices_active 只数「还有在跑任务」的设备：概览条的「· N 台设备」要的是
+    # 这个数，直接报 devices 会把停报设备的过期行一起算进去 —— 0 个任务却写
+    # 「2 台设备」（真机复现过）。
+    devices = storage_module.queue_devices()
+    out["devices"] = len(devices)
+    out["devices_active"] = storage_module.count_live_devices(devices)
     out["by_kind"] = [{"kind": k, "count": c} for k, c in
                       sorted(kinds.items(), key=lambda kv: (-kv[1], kv[0]))]
     return out

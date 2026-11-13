@@ -988,6 +988,9 @@ def query_queue():
 
     devices 是「库里出现过哪几台设备」的清单（device_id / total / active），
     同样统计全库，**不受任何过滤**影响；summary.devices = len(devices)。
+    summary.devices_active 只数其中 active > 0 的台数 —— 设备停报后过期行要
+    等 7 天保留期才清，这期间它仍在 devices 里但已经不在跑，概览条要的是
+    「几台还在跑」（storage.count_live_devices）。
     """
     import app as app_module
     import storage as storage_module
@@ -1016,6 +1019,8 @@ def query_queue():
     # 与 tasks 的过滤口径解耦 —— 前端既能列设备，也能筛某台设备看它的任务。
     devices = storage_module.queue_devices()
     summary["devices"] = len(devices)
+    # 「在跑的设备」与 devices 分开给：前者才是概览条要显示的数
+    summary["devices_active"] = storage_module.count_live_devices(devices)
     return jsonify({"ok": True, "tasks": tasks, "summary": summary,
                     "devices": devices})
 
