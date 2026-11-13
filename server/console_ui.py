@@ -1376,6 +1376,9 @@ function isToday(ms) {
 // ---------- 状态 ----------
 var CUR_TAB = 'conv';
 var MSGS = [], ANALYSES = [], ADVISORS = [];
+// 顾问存档读不出来时的说明（GET /advisor 回 200 + ok:false）：只影响顾问 tab，
+// 不能让顾问 tab 显示成「还没有顾问报告」——那是事实错误（文件坏了 ≠ 没报告）。
+var ADVISORS_ERR = '';
 // App 过滤：'' = 全部；否则只看该包名（四个 tab 共用同一口径）
 var APP_FILTER = '';
 // 全局搜索关键词（跨四个 tab）
@@ -2037,6 +2040,8 @@ async function load(reason) {
       toast('有 ' + ((SKIP_NOTICE.msg || 0) + (SKIP_NOTICE.ana || 0)) + ' 条脏数据被跳过');
     }
     ADVISORS = (res[2] && res[2].reports) || [];
+    ADVISORS_ERR = (res[2] && res[2].ok === false)
+      ? ((res[2].detail || res[2].error) || '顾问存档不可读') : '';
     QUEUE = (res[3] && res[3].items) || [];
     QUEUE_SUMMARY = (res[3] && res[3].summary) || null;
     QUEUE_ERR = (res[3] && res[3].err) || '';
@@ -2317,7 +2322,9 @@ function errorState(kind, msg) {
     unauthorized: { ico: '🔒', title: '令牌无效', desc: '访问令牌缺失或不匹配，服务端拒绝了这次请求。' },
     not_configured: { ico: '⚙️', title: '服务端未配置令牌', desc: '服务端没有设置 WEIXIN_TOKEN，无法提供任何数据。请在服务端配置环境变量后重启。' },
     http: { ico: '⚠️', title: '接口返回错误', desc: '服务器处理请求时出错了，稍后重试；若持续失败请查看服务端日志。' },
-    network: { ico: '📡', title: '网络错误', desc: '连不上服务器，请检查手机网络、服务是否在运行，以及是否处于离线状态。' }
+    network: { ico: '📡', title: '网络错误', desc: '连不上服务器，请检查手机网络、服务是否在运行，以及是否处于离线状态。' },
+    // 顾问存档损坏是「数据在、但读不出来」：既要报错，也要说清不是「没有报告」。
+    advisor_archive: { ico: '🧯', title: '顾问存档损坏', desc: '服务端解析顾问报告存档失败：为防历史报告被整份覆盖，写入已暂停，读取只能返回空列表。文件仍在服务器上，这不是「没有报告」。' }
   }[kind] || { ico: '⚠️', title: '出错了', desc: '发生未知错误。' };
   return '<div class="state state-error" role="alert">' +
     '<div class="state-ico" aria-hidden="true">' + meta.ico + '</div>' +
@@ -2975,6 +2982,18 @@ function renderAdvisor() {
     return advisorSearchText(r).indexOf(q) >= 0;
   });
   var out = [];
+  // 存档损坏：必须先报错再谈空态。读接口回的是 200 + ok:false（不是 5xx），
+  // 只取 reports 会把「文件坏了」渲染成「还没有报告」，把用户引去等端上跑复盘。
+  if (ADVISORS_ERR) {
+    out.push({
+      key: 'adv-error',
+      html: errorState('advisor_archive', ADVISORS_ERR +
+        ' 修好之前新的顾问上报会一直失败（POST /advisor 回 5xx），历史报告仍在服务器上。'),
+      full: true
+    });
+    out.push({ key: 'adv-note', html: refreshNote(), full: true });
+    return out;
+  }
   if (!reports.length) {
     out.push({ key: 'adv-empty', html: emptyStateFor('adv'), full: true });
     out.push({ key: 'adv-note', html: refreshNote(), full: true });

@@ -1185,3 +1185,36 @@ node 侧实证（抽出 `CONSOLE_HTML` 后用花括号配平抓函数体跑）�
 
 **计数**：`console_ui.py` 3480 → **3507 行 / 非空 3418**（`CONSOLE_MANIFEST` @3323 · `CONSOLE_SW` @3369 · `queueStateTotal` @3095 · `queueEmptyHtml` @3214）；
 `test_console_queue.py` 163 → **200 行 / 非空 139**；服务端用例 639 → **642 条**。
+
+### E-58｜顾问存档损坏时 `/suggests/next` 谎报「还没有顾问报告」+ 控制台顾问 Tab 显示成空态（`suggests._advisor_state` / `console_ui`，feat/advisor-archive-guard，2026-11-14）
+
+**问题.** `server/storage.py` 的 `_load_advisor_reports()` 在 JSONL 出现坏行时抛 `AdvisorArchiveError`（这是刻意的：损坏文件保留、拒绝覆盖，避免一次上报把历史整份抹掉）。但两个读取侧都把它当「空」处理：
+
+- `server/suggests.py` 的 `_advisor_state()` 捕到异常后 `logger.warning(...)` 并 `return 0, 0`，于是 RULES 里 priority 50 的 `advisor_total eq 0` 规则命中，`/suggests/next` 输出「还没有顾问报告 / 顾问存档 0 份」。真实状态是**存档损坏、历史报告仍在盘上**。
+- `server/console_ui.py` 的 `load()` 里 `ADVISORS = (res[2] && res[2].reports) || []` 把 `ok:false` 和 `error` 全丢掉，顾问 Tab 落进 `emptyStateFor('adv')` 的通用空态（「还没有顾问报告 / 顾问复盘报告由手机端定时生成并上报」），把用户引导去等端上跑复盘。
+
+同仓库的排队段（`QUEUE_ERR`）与统计段（`STATS_ERR`）都做了显式错误呈现，只有顾问段漏了 —— 这不是「故意简化」，是不一致。
+
+**复现.** 临时 DATA_DIR，写两行坏 JSON 到 `advisor_reports.jsonl`：
+
+```text
+/suggests/next  -> 200 {"suggests":[{"priority":50,"title":"还没有顾问报告","evidence":"顾问存档 0 份",...}]}
+/advisor        -> 200 {"ok":false,"count":0,"reports":[],"error":"advisor archive is corrupted","detail":".../advisor_reports.jsonl"}
+/console        -> 顾问 Tab 渲染通用空态，错误信息丢弃
+```
+
+**修法.**
+
+1. `_advisor_state()` 签名改成三元组 `(total, last_ts, broken)`：正常 `return total, last_ts, False`，损坏分支 `return None, 0, True` —— **份数给 `None` 而不是 0**，让下游能区分「真的没有」与「读不出来」。docstring 明确写出这一点。
+2. `query_suggests_next()` 解包三元组，`ctx` 新增 `advisor_broken`（0/1），RULES 插入 priority **85** 的 `field=advisor_broken, op=gt, bound=0` 规则，夹在 priority 80（待办）与 priority 100（失败排队）之间：`title="顾问存档损坏，报告读不出来"`、`evidence="顾问存档无法解析（advisor archive is corrupted）"`、`jump="adv"`。
+3. 控制台新增全局 `var ADVISORS_ERR = '';`，`load()` 里按 `res[2].ok === false` 置 `(res[2].detail || res[2].error)`；`renderAdvisor()` 在 `if (!reports.length)` **之前**插入 `key: 'adv-error'` 分支，渲染 `errorState('advisor_archive', ...)` 并 `return`；`errorState()` 的 meta 表加 `advisor_archive`（🧯 / 「顾问存档损坏」/ 说明「写入已暂停，读取只能返回空列表。文件仍在服务器上，这不是「没有报告」。」）。
+
+**测试.**
+
+- `server/test_stats_api.py` 670 → 716 行：helper `_write_corrupt_advisor()` + 3 条 —— 损坏时不出现「还没有顾问报告」且 `evidence` 不含「顾问存档 0 份」；priority 排序降序且 85 存在、首位是 100；健康存档从不提损坏。
+- `server/test_console_ui.py` 488 → 505 行：`test_advisor_tab_surfaces_archive_corruption_instead_of_empty_state`，断言 `ADVISORS_ERR` 声明与赋值、`detail || error` 优先级、**错误分支 index 必须小于空态分支 index**、`errorState('advisor_archive'`、`这不是「没有报告」`、meta 表键。
+
+**验证.** 定向 `pytest server/test_stats_api.py server/test_console_ui.py server/test_hardening.py -q` → 97 passed；全量 `pytest server/ -q` → **646 passed in 29.44s**；`compileall` 0。真实 HTTP（werkzeug `make_server` + `urllib`，真 TCP）：健康态给「还没有顾问报告」，写坏存档后 `/suggests/next` 200 只给 `[85, "顾问存档损坏，报告读不出来", "顾问存档无法解析（advisor archive is corrupted）"]`，`/advisor` 200 `ok:false`，`/console` 含 `var ADVISORS_ERR =` 与 `advisor_archive: { ico:`。node harness 抽 `renderAdvisor` 函数体实测：`err_html_has_title=true`、`err_html_has_path=true`、`err_html_says_not_empty=true`、`err_html_no_empty_state=true`、`err_html_is_alert=true`。
+
+**计数.** `server/suggests.py` 322 → **344** 行（非空 280 → 301）、`server/console_ui.py` 3507 → **3526** 行（非空 3418 → 3437）、`server/test_stats_api.py` 670 → **716**、`server/test_console_ui.py` 488 → **505**；服务端用例 642 → **646** 条。新增行号：`suggests.py` `_advisor_state @38` · `_queue_state @74` · `_todo_counts @104` · `_convs_without_analysis @128` · `_pick @197` · `query_suggests_next @209` · `RULES @263` · `register @341`；`console_ui.py` `var ADVISORS_ERR @1381` · `ADVISORS_ERR = (res[2] && res[2].ok === false) @2043` · `errorState @2320` · `advisor_archive` meta @2327 · `emptyStateFor @2346` · `renderAdvisor @2976` · `CONSOLE_MANIFEST @3342` · `CONSOLE_SW @3388`。
+

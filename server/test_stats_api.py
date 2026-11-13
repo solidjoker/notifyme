@@ -455,6 +455,52 @@ def test_suggests_advisor_total_rule_fires_when_archive_empty(api):
     assert adv[0]["priority"] == 50
 
 
+def _write_corrupt_advisor():
+    """把顾问存档写成坏 JSON：读路径抛 AdvisorArchiveError（一份报告都读不出）。"""
+    os.makedirs(app_module.DATA_DIR, exist_ok=True)
+    with open(app_module._advisor_jsonl_path(), "w", encoding="utf-8") as fh:
+        fh.write("{ broken\n{ also broken\n")
+
+
+def test_suggests_reports_broken_archive_instead_of_zero_reports(api):
+    """存档损坏时不能谎报「还没有顾问报告」。
+
+    修前 _advisor_state 在 AdvisorArchiveError 分支 return 0, 0，priority 50 的
+    advisor_total eq0 命中 → 控制台建议卡写「还没有顾问报告 / 顾问存档 0 份」，
+    把用户引去等端上跑复盘；真实状态是服务端存档坏了、要人工修。
+    现在损坏返回 (None, 0, True)，改成 advisor_broken 那条（priority 85）报实情。
+    """
+    _write_corrupt_advisor()
+    data = api.get("/suggests/next").get_json()
+    adv = [item for item in data["suggests"] if item["jump"] == "adv"]
+    assert len(adv) == 1, data["suggests"]
+    assert adv[0]["priority"] == 85
+    assert "损坏" in adv[0]["title"]
+    assert "还没有顾问报告" not in [item["title"] for item in data["suggests"]]
+    assert "顾问存档 0 份" not in adv[0]["evidence"]
+
+
+def test_suggests_broken_archive_outranks_todo_but_not_failed_queue(api):
+    """priority 85：压过待办（80），但仍排在排队失败（100）与过期（90）之后。"""
+    now = _now_ms()
+    _write_corrupt_advisor()
+    _insert_messages([("a", "hi", now - 1000, "conv1", "微信", "com.tencent.mm")])
+    _insert_analyses([("c1", "conv1", 1, "com.tencent.mm", 0, 0)])
+    _insert_queue([("dev-a", "t1", "analysis", "A", "failed", "")])
+    types = [item["priority"] for item in api.get("/suggests/next").get_json()["suggests"]]
+    assert types == sorted(types, reverse=True), types
+    assert 85 in types
+    assert types[0] == 100
+
+
+def test_suggests_healthy_archive_never_mentions_corruption(api):
+    """存档好着的时候不许出现「损坏」建议（不能把正常状态说成故障）。"""
+    now = _now_ms()
+    _write_advisor([{"report_id": "r1", "created_at": str(now - 1000)}])
+    titles = [item["title"] for item in api.get("/suggests/next").get_json()["suggests"]]
+    assert not [t for t in titles if "损坏" in t], titles
+
+
 def test_suggests_returns_at_most_three(api):
     """上限 3 条：数据再差也不能把整页刷满建议。"""
     now = _now_ms()
