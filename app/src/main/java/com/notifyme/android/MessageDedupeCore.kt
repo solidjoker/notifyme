@@ -51,7 +51,7 @@ internal object MessageDedupeCore {
         /** 一行预览：「张三：明天上午十点开会」，超长截断到 [PREVIEW_MAX]。 */
         val preview: String get() {
             val body = if (sender.isBlank() || sender == conversation) text else sender + "：" + text
-            return if (body.length <= PREVIEW_MAX) body else body.substring(0, PREVIEW_MAX) + "…"
+            return TextClipCore.clipWithEllipsis(body, PREVIEW_MAX)
         }
 
         companion object {

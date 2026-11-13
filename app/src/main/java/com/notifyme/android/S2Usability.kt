@@ -113,7 +113,7 @@ internal object S2Usability {
     fun fallbackSummary(kase: AnalysisCase): String =
         kase.messages.lastOrNull()?.text.orEmpty()
             .replace("\n", " ")
-            .take(MAX_SUMMARY_CHARS)
+            .let { TextClipCore.clip(it, MAX_SUMMARY_CHARS) }
 
     /** 字符数（按码点算，避免 emoji 在 UTF-16 下算成两个）。 */
     fun charCount(text: String): Int {
@@ -147,7 +147,7 @@ internal object S2Usability {
     ): List<Check> {
         val out = outcome?.out
         if (out == null) {
-            val why = outcome?.error?.take(60).orEmpty()
+            val why = outcome?.error?.let { TextClipCore.clip(it, 60) }.orEmpty()
             return CHECKS.map { Check(it, false, why) }
         }
         return listOf(
@@ -199,12 +199,12 @@ internal object S2Usability {
             )
         }
         val parsed = DueTimeCore.parse(due, kase.windowEnd, zone)
-            ?: return Check(CHECK_DUE, false, "due_time 解析不出：" + due.take(30))
+            ?: return Check(CHECK_DUE, false, "due_time 解析不出：" + TextClipCore.clip(due, 30))
         if (parsed < kase.windowEnd - PAST_TOLERANCE_MS) {
-            return Check(CHECK_DUE, false, "due_time 早于窗口末条：" + due.take(30))
+            return Check(CHECK_DUE, false, "due_time 早于窗口末条：" + TextClipCore.clip(due, 30))
         }
         if (bucket == TopicLabelCore.DUE_NONE) {
-            return Check(CHECK_DUE, false, "S1 判无截止，S2 却给了 " + due.take(30))
+            return Check(CHECK_DUE, false, "S1 判无截止，S2 却给了 " + TextClipCore.clip(due, 30))
         }
         val actual = bucketOf(parsed, kase.windowEnd, zone)
         if (actual != bucket) {
@@ -344,6 +344,6 @@ internal object S2Usability {
     /** 失败样本的说明列表（报告里「为什么没交付」用）。 */
     fun failureLines(outcomes: Map<String, Outcome>): List<String> =
         outcomes.values.mapNotNull { o ->
-            if (o.out != null) null else o.conversation + "：" + (o.error ?: "未交付").take(120)
+            if (o.out != null) null else o.conversation + "：" + (o.error ?: "未交付").let { TextClipCore.clip(it, 120) }
         }
 }

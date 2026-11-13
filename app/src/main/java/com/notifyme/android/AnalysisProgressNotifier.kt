@@ -55,7 +55,7 @@ object AnalysisProgressNotifier {
             state.caseTotal > 1 ->
                 context.templateText(R.string.analysis_notif_title_round, state.caseIndex, state.caseTotal)
             conv.isNotBlank() ->
-                context.getString(R.string.analysis_notif_title_conv, conv.take(20))
+                context.getString(R.string.analysis_notif_title_conv, TextClipCore.clip(conv, 20))
             else -> context.getString(R.string.analysis_notif_title)
         }
     }

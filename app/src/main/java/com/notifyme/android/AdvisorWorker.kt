@@ -122,7 +122,7 @@ class AdvisorWorker(
             Log.w(TAG, "顾问复盘失败: 网络错误", e)
             Result.retry()
         } catch (e: HttpException) {
-            val detail = if (e.body.isBlank()) "" else " ${e.body.take(120)}"
+            val detail = if (e.body.isBlank()) "" else " ${TextClipCore.clip(e.body, 120)}"
             AdvisorStore.recordResult(applicationContext, "失败：HTTP ${e.code}$detail")
             Log.w(TAG, "顾问复盘失败: HTTP ${e.code}$detail")
             Result.retry()

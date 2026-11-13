@@ -156,7 +156,7 @@ internal object AnalysisParsing {
     fun rejectPlaceholderEcho(out: S2Output) {
         if (out.placeholderEcho) {
             throw IllegalStateException(
-                "S2 输出照抄字段说明（占位文案），判定无效，保留 S1 结论；原文: ${out.rawJson.take(300)}"
+                "S2 输出照抄字段说明（占位文案），判定无效，保留 S1 结论；原文: ${TextClipCore.clip(out.rawJson, 300)}"
             )
         }
     }

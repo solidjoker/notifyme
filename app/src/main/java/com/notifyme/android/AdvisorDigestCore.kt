@@ -172,7 +172,7 @@ internal object AdvisorDigestCore {
             val topic = core?.redact(rec.s1Topic)?.text ?: rec.s1Topic
             val summary = core?.redact(rec.s2Summary.replace("\n", " "))?.text
                 ?: rec.s2Summary.replace("\n", " ")
-            sb.append("- 「").append(conversation.take(CONVERSATION_TRUNCATE)).append("」")
+            sb.append("- 「").append(TextClipCore.clip(conversation, CONVERSATION_TRUNCATE)).append("」")
                 .append(" ").append(timeLabel(rec.analyzedAt))
             if (rec.filtered) {
                 sb.append(" 预筛过滤(prob=").append(LocaleTextCore.fixed(rec.s1NeedActionProb, 2)).append(")")
@@ -182,7 +182,7 @@ internal object AdvisorDigestCore {
                     .append(" topic=").append(topic)
                 if (rec.escalated) {
                     sb.append(" 已深分析 摘要=")
-                        .append(summary.take(SUMMARY_TRUNCATE))
+                        .append(TextClipCore.clip(summary, SUMMARY_TRUNCATE))
                         .append(" 任务数=").append(rec.s2Tasks.size)
                 }
             }
