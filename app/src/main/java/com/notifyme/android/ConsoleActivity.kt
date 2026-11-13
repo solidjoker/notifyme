@@ -38,10 +38,9 @@ class ConsoleActivity : Activity() {
     companion object {
         private const val REQ_POST_NOTIFICATIONS = 42
 
-        /** 天组键（与主页 dayKeyFormat 同格式，折叠显式态的键成分） */
-        /** 每次取用新建实例：SimpleDateFormat 会固化默认 Locale 快照，类初始化时创建会触发 ConstantLocale */
-        private val dayKeyFmt: SimpleDateFormat
-            get() = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        // 天组键统一走 DateKeyCore：以前这里自建 SimpleDateFormat("yyyy-MM-dd")，
+        // 它在非公历 Locale（佛历 / 和历）下产出的 key 与主页 java.time 算的对不上，
+        // 折叠态复合键两边各自成立、互相看不见。
     }
 
     // 保活状态相关视图
@@ -154,10 +153,7 @@ class ConsoleActivity : Activity() {
     private fun collapseTargets(): List<Pair<ConvKey, String>> =
         MessageStore.feedGroups(this).toMap()
             .flatMap { (k, l) ->
-                l.map {
-                    if (it.timestamp > 0) dayKeyFmt.format(Date(it.timestamp))
-                    else MessageStore.DAY_KEY_UNKNOWN
-                }.distinct().map { k to it }
+                l.map { DateKeyCore.dayKeyOf(it.timestamp) }.distinct().map { k to it }
             }
 
     /** 定时分析面板初始化：两个按钮——立即分析一轮、跳分析设置（周期与开关都在那里）。 */

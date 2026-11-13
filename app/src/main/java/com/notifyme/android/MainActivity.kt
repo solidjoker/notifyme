@@ -70,8 +70,6 @@ class MainActivity : Activity() {
         /** 主页待办区最多显示几条（悬浮面板用 DEFAULT_LIMIT=8，首页只占顶端一小块） */
         private const val HOME_TODO_LIMIT = 5
 
-        /** 日期分组兜底 key：时间戳 ≤0（如 a11y 直读估算失败）的消息归「未标注日期」组 */
-        private const val DAY_KEY_UNKNOWN = "__unknown__"
 
         /** ActionMode 批量删除菜单项 id */
         private const val MENU_BATCH_DELETE = 1001
@@ -747,10 +745,6 @@ class MainActivity : Activity() {
             .filter { it.status != ReminderRecord.STATUS_FAILED }
             .map { it.dedupKey }.toSet()
 
-        val dayKeyFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        val currentYear = SimpleDateFormat("yyyy", Locale.getDefault()).format(Date())
-        val labelSameYear = SimpleDateFormat("M月d日", Locale.getDefault())
-        val labelCrossYear = SimpleDateFormat("yyyy年M月d日", Locale.getDefault())
 
         // feed.buckets 已按「最近一条」倒序、组内按时间升序，与旧实现的排序口径一致
         var groups = feed.buckets.map { it.key to it.messages }
@@ -848,8 +842,7 @@ class MainActivity : Activity() {
         val items = mutableListOf<FeedItem>()
         // M14：「全部折叠/展开」作用的天组全集（搜索过滤前口径，主线程按钮直接读，不再起线程读盘）
         feedDayPairs = visibleGroups.flatMap { (k, l) ->
-            l.map { if (it.timestamp > 0) dayKeyFormat.format(Date(it.timestamp)) else DAY_KEY_UNKNOWN }
-                .distinct().map { k to it }
+            l.map { DateKeyCore.dayKeyOf(it.timestamp) }.distinct().map { k to it }
         }
         for ((sectionTitle, sectionGroups) in sections) {
             if (sectionTitle != null) items += FeedItem.Section(sectionTitle)
@@ -882,12 +875,9 @@ class MainActivity : Activity() {
                 // 二级分组：按日期切分（groupBy 保序，组内消息已是时间正序）。
                 // 时间戳兜底：a11y 直读等来源可能带来 ts<=0 的估算失败值，归「未标注日期」组，
                 // 避免被格式化成 1970 年。
-                val byDate = list.groupBy {
-                    if (it.timestamp > 0) dayKeyFormat.format(Date(it.timestamp))
-                    else DAY_KEY_UNKNOWN
-                }
+                val byDate = list.groupBy { DateKeyCore.dayKeyOf(it.timestamp) }
                 // M14：折叠只按天——该会话最新一天默认展开，历史天默认折叠
-                val latestDay = CollapseStore.latestDayKeyOf(byDate.keys, DAY_KEY_UNKNOWN)
+                val latestDay = CollapseStore.latestDayKeyOf(byDate.keys, MessageStore.DAY_KEY_UNKNOWN)
                 // M14：该会话各天被哪些分析窗口覆盖（窗口=ts≤windowEnd 的最近 messageCount 条，
                 // 与建案口径一致）；同天多窗口按 windowEnd 升序，最新一条作主展示
                 val casesOfDay = HashMap<String, List<AnalysisCaseRecord>>()
@@ -895,12 +885,7 @@ class MainActivity : Activity() {
                     val window = list.filter { it.timestamp <= c.windowEnd }
                         .takeLast(c.messageCount)
                     if (window.isEmpty()) continue
-                    val covered = window
-                        .map {
-                            if (it.timestamp > 0) dayKeyFormat.format(Date(it.timestamp))
-                            else DAY_KEY_UNKNOWN
-                        }
-                        .distinct()
+                    val covered = window.map { DateKeyCore.dayKeyOf(it.timestamp) }.distinct()
                     for (day in covered) {
                         casesOfDay[day] = (casesOfDay[day] ?: emptyList()) + c
                     }
@@ -920,12 +905,17 @@ class MainActivity : Activity() {
                     val dateCollapsed = CollapseStore.isDateCollapsed(
                         collapsedDates, expandedDates, key, dayKey, latestDay
                     ) && !SearchCore.forcedExpand(query, dateHit)
-                    val label = if (dayKey == DAY_KEY_UNKNOWN) {
-                        getString(R.string.date_unknown_label)
-                    } else if (dayKey.startsWith(currentYear)) {
-                        labelSameYear.format(Date(dayMessages.first().timestamp))
-                    } else {
-                        labelCrossYear.format(Date(dayMessages.first().timestamp))
+                    // 日期组头文案：年月日全部从 dayKey 自身解析（DateKeyCore），
+                    // 不再拿 SimpleDateFormat 另算一遍——非公历 Locale 下两者会给出不同年份。
+                    val dayLabel = DateKeyCore.labelOf(dayKey, System.currentTimeMillis())
+                    val label = when {
+                        dayLabel.unknown -> getString(R.string.date_unknown_label)
+                        dayLabel.crossYear ->
+                            getString(
+                                R.string.date_label_cross_year,
+                                dayLabel.year, dayLabel.month, dayLabel.day
+                            )
+                        else -> getString(R.string.date_label_same_year, dayLabel.month, dayLabel.day)
                     }
                     items += FeedItem.DateHeader(
                         key = key,
@@ -1874,7 +1864,8 @@ object CollapseStore {
     /**
      * 该会话的「最新一天」：取最大 dayKey（yyyy-MM-dd 字典序即时间序）；
      * 「未标注日期」组是时间戳缺失的历史残渣，有正常天时永远不算最新。
+     * 口径在 [DateKeyCore.latestOf]，这里只是转发（保留旧签名，调用点不用改）。
      */
     fun latestDayKeyOf(dayKeys: Collection<String>, unknownDayKey: String): String =
-        dayKeys.filterNot { it == unknownDayKey }.maxOrNull() ?: unknownDayKey
+        DateKeyCore.latestOf(dayKeys, unknownDayKey)
 }
