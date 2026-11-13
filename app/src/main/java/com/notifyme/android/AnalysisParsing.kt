@@ -129,11 +129,11 @@ internal object AnalysisParsing {
             Log.w(TAG, "S2 输出照抄 prompt 字段说明（占位文案），判定无效，回退 S1")
         }
 
-        // 摘要兜底：模型没给时本地截取窗口末条原文
+        // 摘要兜底：模型没给时本地截取窗口末条原文。
+        // 口径只有一份：S2Usability.fallbackSummary —— 评测要用同一个函数判「这是兜底不是概括」，
+        // 两处各写一份迟早漂开（比如改成 30 字），那样评测就会把真摘要误判成兜底。
         if (summary.isEmpty()) {
-            summary = kase.messages.lastOrNull()?.text.orEmpty()
-                .replace("\n", " ")
-                .take(20)
+            summary = S2Usability.fallbackSummary(kase)
         }
 
         return S2Output(summary, dueTime, suggestedAction, tasks, raw, placeholderEcho)
