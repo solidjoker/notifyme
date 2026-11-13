@@ -292,3 +292,13 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ④ **`UNKNOWN` 字面量只留一份**：`DateKeyCore.UNKNOWN = "__unknown__"`，`MessageStore.DAY_KEY_UNKNOWN` 只是引用它（`MainActivity` 里那份私有常量已删）。`latestOf(dayKeys, unknown)` 必须排除 `__unknown__`（`_`=0x5F 大于数字，字典序会让它赢），`isUnknown` 同时吃 null / 空串 / `UNKNOWN`。
   ⑤ **`latestDayKeyOf` 只是转发**：`CollapseStore.latestDayKeyOf(dayKeys, unknownDayKey)` 保留旧签名转发 `DateKeyCore.latestOf`，调用点不改 —— 但它依赖的「ISO 字典序即时间序」只在恒公历前提下成立，别在别处再手写 `.maxOrNull()`。
   改 key 形态、改跨年判据或改折叠键成分前先跑 `DateKeyCoreTest.kt`（26 条，含 `th-TH` / 和历两条根因回归与 `MessageStore` / `CollapseStore` 委托一致性）。
+
+
+- **公历时间文本 ↔ 毫秒只有一份口径：`DueTimeCore`**（internal object，纯函数 + 31 条单测，`app/src/test/java/com/notifyme/android/DueTimeCoreTest.kt`）。手动提醒弹窗、日期选择器、自定义分析范围三处的「文本 ↔ 毫秒」往返此前各写一套，且都吃**默认 Locale 的历法**（`SimpleDateFormat(_, Locale.getDefault())` 格式化 + `Calendar.getInstance()` 解析），与 `DateKeyCore` 那轮是同一族 bug。六条契约：
+  ① **只走 `java.time`（ISO 公历）**：格式化用 `DateTimeFormatter.ofPattern(pattern, Locale.ROOT)`，造时间点用 `LocalDate.atTime(...).atZone(zone)`。不许再 new `SimpleDateFormat`（它固化创建时的默认 Locale 快照）、也不许用 `Calendar.getInstance()` 的 `YEAR/MONTH/DAY_OF_MONTH`（泰语下这是佛历 2569，和历下是 8）。同一毫秒 `2026-11-12 15:30 +08:00` 在 `th-TH` / `ja-JP-u-ca-japanese` 下旧写法给出 `2569-11-12` / `8-11-12`，Core 恒为 `2026-11-12`。
+  ② **`parse` 解析不出就返 null，不做兜底**：`+1h` 兜底是提醒链的选择（`CalendarHelper.parseDueTime`），Core 只回答「能不能解析、解析成什么」。手填提醒的语义是「先解析成功再落库」，兜底会把用户输入的错值悄悄变成一条别的提醒。
+  ③ **非法日期不许静默顺延**：`2026-02-30` / `2026-13-01` / `2026-04-31` / 非闰年 `2-29` 一律返 null（`LocalDate.of` 抛异常就地捕获），`Calendar` 的「自动进位成 3 月 2 日」语义不能回退。`parseDay` 的年份边界收在 `MIN_YEAR=1970 .. MAX_YEAR=2200`。
+  ④ **`M月d日` 的「已过顺延明年」留 1 分钟容差**：`thisYear < baseTime - 60_000L` 才算已过，与旧实现逐条对齐（59 秒前不算过、61 秒前算过），改容差会让「今天刚过几分钟」的提醒差一整年。
+  ⑤ **系统 DatePicker 的年份必须按「改了多少年」平移**：widget 显示的年份随默认 Locale 的历法走（佛历 2569 / 和历 8），所以 `pickDateTime` 只能把 widget 回的年份与初始显示的年份做差、加到基准公历年上（`adjustPickedYear(pickedYear, shownYear, baseYear)`）。不许写死 `-543` / `+1988` 之类的常数（和历的偏移随年号变化），也不许把 widget 的年份直接 `LocalDate.of`（那就是 1484 年那条 bug）。
+  ⑥ **`AnalysisScopeCore` / `CalendarHelper` / `ManualReminderCore` 只是转发**：`CalendarHelper.tryParseDueTime` 一行委托（保留签名的 `zone` 缺省），`parseDueTime` 的 `+1h` 兜底不动；`AnalysisScopeCore.dayStart/formatDay/parseDay` 保留 `java.util.TimeZone` 签名转发 `zone.toZoneId()`（设置页与 30 条既有单测调用点不改）；`ManualReminderCore` 的 `eventTimeFormat()` 已删除，改用 `eventTimeText(ms)`，别再把它加回来。
+  改格式、改解析分支或改年份换算前先跑 `DueTimeCoreTest.kt`（31 条，含 `th-TH` / 和历两条根因回归与往返一致）与 `ManualReminderCoreTest.kt`（15 条）、`CalendarDueTimeTest.kt`（7 条）、`AnalysisScopeCoreTest.kt`（30 条）。
