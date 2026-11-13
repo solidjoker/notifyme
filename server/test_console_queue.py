@@ -198,3 +198,51 @@ def test_queue_devices_come_from_api_response():
 
 def test_queue_device_filter_applies_to_list():
     assert "if (QUEUE_DEVICE) {" in HTML, "设备筛选没有生效到列表"
+
+def test_overview_device_count_uses_devices_active():
+    """概览条的设备数必须只算「还在跑」的台数，不是设备清单长度。
+
+    缺陷现场：设备停报后它的过期行要等 7 天保留期才清，这期间它还挂在
+    GET /queue 的 devices 里但 active 恒为 0。概览条拿 devices 当设备数，
+    就会写出「当前没有排队任务 · 2 台设备」—— 0 个任务却有 2 台设备在跑。
+    现在概览条读 /stats 的 queue.devices_active（storage.count_live_devices）。
+    """
+    assert "statNum(['queue', 'devices_active'])" in HTML, \
+        "概览条设备数没有读 devices_active"
+    # 旧写法（直接拿清单长度 / devices 台数）必须已经消失
+    assert "var devN = useSrv ? (STATS.queue.devices || 0)" not in HTML, \
+        "概览条还在拿 devices 当设备数"
+    assert "function liveDeviceCount(" in HTML, "缺少离线兜底的设备计数 helper"
+
+
+def test_live_device_count_only_counts_active_devices():
+    """离线兜底：数 QUEUE_DEVICES 里 active > 0 的台数。"""
+    assert "if (Number((QUEUE_DEVICES[i] && QUEUE_DEVICES[i].active) || 0) > 0) n++;" in HTML, \
+        "兜底设备计数没有过滤 active > 0"
+
+
+def test_device_tally_text_separates_total_and_running():
+    """设备台数文案：总台数与「在跑」台数分开，两者不等时才补后半句。"""
+    assert "function deviceTallyText(" in HTML, "缺少设备台数文案 helper"
+    assert "'设备 ' + all + ' 台'" in HTML, "设备台数没有输出总台数"
+    assert "(live < all ? ('（在跑 ' + live + ' 台）') : '')" in HTML, \
+        "两者不等时没有补「在跑」台数"
+    assert "if (!q) return '设备 —';" in HTML, "接口缺失时应显示占位而不是 0 台"
+    # 老服务端没有 devices_active 时不能凭空报「在跑 0 台」
+    assert "var live = Number(q.devices_active);" in HTML, \
+        "设备台数没有读 devices_active"
+    assert "if (!isFinite(live)) live = all;" in HTML, \
+        "缺 devices_active 时没有按「全在跑」保守处理"
+
+
+def test_stats_queue_card_uses_device_tally_text():
+    """统计 Tab 的排队卡也要走同一个文案 helper，别各写一套。"""
+    assert "esc(deviceTallyText(STATS.queue))" in HTML, \
+        "统计 Tab 排队卡没有走设备台数 helper"
+
+
+def test_queue_summary_note_states_live_device_scope():
+    """脚注要说清概览条的设备数只算在跑台数。"""
+    assert "概览条上的设备数只算「还有在跑任务」的台数" in HTML, \
+        "脚注没有说明概览条设备数口径"
+

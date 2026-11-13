@@ -308,9 +308,11 @@ def test_get_empty_table_returns_zero_summary(client):
     body = r.get_json()
     assert body["ok"] is True
     assert body["tasks"] == []
-    # summary 新增 devices（库里一共几台设备），其余字段与原来一字不差
+    # summary 新增 devices（库里一共几台设备）与 devices_active（其中还在跑的台数），
+    # 其余字段与原来一字不差
     assert body["summary"] == {"queued": 0, "running": 0, "failed": 0, "done": 0,
-                               "stale": 0, "total": 0, "devices": 0}
+                               "stale": 0, "total": 0, "devices": 0,
+                               "devices_active": 0}
 
 
 # ---------------------------------------------------------------- summary / stale
@@ -519,6 +521,56 @@ def test_devices_empty_on_empty_db(client):
     body = client.get("/queue").get_json()
     assert body["devices"] == []
     assert body["summary"]["devices"] == 0
+
+
+def test_devices_active_excludes_zombie_devices(client):
+    """设备停报后过期行还在库里，但它不算「在跑的设备」。
+
+    缺陷现场：android-live 有一条 fresh running，android-zombie 的两条都已
+    超 TTL（> 30min）但没超 7 天保留期 —— 库里 devices 是 2 台，而真正还在
+    跑的只有 1 台。概览条拿 devices 当设备数就会写「1 个任务排队或运行中 ·
+    2 台设备」甚至「当前没有排队任务 · 2 台设备」。
+    """
+    now = int(time.time() * 1000)
+    _post(client, [_task(task_id="live1", state="running")],
+          device_id="android-live")
+    expired = now - storage_module.QUEUE_TTL_MS - 60 * 1000
+    _insert_row("android-zombie", "z1", expired, state="running", kind="sync")
+    body = client.get("/queue").get_json()
+    assert set(_devices_by_id(body["devices"])) == {"android-live", "android-zombie"}
+    assert body["summary"]["devices"] == 2
+    # 只有一台还在跑
+    assert body["summary"]["devices_active"] == 1
+    # 与 summary 的活跃口径一致：过期行只计入 stale，不进 queued/running
+    assert body["summary"]["running"] == 1
+    assert body["summary"]["queued"] == 0
+    assert body["summary"]["stale"] == 1
+
+
+def test_devices_active_zero_when_all_stale(client):
+    """全部设备都停报：devices 还是 2 台，devices_active 必须是 0。"""
+    now = int(time.time() * 1000)
+    expired = now - storage_module.QUEUE_TTL_MS - 60 * 1000
+    _insert_row("android-a", "z1", expired, state="running", kind="sync")
+    _insert_row("android-b", "z2", expired, state="queued", kind="sync")
+    body = client.get("/queue").get_json()
+    assert body["summary"]["devices"] == 2
+    assert body["summary"]["devices_active"] == 0
+    assert body["summary"]["running"] == 0
+    assert body["summary"]["queued"] == 0
+    assert body["summary"]["stale"] == 2
+
+
+def test_storage_count_live_devices_accepts_prefetched_list():
+    """count_live_devices 能吃已取到的 devices 列表，脏值按 0 处理。"""
+    assert storage_module.count_live_devices([]) == 0
+    assert storage_module.count_live_devices(
+        [{"device_id": "a", "active": 2}, {"device_id": "b", "active": 0}]) == 1
+    assert storage_module.count_live_devices(
+        [{"device_id": "a", "active": "zzz"},
+         {"device_id": "b"},
+         {"device_id": "c", "active": -3},
+         {"device_id": "d", "active": 1}]) == 1
 
 
 def test_devices_ordering_is_deterministic(client):

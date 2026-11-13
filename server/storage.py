@@ -861,4 +861,25 @@ def queue_devices():
         })
     return devices
 
+def count_live_devices(devices=None):
+    """数「还有在跑任务」的设备台数 —— devices 里 active > 0 的那些。
+
+    为什么不直接 len(devices)：queue_devices() 给的是「库里出现过哪几台设备」，
+    设备停报（换机 / 卸载 / 关掉排队上报）之后过期行要等到 7 天保留期才清，
+    这期间那台设备的 active 恒为 0、只剩 stale 行。拿 len() 当「几台设备在跑」，
+    概览条会在同一行渲染出「当前没有排队任务 · 2 台设备」——
+    0 个任务却有 2 台设备在跑，自相矛盾（真机复现过）。
+
+    入参可以是已取到的 devices 列表（聚合层别为同一份数据查两次库），
+    None 时才自己查一次。脏值一律按 0 处理，与 queue_devices() 同口径。
+    """
+    import app as app_module
+    if devices is None:
+        devices = queue_devices()
+    n = 0
+    for item in devices:
+        if app_module._safe_int(item.get("active"), default=0, lo=0) > 0:
+            n += 1
+    return n
+
 

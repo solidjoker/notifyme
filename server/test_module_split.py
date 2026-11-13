@@ -131,6 +131,9 @@ EXPECTED_OWNER = {
     "_run_extract_bg": "storage.py",
     "_probe_main_db_writable": "storage.py",
     "cleanup_queue_tasks": "storage.py",
+    "queue_summary": "storage.py",
+    "queue_devices": "storage.py",
+    "count_live_devices": "storage.py",
     # routes.py：数据面路由
     "receive_weixin": "routes.py",
     "query_messages": "routes.py",

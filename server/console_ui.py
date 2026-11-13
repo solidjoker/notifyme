@@ -1839,7 +1839,10 @@ function renderOverview() {
   }
   var sQueue = $('ov-queue-sub');
   if (sQueue) {
-    var devN = useSrv ? (STATS.queue.devices || 0) : QUEUE_DEVICES.length;
+    // 设备数必须是「还有在跑任务」的台数：设备停报后它的过期行要等 7 天保留期
+    // 才清，这段时间它还挂在 devices 清单里但 active 恒为 0 —— 拿清单长度当
+    // 设备数，同一行就会写出「当前没有排队任务 · 2 台设备」（自相矛盾）。
+    var devN = useSrv ? (statNum(['queue', 'devices_active']) || 0) : liveDeviceCount();
     var actN = nQueue || 0;
     sQueue.textContent = sk ? '加载中…' :
       (actN
@@ -2911,8 +2914,8 @@ function renderStats() {
       html: '<div class="card"><div class="stat-label">排队任务</div>' +
         '<div class="stat-value">活跃 ' + (STATS.queue.active || 0) + ' · 失败 ' +
         (STATS.queue.failed || 0) + ' · 陈旧 ' + (STATS.queue.stale || 0) + '</div>' +
-        '<div class="ov-sub">' + esc(kindTxt || '暂无任务') + ' · 设备 ' +
-        (STATS.queue.devices || 0) + ' 台</div></div>'
+        '<div class="ov-sub">' + esc(kindTxt || '暂无任务') + ' · ' +
+        esc(deviceTallyText(STATS.queue)) + '</div></div>'
     });
   }
   out.push({
@@ -3092,6 +3095,30 @@ function queueStateLabel(st) {
 function queueKindLabel(k) {
   return QUEUE_KIND_META[k || ''] || '其它';
 }
+// 「还在跑的设备」台数：devices 清单里 active > 0 的那些。
+// 清单本身回答「库里出现过哪几台设备」，设备停报（换机 / 卸载 / 关掉上报）后
+// 它的过期行要等 7 天保留期才清，这段时间 active 恒为 0 —— 拿清单长度当设备数
+// 会在概览条写出「当前没有排队任务 · 2 台设备」。服务端 App 走 /stats 的
+// queue.devices_active，这里只给离线 / 估算场景兜底。
+function liveDeviceCount() {
+  var n = 0;
+  for (var i = 0; i < QUEUE_DEVICES.length; i++) {
+    if (Number((QUEUE_DEVICES[i] && QUEUE_DEVICES[i].active) || 0) > 0) n++;
+  }
+  return n;
+}
+// 设备台数文案：总台数与「在跑」台数分开报，两者不等时才补后半句，
+// 免得用户看到「设备 2 台」却找不到任何在跑的任务。
+function deviceTallyText(q) {
+  if (!q) return '设备 —';
+  var all = Number(q.devices || 0);
+  if (!all) return '设备 0 台';
+  // 老服务端没有 devices_active 时不能凭空报「在跑 0 台」，按「不知道就当全在跑」
+  // 保守处理：只报总台数，别补后半句。
+  var live = Number(q.devices_active);
+  if (!isFinite(live)) live = all;
+  return '设备 ' + all + ' 台' + (live < all ? ('（在跑 ' + live + ' 台）') : '');
+}
 // 活跃任务数（排队中 + 运行中）：概览条与 tab 角标都用它。
 // 优先用 GET /queue 的 summary（服务端全库口径，与 /stats 的 queue 段同源），
 // 拿不到才退回「数已加载的列表」—— 否则一页 200 条时角标永远停在 200。
@@ -3169,6 +3196,8 @@ function queueSummaryCard() {
     html += '<div class="q-note">数据来自手机端同步上报：分析任务的排队 / 运行 / 失败状态，以及待同步消息队列。超过 30 分钟未更新的条目算「已过期」。' +
       '上方汇总为全库口径（与「统计」Tab 一致），下方列表最多显示最近 500 条。' +
       '设备 chip 上的「活跃」只算未过期的条目，「已过期」是那台设备挂着但已经不在跑的任务数。' +
+      '概览条上的设备数只算「还有在跑任务」的台数：停报设备的过期行要等 7 天保留期才清，' +
+      '这期间它会挂在设备清单里但不算在跑。' +
       '状态 chip 上的数字同样是全库口径（过期行只计入「已过期」），不是这一页的条数。' +
       '7 天前的行会在读取或上报时顺带清掉。</div>';
   }
