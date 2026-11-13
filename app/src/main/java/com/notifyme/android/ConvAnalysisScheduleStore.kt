@@ -4,7 +4,6 @@
 package com.notifyme.android
 
 import android.content.Context
-import org.json.JSONObject
 
 /**
  * 已关注会话的「定时分析」排期表（M11.4）。
@@ -42,26 +41,11 @@ object ConvAnalysisScheduleStore {
     /** 全部已设置的排期（convKey.id → 分钟）。 */
     fun all(context: Context): Map<String, Long> = readMap(context)
 
-    private fun readMap(context: Context): Map<String, Long> {
-        val raw = prefs(context).getString(KEY_MAP, "{}").orEmpty()
-        val result = mutableMapOf<String, Long>()
-        try {
-            val obj = JSONObject(raw)
-            val keys = obj.keys()
-            while (keys.hasNext()) {
-                val k = keys.next()
-                val v = obj.optLong(k, 0L)
-                if (k.isNotEmpty() && v > 0) result[k] = v
-            }
-        } catch (e: Exception) {
-            // 损坏按空排期表处理
-        }
-        return result
-    }
+    // 损坏按空排期表处理；intervalMinutes<=0 在语义上就是「未启用」，读时直接丢掉。
+    private fun readMap(context: Context): Map<String, Long> =
+        PrefsJsonCore.longMap(prefs(context).getString(KEY_MAP, "{}"), positiveOnly = true)
 
     private fun writeMap(context: Context, map: Map<String, Long>) {
-        val obj = JSONObject()
-        map.forEach { (k, v) -> obj.put(k, v) }
-        prefs(context).edit().putString(KEY_MAP, obj.toString()).apply()
+        prefs(context).edit().putString(KEY_MAP, PrefsJsonCore.encodeLongMap(map)).apply()
     }
 }

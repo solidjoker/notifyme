@@ -817,3 +817,14 @@ E-38｜S2 摘要可用性评测：六项判据 + 云端 70% vs 端侧替身 15%�
 **验证**　全量 `testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug lintOpenDebug` **1228 条 / 0 失败**（基线 1208，+20）；lint 仍只有刻意保留的三条 warning（`ChromeOsAbiSupport` / `ObsoleteLintCustomCheck` / `OldTargetApi`）、0 error；`static_check.py --strict` 0 命中；`local_check.ps1` 七步全 PASS。
 
 **计数**　新增 `TextClipCore.kt`（65 行）+ `TextClipCoreTest.kt`（182 行 / 20 条）；主源码顶层 122 → **123**（全树 130）、`app/src/test` 77 → **78 个 .kt**、全量单测 1208 → **1228 条**、Core 逻辑内核 41 → **42 个**。三张图重渲：01 `3970×1701`、02 `13379×2007`（索引表已回写）、08 `6850×4895`。
+### E-41｜SharedPreferences 里「存 JSON 字符串」的读写口径：`PrefsJsonCore`（feat/prefs-json-core，2026-11-13）
+
+**问题**　五处 SharedPreferences 站点都把结构化数据塞进一个 JSON 字符串，读的时候各写一份 `try { JSONArray(raw) ... } catch (e: Exception) { }`：`WatchlistStore.getWatched`（会话名单）、`AppSourceStore.readWhitelist` / `readDisabled` / `readObserved`（来源白名单 / 停用集合 / 已观察来源）、`ConvTagStore.readRaw`（会话标签映射）、`ConvAnalysisScheduleStore.readMap`（每会话分析周期）、`AnalysisScopeCore.decodeConvIds`（Worker 传递的会话 id 列表）。五份实现各带自己的边界：有的 trim 有的不 trim；有的走 `optString` 有的走 `getString`（后者遇到数字元素直接抛 `JSONException`）；`readObserved` 把「缺 pkg」的过滤甩给 Activity 侧判空；`decodeConvIds` 写的是 `?: emptySet()` 而不是 catch，坏 JSON 会把异常一路扔进 WorkManager。而「损坏按空返回」这条契约只写在注释里，**一条单测都没有** —— 谁把 catch 改成 rethrow，用户侧表现就是关注名单凭空清空、来源白名单全部失效。
+
+**修法**　新增纯函数内核 `PrefsJsonCore`（135 行，`internal object`，**29 条单测**），五条契约：① **读永不抛异常**，null / 空串 / 非 JSON / JSON 类型不符一律返回空容器，且**返回独立拷贝**（调用方改返回集合不会污染下一次读取）；② **只做形状裁剪、不做领域过滤** —— `strings` 只丢空串（`trim = true` 时先削空白再判空），`longMap` 只保留正数，但「这个值是不是合法标签、是不是合法包名」留在 Store 层（`ConvTagStore` 仍自己 `ConvTag.fromCode(v) != NONE`）；③ 元素一律走 `optString`（数字 `1` 取成 `"1"`）；④ **写不做排序**（名单保持写入顺序，`encodeStrings(sort = true)` 才是显式排序，`AnalysisScopeCore` 用它保证落盘稳定）；⑤ 与 `MessageStore` 的 JSONL 无关（那边逐行流式文件 + 损坏行原位保留，这边单键整表 + 损坏整表按空）。`objects(raw, project)` 让单条坏数据只丢自己不牵连整表，`AppSourceStore.readObserved` 走它。
+
+**测试**　`PrefsJsonCoreTest.kt` 29 条：`strings` 7 / `encodeStrings` 5 / `stringMap` 5 / `longMap` 5 / `objects` 4 / 对照实验 3。三条对照实验把旧内联实现（测试里用 `legacyStrings` / `legacyLongMap` 逐字保留）与新内核喂同一批 10 + 8 个脏样本，断言结果**完全一致** —— 本轮是重构不是修 bug，得先证明行为没变再谈收口。写测试时踩到一个坑：第一版断言「纯空白元素被丢弃」，首跑 FAILED（`expected:<[com.tencent.mm|x]> but was:<[com.tencent.mm|x,   ]>`），因为旧实现只丢 `isNotEmpty()` 假值、纯空白要 `trim = true` 才丢；内核行为是正确的，错的是断言，改成两段断言（默认保留、`trim = true` 丢弃）。
+
+**验证**　全量 `testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug lintOpenDebug` **1257 条 / 0 失败**（基线 1228，+29）；lint 仍只有刻意保留的三条 warning（`ChromeOsAbiSupport` / `ObsoleteLintCustomCheck` / `OldTargetApi`）、0 error。
+
+**计数**　新增 `PrefsJsonCore.kt`（135 行）+ `PrefsJsonCoreTest.kt`（291 行 / 29 条）；`WatchlistStore.kt` 125 → **104**、`AppSourceStore.kt` 253 → **216**、`ConvTagStore.kt` 78 → **64**；主源码顶层 123 → **124**（全树 131）、`app/src/test` 78 → **79 个 .kt**、全量单测 1228 → **1257 条**、Core 逻辑内核 42 → **43 个**。

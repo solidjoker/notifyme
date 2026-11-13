@@ -4,7 +4,6 @@
 package com.notifyme.android
 
 import android.content.Context
-import org.json.JSONArray
 
 /**
  * 重点关注会话名单，存 SharedPreferences（文件名 watchlist，值为 JSON 数组字符串）。
@@ -48,26 +47,16 @@ object WatchlistStore {
      * 损坏的 JSON 按空名单处理（= 默认不关注）。
      */
     @Synchronized
-    fun getWatched(context: Context): MutableSet<String> {
-        val raw = prefs(context).getString(KEY_WATCHED, "[]").orEmpty()
-        val result = mutableSetOf<String>()
-        try {
-            val array = JSONArray(raw)
-            for (i in 0 until array.length()) {
-                result.add(normalize(array.optString(i)))
-            }
-        } catch (e: Exception) {
-            // JSON 损坏按空名单处理（= 默认不关注）
-        }
-        return result
-    }
+    fun getWatched(context: Context): MutableSet<String> =
+        PrefsJsonCore.strings(prefs(context).getString(KEY_WATCHED, "[]"))
+            .mapTo(mutableSetOf()) { normalize(it) }
 
     /** 整体写回名单（元素应为 [ConvKey.id] 或哨兵）。 */
     @Synchronized
     fun setWatched(context: Context, watched: Set<String>) {
-        val array = JSONArray()
-        watched.forEach { array.put(it) }
-        prefs(context).edit().putString(KEY_WATCHED, array.toString()).apply()
+        prefs(context).edit()
+            .putString(KEY_WATCHED, PrefsJsonCore.encodeStrings(watched))
+            .apply()
     }
 
     /** 该会话（复合键）是否应被分析：黑名单命中恒否；全部关注态为真；否则需显式在白名单内（空名单=默认不关注）。 */
@@ -84,26 +73,16 @@ object WatchlistStore {
 
     /** 读取显式不关注集合（已归一为 [ConvKey.id]）。 */
     @Synchronized
-    fun getUnwatched(context: Context): Set<String> {
-        val raw = prefs(context).getString(KEY_UNWATCHED, "[]").orEmpty()
-        val result = mutableSetOf<String>()
-        try {
-            val array = JSONArray(raw)
-            for (i in 0 until array.length()) {
-                result.add(normalize(array.optString(i)))
-            }
-        } catch (e: Exception) {
-            // 损坏按空集合
-        }
-        return result
-    }
+    fun getUnwatched(context: Context): Set<String> =
+        PrefsJsonCore.strings(prefs(context).getString(KEY_UNWATCHED, "[]"))
+            .mapTo(mutableSetOf()) { normalize(it) }
 
     /** 整体写回显式不关注集合（元素应为 [ConvKey.id] 或哨兵）。 */
     @Synchronized
     fun setUnwatched(context: Context, unwatched: Set<String>) {
-        val array = JSONArray()
-        unwatched.forEach { array.put(it) }
-        prefs(context).edit().putString(KEY_UNWATCHED, array.toString()).apply()
+        prefs(context).edit()
+            .putString(KEY_UNWATCHED, PrefsJsonCore.encodeStrings(unwatched))
+            .apply()
     }
 
     /** 名单里的显式 ⭐ 真实会话键（已剔除新旧哨兵）。全部关注态下为空，即时弹卡路径因此只服务白名单会话。 */

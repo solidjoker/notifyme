@@ -4,7 +4,6 @@
 package com.notifyme.android
 
 import android.content.Context
-import org.json.JSONObject
 
 /**
  * 会话标签存储（M19）：SharedPreferences conv_tags，值为 JSON 映射
@@ -24,22 +23,11 @@ object ConvTagStore {
 
     /** 原始映射（convKey.id → 标签码），损坏按空表处理。 */
     @Synchronized
-    fun readRaw(context: Context): Map<String, String> {
-        val raw = prefs(context).getString(KEY_MAP, "{}").orEmpty()
-        val result = mutableMapOf<String, String>()
-        try {
-            val obj = JSONObject(raw)
-            val keys = obj.keys()
-            while (keys.hasNext()) {
-                val k = keys.next()
-                val v = obj.optString(k, "")
-                if (k.isNotEmpty() && ConvTag.fromCode(v) != ConvTag.NONE) result[k] = v
-            }
-        } catch (e: Exception) {
-            // JSON 损坏按空表处理（= 全部未标记，行为回落到关注名单）
-        }
-        return result
-    }
+    // JSON 损坏按空表处理（= 全部未标记，行为回落到关注名单）；
+    // 未知标签码也在这一层丢掉，绝不因脏数据把会话永久拉黑（见 ConvTag.fromCode）。
+    fun readRaw(context: Context): Map<String, String> =
+        PrefsJsonCore.stringMap(prefs(context).getString(KEY_MAP, "{}"))
+            .filterValues { ConvTag.fromCode(it) != ConvTag.NONE }
 
     /** 某会话的标签；未打标返回 [ConvTag.NONE]。 */
     fun tagOf(context: Context, key: ConvKey): ConvTag = ConvTag.fromCode(readRaw(context)[key.id])
@@ -71,8 +59,6 @@ object ConvTagStore {
         ConvTagCore.shouldAnalyze(tagOf(context, key), watched, forced = false)
 
     private fun write(context: Context, map: Map<String, String>) {
-        val obj = JSONObject()
-        map.forEach { (k, v) -> obj.put(k, v) }
-        prefs(context).edit().putString(KEY_MAP, obj.toString()).apply()
+        prefs(context).edit().putString(KEY_MAP, PrefsJsonCore.encodeMap(map)).apply()
     }
 }

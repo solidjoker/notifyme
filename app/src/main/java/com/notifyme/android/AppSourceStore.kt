@@ -144,25 +144,11 @@ internal class AppSourceStateCore(private val kv: Kv) {
     fun whitelist(): Set<String> = readWhitelist()
 
     fun setWhitelist(pkgs: Set<String>) {
-        val arr = JSONArray()
-        pkgs.forEach { arr.put(it) }
-        kv.putString("whitelist", arr.toString())
+        kv.putString("whitelist", PrefsJsonCore.encodeStrings(pkgs))
     }
 
-    private fun readWhitelist(): Set<String> {
-        val raw = kv.getString("whitelist", "[]")
-        val result = mutableSetOf<String>()
-        try {
-            val arr = JSONArray(raw)
-            for (i in 0 until arr.length()) {
-                val pkg = arr.optString(i)
-                if (pkg.isNotEmpty()) result.add(pkg)
-            }
-        } catch (e: Exception) {
-            // 损坏按空白名单（= 白名单模式下什么都不收，宁可保守）
-        }
-        return result
-    }
+    // 损坏按空白名单（= 白名单模式下什么都不收，宁可保守）：纯函数口径在 PrefsJsonCore。
+    private fun readWhitelist(): Set<String> = PrefsJsonCore.stringSet(kv.getString("whitelist", "[]"))
 
     private fun readMode(): String = kv.getString("mode", "all")
 
@@ -181,26 +167,17 @@ internal class AppSourceStateCore(private val kv: Kv) {
 
     // ---------------- observed ----------------
 
-    private fun readObserved(): List<ObservedSource> {
-        val raw = kv.getString(KEY_OBSERVED, "[]")
-        val result = mutableListOf<ObservedSource>()
-        try {
-            val arr = JSONArray(raw)
-            for (i in 0 until arr.length()) {
-                val obj = arr.optJSONObject(i) ?: continue
-                val pkg = obj.optString("pkg")
-                if (pkg.isEmpty()) continue
-                result += ObservedSource(
-                    pkg = pkg,
-                    label = obj.optString("label"),
-                    firstSeen = obj.optLong("first_seen")
-                )
-            }
-        } catch (e: Exception) {
-            // 损坏按空集合
+    // 损坏按空集合、单条坏数据不牵连整表：纯函数口径在 PrefsJsonCore.objects。
+    private fun readObserved(): List<ObservedSource> =
+        PrefsJsonCore.objects(kv.getString(KEY_OBSERVED, "[]")) { obj ->
+            val pkg = obj.optString("pkg")
+            if (pkg.isEmpty()) null
+            else ObservedSource(
+                pkg = pkg,
+                label = obj.optString("label"),
+                firstSeen = obj.optLong("first_seen")
+            )
         }
-        return result
-    }
 
     private fun writeObserved(list: List<ObservedSource>) {
         val arr = JSONArray()
@@ -216,25 +193,11 @@ internal class AppSourceStateCore(private val kv: Kv) {
 
     // ---------------- disabled ----------------
 
-    private fun readDisabled(): Set<String> {
-        val raw = kv.getString(KEY_DISABLED, "[]")
-        val result = mutableSetOf<String>()
-        try {
-            val arr = JSONArray(raw)
-            for (i in 0 until arr.length()) {
-                val pkg = arr.optString(i)
-                if (pkg.isNotEmpty()) result.add(pkg)
-            }
-        } catch (e: Exception) {
-            // 损坏按空集合
-        }
-        return result
-    }
+    // 损坏按空集合（= 一个都没被关掉，全部启用）。
+    private fun readDisabled(): Set<String> = PrefsJsonCore.stringSet(kv.getString(KEY_DISABLED, "[]"))
 
     private fun writeDisabled(disabled: Set<String>) {
-        val arr = JSONArray()
-        disabled.forEach { arr.put(it) }
-        kv.putString(KEY_DISABLED, arr.toString())
+        kv.putString(KEY_DISABLED, PrefsJsonCore.encodeStrings(disabled))
     }
 
     companion object {
