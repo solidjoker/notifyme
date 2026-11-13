@@ -417,7 +417,9 @@ def test_stats_api_is_wired_into_the_console_data_layer():
     assert "async function fetchStats(" in html
     assert "async function fetchSuggests(" in html
     assert "api('stats', { signal: signal })" in html
-    assert "api('suggests/next', { signal: signal })" in html
+    assert "var url = 'suggests/next';" in html
+    assert "if (APP_FILTER) url += '?pkg=' + encodeURIComponent(APP_FILTER);" in html
+    assert "var r = await api(url, { signal: signal });" in html
     assert "var STATS = null;" in html, "聚合真值要有独立全局，拿不到时回退估算"
     assert "var SUGGESTS = [];" in html
     assert "fetchStats(ctrl.signal).catch" in html, "聚合接口失败不能拖垮主数据流"

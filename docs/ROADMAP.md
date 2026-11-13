@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（621 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（625 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -522,6 +522,13 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
 - 测试：`server/test_stats_api.py::test_stats_pkg_filter_applies_to_distributions` 断言分布之和等于同段 `total`；新增 `server/test_tooling_cache.py` 5 条（绝对且在仓库外 / 家目录未展开落临时目录 / 显式指进仓库要改道 / 显式指到仓库外要尊重 / `_inside` 对 `repo_other` 返 False）。服务端用例 615 → **621 条**。
 - 计数：`server/stats_api.py` 189 → **191 行**（`_messages_block` @41、`query_stats` @156、`register` @189）；`server/test_stats_api.py` 462 → **485 行**；`docs/scripts/static_check.py` 217 → **244 行**；`server/test_tooling_cache.py` 新增 71 行。Android 侧不动：顶层 130 / 全树 137 / `app/src/test` 85 个 / 1369 条 / Core 49。
 - 环境提醒：这次缓存落进仓库，是因为跑脚本的 shell 里 `USERPROFILE` 缺失 —— CI 与本地都可能出现，所以修复放在脚本里而不是绕开调用。
+
+- **`/suggests/next` 的 `pkg` 参数只回显不生效（feat/suggests-pkg-scope）**
+  - 问题：`GET /suggests/next?pkg=com.tencent.mm` 只把 `pkg` 原样塞回响应，六条规则一条都没用它 —— 四个采集函数（`_queue_state` / `_advisor_state` / `_todo_counts` / `_convs_without_analysis`）全是全库口径。控制台选了来源筛选后，列表按 `pkg` 过滤、旁边的「下一步建议」却还报全库的待办数，两处对不上；`suggests.py` 的 docstring 却已写着「pkg（可选，来源 App 过滤，与 /messages、/analysis 同口径）」。
+  - 复现：造 2 条消息 + 2 条 `need_action=1` 分析（甲 `com.tencent.mm` / 丙 `com.sina.weibo`），带与不带 `pkg` 返回的证据串完全相同（`待办 2 条，分布在 2 个会话 / 顾问存档 0 份`）。既有用例 `test_suggests_echoes_pkg` 只断言回显，所以 621 条全绿仍漏掉。
+  - 修法：`_todo_counts(pkg=None)` 的 SQL 追加 `AND pkg = ?`；`_convs_without_analysis(pkg=None)` 的 `where` 追加 `m.pkg = ?`；`query_suggests_next` 只把 `pkg` 传给这两个函数 —— 排队按设备、顾问是全局报告，两族规则与来源无关，仍走全库口径（别把口径抹平）。控制台 `fetchSuggests` 拼 `?pkg=`、新增 `refreshSuggests()` 在 `setAppFilter` / `clearAppFilter` 后重拉，建议块标题追加「· 仅 <来源>」，失败就清空而不是拿上一份别的来源的数字冒充。
+  - 测试：`test_stats_api.py` 新增 4 条 —— 待办数按 pkg（3 → 1、evidence「1 条 / 1 个会话」）、未分析会话数按 pkg、`pkg` 不影响 queue/100 与 advisor/50、选中来源无数据时 `todo` 建议不出现而「全部」口径仍报；`test_console_ui.py` 的接线断言从单行 `api('suggests/next', ...)` 改成三行 URL 拼装。
+  - 计数：`server/suggests.py` 308 → **322 行 / 非空 280**（`_todo_counts` @98 · `_convs_without_analysis` @122 · `_pick` @191 · `query_suggests_next` @203 · `register` @319）；`server/console_ui.py` 3452 → **3474 行 / 非空 3385**（`CONSOLE_MANIFEST` @3290 · `CONSOLE_SW` @3336 · `refreshSuggests` @1931）；`server/test_stats_api.py` 485 → **546 行 / 非空 457**；服务端用例 621 → **625 条**。
 
 ## 12. 决策门汇总
 
