@@ -878,3 +878,29 @@ E-38｜S2 摘要可用性评测：六项判据 + 云端 70% vs 端侧替身 15%�
 **验证**。全量 `testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug lintOpenDebug`：**1347 条 / 0 失败**（基线 1322 + 18，另含既有类间的 ±0），`BUILD SUCCESSFUL`；lint issue id 集合仍恰为 `ObsoleteLintCustomCheck` / `OldTargetApi` / `ChromeOsAbiSupport`、0 error；`python docs/scripts/static_check.py --strict` → `issues=0 files=0`。
 
 **计数**。新增 `SyncEndpointCore.kt`（73 行）+ `SyncEndpointCoreTest.kt`（300 行 / 18 条）；`HistorySync.kt` 261 → **254**、`CaptureActivity.kt` 547 → **539**、`SyncWorker.kt` 846 → **836**；主源码顶层 128 → **129**（全树 135 → **136**）、`app/src/test` 83 → **84 个 .kt**、全量单测 1322 → **1347 条**、Core 逻辑内核 47 → **48 个**。
+---
+
+### E-45｜两个抽取脚本的共享内核（`extract_common.py`，feat/extract-common，2026-11-13）
+
+**问题**。`server/android_db_extract.py`（1260 行）与 `server/pc_db_extract.py`（1122 行）是「一个文件复制两次再各改业务」的产物：按行做最长公共块测量（≥8 行才计），逐字相同的块共 **516 行 / 1260 行（41%）** —— `_log_warn` / `_log_event` / `_ro_uri` / `_archive_path` / `_lock_path` / `_archive_item` / `_archive_line` / `class _JsonlArchiver` / `class _FileLock` / `class _Dedup` / `class _BatchWriter` / `_ensure_dedup_index` / `_ensure_main_schema` / `_cursor_int` 全部两份，六个可配常量（`COMMIT_BATCH` / `COMMIT_INTERVAL` / `CROSS_SOURCE_SKEW_MS` / `JSONL_MAX_BYTES` / `LOCK_TIMEOUT` / `LOCK_STALE_SECONDS`）与 `TYPE_PLACEHOLDER` 也各抄一遍。后果是**改一处必须记得改两处**：64 MiB 的 JSONL 轮转阈值要同时与 `server/app.py:214` 对上，锁超时语义要在两边一致，任何一次漏改都会让两条提取腿在同一个 `messages.jsonl` 上互相覆盖出 `.1` 文件或者抢锁。唯一实质差异是解密链路（android 侧 `EnMicroMsg.db` + KDF 4000 轮 / pc 侧 `message_0.db` + 工具链）与字段映射，业务层代码量其实不到一半。
+
+**修法**。新建 `server/extract_common.py`（554 行 / 非空 474），承载上列 15 个符号 + `TYPE_PLACEHOLDER` + 配置注入层；两脚本只留业务段，`android_db_extract.py` **1260 → 813 行**（非空 1095 → 709）、`pc_db_extract.py` **1122 → 673 行**（非空 981 → 595）。
+
+配置注入是本轮真正的难点。测试全部用 `monkeypatch.setattr(ade, "MAIN_DB", tmp)` 这类「打宿主模块属性」的方式隔离数据（`server/test_extract.py:65-79`、`server/test_extract_cursor.py:395-399` 的 fixture，以及 `COMMIT_BATCH = 2` / `COMMIT_INTERVAL = 0` 让分批提交可断言次数），所以：
+
+- 六个 env 常量**必须继续定义在两个脚本里** —— monkeypatch 要有目标；`extract_common` 内部一律走 `_setting(name)`。
+- `_setting(name)` = `getattr(_HOST, name, None)`，**非 `None` 就返回**，否则回 `_DEFAULTS`。判 `None` 不判真值：`COMMIT_INTERVAL = 0` 是合法值（测试就靠它关掉定时提交）。
+- `_HOST` 由 `activate(module)` 登记；两脚本在 import 尾部调一次，**并在每个入口函数（`merge_messages` / `run_extract` / `extract_account`）开头再调一次**。
+- `_archive_path()` / `_lock_path()` 用 `_setting("MAIN_DB")` 而不是 import 时算好 —— 保持原注释承诺的「运行时按 MAIN_DB 解析」。
+
+**踩坑（真事故，已二次确认）**。第一版把注入函数命名为 `bind()` 且只在 import 时调一次，`server/test_extract.py::test_merge_messages_commits_in_batches` 首跑就红：`assert 1 == 5`，stderr 里 `event=lock_acquired path=C:\project\notifyme\server\data\extract.lock`、`rows=10 commits=1`。根因是同进程里 `ade` 与 `pde` 都被导入，**后导入的那个把 `_HOST` 顶掉了** —— `ade` 的 `MAIN_DB` / `COMMIT_BATCH` 全变成 `pde` 的值，锁与存档直接写进真实 `server/data/`。修法就是上面的「改名 `activate` + 每个入口重新 activate」。这类 bug 在单测里只会表现为「次数不对」，但副作用是**污染工作区真实数据文件**，比断言失败严重得多，所以契约写进了 `AGENTS.md`。
+
+第二条坑在存档轮转的测试上：`_maybe_rotate()` 判的是**本批追加之前**的文件字节数（`flush()` 先 `_maybe_rotate()` 再 `open(..., "a").write(blob)`），而且 `json.dumps` 会给纯字符串加引号 —— 拿「我写了 N 个字符」推 `getsize` 一定对不上。最终用例改成「预置 50 字节文件 + `max_bytes = 30` + 断言 `.1` 大小恰为 50」。
+
+第三条坑是导入路径：`server/storage.py:415` 的 `_import_extract_module(leg)` 用 `spec_from_file_location` **按文件路径**加载脚本（注释里写明原本裸名 `__import__` 在 WSGI 部署下会 `ModuleNotFoundError`），那时 `sys.path` 里没有 `server/`，所以两脚本必须 `sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))` 再裸名导入。另外 `import *` 会跳过下划线名，16 个符号只能显式列。
+
+**测试**。新增 `server/test_extract_common.py`（465 行 / **53 条**）：配置注入 7（`activate` 换源、`_setting` 认 0、`_archive_path`/`_lock_path` 跟随 `MAIN_DB` **且是调用时解析**）、结构化日志 4（键值展开、CR/LF 压平、`None` 跳过）、存档 9（轮转只在超限时、等于阈值不转、写失败只计数不抛）、写锁 5（超时抛 `ExtractError` 且消息含「拿不到提取写锁」）、去重 6（五列精确 + 跨来源时窗，**同来源不吃 skew**）、分批提交 5（批量/定时/`on_commit` 回调/失败重试）、主库结构 4（幂等、复用 `app.py` 的 `idx_messages_dedup` 时不重复建）、`_cursor_int` 参数化 15（bool / 负数 / 非整数 float / `+` 前缀 / 空白 / 非数字串）、`TYPE_PLACEHOLDER` 1。fixture 用 `types.SimpleNamespace` + `activate(module)`，teardown `activate(None)`，不依赖两个真实脚本。
+
+**验证**。`python -m pytest server/test_extract_common.py -q` → **53 passed**；`python -m pytest server/test_extract.py server/test_extract_cursor.py -q` → **41 passed**（monkeypatch 面全部仍生效）；`python -m pytest server/ -q` → **566 passed in 27.8s**（基线 513 + 53）；`python -m compileall -q server` 退出码 0。另写一次性探针 `loadcheck.py` 模拟 `storage.py` 的按路径加载（在仓库外的临时目录下运行、`sys.path` 里没有 `server/`）：两模块都加载成功，`mod._BatchWriter is m2._BatchWriter`、`mod.ExtractError is m2.ExtractError`（`except ExtractError` 与 `monkeypatch.setattr(ade._BatchWriter, "execute", boom)` 都依赖这同一性），各自 `_archive_path()` 分别指向自己的 `data/messages.jsonl`。
+
+**计数**。新增 `server/extract_common.py`（554 行 / 非空 474）、`server/test_extract_common.py`（465 行 / 53 条）；`android_db_extract.py` 1260 → **813**、`pc_db_extract.py` 1122 → **673**，`git diff --stat` 两文件 **+26 / −922**；服务端模块 **7+1 → 8+1**，全量 pytest 513 → **566 条**。图 01 / 07 重渲：01 `3970 × 1701` → **`3962 × 1724`**（多一行节点文本变高）、07 `6768 × 3555` → **`6798 × 3737`**（新增 `extract_common` 节点），索引表已回写。
