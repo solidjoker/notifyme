@@ -859,3 +859,22 @@ E-38｜S2 摘要可用性评测：六项判据 + 云端 70% vs 端侧替身 15%�
 **验证**。全量 `testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug lintOpenDebug`：**1322 条 / 0 失败**（基线 1289 + 33），`BUILD SUCCESSFUL`；lint issue id 集合仍恰为上三条、0 error；`static_check.py --strict` 首跑 1 条 `ConvExtrasCore.kt:43:1 File must end with a newline`，`--fix` 后 `issues=0 files=0`。
 
 **计数**。新增 `ConvExtrasCore.kt`（43 行）+ `ConvExtrasCoreTest.kt`（192 行 / 18 条）+ `PermissionGateCore.kt`（78 行）+ `PermissionGateCoreTest.kt`（169 行 / 15 条）；`AnalysisListActivity.kt` 303 → **300**、`ConversationActivity.kt` 1011 → **1008**、`MainActivity.kt` 1863 → **1860**、`ReminderListActivity.kt` 398 → **395**、`OverlayService.kt` 461 → **460**、`ReminderReceiver.kt` 118 → **117**、`ReminderSettingsActivity.kt` 115 → **110**（`CalendarHelper.kt` / `ConsoleActivity.kt` / `PromptEditActivity.kt` 行数不变）；主源码顶层 126 → **128**（全树 133 → **135**）、`app/src/test` 81 → **83 个 .kt**、全量单测 1289 → **1322 条**、Core 逻辑内核 45 → **47 个**。
+---
+
+### E-44｜服务端地址推导与 `X-Token` 头（`SyncEndpointCore`，feat/sync-endpoint-core，2026-11-13）
+
+**问题**。端侧要拼自托管服务端 URL 的地方一共五处，同一段推导抄了七遍：`HistorySync.endpoint` 与 `CaptureActivity.extractEndpoint` 各有一份 `var base = serverUrl.trim().trimEnd('/')` + `if (base.endsWith("/weixin")) base = base.dropLast("/weixin".length)`，`SyncWorker` 的 analysis / advisor / queue 三处又各内联一遍；鉴权头同样抄三遍（`HistorySync.request` 与 `CaptureActivity.extractRequest` 用 `isNotBlank()`，`SyncWorker.postJson` 内联用 `isNotEmpty()`）。同一个仓库里两套「令牌是否为空」的判定，改一处忘另一处就会出现「配了纯空白令牌时有的通道带头、有的不带」。
+
+**修法**。新增 `SyncEndpointCore`（73 行，`internal object`）：`TOKEN_HEADER = "X-Token"` / `WEIXIN_SUFFIX = "/weixin"` 两常量 + `base(serverUrl)` / `url(serverUrl, path)` / `adminUrl(serverUrl, path)` / `token(raw)` / `authorized(builder, rawToken)`。三条语义边界写进类注释：不接管 `/chat/completions`（`ChatRequestCore`）、不接管 `removeSuffix("/v1")`（各通道的 provider 前缀自理解）、不做 HTTPS 策略（`NetworkPolicy`）。
+
+五处站点全部接线：`HistorySync.endpoint` / `request` 与 `CaptureActivity.extractEndpoint` / `extractRequest` 退化成一行委托；`SyncWorker.postJson` 改 `SyncEndpointCore.authorized(Request.Builder().url(url).post(body.toRequestBody(JSON_MEDIA_TYPE)), config.authToken).build()`，analysis / advisor / queue 三处内联 base 推导改 `SyncEndpointCore.url(serverUrl, "...")`。
+
+两条口径细节：① **`base()` 的顺序是契约** —— 先 trim、再去尾斜杠、最后剥尾部 `/weixin`。反序时 `http://h/weixin/` 剥不掉（尾字符是 `/` 不是 `/weixin`），会拼出 `http://h/weixin/weixin/...`；② **两套令牌判定能合一的依据是 `SyncConfig` 的 setter 会 trim 落盘**，纯空白令牌不可达，`isNotEmpty` 与 `isNotBlank` 的差异只存在于「构造出来但从未落盘」的对象上。
+
+**测试**。`SyncEndpointCoreTest.kt`（300 行，**18 条**）：`base` 9（去尾斜杠 / 去 `/weixin` / 顺序契约 `http://h/weixin/` / 保留前置路径 / 大小写敏感 `/Weixin` 不剥 / 非尾部 `/weixin` 不剥 / trim 空白 / 空与纯空白与只剩 `/weixin` 剥成空 / 幂等）、`url`+`adminUrl` 4（根路径拼接 / 保留 query / admin 拼接 / `http://h/admin` 不二次叠 admin）、`token` 3（纯空白返 null / 非空白逐字返回且不 trim / `TOKEN_HEADER` 字面量）、与旧实现逐样本对照 3（14 个 base 样本、4 servers × 5 paths 双拼接、令牌可达性论证含 `legacyAttachNotEmpty` 与 `legacyAttachNotBlank` 两套旧实现）、okhttp 接线 4（带 / 不带头、`assertSame(builder, ...)` 证明链式、`header()` 覆盖不成双、POST 保 method 与 body）。
+
+**踩坑**。对照单测第一版把「旧 `isNotEmpty` 对纯空白必带头」写成 `assertEquals(" ", legacyAttachNotEmpty(sample))`，对空串样本不成立（`""` 的 `isNotEmpty()` 是 false → 返 null），首跑 `expected:< > but was:<null>` 于 `SyncEndpointCoreTest.kt:216`。改成三行断言:token 恒 null + 「旧返回值是否为空」跟随 `sample.isNotEmpty()` + `isNotBlank` 版本恒 null，才真正表达了「两套实现只在纯空白上有分歧」。
+
+**验证**。全量 `testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug lintOpenDebug`：**1347 条 / 0 失败**（基线 1322 + 18，另含既有类间的 ±0），`BUILD SUCCESSFUL`；lint issue id 集合仍恰为 `ObsoleteLintCustomCheck` / `OldTargetApi` / `ChromeOsAbiSupport`、0 error；`python docs/scripts/static_check.py --strict` → `issues=0 files=0`。
+
+**计数**。新增 `SyncEndpointCore.kt`（73 行）+ `SyncEndpointCoreTest.kt`（300 行 / 18 条）；`HistorySync.kt` 261 → **254**、`CaptureActivity.kt` 547 → **539**、`SyncWorker.kt` 846 → **836**；主源码顶层 128 → **129**（全树 135 → **136**）、`app/src/test` 83 → **84 个 .kt**、全量单测 1322 → **1347 条**、Core 逻辑内核 47 → **48 个**。

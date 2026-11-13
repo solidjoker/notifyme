@@ -59,7 +59,7 @@ flowchart TB
         ENGINE2["LocalLlmEngine · LayaTfliteEngine<br/>端侧推理抽象 · LiteRT 2.2.0"]:::dom
     end
 
-    subgraph L4B["④-2 本轮新增 Core 逻辑内核 ×47（纯 JVM · 无 Android 依赖 · app/src/test 83 个 .kt / 1322 条覆盖）"]
+    subgraph L4B["④-2 本轮新增 Core 逻辑内核 ×48（纯 JVM · 无 Android 依赖 · app/src/test 84 个 .kt / 1347 条覆盖）"]
         direction LR
         C1["同步与上报<br/>SyncOutcome.kt 192（207 先于 2xx）<br/>SyncBatchCore.kt 84（200 条 / 1 MiB · 二分）<br/>SyncWatermarkCore.kt 57（已结算前缀）<br/>AnalysisSyncCore.kt 60 · AdvisorSyncCore.kt 44<br/>HistorySyncCore.kt 62（隐私门控 · MAX_PAGES=20）"]:::dom
         C2["拒绝与隔离<br/>AnalysisRejectCore.kt 201（被拒计数 + 隔离）<br/>AdvisorRejectCore.kt 183（复用 AnalysisRejectCore）<br/>PendingRejectCore.kt 66（被拒计数 + 丢弃上限）"]:::dom
@@ -90,6 +90,7 @@ flowchart TB
         C27["SharedPreferences JSON 口径<br/>PrefsJsonCore.kt 135（读永不抛 · 损坏按空返独立拷贝 · 只做形状裁剪不做领域过滤 · 元素走 optString · 写不排序 · 五处 Store 的容错解析已收口 + 29 条单测）"]:::dom
         C28["模型通道请求体与状态行着色<br/>ChatRequestCore.kt 61（端点归一 trim→trimEnd(/)+补 /chat/completions，不猜 provider 前缀 · max_tokens 单一默认 4096 · 请求体键集合 model/messages/response_format/max_tokens/stream 是契约 · 三处 postChatCompletions 已收口）<br/>StatusTintCore.kt 31（失败/鉴权先判、成功/完成后判 · 只回资源 id · 两处逐字相同的 tintStatus 已收口 + 32 条单测）"]:::dom
         C29["Intent extras 与运行时权限口径<br/>ConvExtrasCore.kt 43（包名空白回落微信且不 trim · 会话名空白=无会话返 null，不构造永匹配不到的空键 · 六处 getStringExtra 已收口）<br/>PermissionGateCore.kt 78（needsPostNotifications 同时看 sdkInt 与结果 · allGranted 空结果 false · 权限名用字面量常量，写 Manifest.permission.POST_NOTIFICATIONS 会报 InlinedApi）"]:::dom
+        C30["服务端地址与鉴权头<br/>SyncEndpointCore.kt 73（base 顺序契约：先去尾斜杠再剥尾部 /weixin · url/adminUrl 只拼接不猜 /v1 也不补 /chat/completions · token 用 isNotBlank 转 null · authorized 只在非空时加 X-Token 并返回同一 builder 可链式 · 五处 URL 与三处头已收口 + 18 条单测）"]:::dom
     end
 
     subgraph L5["⑤ 存储层 · app 私有目录（卸载即删）"]
