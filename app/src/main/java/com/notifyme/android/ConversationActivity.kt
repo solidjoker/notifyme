@@ -100,7 +100,6 @@ class ConversationActivity : Activity() {
     private lateinit var tvConvReminders: TextView
     private lateinit var tvConvTag: TextView
 
-    private val timeFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
     private val handler = Handler(Looper.getMainLooper())
 
     /** 已展示的分析记录时间：轮询时只有拿到新结果才重渲染面板 */
@@ -434,7 +433,7 @@ class ConversationActivity : Activity() {
             if (msg.timestamp > 0 && msg.timestamp - lastTimestamp > TIME_DIVIDER_GAP_MS) {
                 val divider = item.findViewById<TextView>(R.id.tvTimeDivider)
                 divider.visibility = View.VISIBLE
-                divider.text = timeFormat.format(Date(msg.timestamp))
+                divider.text = LocaleTextCore.minutes(msg.timestamp)
             }
             lastTimestamp = msg.timestamp
 
@@ -699,8 +698,7 @@ class ConversationActivity : Activity() {
         tvLastAnalysisTime.visibility = View.VISIBLE
         tvLastAnalysisTime.text = getString(
             R.string.analysis_last_time,
-            SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
-                .format(Date(record.analyzedAt))
+            LocaleTextCore.seconds(record.analyzedAt)
         )
     }
 

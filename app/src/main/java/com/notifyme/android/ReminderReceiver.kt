@@ -13,9 +13,6 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * App 内提醒的到点接收器（三级降级链 Level 3 的出口）。
@@ -54,8 +51,6 @@ class ReminderReceiver : BroadcastReceiver() {
             }
         }
     }
-
-    private val timeFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION_REMIND) return
@@ -98,7 +93,7 @@ class ReminderReceiver : BroadcastReceiver() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val timeText = if (eventTime > 0) "（${timeFormat.format(Date(eventTime))}）" else ""
+        val timeText = if (eventTime > 0) "（${LocaleTextCore.minutes(eventTime)}）" else ""
         val content = buildString {
             append(title).append(timeText)
             if (summary.isNotEmpty() && summary != title) append("\n").append(summary)

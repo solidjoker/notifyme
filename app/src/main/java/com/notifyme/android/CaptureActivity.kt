@@ -24,9 +24,6 @@ import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
@@ -252,8 +249,7 @@ class CaptureActivity : Activity() {
         tvSyncStatus.text = if (time <= 0L) {
             getString(R.string.sync_status_none)
         } else {
-            val timeText = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
-                .format(Date(time))
+            val timeText = LocaleTextCore.seconds(time)
             "$timeText  ${syncConfig.lastSyncResult}"
         }
         tintStatus(tvSyncStatus, syncConfig.lastSyncResult)

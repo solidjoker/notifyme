@@ -154,15 +154,15 @@ internal object S1Agreement {
         sb.append("| 云端 need_action 命中 | ").append(summary.cloudFlagged).append(" |\n")
         sb.append("| 端侧 need_action 命中 | ").append(summary.localFlagged).append(" |\n")
         sb.append("| need_action_prob 平均绝对差 | ")
-        sb.append("%.3f".format(summary.meanProbDelta)).append(" |\n")
+        sb.append(LocaleTextCore.fixed(summary.meanProbDelta, 3)).append(" |\n")
         sb.append("| importance 平均绝对差 | ")
-        sb.append("%.2f".format(summary.meanImportanceDelta)).append(" |\n")
+        sb.append(LocaleTextCore.fixed(summary.meanImportanceDelta, 2)).append(" |\n")
         sb.append("| 端侧 confidence 均值 | ")
-        sb.append("%.3f".format(summary.meanConfidence)).append(" |\n")
+        sb.append(LocaleTextCore.fixed(summary.meanConfidence, 3)).append(" |\n")
         sb.append("\n结论：").append(summary.grade).append("\n")
         sb.append("\n> 生成时间：").append(generatedAt).append("\n")
         return sb.toString()
     }
 
-    private fun pct(v: Double): String = "%.1f%%".format(v * 100)
+    private fun pct(v: Double): String = LocaleTextCore.percent(v, 1)
 }

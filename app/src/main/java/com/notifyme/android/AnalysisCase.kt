@@ -375,8 +375,11 @@ data class AnalysisCase(
 
             /** 注入 S2 prompt 的判定结论文本（对齐 we_jev S1→S2 注入模式） */
             fun toInjectText(): String =
-                "need_action_prob=%.2f, importance=%.1f, due_window=%s, topic=%s, confidence=%.2f"
-                    .format(needActionProb, importance, dueWindow, topic, confidence)
+                "need_action_prob=" + LocaleTextCore.fixed(needActionProb, 2) +
+                    ", importance=" + LocaleTextCore.fixed(importance, 1) +
+                    ", due_window=" + dueWindow +
+                    ", topic=" + topic +
+                    ", confidence=" + LocaleTextCore.fixed(confidence, 2)
         }
 
         /** 升级阈值：need_action 概率 ≥ 0.5 */

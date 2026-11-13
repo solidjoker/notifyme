@@ -356,16 +356,16 @@ class AnalysisWorker(
                     // caseId 随之落库进已分析集合，窗口不变不会重复评估。
                     Log.i(
                         TAG_FORK,
-                        "fork prefilter p=%.2f sharp → settle | %s | %s"
-                            .format(pre.prob, kase.conversation, pre.note)
+                        "fork prefilter p=" + LocaleTextCore.fixed(pre.prob, 2) +
+                            " sharp → settle | " + kase.conversation + " | " + pre.note
                     )
                     AnalysisStore.append(applicationContext, filteredRecord(kase, preFork))
                     filteredCount++
                 } else {
                     Log.i(
                         TAG_FORK,
-                        "fork prefilter p=%.2f split → s1 | %s"
-                            .format(pre.prob, kase.conversation)
+                        "fork prefilter p=" + LocaleTextCore.fixed(pre.prob, 2) +
+                            " split → s1 | " + kase.conversation
                     )
                     val record = analyzeOneCase(
                         config, slot, baseUrl, kase, preFork,
@@ -561,9 +561,9 @@ class AnalysisWorker(
         )
         Log.i(
             TAG_FORK,
-            "fork s1 p=%.2f %s | %s | %s"
-                .format(s1.needActionProb, if (s1.needAction) "split" else "sharp",
-                    kase.conversation, s1.toInjectText())
+            "fork s1 p=" + LocaleTextCore.fixed(s1.needActionProb, 2) +
+                " " + (if (s1.needAction) "split" else "sharp") +
+                " | " + kase.conversation + " | " + s1.toInjectText()
         )
 
         // ---- fork 3：S1→S2 自动升级判定 ----
@@ -577,8 +577,9 @@ class AnalysisWorker(
         // 升级概率依据：need_action 概率与 importance 归一化取大者（记录用，判定仍走 shouldEscalate）
         val escalateProb = maxOf(s1.needActionProb, s1.importance / 9.0)
         val escalateVerdict = if (s1.shouldEscalate()) "split" else "sharp"
-        val escalateNote = "need_action_prob=%.2f(≥0.5升级) importance=%.1f(≥6升级) confidence=%.2f(<0.5升级)"
-            .format(s1.needActionProb, s1.importance, s1.confidence)
+        val escalateNote = "need_action_prob=" + LocaleTextCore.fixed(s1.needActionProb, 2) +
+            "(≥0.5升级) importance=" + LocaleTextCore.fixed(s1.importance, 1) +
+            "(≥6升级) confidence=" + LocaleTextCore.fixed(s1.confidence, 2) + "(<0.5升级)"
         forks += AnalysisCaseRecord.ForkRecord(
             fork = "escalate",
             prob = escalateProb,
@@ -587,9 +588,10 @@ class AnalysisWorker(
         )
         Log.i(
             TAG_FORK,
-            "fork escalate p=%.2f %s → %s | %s"
-                .format(escalateProb, escalateVerdict,
-                    if (escalateVerdict == "split") "s2" else "settle", kase.conversation)
+            "fork escalate p=" + LocaleTextCore.fixed(escalateProb, 2) +
+                " " + escalateVerdict +
+                " → " + (if (escalateVerdict == "split") "s2" else "settle") +
+                " | " + kase.conversation
         )
 
         if (s1.shouldEscalate()) {

@@ -14,9 +14,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -138,11 +135,10 @@ class AdvisorWorker(
      *  - 别名盐 + **最近消息窗口反推的会话事实**（分析记录里没有窗口发送者名单与
      *    isGroup，只能从消息日志重建，口径见 [AdvisorDigestCore.windows]）。
      *
-     * 时间格式用本机 Locale（用户看到的是本地时间），内核不碰 Locale ——
+     * 时间格式走 [LocaleTextCore]（恒 ASCII 数字、本机时区），内核不碰 Locale ——
      * 这样摘要正文的口径可以纯 JVM 单测钉死。
      */
     private fun buildDigest(cases: List<AnalysisCaseRecord>, privacy: PrivacyModeState): String {
-        val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
         // 盐只在真正需要出设备时才取：alias_salt 的「首次需要脱敏才生成」语义不能破
         val salt: ByteArray?
         val windows: Map<String, AdvisorDigestCore.ConvWindow>
@@ -162,7 +158,7 @@ class AdvisorWorker(
             salt = salt,
             enabledRules = privacy.enabledRules,
             periodDays = PERIOD_DAYS,
-            timeLabel = { fmt.format(Date(it)) }
+            timeLabel = { LocaleTextCore.minutes(it) }
         )
     }
 

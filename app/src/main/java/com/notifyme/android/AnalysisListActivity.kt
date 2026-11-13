@@ -14,9 +14,6 @@ import android.widget.Toast
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * 分析结果列表页：倒序展示 analysis.jsonl 的分析记录。
@@ -191,7 +188,6 @@ class AnalysisListActivity : Activity() {
         private var sources: Map<String, String> = emptyMap()
         /** M13 展开原文的 caseId 集合：刷新列表后保持展开态不跳变 */
         private val expanded = mutableSetOf<String>()
-        private val timeFormat = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
 
         /** 用 DiffUtil 做增量刷新：避免整表 notifyDataSetChanged 造成的重绘与动画抖动。 */
         fun submit(records: List<AnalysisCaseRecord>, sources: Map<String, String>) {
@@ -286,7 +282,7 @@ class AnalysisListActivity : Activity() {
                     holder.tvSource.maxLines = if (record.caseId in expanded) 64 else 4
                 }
             }
-            holder.tvTime.text = timeFormat.format(Date(record.analyzedAt))
+            holder.tvTime.text = LocaleTextCore.seconds(record.analyzedAt)
         }
 
         override fun getItemCount(): Int = items.size

@@ -15,9 +15,6 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * 已创建提醒列表：按 [ReminderListCore] 的口径分组（需要处理 → 生效中 → 已过期）、
@@ -51,7 +48,6 @@ class ReminderListActivity : Activity() {
         }
     }
 
-    private val timeFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
     private lateinit var recycler: RecyclerView
     private lateinit var emptyView: TextView
     private lateinit var chipRow: LinearLayout
@@ -198,7 +194,6 @@ class ReminderListActivity : Activity() {
         recycler.visibility = if (rows.isEmpty()) View.GONE else View.VISIBLE
         recycler.adapter = ReminderAdapter(
             rows,
-            timeFormat,
             onReopen = { record ->
                 // 再次唤起日历 App：重放预填 intent，不产生新记录
                 val ok = CalendarHelper.openCalendarInsert(
@@ -301,7 +296,6 @@ class ReminderListActivity : Activity() {
 
     private class ReminderAdapter(
         private val rows: List<ReminderRow>,
-        private val timeFormat: SimpleDateFormat,
         private val onReopen: (ReminderRecord) -> Unit,
         private val onRetry: (ReminderRecord) -> Unit,
         private val onDelete: (ReminderRecord) -> Unit
@@ -379,14 +373,14 @@ class ReminderListActivity : Activity() {
                 status.setBackgroundResource(bgRes)
 
                 val eventText = if (record.eventTime > 0) {
-                    timeFormat.format(Date(record.eventTime))
+                    LocaleTextCore.minutes(record.eventTime)
                 } else {
                     ctx.getString(R.string.reminder_no_time)
                 }
                 time.text = ctx.getString(
                     R.string.reminder_time_line,
                     eventText,
-                    timeFormat.format(Date(record.createdAt))
+                    LocaleTextCore.minutes(record.createdAt)
                 )
                 note.text = record.note
 

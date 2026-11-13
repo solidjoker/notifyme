@@ -21,9 +21,6 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * 移动端控制台首页（原巨型配置中心拆分后的入口页）：
@@ -205,8 +202,7 @@ class ConsoleActivity : Activity() {
         rows: List<AnalysisScheduleSummaryCore.ConvRow>,
         counts: Map<ConvTag, Int>,
     ) {
-        val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
-        val last = timeFmt.format(Date(status.lastRunAt))
+        val last = LocaleTextCore.hourMinute(status.lastRunAt)
         tvScheduleGlobal.text = when {
             status.health == AnalysisScheduleSummaryCore.Health.DISABLED ->
                 getString(R.string.console_schedule_disabled)
@@ -219,7 +215,12 @@ class ConsoleActivity : Activity() {
             status.nextRunAt <= System.currentTimeMillis() ->
                 getString(R.string.console_schedule_running_soon, status.intervalMinutes, last)
             else ->
-                getString(R.string.console_schedule_running, status.intervalMinutes, last, timeFmt.format(Date(status.nextRunAt)))
+                getString(
+                    R.string.console_schedule_running,
+                    status.intervalMinutes,
+                    last,
+                    LocaleTextCore.hourMinute(status.nextRunAt),
+                )
         }
         if (status.health == AnalysisScheduleSummaryCore.Health.STALE) {
             tvScheduleWarn.visibility = View.VISIBLE
@@ -249,7 +250,7 @@ class ConsoleActivity : Activity() {
                         R.string.console_schedule_conv_row,
                         name,
                         row.intervalMinutes,
-                        SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(row.nextRunAt)),
+                        LocaleTextCore.hourMinute(row.nextRunAt),
                     )
                 }
                 llScheduleConvs.addView(
