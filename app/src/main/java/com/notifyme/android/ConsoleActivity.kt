@@ -147,12 +147,12 @@ class ConsoleActivity : Activity() {
     }
 
     /**
-     * 折叠作用域：近 500 条消息里出现的每个 (会话, 天) 组合，与主页 buildFeed 的
-     * feedDayPairs 同口径（同一份数据、同一套复合键），两处按钮行为完全一致。
+     * 折叠作用域：首页窗口（[FeedWindowCore]，每会话各留一窗）里出现的每个 (会话, 天) 组合，
+     * 与主页 buildFeed 的 feedDayPairs 同口径（同一份数据、同一套复合键），两处按钮行为完全一致。
+     * 别退回 readRecent(500)：那是跨会话窗口，静默会话的天组在这里会折叠不到。
      */
     private fun collapseTargets(): List<Pair<ConvKey, String>> =
-        MessageStore.readRecent(this, 500)
-            .groupBy { it.convKey }
+        MessageStore.feedGroups(this).toMap()
             .flatMap { (k, l) ->
                 l.map {
                     if (it.timestamp > 0) dayKeyFmt.format(Date(it.timestamp))

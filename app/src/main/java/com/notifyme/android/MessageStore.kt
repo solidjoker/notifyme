@@ -182,6 +182,25 @@ object MessageStore {
     ): ConvWindowCore.Window = core(context).readWindow(key, limit)
 
     /**
+     * 首页信息流的取样：每会话各留一窗（口径全在 [FeedWindowCore]）。
+     *
+     * 返回的 [FeedWindowCore.Bucket] 已按「最近活跃」倒序、组内按时间升序，
+     * 可直接喂给首页的会话头 / 天组 / 消息渲染。别在这里再 filter 一遍
+     * [readRecent] 的结果 —— 那会把别的会话的活跃度带进本会话的可见条数。
+     */
+    @Synchronized
+    internal fun feedGroups(
+        context: Context,
+        maxPerConv: Int = FeedWindowCore.PER_CONV,
+        maxConversations: Int = FeedWindowCore.MAX_CONVERSATIONS,
+        totalBudget: Int = FeedWindowCore.TOTAL_BUDGET
+    ): FeedWindowCore.Result = core(context).feedGroups(
+        maxPerConv = maxPerConv,
+        maxConversations = maxConversations,
+        totalBudget = totalBudget
+    )
+
+    /**
      * 按会话分组取「分析候选」：每会话只留最近 [CandidateWindowCore.PER_CONV] 条。
      *
      * 为什么不能沿用 `readRecent(500).groupBy { it.convKey }`：那个窗口是**跨会话**的
@@ -218,6 +237,7 @@ object MessageStore {
         }
         return result.removed
     }
+
 
     /** 清空全部记录。 */
     @Synchronized
@@ -450,6 +470,42 @@ internal class MessageStoreCore(
             linesRead = lines.size,
             requested = requested,
             limit = limit
+        )
+    }
+
+    /**
+     * 首页信息流的取样：按会话各留一窗（口径全在 [FeedWindowCore]）。
+     *
+     * 为什么不能沿用 [readRecent]：那个窗口是**跨会话**的最近 N 条，几个群刷满窗口后
+     * 安静会话一条都进不了首页 —— 首页待办区的可见集（todoVisibleKeys）随之看不到它，
+     * 而数据其实还在 messages.jsonl 里。这是同源隐患的第五处，前四处已由
+     * [ConvWindowCore] / [CandidateWindowCore] / [AnalysisWindowCore] 收口。
+     *
+     * @param requested 尾部读多少原始行（[FeedWindowCore.REQUEST_LINES]）；读不满即已到文件头
+     */
+    fun feedGroups(
+        maxPerConv: Int = FeedWindowCore.PER_CONV,
+        maxConversations: Int = FeedWindowCore.MAX_CONVERSATIONS,
+        totalBudget: Int = FeedWindowCore.TOTAL_BUDGET,
+        requested: Int = FeedWindowCore.REQUEST_LINES
+    ): FeedWindowCore.Result {
+        if (!store.exists()) return FeedWindowCore.Result(emptyList(), true)
+        val lines = store.readTailLines(requested)
+        val parsed = lines.mapNotNull { line ->
+            try {
+                ChatMessage.fromJson(JSONObject(line))
+            } catch (e: Exception) {
+                null // 单行损坏不影响整体读取
+            }
+        }
+        // requested<=0 时 readTailLines 返空表，此时「读到文件头」这一说法无意义，按未读全处理
+        val complete = requested > 0 && lines.size < requested
+        return FeedWindowCore.group(
+            messages = parsed,
+            maxPerConv = maxPerConv,
+            maxConversations = maxConversations,
+            totalBudget = totalBudget,
+            complete = complete
         )
     }
 

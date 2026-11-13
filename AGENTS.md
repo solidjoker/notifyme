@@ -262,3 +262,11 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ④ **不按会话设条数上限**（与 `CandidateWindowCore.PER_CONV` 不同）：聚合前不知道有多少会话，内存由 `TAIL_LINES` 兜住。已知局限写进类注释：窗口外的老 case 读不到，要更强公平性得上索引。别悄悄把 `TAIL_LINES` 涨到几十万来「修」它。
   ⑤ **新增返回这些内部类型的 `AnalysisStore` 方法必须 `@Synchronized` + 参数用 `JsonlStore(storeFile(context))` 现造**（与 `readRecent` / `readWindow` 同风格），否则并发追加时会读到半行。`AnalysisWindowFile` 自身只管读，不缓存。
   改窗口量级、排序方向或「最新一条」的取舍前先跑 `app/src/test/java/com/notifyme/android/AnalysisWindowCoreTest.kt`（23 条，含 600 条噪声 + 本会话 3 条的对照回归）。
+
+- **首页信息流的取样口径全在 `FeedWindowCore`**（internal object，纯函数 + 22 条单测），别在 `MainActivity.buildFeed` 里另写一套：
+  ① **首页取样不是「全局最近 500 条」**：旧写法 `readRecent(500).groupBy { convKey }` 会让几个群刷满窗口后安静会话一条都不出现，首页「最近待办」的可见集（`todoVisibleKeys`）随之看不到它 —— 这是 `readRecent` 同源隐患的**第五处**（前四处见上三条契约）。取会话集合 / 首页列表 / 悬浮面板窗口键 / 控制台折叠作用域 / 关注名单键 / 分析范围会话多选器，一律走 `MessageStore.feedGroups(context)`。
+  ② **名额按会话数自适应，别写死一个 perConv**：`perConvFor(convCount)` 把 `TOTAL_BUDGET = 6000` 摊薄，再夹进 `[MIN_PER_CONV = 20, PER_CONV = 200]`。`20 = 2 × AnalysisCase.WINDOW_SIZE`，保证会话再多每会话仍能凑出一个完整分析窗口；`200` 是「按天折叠后够翻几天」的上限。`convCount <= 0` / `totalBudget <= 0` / `maxPerConv <= 0` 返回 0（保守退化，不抛异常）。
+  ③ **会话间按「该会话最近一条」倒序、组内升序**（与旧实现同口径）：`timestamp <= 0` 归 0 排最前，超 `keep` 只保最近若干条。会话间排序用 `sortedByDescending`（稳定排序），并列时保持首次出现顺序 —— 同一份输入必须得到同一个首页顺序。
+  ④ **条数是下限时必须写成 `N+ 条`**：`Bucket.truncated` 分两档判定 —— 行窗口**读到文件头**（`Result.complete`）时 `size > keep`，**没读到文件头**时 `size >= keep`（刚好顶到名额也可能还有更早的没读进来）。首页会话头据此走 `R.string.msg_count_at_least`，不要拿窗口内条数冒充本会话总数。
+  ⑤ **`MessageStore.feedGroups` 必须 `internal`**（返回 `internal` 的 `FeedWindowCore.Result`，public 会报 `public function exposes its internal return type`）；`MessageStoreCore.feedGroups` 的 `requested = FeedWindowCore.REQUEST_LINES = 20000` 比 `TAIL_LINES = 5000` 大是刻意的 —— 安静会话本来就在文件靠前的位置，行窗口太浅照样读不到。
+  改名额公式、排序方向或截断判据前先跑 `app/src/test/java/com/notifyme/android/FeedWindowCoreTest.kt`（22 条，含「600 条噪声 + 本会话仍在首页」与旧写法对照实验）。

@@ -338,7 +338,9 @@ class OverlayService : Service() {
             // 四层门槛全在 ConvVisibilityCore；**首页来源筛选也要接**，否则首页筛了飞书、
             // 悬浮面板还列微信待办（真机复现过）。
             val unwatchedIds = WatchlistStore.getUnwatched(this)
-            val windowKeys = MessageStore.readRecent(this, 500).map { it.convKey }.distinct()
+            // 窗口键与首页同口径（[FeedWindowCore]）：页面上有的会话面板才有，
+            // 否则首页静默、面板却列出「首页看不到」的会话（第五处同源隐患的右下角）
+            val windowKeys = MessageStore.feedGroups(this).keys()
             // 可选项必须是「过了前三层门槛的来源」，与首页 buildFeed 的 chips 同口径：
             // 已停用来源不该让筛选停在那里（首页已回落，面板若还保留就会整页空）
             val baseKeys = ConvVisibilityCore.visibleKeys(
