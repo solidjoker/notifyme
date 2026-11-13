@@ -3,13 +3,6 @@
 
 package com.notifyme.android
 
-import org.junit.After
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import org.junit.Before
-import org.junit.Test
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.LocalDate
@@ -18,6 +11,13 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
 
 /**
  * 「公历时间文本 ↔ 毫秒」的唯一口径（[DueTimeCore]）。

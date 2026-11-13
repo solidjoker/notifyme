@@ -90,7 +90,6 @@ class RedactorPreviewActivity : Activity() {
         recycler.adapter = PreviewAdapter(rows)
     }
 
-
     private class PreviewAdapter(rows: List<Row>) :
         RecyclerView.Adapter<PreviewAdapter.VH>() {
 

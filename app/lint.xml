@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Android Lint 基线的唯一记录点（M1 任务 4「lint.xml 收口」的落点）。
+
+  这个文件刻意「什么都不改」：不 ignore 任何 issue、不降级任何 severity。
+  原因是我们只接受 3 条已知的、无法在本仓库范围内消除的 issue，
+  与其把它们 ignore 掉（那会让「新增第 4 条」这件事从报告里彻底消失），
+  不如让它们一直出现在报告里，由 docs/scripts/local_check.ps1 的 lint-summary
+  步骤断言「报告里的 issue id 集合必须恰好等于下面这份清单」——
+  多出一条就本地自检失败，等于给 lint 装了回归护栏。
+
+  已知基线（2026-11-13，app/build.gradle.kts 的 lint 块：abortOnError=true、
+  warningsAsErrors=false，所以三条都是 Warning，CI 不因此变红）：
+
+  1. ObsoleteLintCustomCheck —— AGP 8.5.2 自带的 lint 规则与当前 lint 版本不匹配的内部提示，
+     属于工具链噪音，不是本仓库代码问题。
+  2. OldTargetApi —— targetSdk 34 落后于 lint 内置的最新 API 表。升 targetSdk 需要
+     同步回归通知监听 / 前台服务 / 悬浮窗权限行为，属于独立里程碑，不在 M1 范围内。
+  3. ChromeOsAbiSupport —— 发布包里只打 arm64-v8a（见 app/build.gradle.kts 的 releaseAbis），
+     缺 x86_64 于是提示 ChromeOS 兼容性。这是刻意的体积取舍。
+
+  改动本文件前先读 AGENTS.md 第 6 节的静态检查条目。
+-->
+<lint>
+    <!-- 有意为空：见上面的说明。 -->
+</lint>

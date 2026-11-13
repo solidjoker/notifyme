@@ -4,6 +4,8 @@
 package com.notifyme.android
 
 import android.content.Context
+import java.io.File
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -12,8 +14,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
-import java.util.concurrent.TimeUnit
 
 /**
  * 云端 vs 端侧 S1 判定一致率采集器（ROADMAP M4 任务 6 / docs/ROADMAP.md:237）。

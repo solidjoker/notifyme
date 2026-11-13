@@ -3,12 +3,12 @@
 
 package com.notifyme.android
 
+import java.util.Locale
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
-import java.util.Locale
 
 /**
  * [LocaleTextCore.format] 的口径回归：资源模板里的数字槽位代入后恒 ASCII，且降级不抛异常。

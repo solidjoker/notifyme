@@ -3,12 +3,6 @@
 
 package com.notifyme.android
 
-import org.junit.After
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertTrue
-import org.junit.Before
-import org.junit.Test
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.ZoneId
@@ -16,6 +10,12 @@ import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
 
 /**
  * [LocaleTextCore] 的口径回归：数字形态不随系统语言变，且旧写法在非拉丁数字语言下确实会变。

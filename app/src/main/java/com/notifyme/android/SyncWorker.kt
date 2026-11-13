@@ -7,14 +7,14 @@ import android.content.Context
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import java.io.IOException
+import java.util.concurrent.TimeUnit
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.IOException
-import java.util.concurrent.TimeUnit
 
 /**
  * 定时上报 Worker：四个通道依次执行——
@@ -127,7 +127,6 @@ class SyncWorker(
 
         return msgResult
     }
-
 
     /**
      * 单批提交的结果：状态码分类 + 被拒下标 + 服务端给出的原因。
@@ -831,8 +830,8 @@ class SyncWorker(
                 // 不抛、不重试：下轮自然重报，控制台晚一拍不影响数据一致性
                 // postJson 把网络异常统一记成 code=0，这里还原成「网络错误」文案
                 val why = if (result.code > 0) "HTTP ${result.code}" else "网络错误"
-                Log.w(TAG, "排队状态上报失败: ${why}")
-                extraParts += "排队状态上报失败：${why}"
+                Log.w(TAG, "排队状态上报失败: $why")
+                extraParts += "排队状态上报失败：$why"
             }
         } catch (e: Exception) {
             Log.w(TAG, "排队状态上报异常", e)

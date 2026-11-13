@@ -6,8 +6,8 @@ package com.notifyme.android
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import org.json.JSONObject
 import java.io.File
+import org.json.JSONObject
 
 /**
  * 一条捕获到的聊天消息。
@@ -235,7 +235,6 @@ object MessageStore {
         }
         return result.removed
     }
-
 
     /** 清空全部记录。 */
     @Synchronized

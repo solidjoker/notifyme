@@ -3,8 +3,8 @@
 
 package com.notifyme.android
 
-import org.json.JSONObject
 import java.io.File
+import org.json.JSONObject
 
 /**
  * 分析通道的**被拒计数与隔离**策略（纯逻辑 + 文件级落盘，无 Android 依赖，可 JVM 单测）。
@@ -95,7 +95,6 @@ internal object AnalysisRejectCore {
     /** 隔离到期：解除隔离并清零计数（记录重新获得上报机会）。 */
     fun revive(): Decision = Decision(0, 0L, false, true)
 }
-
 
 /**
  * 分析文件的**被拒 / 隔离**落盘操作（文件级、无 Context，可 JVM 单测）。

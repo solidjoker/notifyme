@@ -3,10 +3,10 @@
 
 package com.notifyme.android
 
-import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.RandomAccessFile
+import org.json.JSONObject
 
 /**
  * 分析通道的**增量扫描游标**（纯字节计算 + 文件级扫描，无 Android 依赖，可 JVM 单测）。
@@ -100,7 +100,6 @@ internal object AnalysisScanCursor {
         return offset
     }
 }
-
 
 /**
  * 文件级的**增量扫描**（无 Android 依赖，可 JVM 单测）。

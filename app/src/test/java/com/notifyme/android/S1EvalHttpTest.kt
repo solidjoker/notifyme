@@ -3,13 +3,13 @@
 
 package com.notifyme.android
 
-import org.junit.Assume
-import org.junit.Assert.assertTrue
-import org.junit.Test
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Properties
+import org.junit.Assert.assertTrue
+import org.junit.Assume
+import org.junit.Test
 
 /**
  * 云端 vs 端侧 S1 真实 HTTP 对比评测（ROADMAP M4 任务 6 / docs/ROADMAP.md:237）。

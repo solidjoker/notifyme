@@ -11,12 +11,10 @@ import android.content.pm.PackageManager
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.PowerManager
 import android.provider.Settings
 import android.text.Editable
 import android.text.InputFilter
@@ -66,7 +64,6 @@ class MainActivity : Activity() {
 
         /** 主页待办区最多显示几条（悬浮面板用 DEFAULT_LIMIT=8，首页只占顶端一小块） */
         private const val HOME_TODO_LIMIT = 5
-
 
         /** ActionMode 批量删除菜单项 id */
         private const val MENU_BATCH_DELETE = 1001
@@ -741,7 +738,6 @@ class MainActivity : Activity() {
         val remindedCaseIds = reminderRecords
             .filter { it.status != ReminderRecord.STATUS_FAILED }
             .map { it.dedupKey }.toSet()
-
 
         // feed.buckets 已按「最近一条」倒序、组内按时间升序，与旧实现的排序口径一致
         var groups = feed.buckets.map { it.key to it.messages }

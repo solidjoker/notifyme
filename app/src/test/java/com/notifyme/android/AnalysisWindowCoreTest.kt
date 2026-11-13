@@ -3,6 +3,7 @@
 
 package com.notifyme.android
 
+import java.io.File
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -10,7 +11,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-import java.io.File
 
 // 分析记录按会话取窗口（AnalysisWindowCore + AnalysisWindowFile）单测。
 class AnalysisWindowCoreTest {

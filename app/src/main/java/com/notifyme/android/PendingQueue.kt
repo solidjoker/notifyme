@@ -4,8 +4,8 @@
 package com.notifyme.android
 
 import android.content.Context
-import org.json.JSONObject
 import java.io.File
+import org.json.JSONObject
 
 /**
  * 待上报队列里的一条消息：在 ChatMessage 基础上加一个自增 id。

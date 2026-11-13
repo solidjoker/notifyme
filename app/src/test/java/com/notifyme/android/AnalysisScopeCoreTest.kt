@@ -3,6 +3,7 @@
 
 package com.notifyme.android
 
+import java.util.TimeZone
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -10,7 +11,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
-import java.util.TimeZone
 
 /**
  * M12 分析范围 [AnalysisScopeCore] 的纯函数口径。

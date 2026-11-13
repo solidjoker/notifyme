@@ -3,6 +3,7 @@
 
 package com.notifyme.android
 
+import java.security.SecureRandom
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -10,7 +11,6 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.security.SecureRandom
 
 /**
  * [AliasSaltCore] 强匿名内核单测：盐的生成 / 编解码 / 取值稳定性，以及

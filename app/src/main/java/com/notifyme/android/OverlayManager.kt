@@ -145,7 +145,6 @@ object OverlayManager {
             .notify(notifId, notification)
     }
 
-
     /** 通知 id：有 caseId 用它，保证同 case 不堆多条；否则按内容哈希。 */
     private fun notificationId(card: Card): Int =
         if (card.caseId.isNotEmpty()) card.caseId.hashCode()

@@ -9,7 +9,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.CalendarContract
 import android.util.Log
-import java.util.regex.Pattern
 
 /**
  * 日历提醒助手：分析判定 needAction 后，按三级降级链确保用户能被提醒到。
