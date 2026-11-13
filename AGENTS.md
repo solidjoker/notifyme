@@ -276,3 +276,11 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ② **要「全库聚合 / 每会话一条」→ `AnalysisStore.readGrouped` / `latestByConvKey`；要「会话候选集」→ `MessageStore.feedGroups(context).keys()`**。设置页统计（会话数 / 待办会话数）与隐私页白名单候选都属于这一档：旧 `readRecent(500)` / `readRecent(1000)` 数出来的是窗口内命中数，超窗口就是错数、也漏掉安静会话。
   ③ **要「逐条列表」→ `FeedWindowCore.sample(MessageStore.feedGroups(context), limit)`**（脱敏预览用 `PREVIEW_LIMIT = 200`）。**别用 `recent()` 那类「全表最近 N 条再排序」**：那样等于把旧 `readRecent` 行为又写了一遍，600 条噪声下安静会话仍是 0 条 —— 这条是第一版实现被单测当场证伪后改的（`FeedWindowCoreTest > sample 在别的会话刷满行窗口时仍能看到安静会话` 先红后修）。`sample` 是**按会话轮流取**：第 1 轮各会话各取最新一条、第 2 轮各取次新……同一会话内取时间尾部，最后整体按时间升序；`timestamp <= 0` 归 0 排最前，**并列时先后由取出顺序决定**（两条未标注日期的消息不要断言成输入顺序）。
   改这几处口径前先跑 `app/src/test/java/com/notifyme/android/AnalysisWindowCoreTest.kt`（27 条）与 `FeedWindowCoreTest.kt`（27 条），两边都有「旧写法对照实验」。
+
+- **JSONL 文件的「逐行打补丁 + 原子重写」只有一份口径：`JsonlPatchCore`**（internal object，纯函数 + 15 条单测，`app/src/test/java/com/notifyme/android/JsonlPatchCoreTest.kt`）。以前 `AnalysisRejectFile` / `AdvisorRejectFile` 各有一份 ~90 行的同构实现（只差 schema 与 newly 容器），已收敛；现在两者只留 `keyOf` / `parse` / `encode` / `patch` 四个 lambda。
+  ① **`target == null` = 扫全文件**（顾问通道 `reviveExpired` 复活过期隔离走这条），非 null 只碰命中 key 的行；同一 key 出现多行时**每行都打补丁**（与旧实现一致，别改成只改第一行）。
+  ② **损坏行一律原位保留，不许「顺手清理」**：解析抛异常 / 解析返回 null / 序列化抛异常（`AnalysisCaseRecord` 缺 `s1` 时 `importance` 是 NaN，`JSONObject.put` 会抛）三种都只保留原行，其它行照常改，整轮不判失败。
+  ③ **只有真的改了才重写**：`updated == record`（data class 结构相等）与「零命中」直接返 false，不碰文件 —— 无谓的 `atomicWrite` 会搅动 mtime，`AnalysisStore` / `AdvisorStore` 的读缓存与 watch 链都会跟着抖。
+  ④ **`collect()` 只读**（`quarantinedCaseIds` / `quarantinedReportIds` 用它），`LinkedHashSet` 按文件顺序去重 —— 隔离集合的遍历顺序因此可复现，别换成 `HashSet`。
+  ⑤ **别把 `PendingRejectCore` 拉进来**：它是丢弃语义（达上限即 dropped），没有 quarantined / revive，`Decision` 只有 `dropped`；合并会逼出恒 false 的 `include` 和无意义参数。三兄弟里只有 Analysis / Advisor 是「隔离 + 复活」同构。
+  改补丁语义（比如想改成「损坏行也重写」或「同 key 只改第一条」）前先跑 `JsonlPatchCoreTest.kt`（15 条），它用与业务无关的假记录证明内核与 schema 无关。

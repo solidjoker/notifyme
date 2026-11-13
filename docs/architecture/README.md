@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **115 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 122 个，`app/src/test` 69 个 / 1054 条），服务端已拆成 **7+1 模块**（`app.py` 605 / `util.py` 255 / `storage.py` 705 / `routes.py` 978 / `console_ui.py` 3341 / `stats_api.py` 157 / `suggests.py` 260 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **116 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 123 个，`app/src/test` 70 个 / 1069 条），服务端已拆成 **7+1 模块**（`app.py` 605 / `util.py` 255 / `storage.py` 705 / `routes.py` 978 / `console_ui.py` 3341 / `stats_api.py` 157 / `suggests.py` 260 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -15,7 +15,7 @@
 | # | 图 | 回答的问题 | 尺寸 (px) |
 |---|---|---|---|
 | 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3970 × 1701 |
-| 02 | [Android 分层架构](#02-android-分层架构) | 115 个顶层 Kotlin 文件各自属于哪一层？ | 11196 × 2007 |
+| 02 | [Android 分层架构](#02-android-分层架构) | 116 个顶层 Kotlin 文件各自属于哪一层？ | 11506 × 2007 |
 | 03 | [三条采集通道](#03-三条采集通道) | 消息是怎么进来的？为什么需要三条路？ | 3386 × 1048 |
 | 04 | [分析决策流水线](#04-分析决策流水线) | 一条消息如何变成一条待办？ | 2510 × 5356 |
 | 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1973 × 3290 |
@@ -50,7 +50,7 @@
 
 五层 + Application 入口。**刻意不引 Compose**：全部传统 View + RecyclerView，运行时依赖只有 5 个（core-ktx / recyclerview / work-runtime-ktx / okhttp / **litert-api**——`com.google.ai.edge.litert:litert:2.2.0`，端侧 LiteRT 推理用），把首次构建失败风险降到最低。JSON 用平台内置 `org.json`，不引 Gson/Moshi。
 
-源码规模：`app/src/main/java/com/notifyme/android/` **顶层 115 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 122 个；`app/src/test` 69 个 .kt / 1054 条（纯 JVM 单测）。
+源码规模：`app/src/main/java/com/notifyme/android/` **顶层 116 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 123 个；`app/src/test` 70 个 .kt / 1069 条（纯 JVM 单测）。
 
 ![Android 分层架构图](diagrams/02-android-layers.png)
 
@@ -59,15 +59,16 @@
 | ① UI 层 | **18 个 Activity**：Main（首页）· Console（控制台 8 卡）· Conversation（会话详情+分析面板）· AnalysisList · **AnalysisSettings（S1/S2 槽位）** · Watchlist · Sources（通知来源）· ReminderList · **ReminderSettings** · PromptEdit · ModelList · Onboarding · **Capture** · **CaptureDiagnostics** · **EngineSmoke** · **OverlaySettings** · **PrivacySettings** · **RedactorPreview** |
 | ② 采集与常驻层 | `NotifyMeListener`（通知监听）· `A11yExtractService`（无障碍直读，仅微信）· `KeepAliveService`（60s 看门狗 requestRebind）· `BootReceiver` · `ReminderReceiver` · **`OverlayService`**（悬浮窗）· **`OverlayActionReceiver`** |
 | ③ 后台任务层 | 4 个 Worker：Sync（三通道上报）· Analysis（逐会话窗口 case）· Advisor（近 7 天复盘）· ModelDownload（.part 断点续传）；3 个 Scheduler 全部 `enqueueUniquePeriodicWork` + UPDATE 策略 |
-| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 35 个 Core 逻辑内核**（见下表） |
+| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 36 个 Core 逻辑内核**（见下表） |
 | ⑤ 存储层 | 5 个 JSONL + `files/models/` 目录 + **22 个** SharedPreferences 文件（见下方存储清单） |
 
-**④ 层本轮新增的 35 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
+**④ 层本轮新增的 36 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
 
 | 主题 | 类 | 职责 |
 |---|---|---|
 | 同步与上报 | `SyncOutcome`（192）· `SyncBatchCore`（84）· `SyncWatermarkCore`（57）· `AnalysisSyncCore`（60）· `AdvisorSyncCore`（44）· `HistorySyncCore`（62）· `QueueStateCore`（156） | 上报结果分类（207 先于 2xx 判定）· 分批与二分 · **已结算前缀水位** · 各通道分批 · 历史同步隐私门控与翻页判定 |
-| 拒绝与隔离 | `AnalysisRejectCore`（238）· `AdvisorRejectCore`（213）· `PendingRejectCore`（66） | 被拒次数累计 + 超限隔离，顾问通道复用分析通道实现 |
+| 拒绝与隔离 | `AnalysisRejectCore`（201）· `AdvisorRejectCore`（183）· `PendingRejectCore`（66） | 被拒次数累计 + 超限隔离，顾问通道复用分析通道实现；两份文件级实现（逐行打补丁 + 原子重写）已收敛到 `JsonlPatchCore` |
+| JSONL 补丁 | `JsonlPatchCore`（114） | 5 个 JSONL 存储共用的「逐行读 → 按 key 命中 → 打补丁 → 原子重写」内核：`patch(file, target, keyOf, parse, encode, patch)` 的 target 为 null 时扫全文件（顾问通道 `reviveExpired` 用），空行 / 解析失败 / 序列化失败的损坏行一律**原位保留**，`updated == record` 与「零命中」都不重写文件；`collect(...)` 只读、按文件顺序去重。`AnalysisRejectCore` 238→201 行、`AdvisorRejectCore` 213→183 行，schema 适配各留各的 |
 | 扫描与调度 | `AnalysisScanCursor`（265）· `AnalysisScheduleSummaryCore`（71） | 持久化字节游标 + 环形重扫 · 调度健康（Health）自愈阈值 |
 | 脱敏与标签 | `RedactorCore`（293）· `AliasSaltCore`（143）· `ConvTagCore`（47） | 身份证/手机号/姓名等规则脱敏 · 姓名别名的**设备随机盐**（sha256(盐 ‖ 0x00 ‖ 名字) 取前 6 位，盐存 privacy_config/alias_salt，可重置；盐为空退化为 M3 初版的无盐 sha256）· 会话标签 NONE/TODO/TRACK/DONE/NOISE |
 | 顾问通道 | `AdvisorDigestCore`（196） | 顾问复盘摘要 + 报告上报的输入口径：从**每会话各留一窗**（`windowsOf(FeedWindowCore.Result)`，与首页/悬浮面板/关注名单同源）反推每个会话的 `(conversation, isGroup, senders)` 三元组，补上分析记录里没有的窗口发送者名单，让 `NameAliases.nameMapFor` 的姓名别名在两条顾问通道上都生效（窗口查不到退回七类规则）；同时钉死摘要正文（≤50 个 case / 摘要截 30 字 / 会话名截 20 字） |
@@ -159,7 +160,7 @@ prefs queue_state               QueueStateCollector.kt  排队上报的 device_s
 
 落库后两条出口：`needAction=true` 且提醒开关开启 → `CalendarHelper.createReminder(dedupKey=caseId)`；`SyncWorker` 通道 2 → `POST {server}/analysis`。
 
-**本轮新增的分析侧内核**（详见 [02](#02-android-分层架构) 的 ④ 层清单）：`AnalysisScanCursor`（265 行）把「扫到哪」持久化成字节游标，配合 `FULL_PASS_INTERVAL_MS` 做环形重扫，避免每次全量扫描；`AnalysisScheduleSummaryCore`（71 行）汇总调度健康（`Health`：DISABLED / GLOBAL_OFF 等），阈值复用 `ScheduleSelfHealCore.thresholdFor`；`RedactorCore`（250 行）在落库时打 `redacted` 标记并按 `RedactorRules`（ID_CARD / PHONE / NAME 等）替换为类型占位符；`ConvTagCore`（47 行）给出会话标签 `NONE / TODO / TRACK / DONE / NOISE`；`TodoPanelCore`（27 行）控制待办面板条数（DEFAULT_LIMIT=8）与首页可见性；`AnalysisRejectCore`（238 行）负责被拒次数累计与超限隔离（详见 [09](#09-同步时序)）。
+**本轮新增的分析侧内核**（详见 [02](#02-android-分层架构) 的 ④ 层清单）：`AnalysisScanCursor`（265 行）把「扫到哪」持久化成字节游标，配合 `FULL_PASS_INTERVAL_MS` 做环形重扫，避免每次全量扫描；`AnalysisScheduleSummaryCore`（71 行）汇总调度健康（`Health`：DISABLED / GLOBAL_OFF 等），阈值复用 `ScheduleSelfHealCore.thresholdFor`；`RedactorCore`（250 行）在落库时打 `redacted` 标记并按 `RedactorRules`（ID_CARD / PHONE / NAME 等）替换为类型占位符；`ConvTagCore`（47 行）给出会话标签 `NONE / TODO / TRACK / DONE / NOISE`；`TodoPanelCore`（27 行）控制待办面板条数（DEFAULT_LIMIT=8）与首页可见性；`AnalysisRejectCore`（201 行）负责被拒次数累计与超限隔离，文件级的逐行打补丁与原子重写走 `JsonlPatchCore`（114 行）（详见 [09](#09-同步时序)）。
 
 旁支 **AdvisorWorker（Fable 层）**：每 7 天或手动触发，通读近 7 天 case（≤50 个，摘要截 30 字），调 System 2 服务商产出 `{summary, suggestions:[{type,title,detail}]}`，`type ∈ prompt/watchlist/threshold/other`。纯增量功能，失败不影响主链路。
 

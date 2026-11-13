@@ -156,58 +156,28 @@ internal class AdvisorRejectFile(private val file: File) {
         return revived
     }
 
-    /** 当前被隔离的 report_id 集合（文件级扫描）。 */
-    fun quarantinedReportIds(): Set<String> {
-        if (!file.exists()) return emptySet()
-        val out = LinkedHashSet<String>()
-        for (line in file.readLines(Charsets.UTF_8)) {
-            if (line.isBlank()) continue
-            val report = try {
-                AdvisorReport.fromJson(JSONObject(line))
-            } catch (e: Exception) {
-                null
-            } ?: continue
-            if (report.quarantined) out += report.reportId
-        }
-        return out
-    }
+    /** 当前被隔离的 report_id 集合（文件级扫描，只读、不重写文件）。 */
+    fun quarantinedReportIds(): Set<String> = JsonlPatchCore.collect(
+        file = file,
+        keyOf = { it.reportId },
+        parse = { line -> AdvisorReport.fromJson(JSONObject(line)) },
+        include = { it.quarantined }
+    )
 
     /**
-     * 逐行打补丁后原子重写：只有真正发生变化的行才被改写，其余行原样保留
-     *（含解析不出来的损坏行）。[target] 为 null 表示「全文件扫一遍」。
-     *
-     * @return 文件是否被重写
+     * 逐行打补丁后原子重写：口径全在 [JsonlPatchCore.patch]（只有真正变化的行才被改写、
+     * 损坏行与序列化失败的行一律原样保留、没变化就不碰文件）。[target] 为 null 表示
+     * 「全文件扫一遍」（reviveExpired 按时间条件复活）。
      */
     private fun patchReports(
         target: Set<String>?,
         patch: (AdvisorReport) -> AdvisorReport
-    ): Boolean {
-        if (!file.exists()) return false
-        val out = ArrayList<String>()
-        var changed = false
-        for (line in file.readLines(Charsets.UTF_8)) {
-            if (line.isBlank()) {
-                out += line
-                continue
-            }
-            val report = try {
-                AdvisorReport.fromJson(JSONObject(line))
-            } catch (e: Exception) {
-                null
-            }
-            if (report == null || (target != null && report.reportId !in target)) {
-                out += line
-                continue
-            }
-            val updated = patch(report)
-            if (updated == report) {
-                out += line
-                continue
-            }
-            out += updated.toJson().toString()
-            changed = true
-        }
-        if (changed) JsonlStore.atomicWrite(file, out)
-        return changed
-    }
+    ): Boolean = JsonlPatchCore.patch(
+        file = file,
+        target = target,
+        keyOf = { it.reportId },
+        parse = { line -> AdvisorReport.fromJson(JSONObject(line)) },
+        encode = { it.toJson().toString() },
+        patch = patch
+    )
 }
