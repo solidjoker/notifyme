@@ -1,9 +1,6 @@
 package com.notifyme.android
 
 import java.security.MessageDigest
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * M17 会话内自建提醒的纯逻辑（不碰 Android API，可单测）。
@@ -13,22 +10,22 @@ import java.util.Locale
  */
 object ManualReminderCore {
 
-    /** 弹窗时间框的规范格式：CalendarHelper.tryParseDueTime 的「完整年月日」分支可直接解析。 */
-    const val EVENT_TIME_PATTERN = "yyyy-MM-dd HH:mm"
+    /**
+     * 弹窗时间框的规范格式：`yyyy-MM-dd HH:mm`，[DueTimeCore] / [CalendarHelper.tryParseDueTime] 可直接解析。
+     * 格式与解析**必须**是同一套公历口径 —— 见 [DueTimeCore] 的类注释（默认 Locale 的历法会把年份解释错）。
+     */
+    const val EVENT_TIME_PATTERN = DueTimeCore.EVENT_TIME_PATTERN
 
-    fun eventTimeFormat(): SimpleDateFormat = SimpleDateFormat(EVENT_TIME_PATTERN, Locale.getDefault())
+    /** 格式化提醒时间（`yyyy-MM-dd HH:mm`，公历；恒定 Locale.ROOT，不吃设备 Locale 的历法）。 */
+    fun eventTimeText(ms: Long, zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): String =
+        DueTimeCore.formatEventTime(ms, zone)
 
     /** 默认填充「下一个整点」，避免用户面对空框。 */
-    fun defaultTimeText(now: Long, format: SimpleDateFormat = eventTimeFormat()): String {
-        val next = nextWholeHour(now)
-        return format.format(Date(next))
-    }
+    fun defaultTimeText(now: Long, zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): String =
+        DueTimeCore.defaultEventTimeText(now, zone)
 
     /** 取严格大于 now 的下一个整点（毫秒级）。 */
-    fun nextWholeHour(now: Long): Long {
-        val hourMillis = 60L * 60_000L
-        return (now / hourMillis + 1) * hourMillis
-    }
+    fun nextWholeHour(now: Long): Long = DueTimeCore.nextWholeHour(now)
 
     /**
      * 手动提醒去重键：同会话 + 同标题 + 同时间 = 同一条提醒。

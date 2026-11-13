@@ -800,7 +800,7 @@ class ConversationActivity : Activity() {
                 val now = System.currentTimeMillis()
                 val initial = CalendarHelper.tryParseDueTime(etTime.text.toString(), now) ?: now
                 pickDateTime(initial) { millis ->
-                    etTime.setText(ManualReminderCore.eventTimeFormat().format(Date(millis)))
+                    etTime.setText(ManualReminderCore.eventTimeText(millis))
                 }
             }
         }
@@ -900,30 +900,42 @@ class ConversationActivity : Activity() {
         }
     }
 
-    /** 日期 -> 时间两级系统选择器（不引第三方库）；结果按「yyyy-MM-dd HH:mm」回填。 */
+    /**
+     * 日期 -> 时间两级系统选择器（不引第三方库）；结果按「yyyy-MM-dd HH:mm」回填。
+     *
+     * 落库值只用 [java.time] 的公历推算：以前是 `Calendar.getInstance()` 造 + 读写，
+     * 佛历（泰语）设备上 widget 显示 2569 年、用户照着改年份就会落成公历 1484 年。
+     * 系统 DatePicker 的「年份」仍然按默认 Locale 的历法显示，所以只拿它当基准读一次
+     * （[shownYear]），再用 [DueTimeCore.adjustPickedYear] 按「用户改了多少年」平移 ——
+     * 公历设备平移量恒为 0，佛历设备 2569 ↔ 2026 一致。
+     */
     private fun pickDateTime(initial: Long, onPicked: (Long) -> Unit) {
-        val cal = Calendar.getInstance().apply { timeInMillis = initial }
+        val zone = java.time.ZoneId.systemDefault()
+        val base = java.time.Instant.ofEpochMilli(initial).atZone(zone)
+        val shownYear = Calendar.getInstance().apply { timeInMillis = initial }.get(Calendar.YEAR)
         DatePickerDialog(
             this,
             { _, year, month, day ->
-                cal.set(year, month, day)
+                val picked = java.time.LocalDate.of(
+                    DueTimeCore.adjustPickedYear(year, shownYear, base.year),
+                    month + 1,
+                    day
+                )
                 TimePickerDialog(
                     this,
                     { _, hour, minute ->
-                        cal.set(Calendar.HOUR_OF_DAY, hour)
-                        cal.set(Calendar.MINUTE, minute)
-                        cal.set(Calendar.SECOND, 0)
-                        cal.set(Calendar.MILLISECOND, 0)
-                        onPicked(cal.timeInMillis)
+                        onPicked(
+                            picked.atTime(hour, minute).atZone(zone).toInstant().toEpochMilli()
+                        )
                     },
-                    cal.get(Calendar.HOUR_OF_DAY),
-                    cal.get(Calendar.MINUTE),
+                    base.hour,
+                    base.minute,
                     true
                 ).show()
             },
-            cal.get(Calendar.YEAR),
-            cal.get(Calendar.MONTH),
-            cal.get(Calendar.DAY_OF_MONTH)
+            shownYear,
+            base.monthValue - 1,
+            base.dayOfMonth
         ).show()
     }
 
