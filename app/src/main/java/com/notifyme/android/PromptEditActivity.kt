@@ -38,17 +38,17 @@ class PromptEditActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_prompt_edit)
 
-        val conversation = intent.getStringExtra(EXTRA_CONVERSATION).orEmpty()
-        if (conversation.isEmpty()) {
+        // 缺会话名就关页；extras 口径在 ConvExtrasCore
+        val key = ConvExtrasCore.key(
+            intent.getStringExtra(EXTRA_CONVERSATION),
+            intent.getStringExtra(EXTRA_PKG)
+        ) ?: run {
             finish()
             return
         }
-        val pkg = intent.getStringExtra(EXTRA_PKG)
-            ?.takeIf { it.isNotBlank() } ?: AppSourceRegistry.PKG_WECHAT
-        val key = ConvKey(pkg, conversation)
 
         findViewById<TextView>(R.id.btnBack).setOnClickListener { finish() }
-        findViewById<TextView>(R.id.tvConversationName).text = conversation
+        findViewById<TextView>(R.id.tvConversationName).text = key.conversation
 
         val etPrompt = findViewById<EditText>(R.id.etPrompt)
         etPrompt.setText(PromptStore.getPrompt(this, key))

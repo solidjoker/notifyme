@@ -106,9 +106,8 @@ class OverlayService : Service() {
     // ---------------- 悬浮卡 ----------------
 
     private fun showCardFromIntent(intent: Intent) {
-        val pkg = intent.getStringExtra(EXTRA_PKG)
-            ?.takeIf { it.isNotBlank() } ?: AppSourceRegistry.PKG_WECHAT
-        val conversation = intent.getStringExtra(EXTRA_CONVERSATION).orEmpty()
+        val pkg = ConvExtrasCore.pkg(intent.getStringExtra(EXTRA_PKG))
+        val conversation = ConvExtrasCore.conversation(intent.getStringExtra(EXTRA_CONVERSATION))
         val sender = intent.getStringExtra(EXTRA_SENDER).orEmpty()
         val text = intent.getStringExtra(EXTRA_TEXT).orEmpty()
         val appLabel = intent.getStringExtra(EXTRA_APP_LABEL).orEmpty()

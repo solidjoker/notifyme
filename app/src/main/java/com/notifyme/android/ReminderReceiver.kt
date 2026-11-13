@@ -9,7 +9,6 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -58,17 +57,17 @@ class ReminderReceiver : BroadcastReceiver() {
         val dedupKey = intent.getStringExtra(EXTRA_DEDUP_KEY).orEmpty()
         val title = intent.getStringExtra(EXTRA_TITLE).orEmpty()
         val summary = intent.getStringExtra(EXTRA_SUMMARY).orEmpty()
-        val pkg = intent.getStringExtra(EXTRA_PKG)
-            ?.takeIf { it.isNotBlank() } ?: AppSourceRegistry.PKG_WECHAT
-        val conversation = intent.getStringExtra(EXTRA_CONVERSATION).orEmpty()
+        val pkg = ConvExtrasCore.pkg(intent.getStringExtra(EXTRA_PKG))
+        val conversation = ConvExtrasCore.conversation(intent.getStringExtra(EXTRA_CONVERSATION))
         val eventTime = intent.getLongExtra(EXTRA_EVENT_TIME, 0L)
         Log.i("ReminderReceiver", "到点提醒触发: key=$dedupKey title=$title")
 
         // Android 13+ 通知运行时权限：未授予时这次提醒发不出去，但必须如实回写状态——
         // 原先直接 return，提醒记录仍显示「已设App内提醒」，用户以为提醒在，实则静默丢失。
-        if (Build.VERSION.SDK_INT >= 33 &&
-            context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
+        if (PermissionGateCore.needsPostNotifications(
+                Build.VERSION.SDK_INT,
+                context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+            )
         ) {
             Log.w("ReminderReceiver", "无通知权限，提醒无法弹出: $dedupKey")
             ReminderStore.markStatus(
