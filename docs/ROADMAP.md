@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（615 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（621 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -514,6 +514,15 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   修法：新增 `CONV_KEY_SQL = "pkg || char(1) || conversation"` 常量化口径（`char(1)` 与前端 `SEP` 同值），三处 SQL 全部引用它；`conversation` 为 NULL 时整体为 NULL、`COUNT(DISTINCT)` 跳过，脏行仍不计入会话数（与旧口径一致）；模块 docstring 补一条口径说明。
   测试：`test_stats_api.py` 新增 3 条 —— 跨 pkg 同名会话（消息段 `total 3 / convs 2`，`?pkg=` 过滤后 `2 / 1`）、分析段同口径（`convs 2` / `todo 2` / `todo_convs 2`）、`conversation = NULL` 的脏行不计入会话数。
   计数：服务端用例 612 → **615 条**；`stats_api.py` 180 → **189 行 / 非空 164**（`CONV_KEY_SQL` @37 · `_messages_block` @39 · `_analysis_block` @78 · `_queue_block` @113 · `query_stats` @152 · `register` @185）、`test_stats_api.py` 405 → **462 行 / 非空 385**。Android 侧计数不变（130 / 137 / 85 / 1369 / 49）。
+- **`/stats` 在 `?pkg=` 过滤下分布不跟手 + ktlint 缓存落进仓库（feat/stats-pkg-dist）**
+- 问题一：`GET /stats?pkg=com.tencent.mm` 返回 `total=2` / `convs=2`，但 `sum(by_pkg)=3`、`sum(by_source)=3` —— 同一段里总量是过滤后的、分布是全库的，控制台并排渲染成「共 2 条，应用分布加起来 3 条」。`_messages_block(pkg)` 里只有 `total` / `convs` / `last_24h` 三条 SQL 带 `where`，两条分布 SQL 漏了。
+- 修法：`by_pkg` / `by_source` 的 `SELECT ... FROM messages` 追加同一份 `where` 与 `params`，让「同一段内分布之和恒等于 `total`」成为可断言的不变量。
+- 问题二（工具链）：`docs/scripts/static_check.py` 的 `cache_dir()` 用 `os.path.expanduser(波浪号)`，环境缺 `USERPROFILE` 时原样返回波浪号 → 拼出相对路径 → 71 MB 的 ktlint jar 被下载进仓库内，`git add -A` 一把带进提交（靠 `git reset --soft` 才救回）。
+- 修法：`cache_dir()` 取值链 = `NOTIFYME_TOOLS_DIR` → 展开成功且绝对的家目录 → 系统临时目录；解析结果若落在仓库内强制改道。判「在仓库内」用 `os.path.commonpath` 而不是 `startswith`（`repo_other` 会被骗）。
+- 测试：`server/test_stats_api.py::test_stats_pkg_filter_applies_to_distributions` 断言分布之和等于同段 `total`；新增 `server/test_tooling_cache.py` 5 条（绝对且在仓库外 / 家目录未展开落临时目录 / 显式指进仓库要改道 / 显式指到仓库外要尊重 / `_inside` 对 `repo_other` 返 False）。服务端用例 615 → **621 条**。
+- 计数：`server/stats_api.py` 189 → **191 行**（`_messages_block` @41、`query_stats` @156、`register` @189）；`server/test_stats_api.py` 462 → **485 行**；`docs/scripts/static_check.py` 217 → **244 行**；`server/test_tooling_cache.py` 新增 71 行。Android 侧不动：顶层 130 / 全树 137 / `app/src/test` 85 个 / 1369 条 / Core 49。
+- 环境提醒：这次缓存落进仓库，是因为跑脚本的 shell 里 `USERPROFILE` 缺失 —— CI 与本地都可能出现，所以修复放在脚本里而不是绕开调用。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：

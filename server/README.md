@@ -12,7 +12,7 @@
 | `util.py` | 纯函数工具层：数值归一、时间戳格式化、文本转义、来源包名映射 |
 | `storage.py` | 存储层：SQLite 连接与建库、JSONL 存档与轮转、顾问存档读写、抽库后台任务 |
 | `routes.py` | 数据面路由：`/weixin`、`/messages`、`/analysis`、`/advisor`、`/queue`、`/admin/extract`，由 `register(app)` 挂载 |
-| `stats_api.py` | 全库聚合 `/stats`：消息段（含 `by_pkg` / `by_source`）、分析段（含脱敏证据）、排队段；**分析段不接受 `pkg` 过滤**；会话数（`convs` / `todo_convs`）按 `(pkg, conversation)` 计，与 `/messages` 行和控制台会话卡同口径 |
+| `stats_api.py` | 全库聚合 `/stats`：消息段（含 `by_pkg` / `by_source`）、分析段（含脱敏证据）、排队段；**分析段不接受 `pkg` 过滤**；会话数（`convs` / `todo_convs`）按 `(pkg, conversation)` 计，与 `/messages` 行和控制台会话卡同口径；带 `?pkg=` 时消息段的 `by_pkg` / `by_source` 也一并跟着过滤（同一段内分布之和恒等于 `total`） |
 | `suggests.py` | 下一步建议 `/suggests/next`：6 条规则按 `priority` 降序取前 3，带 `why` / `how` / `evidence` / `jump` |
 | `console_ui.py` | 内嵌 PWA 控制台前端（HTML/CSS/JS，无外部依赖） |
 | `extract_common.py` | 两个抽取脚本的共享内核：结构化日志、原文 JSONL 存档与轮转、跨进程写锁、五列去重、分批提交、主库结构兜底；配置由 `activate(module)` 注入宿主模块，`_setting()` 每次调用时读取 |

@@ -21,7 +21,7 @@ subgraph APP["server/app.py · Flask 壳 719 行<br/>app.run host=0.0.0.0 port=P
         MU["util.py · 432 行<br/>纯函数工具层<br/>_advisor_ts @88（顾问时间归一）· _validate_item @400 · _safe_int @50 · _clamp_int @69<br/>_esc_html @363 · _fmt_ts @313 · _parse_tz_offset @158<br/>_parse_cursor @195（游标毫秒+rowid 双段校验）<br/>_utc_ms @236 · _local_offset_min @247 · _day_bounds_ms @283（按 UTC 基准换算，1970 前不抛 OSError）"]:::mod
         MS["storage.py · 816 行<br/>存储层<br/>init_db @58 · _append_jsonl @197<br/>顾问存档 @216 · _run_extract_bg @437<br/>排队任务 upsert @613 · query @659<br/>全库聚合 queue_summary @718（不受 limit 截断）<br/>设备聚合 queue_devices @776<br/>主库可写探测 _probe_main_db_writable @479"]:::mod
         MR["routes.py · 1022 行<br/>数据面路由<br/>register @1010 · add_url_rule 映射 @1012-1021"]:::mod
-        MST["stats_api.py · 189 行<br/>全库聚合 /stats · 会话数按 (pkg, conversation)<br/>query_stats @152 · _messages_block @39<br/>_analysis_block @78 · _queue_block @113"]:::mod
+        MST["stats_api.py · 191 行<br/>全库聚合 /stats · 会话数按 (pkg, conversation)<br/>分布 by_pkg/by_source 跟随 pkg 过滤 · query_stats @156<br/>_messages_block @41 · _analysis_block @82 · _queue_block @117"]:::mod
         MSN["suggests.py · 308 行<br/>下一步建议 /suggests/next<br/>query_suggests_next @193<br/>规则优先级 _pick @181"]:::mod
         MC["console_ui.py · 3452 行<br/>控制台前端常量（5 个 Tab）<br/>CONSOLE_HTML @13 · CONSOLE_MANIFEST @3268<br/>CONSOLE_SW @3314"]:::mod
         CC["console_classify.js · 434 行<br/>归类规则单一事实源（UMD）<br/>normPkg · ckOf · senderKey · groupBySender<br/>groupTodosByImportance · groupSuggestions<br/>groupMessages 两级分组 · groupQueueTasksByDevice"]:::mod
