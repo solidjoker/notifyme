@@ -54,12 +54,14 @@ def _messages_block(pkg=None):
             "SELECT COUNT(*) FROM messages" + where +
             (" AND" if where else " WHERE") + " timestamp >= ?",
             params + [now_ms - DAY_MS]).fetchone()
+        # 分布也必须跟着 pkg 过滤走：同一段里 total / convs 是过滤后的，
+        # 分布却是全库的，客户端渲染出来就是「共 2 条，分布加起来 3 条」。
         by_pkg = conn.execute(
-            "SELECT pkg, COUNT(*) FROM messages GROUP BY pkg "
-            "ORDER BY COUNT(*) DESC, pkg ASC").fetchall()
+            "SELECT pkg, COUNT(*) FROM messages" + where + " GROUP BY pkg "
+            "ORDER BY COUNT(*) DESC, pkg ASC", params).fetchall()
         by_source = conn.execute(
-            "SELECT source, COUNT(*) FROM messages GROUP BY source "
-            "ORDER BY COUNT(*) DESC, source ASC").fetchall()
+            "SELECT source, COUNT(*) FROM messages" + where + " GROUP BY source "
+            "ORDER BY COUNT(*) DESC, source ASC", params).fetchall()
     finally:
         conn.close()
     last_ts = int(row[2] or 0)

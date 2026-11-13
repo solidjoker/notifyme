@@ -35,6 +35,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.request
 
 KTLINT_VERSION = "1.8.0"
@@ -67,10 +68,36 @@ def repo_root():
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+def _inside(path, parent):
+    try:
+        return os.path.commonpath([os.path.abspath(path), parent]) == parent
+    except ValueError:
+        return False
+
+
 def cache_dir():
-    base = os.environ.get("NOTIFYME_TOOLS_DIR")
-    if not base:
-        base = os.path.join(os.path.expanduser("~"), ".notifyme-tools")
+    """ktlint jar 的缓存目录。
+
+    必须落在仓库之外，且必须是绝对路径。原来直接 os.path.expanduser("~")：
+    环境里缺 USERPROFILE / HOMEDRIVE 时 expanduser 会把 "~" 原样返回，
+    os.path.join 就得到相对路径 "~/.notifyme-tools/..."，于是 71 MB 的 jar
+    被下载到仓库内（cwd）的 "~/" 目录里，`git add -A` 一把带进提交。
+    """
+    base = os.environ.get("NOTIFYME_TOOLS_DIR") or ""
+    if base:
+        base = os.path.abspath(os.path.expanduser(base))
+    else:
+        home = os.path.expanduser("~")
+        if home and home != "~" and os.path.isabs(home):
+            base = os.path.join(home, ".notifyme-tools")
+        else:
+            # expanduser 没展开（Windows 缺 USERPROFILE 等）：退回系统临时目录，
+            # 别让缓存落进仓库。
+            base = os.path.join(tempfile.gettempdir(), ".notifyme-tools")
+    root = repo_root()
+    if _inside(base, root):
+        # 显式配置指进仓库也不干：缓存是构建产物，不能进版本库。
+        base = os.path.join(tempfile.gettempdir(), ".notifyme-tools")
     return os.path.join(base, "ktlint", KTLINT_VERSION)
 
 
