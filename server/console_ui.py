@@ -1833,9 +1833,13 @@ function renderOverview() {
   }
   var sTodo = $('ov-todo-sub');
   if (sTodo) {
+    // 会话数必须读 todo_convs（有待办的会话数），不是 convs（有分析结果的会话数）：
+    // 「待办 2 条」下面写「共 4 个会话」时，另外 2 个会话压根没有待办，
+    // 用户会以为还有待办没显示出来。/stats 两个键都有，别拿错（与 /suggests/next
+    // 的「待办 2 条，分布在 2 个会话」同一个口径）。
     sTodo.textContent = sk ? '加载中…' :
       (est ? ('估算 · 当前筛选下 ' + todos.length + ' 条')
-        : ('全库真值 · 共 ' + (statNum(['analyses', 'convs']) || 0) + ' 个会话'));
+        : ('全库真值 · 共 ' + (statNum(['analyses', 'todo_convs']) || 0) + ' 个会话'));
   }
   var sQueue = $('ov-queue-sub');
   if (sQueue) {
