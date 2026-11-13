@@ -155,7 +155,7 @@ object AnalysisProgressUi {
     fun text(context: Context, state: AnalysisRunState): String {
         val elapsed = formatElapsed(state.elapsedMs())
         val casePrefix = if (state.caseTotal > 1) {
-            context.getString(R.string.analysis_progress_case, state.caseIndex, state.caseTotal) + " · "
+            context.templateText(R.string.analysis_progress_case, state.caseIndex, state.caseTotal) + " · "
         } else ""
         return when (state.stage) {
             AnalysisStage.PREPARING ->
@@ -167,7 +167,7 @@ object AnalysisProgressUi {
                     context.getString(R.string.analysis_stage_loading), elapsed)
 
             AnalysisStage.LOCAL_PREFILL ->
-                casePrefix + context.getString(
+                casePrefix + context.templateText(
                     R.string.analysis_progress_prefill,
                     context.getString(R.string.analysis_stage_prefill),
                     state.token, state.maxToken, elapsed
@@ -179,7 +179,7 @@ object AnalysisProgressUi {
                     casePrefix + context.getString(R.string.analysis_progress_elapsed,
                         context.getString(R.string.analysis_stage_decode), elapsed)
                 } else {
-                    casePrefix + context.getString(
+                    casePrefix + context.templateText(
                         R.string.analysis_progress_decode,
                         context.getString(R.string.analysis_stage_decode),
                         percent, state.token, elapsed
@@ -188,7 +188,7 @@ object AnalysisProgressUi {
             }
 
             AnalysisStage.LOCAL_QUESTIONS ->
-                casePrefix + context.getString(
+                casePrefix + context.templateText(
                     R.string.analysis_progress_questions,
                     context.getString(R.string.analysis_stage_questions),
                     state.token, state.maxToken, elapsed

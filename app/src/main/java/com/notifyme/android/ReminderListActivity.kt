@@ -147,7 +147,7 @@ class ReminderListActivity : Activity() {
             val label = getString(filterLabelRes(code))
             val count = counts[code] ?: 0
             val chip = TextView(this)
-            chip.text = getString(R.string.reminder_filter_chip_label, label, count)
+            chip.text = templateText(R.string.reminder_filter_chip_label, label, count)
             chip.textSize = 13f
             chip.gravity = android.view.Gravity.CENTER
             chip.setPadding(
@@ -159,7 +159,7 @@ class ReminderListActivity : Activity() {
             chip.setTextColor(getColor(if (selected) R.color.card_bg else R.color.text_secondary))
             // isSelected 让 TalkBack 读「已选中」；contentDescription 只补「状态 X，N 条」
             chip.isSelected = selected
-            chip.contentDescription = getString(R.string.reminder_filter_chip_desc, label, count)
+            chip.contentDescription = templateText(R.string.reminder_filter_chip_desc, label, count)
             val lp = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -341,7 +341,7 @@ class ReminderListActivity : Activity() {
             fun bind(row: ReminderRow.Group) {
                 val ctx = itemView.context
                 title.text = ctx.getString(groupLabelRes(row.code))
-                count.text = ctx.getString(R.string.reminder_group_count, row.count)
+                count.text = ctx.templateText(R.string.reminder_group_count, row.count)
             }
         }
 

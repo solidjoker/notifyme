@@ -176,7 +176,7 @@ class ModelListActivity : Activity() {
             LocalModelStore.STATE_DOWNLOADING -> {
                 bar.visibility = ProgressBar.VISIBLE
                 bar.progress = pct
-                tv.text = getString(
+                tv.text = templateText(
                     R.string.model_status_downloading,
                     pct,
                     LocalModelStore.formatBytes(LocalModelStore.downloadedBytes(this, modelId)),

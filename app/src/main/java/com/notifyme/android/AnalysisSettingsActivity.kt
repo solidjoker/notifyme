@@ -302,7 +302,7 @@ class AnalysisSettingsActivity : Activity() {
         btnScopePickConvs.text = if (state.convIds.isEmpty()) {
             getString(R.string.scope_pick_convs)
         } else {
-            getString(R.string.scope_pick_convs_n, state.convIds.size)
+            templateText(R.string.scope_pick_convs_n, state.convIds.size)
         }
     }
 
@@ -824,7 +824,7 @@ class AnalysisSettingsActivity : Activity() {
             val todoConversations = groups.count { (_, list) -> list.any { it.s1NeedAction } }
             runOnUiThread {
                 if (token != statsToken || isFinishing || isDestroyed) return@runOnUiThread
-                tvAnalysisStats.text = getString(
+                tvAnalysisStats.text = templateText(
                     R.string.analysis_stats_format, conversations, todoConversations
                 )
                 tvAnalysisStats.setTextColor(

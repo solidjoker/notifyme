@@ -111,7 +111,7 @@ class OnboardingActivity : Activity() {
             page.visibility = if (i == index) View.VISIBLE else View.GONE
         }
         tvPageIndicator.text =
-            getString(R.string.onboarding_page_indicator, index + 1, pages.size)
+            templateText(R.string.onboarding_page_indicator, index + 1, pages.size)
         btnPrev.isEnabled = index > 0
         btnNext.text = getString(
             if (index == pages.size - 1) R.string.btn_finish else R.string.btn_next

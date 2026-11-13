@@ -53,7 +53,7 @@ object AnalysisProgressNotifier {
         val conv = state.conversation
         return when {
             state.caseTotal > 1 ->
-                context.getString(R.string.analysis_notif_title_round, state.caseIndex, state.caseTotal)
+                context.templateText(R.string.analysis_notif_title_round, state.caseIndex, state.caseTotal)
             conv.isNotBlank() ->
                 context.getString(R.string.analysis_notif_title_conv, conv.take(20))
             else -> context.getString(R.string.analysis_notif_title)

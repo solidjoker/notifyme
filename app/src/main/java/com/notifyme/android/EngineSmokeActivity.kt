@@ -62,7 +62,7 @@ class EngineSmokeActivity : Activity() {
                 val ms = System.currentTimeMillis() - started
                 outcome
                     .onSuccess {
-                        tvStatus.text = getString(R.string.smoke_done, ms)
+                        tvStatus.text = templateText(R.string.smoke_done, ms)
                         tvResult.text = it
                     }
                     .onFailure {

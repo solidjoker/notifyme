@@ -402,12 +402,12 @@ class ConversationActivity : Activity() {
         val hintText = when {
             // 读到文件头 + 没被 limit 砍：条数就是真实总数，可以说「共 N 条」
             preview.countedAll && preview.truncated ->
-                getString(R.string.chat_truncated, renderLimit, preview.visible)
+                templateText(R.string.chat_truncated, renderLimit, preview.visible)
             // 条数不可信时绝不说「共 N 条」：只说这个窗口里有多少、更早的不在窗口内
             preview.truncated ->
-                getString(R.string.chat_truncated_window, renderLimit, preview.visible)
+                templateText(R.string.chat_truncated_window, renderLimit, preview.visible)
             !preview.countedAll ->
-                getString(R.string.chat_window_partial, preview.visible)
+                templateText(R.string.chat_window_partial, preview.visible)
             else -> null
         }
         if (hintText != null) {
@@ -544,7 +544,7 @@ class ConversationActivity : Activity() {
     /** 同步 ActionMode 标题并重绘气泡（勾选背景）。 */
     private fun syncMsgSelection() {
         selectActionMode?.title =
-            getString(R.string.msg_selected_n, selectedMessages.size)
+            templateText(R.string.msg_selected_n, selectedMessages.size)
         renderContent()
     }
 
@@ -583,14 +583,14 @@ class ConversationActivity : Activity() {
         val msgs = selectedMessages.toList()
         if (msgs.isEmpty()) return
         AlertDialog.Builder(this)
-            .setMessage(getString(R.string.confirm_delete_messages, msgs.size))
+            .setMessage(templateText(R.string.confirm_delete_messages, msgs.size))
             .setNegativeButton(R.string.common_cancel, null)
             .setPositiveButton(R.string.common_delete) { _, _ ->
                 PendingQueue.removeByMessages(this, msgs)
                 val n = MessageStore.deleteMessages(this, msgs)
                 selectActionMode?.finish()
                 renderContent()
-                Toast.makeText(this, getString(R.string.delete_done, n), Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, templateText(R.string.delete_done, n), Toast.LENGTH_SHORT).show()
             }
             .show()
     }
@@ -615,12 +615,12 @@ class ConversationActivity : Activity() {
         // need_action：待办橙 chip / 无需行动绿字灰 chip（含概率百分比）
         addChip(
             text = if (record.s1NeedAction) {
-                getString(
+                templateText(
                     R.string.chip_need_action_yes,
                     (record.s1NeedActionProb * 100).toInt()
                 )
             } else {
-                getString(
+                templateText(
                     R.string.chip_need_action_no,
                     (record.s1NeedActionProb * 100).toInt()
                 )
@@ -630,7 +630,7 @@ class ConversationActivity : Activity() {
             normalColor = getColor(R.color.status_ok)
         )
         addChip(
-            text = getString(R.string.chip_importance, record.s1Importance),
+            text = templateText(R.string.chip_importance, record.s1Importance),
             highlight = record.s1Importance >= AnalysisCase.ESCALATE_IMPORTANCE,
             highlightColor = getColor(R.color.accent_orange),
             normalColor = getColor(R.color.text_secondary)
@@ -738,7 +738,7 @@ class ConversationActivity : Activity() {
             return
         }
         tvConvReminders.visibility = View.VISIBLE
-        tvConvReminders.text = getString(R.string.reminder_conv_count, count)
+        tvConvReminders.text = templateText(R.string.reminder_conv_count, count)
     }
 
     /** 长按消息建提醒：先捕获选中消息，再退出多选态（退出会清空选中集）。 */
