@@ -12,7 +12,7 @@
 | `util.py` | 纯函数工具层：数值归一、时间戳格式化、文本转义、来源包名映射 |
 | `storage.py` | 存储层：SQLite 连接与建库、JSONL 存档与轮转、顾问存档读写、抽库后台任务 |
 | `routes.py` | 数据面路由：`/weixin`、`/messages`、`/analysis`、`/advisor`、`/queue`、`/admin/extract`，由 `register(app)` 挂载 |
-| `stats_api.py` | 全库聚合 `/stats`：消息段（含 `by_pkg` / `by_source`）、分析段（含脱敏证据）、排队段；**分析段不接受 `pkg` 过滤**；会话数（`convs` / `todo_convs`）按 `(pkg, conversation)` 计，与 `/messages` 行和控制台会话卡同口径；带 `?pkg=` 时消息段的 `by_pkg` / `by_source` 也一并跟着过滤（同一段内分布之和恒等于 `total`） |
+| `stats_api.py` | 全库聚合 `/stats`：数值列一律走安全取值（脏值归 0，不让单行脏数据把整页打成 500）；消息段（含 `by_pkg` / `by_source`）、分析段（含脱敏证据）、排队段；**分析段不接受 `pkg` 过滤**；会话数（`convs` / `todo_convs`）按 `(pkg, conversation)` 计，与 `/messages` 行和控制台会话卡同口径；带 `?pkg=` 时消息段的 `by_pkg` / `by_source` 也一并跟着过滤（同一段内分布之和恒等于 `total`） |
 | `suggests.py` | 下一步建议 `/suggests/next`：6 条规则按 `priority` 降序取前 3，带 `why` / `how` / `evidence` / `jump`；`?pkg=` 是**真过滤**，只作用于 `todo` / `convs_missing` 两族规则的计数（排队按设备、顾问是全局报告，与来源无关，仍走全库口径） |
 | `console_ui.py` | 内嵌 PWA 控制台前端（HTML/CSS/JS，无外部依赖） |
 | `extract_common.py` | 两个抽取脚本的共享内核：结构化日志、原文 JSONL 存档与轮转、跨进程写锁、五列去重、分批提交、主库结构兜底；配置由 `activate(module)` 注入宿主模块，`_setting()` 每次调用时读取 |
@@ -248,6 +248,13 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 
 结果按 `timestamp` 倒序（同毫秒按 `rowid` 再排，翻页不丢条目）。`received_at` 为服务端接收时间（毫秒），`source` 标记来源（`android-notification` 通知上报 / `android-db` 数据库直读）。
 
+**数值列的脏值守卫**：`timestamp` / `received_at` 声明成 INTEGER，但 SQLite 的类型亲和只是「建议」——
+写不进整数时会被原样存成 TEXT（直连改库、老库迁移、第三方脚本都能造出来）。服务端把 `typeof(timestamp) IN ('integer','real')` 作为**常驻条件**（不是可选过滤）：
+不满足的行整条不出现在结果里，正常行的返回格式与上面完全一样。实测该守卫不破坏 `idx_messages_ts`（仍是 SEARCH），
+换成 `CAST(timestamp AS INTEGER) >= ?` 才会退化成全表 SCAN。
+
+同理 `next_before` 的毫秒段永远是数字（脏行进不来，也就不会拼出 `abc_1` 这种客户端拿回来自动 400 的游标）。
+
 返回里还有 `next_before`：**还有下一页时**给游标字符串，**没有下一页时为 `null`**（不要按「满页」判断）。
 
 ### POST /analysis —— 接收分析结果（需 token）
@@ -294,6 +301,9 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 | `tz` / `tz_offset` | 可选时区 / 时区偏移（分钟），作用同 `/messages` |
 
 返回 `{"ok": true, "count": n, "analyses": [...]}`，`s1`/`s2`/`forks` 已解析回对象，按 `received_at DESC, rowid DESC` 倒序（第二排序键保证同毫秒记录不漏不重）。
+
+**数值列的脏值守卫**：`received_at` 同样是 INTEGER 亲和列（SQLite 类型亲和只是「建议」），服务端把 `typeof(received_at) IN ('integer','real')` 作为**常驻条件**，
+脏行不出现、也就不会把 `next_before` 拼成 `boom_2` 让第二页直接 400。`window_end` / `message_count` 走安全取值：认不出给 `null`，不把脏字符串吐给前端。
 只有**确实还有下一页**时才返回 `next_before`，最后一页返回 `null`。
 每条还带归一后的 `need_action`（布尔）与 `importance`（`high`/`medium`/`low`），以及 `redacted` / `redaction_rules` / `redaction_hits` / `todo_text` / `todo_due`。
 库里被写脏的数值列（`window_end`/`message_count` 不是数字）返回 `null` 而不是 500；

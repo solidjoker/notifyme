@@ -19,9 +19,9 @@ subgraph APP["server/app.py · Flask 壳 719 行<br/>app.run host=0.0.0.0 port=P
     subgraph MODS["其余 6 个模块（拆自旧单文件）+ console_classify.js"]
         direction LR
         MU["util.py · 432 行<br/>纯函数工具层<br/>_advisor_ts @88（顾问时间归一）· _validate_item @400 · _safe_int @50 · _clamp_int @69<br/>_esc_html @363 · _fmt_ts @313 · _parse_tz_offset @158<br/>_parse_cursor @195（游标毫秒+rowid 双段校验）<br/>_utc_ms @236 · _local_offset_min @247 · _day_bounds_ms @283（按 UTC 基准换算，1970 前不抛 OSError）"]:::mod
-        MS["storage.py · 816 行<br/>存储层<br/>init_db @58 · _append_jsonl @197<br/>顾问存档 @216 · _run_extract_bg @437<br/>排队任务 upsert @613 · query @659<br/>全库聚合 queue_summary @718（不受 limit 截断）<br/>设备聚合 queue_devices @776<br/>主库可写探测 _probe_main_db_writable @479"]:::mod
-        MR["routes.py · 1022 行<br/>数据面路由<br/>register @1010 · add_url_rule 映射 @1012-1021"]:::mod
-        MST["stats_api.py · 191 行<br/>全库聚合 /stats · 会话数按 (pkg, conversation)<br/>分布 by_pkg/by_source 跟随 pkg 过滤 · query_stats @156<br/>_messages_block @41 · _analysis_block @82 · _queue_block @117"]:::mod
+        MS["storage.py · 819 行<br/>存储层<br/>init_db @58 · _append_jsonl @197<br/>顾问存档 @216 · _run_extract_bg @437<br/>排队任务 upsert @613 · query @659<br/>全库聚合 queue_summary @720（不受 limit 截断）<br/>设备聚合 queue_devices @779<br/>主库可写探测 _probe_main_db_writable @479"]:::mod
+        MR["routes.py · 1034 行<br/>数据面路由<br/>register @1022 · add_url_rule 映射 @1024-1033"]:::mod
+        MST["stats_api.py · 212 行<br/>全库聚合 /stats · 会话数按 (pkg, conversation)<br/>数值列 typeof 守卫 · 分布 by_pkg/by_source 跟随 pkg 过滤<br/>query_stats @177 · INT_ONLY_TS @47 · MAX_TS @51<br/>_messages_block @54 · _analysis_block @102 · _queue_block @137"]:::mod
         MSN["suggests.py · 322 行<br/>下一步建议 /suggests/next<br/>query_suggests_next @203 · _pick @191<br/>pkg 只作用于 todo / convs_missing 两族<br/>排队按设备 · 顾问是全局报告"]:::mod
         MC["console_ui.py · 3474 行<br/>控制台前端常量（5 个 Tab）<br/>CONSOLE_HTML @13 · CONSOLE_MANIFEST @3290<br/>CONSOLE_SW @3336 · refreshSuggests @1931"]:::mod
         CC["console_classify.js · 434 行<br/>归类规则单一事实源（UMD）<br/>normPkg · ckOf · senderKey · groupBySender<br/>groupTodosByImportance · groupSuggestions<br/>groupMessages 两级分组 · groupQueueTasksByDevice"]:::mod
@@ -30,17 +30,17 @@ subgraph APP["server/app.py · Flask 壳 719 行<br/>app.run host=0.0.0.0 port=P
     subgraph WRITE["写入 API · Android 上报（routes.py）"]
         direction LR
         RWX["POST /weixin  @routes.py:20<br/>receive_weixin()<br/>_validate_item @util.py:400<br/>返回 received/duplicated/invalid"]:::srv
-        RAN["POST /analysis  @routes.py:311<br/>receive_analysis()<br/>case_id 唯一键去重"]:::srv
-        RAD["POST /advisor  @routes.py:699<br/>receive_advisor()<br/>report_id 去重"]:::srv
-        RQ["POST /queue  @routes.py:891<br/>receive_queue()<br/>device_id + tasks[] 整份覆盖<br/>非法条目逐条拒收 207"]:::srv
+        RAN["POST /analysis  @routes.py:318<br/>receive_analysis()<br/>case_id 唯一键去重"]:::srv
+        RAD["POST /advisor  @routes.py:711<br/>receive_advisor()<br/>report_id 去重"]:::srv
+        RQ["POST /queue  @routes.py:903<br/>receive_queue()<br/>device_id + tasks[] 整份覆盖<br/>非法条目逐条拒收 207"]:::srv
     end
 
     subgraph READ["查询 API · PWA / App 回读（routes.py）"]
         direction LR
-        QM["GET /messages  @routes.py:169<br/>conversation 模糊 · date · limit≤1000<br/>timestamp DESC + source 徽标 + 翻页游标"]:::srv
-        QA["GET /analysis  @routes.py:537<br/>todo_only=1 只看待办<br/>s1/s2 反解析为对象"]:::srv
-        QAD["GET /advisor  @routes.py:788"]:::srv
-        QQ["GET /queue  @routes.py:964<br/>query_queue()<br/>{ok, tasks[], summary{queued,running,failed,done,stale,total}}<br/>summary = 全库口径（不受 limit 截断），tasks = 当前页<br/>devices[] 设备聚合（device_id/total/active）<br/>stale = 30 分钟未更新"]:::srv
+        QM["GET /messages  @routes.py:169<br/>conversation 模糊 · date · limit≤1000<br/>timestamp DESC + source 徽标 + 翻页游标<br/>typeof 守卫挡掉非数值脏行（防游标毒化）"]:::srv
+        QA["GET /analysis  @routes.py:544<br/>todo_only=1 只看待办<br/>s1/s2 反解析为对象<br/>typeof(received_at) 常驻守卫"]:::srv
+        QAD["GET /advisor  @routes.py:800"]:::srv
+        QQ["GET /queue  @routes.py:976<br/>query_queue()<br/>{ok, tasks[], summary{queued,running,failed,done,stale,total}}<br/>summary = 全库口径（不受 limit 截断），tasks = 当前页<br/>devices[] 设备聚合（device_id/total/active）<br/>stale = 30 分钟未更新"]:::srv
     end
 
     subgraph PARTIAL["部分接受 207 · 路由层语义"]
@@ -49,10 +49,10 @@ subgraph APP["server/app.py · Flask 壳 719 行<br/>app.run host=0.0.0.0 port=P
 
     subgraph EXTRACT["提取编排 · 服务端触发 DB 直读（routes.py + storage.py）"]
         direction TB
-        AE["POST /admin/extract  @routes.py:832<br/>admin_extract()<br/>full=1 全量 · source ∈ android|pc|all<br/>409 = 已在跑"]:::srv
+        AE["POST /admin/extract  @routes.py:844<br/>admin_extract()<br/>full=1 全量 · source ∈ android|pc|all<br/>409 = 已在跑"]:::srv
         ST["_extract_status 内存态<br/>{running, last} + _extract_lock"]:::srv
         BG["_run_extract_bg(full, source)  @storage.py:437<br/>daemon Thread<br/>mod = __import__(leg + '_db_extract')<br/>result[leg] = mod.run_extract(full=full)<br/>单腿失败不拖垮另一腿"]:::srv
-        AS["GET /admin/extract/status  @routes.py:877<br/>admin_extract_status()<br/>{ok, running, last}<br/>scanned/inserted/duplicated/skipped/elapsed_sec"]:::srv
+        AS["GET /admin/extract/status  @routes.py:889<br/>admin_extract_status()<br/>{ok, running, last}<br/>scanned/inserted/duplicated/skipped/elapsed_sec"]:::srv
         AE --> BG
         BG --> ST
         ST --> AS

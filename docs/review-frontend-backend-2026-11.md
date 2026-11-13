@@ -1039,3 +1039,53 @@ CONV_KEY_SQL = "pkg || char(1) || conversation"
 **测试**。`server/test_stats_api.py`（485 → 546 行）新增 4 条：`test_suggests_pkg_filters_todo_counts`（3 条待办跨两包 → 全库 title 含 3；`?pkg=com.larkoffice.app` 只含 1 且 evidence 为「1 条 / 1 个会话」）、`test_suggests_pkg_filters_missing_conversation_counts`（`?pkg=com.tencent.mm` 下无 `rerun`，`?pkg=com.larkoffice.app` 下 conv 建议 evidence「1 个会话」）、`test_suggests_pkg_does_not_touch_queue_or_advisor_rules`（pkg 不影响 queue/100 与 adv/50 —— 口径边界写成断言）、`test_suggests_pkg_that_has_no_data_silences_own_rules`（选中来源无待办时 `todo` 建议不出现，「全部」口径仍报）。`server/test_console_ui.py:414` 的接线断言从单行 `api(suggests/next, { signal: signal })` 改成三行 URL 拼装（`var url = suggests/next;` / `if (APP_FILTER) url += ?pkg= + encodeURIComponent(APP_FILTER);` / `var r = await api(url, { signal: signal });`）。
 **验证**。`python -m pytest server/test_stats_api.py server/test_console_ui.py -q` → **61 passed**；`python -m pytest server/ -q` → **625 passed in 28.95s**（基线 621 + 4）；`python -m compileall -q server` 退出码 0。控制台内联脚本用正则抽出 4 个 `<script>` 块逐个 `node --check`，全部 `JS=0`（注意仓库里并不存在 AGENTS.md §6 提到的 `docs/scripts/check_console_js.py`，别照着敲）。
 **计数**。`server/suggests.py` 308 → **322 行 / 非空 280**（`_todo_counts` @98 · `_convs_without_analysis` @122 · `_fill` @154 · `_pick` @191 · `query_suggests_next` @203 · `RULES` @255 · `register` @319）；`server/console_ui.py` 3452 → **3474 行 / 非空 3385**（`CONSOLE_MANIFEST` @3290 · `CONSOLE_SW` @3336 · `refreshSuggests` @1931 · `suggestSections` @2256）；`server/test_stats_api.py` 485 → **546 行 / 非空 457**；服务端用例 621 → **625 条**。
+
+### E-55｜库内 INTEGER 亲和列被写成 TEXT：`/stats` 与 `/queue` 整页 500、分页游标被毒化（feat/dirty-numeric-row-guard，2026-11-14）
+
+**问题**：`messages.timestamp` / `messages.received_at` / `analyses.received_at` / `queue_tasks.updated_at` 都声明成 INTEGER，
+但 SQLite 的类型亲和只是「建议」：写不进整数时它**原样存 TEXT**，而我们建表时没加 CHECK 约束。
+于是「直连 sqlite 修数据 / 老库迁移 / 第三方脚本 / 手工 import」任何一条路径都能造出脏行。
+
+**复现**（`server/test_stats_api.py` / `server/test_queue.py` 的新用例就是它的固化版）：
+
+- 往 messages 插一条 `timestamp = "abc"` 的脏行 → `GET /stats` **500**，traceback 停在 `stats_api.py` 的 `last_ts = int(row[2] or 0)`，
+  `ValueError: invalid literal for int() with base 10: abc`；同一时刻 `/messages?limit=5` 200、`/analysis` 200、`/suggests/next` 200。
+- `queue_tasks.updated_at = "zzz"` → `/queue` 500、`/stats` 500。
+- 更阴的一条：`GET /messages?limit=1` 返回 `next_before = "abc_1"`（脏 TEXT 被原样当游标毫秒段吐出去），
+  下一页 `?before=abc_1` 直接 400 `before must be <ms> or <ms>_<rowid>` —— 客户端**永远翻不到第二页**，且报错完全指不到脏行；`/analysis` 的 `boom_2` 同款。
+
+**为什么 625 条全绿却没发现**：原有脏数据用例只覆盖 `analyses.window_end = "abc"`（该路径早就是 `_safe_int(default=None)`）与顾问 JSONL 文本时间戳；
+没有一个用例越过「接口正常写入」这条路径去直接改库，而 SQLite 恰恰允许这么干。
+
+**根因分两层**：① 取值层用 `int(row[x] or 0)` —— `or` 只拦假值（`None` / `0` / `""`），对 `"abc"` 完全无效；
+② 谓词层没设 `typeof` 守卫 —— TEXT 在 SQLite 排序里**恒大于所有数字**，脏行必然排第一，`MAX()` 也会原样返回那个字符串。
+
+**修法**（四处，全部落在服务端）：
+
+1. `server/stats_api.py` 新增四个常量并解释为什么用 `typeof` 不用 `CAST`：
+
+   ```python
+   INT_ONLY_TS = "typeof(timestamp) IN ('integer','real')"
+   INT_ONLY_RECEIVED = "typeof(received_at) IN ('integer','real')"
+   MAX_TS = "MAX(CASE WHEN " + INT_ONLY_TS + " THEN timestamp END)"
+   MAX_RECEIVED = "MAX(CASE WHEN " + INT_ONLY_RECEIVED + " THEN received_at END)"
+   ```
+
+   `_messages_block` 的主聚合改 `MAX_TS` / `MAX_RECEIVED`，近 24h 计数加 `INT_ONLY_TS + " AND timestamp >= ?"`；
+   `_analysis_block` 的 `MAX(received_at)` 同步换掉。
+2. `server/routes.py` 的 `query_messages` / `query_analysis` 把守卫塞进 `conditions` **初始值**（常驻、不是可选过滤）：
+   脏行不出现在结果里，也就不会被拼进 `next_before`；行映射的 `timestamp` / `received_at` 再兜一层 `_safe_int(default=None)`，
+   `next_before` 用 `"%d_%s" % (_safe_int(rows[-1][N], default=0), rowid)` 拼。
+3. `server/stats_api.py` / `server/storage.py` 的**所有**「库内整数字段」取值改 `app_module._safe_int(value, default=0, lo=0)`，
+   覆盖 `/stats` 三段与 `query_queue_tasks` / `queue_summary` / `queue_devices`。
+4. 索引验证：`EXPLAIN QUERY PLAN` 实测 `WHERE typeof(timestamp) IN ('integer','real') AND timestamp >= ?` 仍是
+   `SEARCH messages USING COVERING INDEX idx_messages_ts (timestamp>?)`；换成 `CAST(timestamp AS INTEGER) >= ?` 就退化成全表 `SCAN` —— 这是选 `typeof` 的硬理由。
+
+**测试**：`server/test_stats_api.py` 新增 4 条（`/stats` 跳过脏 `timestamp` 且 `total` 仍计入该行、`/messages` 分页可达第二页且游标毫秒段是数字、`analyses.received_at` 同族、`/analysis` 游标不毒化），
+`server/test_queue.py` 新增 2 条（脏 `updated_at` 按过期保守处理且只计 `stale`、脏 `queued_at` 归一成 0）。全量 `python -m pytest server/ -q` → **631 passed**（基线 625 + 6）。
+
+**验证**：`python -m compileall -q server` EXIT=0；`pytest server/ -q` 631 passed in 28.94s。
+
+**计数**：`stats_api.py` 191 / 168 → **212 / 187**（非空行同改），`storage.py` 816 / 759 → **819 / 762**，`routes.py` 1022 / 962 → **1034 / 974**，
+`test_stats_api.py` 545 / 457 → **662 / 559**，`test_queue.py` 645 / 519 → **682 / 549**；服务端用例 625 → **631**。
+
