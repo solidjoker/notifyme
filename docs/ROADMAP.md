@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 76 个 `.kt` / 1192 条（`app/src/test`）+ 服务端 `server/test_*.py`（513 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 77 个 `.kt` / 1208 条（`app/src/test`）+ 服务端 `server/test_*.py`（513 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -458,6 +458,12 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   **两处新发现的坑**：① 机器生成报告的文件名必须纯 ASCII —— 第一次写 `../docs/评测-云端vs端侧S2.md`，Windows 下 `java.io.File` 用平台编码往返路径，落盘成 `è¯æµ-äºç¯vsç¯ä¾§S2.md`（`S2EvalHttpTest` 的默认 `OUT_S2` 已改成 `eval-s2-cloud-vs-local.md` 并加注释）；② `no_placeholder` 判的是「与骨架常量**完全相等**」，端侧输出「给用户的建议动作」对常量「给用户的建议动作，≤20字」不完全相等 → 判据放过。刻意不收紧（改 contains 会误伤正常输出里恰好出现的「责任人」），代价是对「截断式照抄」不敏感，留作后续决策。
   测试：`app/src/test/java/com/notifyme/android/S2UsabilityTest.kt` **34 条** —— `parseS2Output` 与 Core 兜底同一、六项逐条通过/失败（含 21 字越界与恰好 20 字、空 due 仅在 S1=none 时通过、due 早于 windowEnd、异桶挂且 note 带桶名、needAction 且 tasks 空要挂）、`score` 未交付不进分母、`bucketOf` 五桶与显式 zone（11-13 07:00 +08 在 UTC 下是 11-12 23:00）。`S2EvalHttpTest` 只断言「评测跑通」（每侧至少 1 条解析出且 `size*2 >= cases.size`），不断言答对多少 —— 它是测量工具，不是门禁。
   计数：新增 `S2Usability.kt` 349 行 + `S2UsabilityTest.kt` + `S2EvalHttpTest.kt`；主源码顶层 120 → **121**（全树 128）、`app/src/test` 74 → **76 个 .kt**、全量单测 1157 → **1192 条**。
+
+- **采集诊断页的累计统计口径（feat/alltime-stats-core）**：诊断页 W4「各来源累计统计」那四个数字（累计消息 / 会话总数 / 自发消息 / 每 App 群聊数）此前走 `MessageStore.readRecent(this, ALLTIME_SCAN_LIMIT = 200_000)`，而 `readRecent` 的窗口**写死 `TAIL_LINES = 5_000` 行** —— 传 20 万进去也只覆盖尾部 5 千行，历史一长数字就静默偏小，且页面还自称「累计」；截断提示的判据是 `totalLines > s.total`，拿「文件原始行数」比「解析出的消息数」，损坏行一多就误报、而 20 万上限几乎永达不到。聚合本身是纯函数却住在 Activity 的私有类里，一行测试也没有。
+  修法：新增纯函数内核 `AllTimeStatsCore`（124 行，`internal object`，**16 条单测**）—— `SCAN_LINES = 50_000`（比旧 20 万更贴近「真会读到」的量级，5 万行 ≈ 个人设备数年通知量）、`Accumulator` 单遍流式累加（不为统计多驻留数万个 `ChatMessage`）、`summarize(list)` 供测试与一次性聚合、`capped(totalLines, scannedLines)` **只比扫描行数**。口径：会话数按 `ConvKey`（pkg + 会话名）复合键去重、群聊数按「该 App 下 `isGroup` 的**会话**数」而不是消息数、`latest` 忽略 `timestamp <= 0`、来源按包名升序。
+  接线：`MessageStoreCore` 新增 `scanAll(limit)`（窗口由调用方指定，逐行解析、损坏行跳过但**计入扫描行数**），`MessageStore.allTimeStats(context)` 是 `internal`（返回 `internal` 类型，public 会报 `public function exposes its internal return type`）；`CaptureDiagnosticsActivity` 删掉 `ALLTIME_SCAN_LIMIT` 与私有 `AllTimeSummary` / `PkgStat`，改渲染 `AllTimeStatsCore.Scan`，截断提示改用 `scan.scannedLines` 作分子。
+  测试：`app/src/test/java/com/notifyme/android/AllTimeStatsCoreTest.kt` **16 条** —— summarize 8 条（含跨 App 同名会话是两条会话、群聊按会话计、`latest` 忽略无时间戳、空输入、包名升序）+ `Accumulator` 2 条（逐条喂与整批等价、空态）+ `capped` 3 条（含「损坏行不让覆盖判定误报截断」）+ `scanAll` 4 条。其中一条是**旧行为对照实验**：6000 行文件里本会话 10 条在文件头、其余 5990 行噪声会话 → 新 `scanAll` 得 6000 条 / 2 个会话，旧 `core.readRecent(200_000)` 只给 5000 条 / 1 个会话。
+  计数：新增 `AllTimeStatsCore.kt` 124 行 + `AllTimeStatsCoreTest.kt`；主源码顶层 121 → **122**（全树 129）、`app/src/test` 76 → **77 个 .kt**、全量单测 1192 → **1208 条**；`local_check.ps1` 七步全 PASS，lint 仍是刻意保留的三条 warning / 0 error。
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：

@@ -592,7 +592,7 @@ E-24/E-26 收掉 `readRecent(500)` 的三处误用后，我在收尾句里写着
 
 `CandidateWindowCoreTest` 16 条：10 条打 `group`（空输入、`perConv` 非正、首次出现序、组内升序、`ts <= 0` 排最前、超限保最近、恰好等于不裁剪、同名跨 App 不合并、`candidateCount`、`PER_CONV > WINDOW_SIZE`），6 条走 `MessageStoreCore` 集成（文件不存在、跳过损坏行、**600 条噪声 + 本会话 5 条仍在候选**、**对照实验：同一份数据喂旧写法 `readRecent(500).groupBy` 确实拿不到本会话**、两会话各留 `perConv` 条互不挤占、保留余量扛住范围过滤——只留 10 条时区间内一条不剩、留 50 条时 30 条可用且 case 末条是「区间内39」）。最后两条是这次改动的价值证明：没有它们，后人只会看到「窗口数字从 500 变成 50」，看不出为什么。
 
-验证：`local_check.ps1` 六项全 PASS，全量 android 单测 **1192 条 / 76 个 .kt**（基线 976 / 65，+16）；lint 仍是刻意保留的三条（`ChromeOsAbiSupport` / `ObsoleteLintCustomCheck` / `OldTargetApi`），0 error。真机（云手机 127.0.0.1:16384）：灌 600 条「闲聊群」噪声 + 4 条「甲项目群」历史后，分析列表能给出本会话的 case 与原文回看。
+验证：`local_check.ps1` 六项全 PASS，全量 android 单测 **992 条 / 66 个 .kt**（基线 976 / 65，+16）；lint 仍是刻意保留的三条（`ChromeOsAbiSupport` / `ObsoleteLintCustomCheck` / `OldTargetApi`），0 error。真机（云手机 127.0.0.1:16384）：灌 600 条「闲聊群」噪声 + 4 条「甲项目群」历史后，分析列表能给出本会话的 case 与原文回看。
 E-28 分析记录（analysis.jsonl）侧取窗口口径统一（2026-11-13，PR feat/analysis-window-core）
 
 E-24/E-25/E-26/E-27 收掉的全是「消息侧」的跨会话窗口误用（`MessageStore.readRecent(N)`）。这一轮把同一种错误在**分析记录侧**的三处一并收掉：
@@ -611,7 +611,7 @@ E-24/E-25/E-26/E-27 收掉的全是「消息侧」的跨会话窗口误用（`Me
 
 接线：`MainActivity.kt:731` 改 `AnalysisStore.readGrouped(this)` + `AnalysisWindowCore.latest(...)`（`:754` 原先的第二处 `groupBy` 删掉，改注释说明已在上面算好）；`AnalysisListActivity.kt:150` 改 `if (filter != null) AnalysisStore.readForConversation(this, filter) else AnalysisStore.readRecentWindow(this, AnalysisWindowCore.LIST_LIMIT)`；`ConversationActivity` / `OverlayService` 的调用点不动，随 `latestByConvKey` 实现升级自动获益。
 
-验证：`compileOpenDebugKotlin` 通过；全量 android 单测 **1192 条 / 76 个 .kt**（基线 992 / 66，+23）；lint 仍是刻意保留的三条（`ChromeOsAbiSupport` / `ObsoleteLintCustomCheck` / `OldTargetApi`），0 error。
+验证：`compileOpenDebugKotlin` 通过；全量 android 单测 **1015 条 / 67 个 .kt**（基线 992 / 66，+23）；lint 仍是刻意保留的三条（`ChromeOsAbiSupport` / `ObsoleteLintCustomCheck` / `OldTargetApi`），0 error。
 
 **E-29（首页信息流取样：readRecent(500) 的第五处同源隐患）** 首页 `MainActivity.buildFeed` 的取样此前是 `MessageStore.readRecent(this, 500)` —— **跨所有会话**的最近 500 条再 `groupBy { it.convKey }`，于是「某个会话能不能出现在首页」取决于别的会话有多活跃：几个群刷满窗口，安静但有内容的会话在首页一条都不出现，首页「最近待办」区的可见集（`todoVisibleKeys` = `ConvVisibilityCore.visibleKeys(feed 键)`）随之看不到它，而数据完好躺在 `messages.jsonl` 里。这是同源隐患的第五处（前四处见 E-24/E-25/E-26 的详情页 / 日历补上下文 / 回看原文、E-27 的分析候选、E-28 的分析记录），本次口径抽成 `FeedWindowCore`（internal object，157 行，**22 条单测**）：`perConvFor(convCount, totalBudget = 6000, maxPerConv = 200, minPerConv = 20)` —— `totalBudget / convCount` 再夹进 `[minPerConv, maxPerConv]`，会话少给满上限、会话多按均值摊薄但不低于保底（`minPerConv = 2 × AnalysisCase.WINDOW_SIZE`，保证会话再多每会话仍能凑出一个完整分析窗口）；`group(messages, ...)` 用 `LinkedHashMap` 分组 → 会话间 `sortedByDescending { 该会话最近一条（ts <= 0 归 0） }`（稳定排序，首页顺序可复现）→ `take(maxConversations = 200)` → 组内 `sortedBy { ts <= 0 归 0 }` 升序、超限 `takeLast(keep)`；`Bucket.truncated` 的判定分两档：`complete`（行窗口已读到文件头）时 `ascending.size > keep`、否则 `ascending.size >= keep` —— 后者是「刚好顶到名额时也可能还有更早的没读进来」，宁可把条数写成下限。接线五处同口径：`MainActivity.buildFeed`（`MessageStore.feedGroups(this)` 直接给会话头/天组/消息；`todoVisibleKeys` 改用 `feed.buckets` 的键；新增 `FeedItem.Header.countAtLeast` + `R.string.msg_count_at_least`「%1$d+ 条」，会话被截断时条数是下限）、`OverlayService` 的窗口键、`ConsoleActivity.collapseTargets` 的折叠作用域、`WatchlistActivity` 的会话键收集、`AnalysisSettingsActivity.showScopeConvPicker` 的会话多选器。`MessageStoreCore.feedGroups(...)` 用 `readTailLines(FeedWindowCore.REQUEST_LINES = 20000)`（比 `TAIL_LINES = 5000` 大：安静会话本来就排在文件靠前的位置，行窗口太浅照样读不到），`complete = requested > 0 && lines.size < requested`；`object MessageStore` 侧 `internal fun feedGroups(context, ...)` 做转发（必须 `internal`，否则 public 函数暴露 internal 的 `FeedWindowCore` 类型）。真机实证（云手机 127.0.0.1:16384，`messages.jsonl` 604 行 = 乙闲聊群 600 条噪声 + 甲项目群 4 条更早的「A历史第 1–4 条」）：离线按两条实现逐行模拟，旧 `readRecent(500).groupBy` 的会话键只剩 `[乙闲聊群]`、甲项目群一条都没有；新 `feedGroups` 两个会话都在、甲项目群 4 条完整；`AnalysisWorker` 日志实测「本轮分析开始: 入选 2 个会话 (候选 2 个, 标签拦截 0 个, 未关注拦截 0 个, force=null, 范围=不限 · 全部会话)」（旧写法候选 1 个）。踩坑记档：① `MessageStore.kt` 里「清空全部记录」的注释出现两次（object 与 class 各一），按它当唯一锚点插 `feedGroups` 会把 core 实现插进 `object MessageStore`（那里没有 `store` 字段），编译报 Unresolved reference store + public function exposes its internal return type；插 class 必须用带 `fun clear() {` 的那一处。② 新增 `msg_count_at_least` 时若误插到已有 `msg_count` 那行旁边，`mergeOpenDebugResources` 报 Found item String/msg_count more than one time。③ 单测里 Kotlin 字符串模板 `$it` 后紧跟中文字符（`第$it条`）会被读成标识符 `it条`，必须写成 `${it}` 形式。验证：`compileOpenDebugKotlin` 通过；`FeedWindowCoreTest` 22 条全绿；全量 android 单测 **1192 条 / 76 个 .kt**（基线 1015 / 67，+22）；`local_check.ps1` 六项全 PASS（`CHECK_EXIT=0`，日志目录 `%TEMP%/notifyme-local-check-20261113-075033`），lint 仍是刻意保留的三条（`ChromeOsAbiSupport` / `ObsoleteLintCustomCheck` / `OldTargetApi`）、0 error。
 
@@ -644,7 +644,7 @@ E-24/E-25/E-26/E-27 收掉的全是「消息侧」的跨会话窗口误用（`Me
   问题：首页天级分组（`MainActivity.buildFeed` 的三处 `dayKeyFormat.format`）、日期组头文案（`currentYear` / `labelSameYear` / `labelCrossYear` 三个 `SimpleDateFormat`）、控制台折叠作用域（`ConsoleActivity.dayKeyFmt`）与 `MessageStore.dayKeyOf`（java.time）是**四处各写一套**的同一件事，其中三处用 `SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())`。`SimpleDateFormat` 的历法随 Locale 变化：同一毫秒（2026-11-12 15:30 +08:00）在 `th-TH` 下是 `2569-11-12`（佛历）、`ja-JP-u-ca-japanese` 下是 `8-11-12`（和历）、`ar-EG` 下是本地数字；而 `java.time` 恒为公历 ISO。设备系统 Locale 一旦非公历，界面算出的 key 与 `MessageStore.dayKeyOf` 永远不相等 → 左滑删某天删不掉（`deleteDate` 按 key 比对）、`CollapseStore` 复合键对不上（折叠态全失效）、「最新一天」判定错、`dayKey.startsWith(currentYear)` 里 currentYear 是佛历年所以前缀永不匹配、所有天组都渲染成跨年格式。
   修法：新增 `DateKeyCore`（136 行，internal object，纯函数）：`dayKeyOf(timestampMs, zone)` 只走 `Instant → atZone → toLocalDate`；`parts(dayKey)` 按位取数字 + `LocalDate.of` 回读校验（`2026-02-30` 返 null 而非静默变成 3 月 2 日）；`labelOf(dayKey, nowMs, zone)` 用年份**数值比较**算 `crossYear`，返回纯数值 `DayLabel`，文案交 `strings.xml`（新增 `date_label_same_year` / `date_label_cross_year`）；`latestOf(dayKeys, unknown)` 收掉字典序取最大值；`isUnknown` 同时吃 null / 空串 / `__unknown__`。四处接线：`MessageStore.dayKeyOf` 一行委托、`DAY_KEY_UNKNOWN` 改为引用 `DateKeyCore.UNKNOWN`（字面量只留一份，`MainActivity` 里那份私有常量删除）、`MainActivity` 三处分组与组头文案改走 Core、`ConsoleActivity.collapseTargets` 走 `DateKeyCore.dayKeyOf`、`CollapseStore.latestDayKeyOf` 转发 `latestOf`（保留旧签名，调用点不改）。
   测试：`DateKeyCoreTest.kt` **26 条**，其中两条是根因本身的回归 —— 切到 `th-TH` 断言 `SimpleDateFormat` 给出 `2569` 开头而 Core 给 `2026-11-12`；切到和历断言前者不以 `2026` 开头。另有「佛历下同年分组不判跨年」（旧 `startsWith` 的错法）、`parts` 拒绝 `2026-02-30` / `2026-13-01` / `2026-04-31`、闰日 `2024-02-29` 通过而 `2026-02-29` 不通过、`latestOf` 必须排除 `__unknown__`（`_`=0x5F 大于数字，字典序会赢）、`MessageStore.dayKeyOf` 与 `CollapseStore.latestDayKeyOf` 委托一致性。
-  计数：`DateKeyCore.kt` 136 行 / `DateKeyCoreTest.kt` 244 行；主源码顶层 116 → **117**（全树 124）、`app/src/test` 70 → **76 个 .kt**、全量单测 1069 → **1192 条**；`local_check.ps1` 六项全 PASS，lint 仍是刻意保留的三条 warning / 0 error。
+  计数：`DateKeyCore.kt` 136 行 / `DateKeyCoreTest.kt` 244 行；主源码顶层 116 → **117**（全树 124）、`app/src/test` 70 → **71 个 .kt**、全量单测 1069 → **1095 条**；`local_check.ps1` 六项全 PASS，lint 仍是刻意保留的三条 warning / 0 error。
 
 E-34｜公历时间文本 ↔ 毫秒统一到 `DueTimeCore`（feat/due-time-core，2026-11-13）
 
@@ -698,7 +698,7 @@ E-36｜资源字符串的数字槽位统一走 `templateText`（feat/format-temp
 
 **测试**：`app/src/test/java/com/notifyme/android/FormatTemplateTest.kt` **15 条**，其中两条是根因本身的正反对照 —— `integerSlotStaysAsciiUnderArabicLocale`（ar-EG 下 `format` 出 `200 条`，同一模板交给 `String.format` 出的是本地数字）、`decimalSlotKeepsDotUnderGermanLocale`（de-DE 下 `format` 出 `重要度 2.0`，旧写法出 `重要度 2,0`）。另 1 条**资源契约测试**直接读 `strings.xml`：扫到所有含数值槽位的模板（≥50 条），摘掉位置化槽位与 `%%` 后只要还剩 `%` 就判失败 —— 这条能拦住「新加资源时顺手写裸 `%d`」的回归。
 
-**计数**：`LocaleTextCore.kt` 93 → **161 行**、新增 `ContextTemplateText.kt` 29 行；主源码顶层 119 → **120**（全树 127）、`app/src/test` 73 → **76 个 .kt**、全量单测 1142 → **1192 条**（`COUNT_FILES=73 TESTCASES=1157`，skip 仍是 `S1EvalHttpTest`）；lint 仍是刻意保留的三条 warning / 0 error。
+**计数**：`LocaleTextCore.kt` 93 → **161 行**、新增 `ContextTemplateText.kt` 29 行；主源码顶层 119 → **120**（全树 127）、`app/src/test` 73 → **74 个 .kt**、全量单测 1142 → **1157 条**（`COUNT_FILES=73 TESTCASES=1157`，skip 仍是 `S1EvalHttpTest`）；lint 仍是刻意保留的三条 warning / 0 error。
 
 E-37｜静态检查基线落地：ktlint 只开 5 条 + lint 基线断言（feat/static-check-baseline，2026-11-13）
 
@@ -773,3 +773,33 @@ E-38｜S2 摘要可用性评测：六项判据 + 云端 70% vs 端侧替身 15%�
 **计数**　新增 `S2Usability.kt`（349 行）+ `S2UsabilityTest.kt`（34 条）+ `S2EvalHttpTest.kt`（HTTP 侧入口）；主源码顶层 120 → **121**（全树 128）、`app/src/test` 74 → **76 个 .kt**、全量单测 1157 → **1192 条**。
 
 **记录**　手写解说 `docs/评测-云端vs端侧S2.md`（八节：为什么 / 六项判据口径 / 实测 / 六条限制（含「数字是区间」）/ 原始输出对比 / 复现 / 真机路径 / 文件表）+ 机器生成 `docs/eval-s2-cloud-vs-local.md`。
+
+---
+
+**E-39（采集诊断页的累计统计：readRecent 的窗口被写死 5000 行，页面却自称「累计」）**　采集诊断页 W4「各来源累计统计」给四个数字：累计消息、会话总数、自发消息数、每来源的群聊会话数。它的取数是 `MessageStore.readRecent(this, ALLTIME_SCAN_LIMIT)` 且 `ALLTIME_SCAN_LIMIT = 200_000` —— 看起来给了 20 万行的窗口，但 `MessageStoreCore.readRecent` 内部**只从 `store.readTailLines(TAIL_LINES = 5_000)` 取窗口**，`limit` 只是在这 5 千行里再切。历史一超 5 千行，页面上的「累计消息 / 会话总数 / 群聊数」就**静默偏小**，且没有任何迹象。
+
+**第二个缺陷在截断提示上**：`if (totalLines > s.total) hint(diag_alltime_capped, ALLTIME_SCAN_LIMIT, totalLines)` —— 左边是文件原始行数（`storageStats().totalLines`），右边是**解析成功**的消息数。损坏行一多就误判成「被截断了」；而它嘴上说的是「仅统计最近 200000 条」，这个上限实际上永远达不到（真读到 5 千行就停了）。两个不同口径的数字被摆在一起比较。
+
+**第三个缺陷是可测性**：聚合逻辑（每包条数 / 会话数 / 群聊数 / 最近时间）是一段纯函数，却写在 `CaptureDiagnosticsActivity` 的私有 `class AllTimeSummary` 里 —— 纯 JVM 单测碰不到它，四个数字的口径没有任何回归保护。
+
+**修法**　新建纯函数内核 `AllTimeStatsCore`（124 行，`internal object`）：
+
+1. `SCAN_LINES = 50_000` —— 比旧 20 万更贴近「真会读到」的量级（5 万行 ≈ 个人设备数年通知量），内存只与尾部行字符串相关；
+2. `Accumulator`（`add(msg)` / `finish(): Summary`）单遍流式累加，**不为统计多驻留数万个 `ChatMessage`**（`summarize(list)` 只是它的便捷包装，供测试与一次性聚合用）；
+3. 口径：会话数按 `ConvKey`（pkg + 会话名）复合键去重、群聊数按「该 App 下 `isGroup` 的**会话**数」而不是消息数、`latest` 忽略 `timestamp <= 0`、`byPkg` 按包名升序（`sina.weibo` < `tencent.mm`）；
+4. `capped(totalLines, scannedLines)` **只比扫描行数** —— 损坏行因此不会让覆盖判定误报。
+
+接线：`MessageStoreCore` 新增 `scanAll(limit = SCAN_LINES)` —— 窗口由调用方指定、逐行 `ChatMessage.fromJson` 后喂给 `Accumulator`，**损坏行跳过但计入 `scannedLines`**；`MessageStore.allTimeStats(context)` 声明成 `internal`（返回 `internal` 类型，public 会报 `public function exposes its internal return type`，与 `readWindow` / `candidateGroups` / `feedGroups` 同一个坑）。`CaptureDiagnosticsActivity` 删掉 `ALLTIME_SCAN_LIMIT` 与私有 `AllTimeSummary` / `PkgStat`，`renderAllTimeByApp()` 改渲染 `AllTimeStatsCore.Scan`，截断提示的分子换成 `scan.scannedLines`。
+
+**测试**　`app/src/test/java/com/notifyme/android/AllTimeStatsCoreTest.kt` **16 条**：
+
+- `summarize` 8 条 —— 条数 / 会话 / 自发消息 / 来源；**同名会话在不同 App 下是两条会话**（复合键）；群聊数按会话不按消息；`latest` 忽略 `ts <= 0`；全部无时间戳时 `latest == 0`；空输入；包名升序；
+- `Accumulator` 2 条 —— 逐条喂与整批 `summarize` 结果相等（`assertEquals` 整对象）、空态 `finish()` 可用；
+- `capped` 3 条 —— 覆盖时不算截断、超出行数算截断、**10 行文件里 2 行损坏也不算截断**（旧判据在这里会误报）；
+- `scanAll` 4 条 —— 空存储；**6000 行对照实验**（本会话 10 条在文件头 + 5990 行噪声会话 → 新 `scanAll` 得 6000 条 / 2 个会话，旧 `core.readRecent(200_000)` 只给 **5000 条 / 1 个会话**）；损坏行计入扫描行数；`scanAll(limit = 50)` 的扫描上限由调用方指定。
+
+**验证**　定向 `AllTimeStatsCoreTest` 16 条全 PASSED；全量 `testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug lintOpenDebug` **1208 条 / 0 失败**（基线 1192），lint 仍只有刻意保留的三条 warning（`ChromeOsAbiSupport` / `ObsoleteLintCustomCheck` / `OldTargetApi`）、0 error。
+
+**计数**　新增 `AllTimeStatsCore.kt`（124 行）+ `AllTimeStatsCoreTest.kt`（246 行 / 16 条）；`CaptureDiagnosticsActivity.kt` 277 行、`MessageStore.kt` 709 行；主源码顶层 121 → **122**（全树 129）、`app/src/test` 76 → **77 个 .kt**、全量单测 1192 → **1208 条**；Core 内核 40 → **41 个**；三张图重渲（01 `3970×1701`、02 `13069×2007`、08 `6850×4895`），README 索引表 02 行尺寸按新 viewBox 回写。
+
+**一处刻意没做**　诊断页的「每来源累计」现在扫的是文件尾部 5 万行，仍不是「遍历整个文件」。要真做到「不看窗口」得上流式游标（`JsonlStore.forEachRawLine` 已经在），但要处理「扫到一半文件被追加写」的一致性，且诊断页是**只读诊断、允许给出下限**（页面上写「仅统计最近 N 条（存储共 M 行）」）。本轮只把「静默偏小」变成「明示下限 + 判据正确」，没有引入第二套全量扫描语义。
