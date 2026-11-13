@@ -33,7 +33,7 @@ import org.junit.Test
  * NOTIFYME_EVAL_LOCAL_URL=http://127.0.0.1:8081/v1
  * NOTIFYME_EVAL_LOCAL_KEY=
  * NOTIFYME_EVAL_LOCAL_MODEL=qwen25-0.5b-q4km.gguf
- * NOTIFYME_EVAL_OUT=../docs/评测-云端vs端侧S1-<日期>.md
+ * NOTIFYME_EVAL_OUT=../docs/eval-s1-cloud-vs-local.md   # 纯 ASCII 默认值，见下
  * NOTIFYME_EVAL_CALL_TIMEOUT_MS=90000   # 单次调用上限（默认 90s）
  * NOTIFYME_EVAL_TOTAL_BUDGET_MS=900000  # 整轮预算（默认 15min，耗尽即停并写进报告）
  * ```
@@ -341,7 +341,7 @@ class S1EvalHttpTest {
         return EvalConfig(
             cloud = Endpoint(cloudUrl, get("CLOUD_KEY"), get("CLOUD_MODEL")),
             local = Endpoint(localUrl, get("LOCAL_KEY"), get("LOCAL_MODEL")),
-            out = File(get("OUT", "../docs/评测-云端vs端侧S1.md")),
+            out = File(get("OUT", "../docs/eval-s1-cloud-vs-local.md")),
             labelPath = labelPath,
             plan = S1EvalBudgetCore.resolvePlan(
                 get("TOTAL_BUDGET_MS").takeIf { it.isNotBlank() },
