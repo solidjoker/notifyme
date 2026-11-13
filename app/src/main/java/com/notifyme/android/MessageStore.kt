@@ -93,11 +93,12 @@ object MessageStore {
     private const val FILE_NAME = "messages.jsonl"
 
     /** 日期分组兜底 key：timestamp ≤0（如 a11y 直读估算失败）的消息归「未标注日期」组 */
-    const val DAY_KEY_UNKNOWN = "__unknown__"
+    const val DAY_KEY_UNKNOWN = DateKeyCore.UNKNOWN
 
     // 日期分组用 java.time（API 26+ 可用）：原来的静态 SimpleDateFormat 在
-    // UI / Worker / prefs 剔除等多线程路径共用，同一实例被并发 format 会产出错日期
-    private val dayZone: java.time.ZoneId = java.time.ZoneId.systemDefault()
+    // UI / Worker / prefs 剔除等多线程路径共用，同一实例被并发 format 会产出错日期；
+    // 更严重的是它的历法随 Locale 变（佛历 / 和历），产出的 key 与别的调用点对不上。
+    // 口径统一收敛在 DateKeyCore。
 
     /**
      * 进程内变更观察者：新消息入库后通知 UI 立即刷新，解决「App 停在前台时
@@ -136,10 +137,7 @@ object MessageStore {
     }
 
     /** 消息所属日期 key：yyyy-MM-dd（本机时区）；timestamp≤0 返回 [DAY_KEY_UNKNOWN]。 */
-    fun dayKeyOf(m: ChatMessage): String =
-        if (m.timestamp > 0) {
-            java.time.Instant.ofEpochMilli(m.timestamp).atZone(dayZone).toLocalDate().toString()
-        } else DAY_KEY_UNKNOWN
+    fun dayKeyOf(m: ChatMessage): String = DateKeyCore.dayKeyOf(m.timestamp)
 
     /**
      * 按目录构造核心逻辑（不依赖 Context）：单测与内部复用入口。

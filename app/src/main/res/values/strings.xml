@@ -18,6 +18,9 @@
     <!-- 会话在首页窗口里被截断（还有更早的消息没进窗口）：条数是下限，不能写成确数 -->
     <string name="msg_count_at_least">%1$d+ 条</string>
     <string name="date_unknown_label">未标注日期</string>
+    <!-- 日期组头：年月日从 day key 自身解析（DateKeyCore），模板留在这里，Core 只回数值 -->
+    <string name="date_label_same_year">%1$d月%2$d日</string>
+    <string name="date_label_cross_year">%1$d年%2$d月%3$d日</string>
 
     <!-- 分析结果联动与列表页 -->
     <string name="analysis_label_todo">⚡ 待办</string>
