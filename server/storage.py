@@ -700,7 +700,9 @@ def query_queue_tasks(device_id=None, state=None, limit=QUEUE_DEFAULT_LIMIT):
     now_ms = int(time.time() * 1000)
     tasks = []
     for row in rows:
-        updated_at = int(row[7] or 0)
+        # 列是 INTEGER 亲和，但写不进整数时 SQLite 会原样存 TEXT：
+        # 裸 int("zzz") 会把整页 /queue 打成 500（与 /stats 同族，见 stats_api）。
+        updated_at = app_module._safe_int(row[7], default=0, lo=0)
         tasks.append({
             "device_id": row[0],
             "task_id": row[1],
@@ -708,7 +710,7 @@ def query_queue_tasks(device_id=None, state=None, limit=QUEUE_DEFAULT_LIMIT):
             "title": row[3] or "",
             "state": row[4],
             "detail": row[5] or "",
-            "queued_at": int(row[6] or 0),
+            "queued_at": app_module._safe_int(row[6], default=0, lo=0),
             "updated_at": updated_at,
             "stale": (now_ms - updated_at) > QUEUE_TTL_MS,
         })
@@ -764,7 +766,8 @@ def queue_summary(device_id=None, state=None):
     now_ms = int(time.time() * 1000)
     summary["total"] = len(rows)
     for row in rows:
-        updated_at = int(row[1] or 0)
+        # 脏行（updated_at 被写成文本）不能拖垮 summary：认不出按 0
+        updated_at = app_module._safe_int(row[1], default=0, lo=0)
         if (now_ms - updated_at) > QUEUE_TTL_MS:
             summary["stale"] += 1
             continue
@@ -808,8 +811,8 @@ def queue_devices():
     for row in rows:
         devices.append({
             "device_id": row[0],
-            "total": int(row[1] or 0),
-            "active": int(row[2] or 0),
+            "total": app_module._safe_int(row[1], default=0, lo=0),
+            "active": app_module._safe_int(row[2], default=0, lo=0),
         })
     return devices
 

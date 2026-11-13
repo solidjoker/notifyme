@@ -209,7 +209,12 @@ def query_messages():
 
     sql = ("SELECT sender, text, timestamp, conversation, is_group, "
            "received_at, source, pkg, rowid FROM messages")
-    conditions = []
+    # 数值列 typeof 守卫是常驻条件（不是可选过滤）：timestamp 是 INTEGER 亲和，
+    # 但写不进整数时 SQLite 会原样存 TEXT，而排序里 TEXT 恒大于所有数字 ——
+    # 脏行会排在第一页最前面，还会被写进 next_before，下一页直接 400。
+    # 实测 typeof 守卫不破坏索引（仍是 SEARCH ... idx_messages_ts），
+    # 换 CAST(timestamp AS INTEGER) 才退化成全表 SCAN。
+    conditions = ["typeof(timestamp) IN ('integer','real')"]
     params = []
 
     # 来源 App 精确过滤
@@ -284,7 +289,8 @@ def query_messages():
             # 显示成字面量 null，这里统一成空串。
             "sender": r[0] if r[0] is not None else "",
             "text": r[1] if r[1] is not None else "",
-            "timestamp": r[2],
+            # 已被 typeof 守卫挡掉，这里再兜一层：真出现非常规值也不吐脏字符串
+            "timestamp": app_module._safe_int(r[2], default=None),
             "conversation": r[3] if r[3] is not None else "",
             "is_group": bool(r[4]),
             "received_at": r[5],
@@ -296,7 +302,8 @@ def query_messages():
     next_before = None
     # 只有真的还有下一页时才给游标（原来满页就给 → 多一次空请求）
     if has_more and rows:
-        next_before = f"{rows[-1][2]}_{rows[-1][8]}"
+        next_before = ("%d_%s" % (app_module._safe_int(rows[-1][2], default=0),
+                                  rows[-1][8]))
     return jsonify({
         "ok": True,
         "count": len(messages),
@@ -579,7 +586,11 @@ def query_analysis():
            "protocol, received_at, forks, filtered, pkg, "
            "redacted, redaction_rules, redaction_hits, todo_text, todo_due, "
            "rowid FROM analyses")
-    conditions, params = [], []
+    # 数值列 typeof 守卫是常驻条件（与 /messages 同款）：received_at 是 INTEGER
+    # 亲和，被写脏成 TEXT 时排序里会排最前，还会被拼进 next_before（"boom_2"），
+    # 客户端拿它翻页直接 400 —— 脏行不该毒化整个分页链。
+    conditions = ["typeof(received_at) IN ('integer','real')"]
+    params = []
     if pkg:
         conditions.append("pkg = ?")
         params.append(pkg)
@@ -665,7 +676,7 @@ def query_analysis():
                 "importance": app_module._importance_label(r[5]),
                 "analyzed_at": r[9],
                 "protocol": r[10],
-                "received_at": r[11],
+                "received_at": app_module._safe_int(r[11], default=None),
                 # fork 层轨迹（App v0.1.2+；老数据为 None/False）
                 "forks": app_module._safe_json(r[12]),
                 "filtered": bool(r[13]),
@@ -684,7 +695,8 @@ def query_analysis():
     next_before = None
     # 只有真的还有下一页时才给游标（原来满页就给 → 多一次空请求）
     if has_more and rows:
-        next_before = f"{rows[-1][11]}_{rows[-1][20]}"
+        next_before = ("%d_%s" % (app_module._safe_int(rows[-1][11], default=0),
+                                  rows[-1][20]))
     return jsonify({
         "ok": True,
         "count": len(analyses),

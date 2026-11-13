@@ -38,6 +38,19 @@ DAY_MS = 24 * 3600 * 1000
 # COUNT(DISTINCT) 会跳过它 —— 与旧口径一致（脏数据仍不计入会话数）。
 CONV_KEY_SQL = "pkg || char(1) || conversation"
 
+# 数值列的 typeof 守卫：SQLite 的类型亲和只是「建议」，写不进整数时原样存 TEXT。
+# 一旦存在 TEXT 行，MAX(timestamp) 会原样返回那个字符串（TEXT 恒大于所有数字），
+# 排在最前的也是它 —— 裸 int() 就抛 ValueError 把整个 /stats 打成 500。
+# 实测 EXPLAIN：WHERE typeof(timestamp) IN ('integer','real') AND timestamp >= ?
+# 仍是 SEARCH ... USING COVERING INDEX idx_messages_ts（不退化），而
+# CAST(timestamp AS INTEGER) >= ? 会退化成全表 SCAN —— 所以用 typeof 不用 CAST。
+INT_ONLY_TS = "typeof(timestamp) IN ('integer','real')"
+INT_ONLY_RECEIVED = "typeof(received_at) IN ('integer','real')"
+
+# MAX() 也要过滤非数值行，否则脏文本会当成「最近时间」吐给前端
+MAX_TS = "MAX(CASE WHEN " + INT_ONLY_TS + " THEN timestamp END)"
+MAX_RECEIVED = "MAX(CASE WHEN " + INT_ONLY_RECEIVED + " THEN received_at END)"
+
 def _messages_block(pkg=None):
     """消息侧聚合。pkg=None 表示不按来源 App 过滤（全库口径）。"""
     import app as app_module
@@ -47,12 +60,13 @@ def _messages_block(pkg=None):
     conn = app_module._connect()
     try:
         row = conn.execute(
-            "SELECT COUNT(*), COUNT(DISTINCT " + CONV_KEY_SQL + "), "
-            "MAX(timestamp), MAX(received_at) FROM messages" + where,
+            "SELECT COUNT(*), COUNT(DISTINCT " + CONV_KEY_SQL + "), " +
+            MAX_TS + ", " + MAX_RECEIVED + " FROM messages" + where,
             params).fetchone()
         day_row = conn.execute(
             "SELECT COUNT(*) FROM messages" + where +
-            (" AND" if where else " WHERE") + " timestamp >= ?",
+            (" AND" if where else " WHERE") + " " + INT_ONLY_TS +
+            " AND timestamp >= ?",
             params + [now_ms - DAY_MS]).fetchone()
         # 分布也必须跟着 pkg 过滤走：同一段里 total / convs 是过滤后的，
         # 分布却是全库的，客户端渲染出来就是「共 2 条，分布加起来 3 条」。
@@ -64,18 +78,24 @@ def _messages_block(pkg=None):
             "ORDER BY COUNT(*) DESC, source ASC", params).fetchall()
     finally:
         conn.close()
-    last_ts = int(row[2] or 0)
-    last_at = int(row[3] or 0)
+    # 取值一律走 _safe_int：CONV_KEY_SQL 里 COUNT(*)/COUNT(DISTINCT ...) 恒为整数，
+    # 但 MAX(...) 在没有数值行时是 NULL，且老库可能有非数值行混进来。
+    last_ts = app_module._safe_int(row[2], default=0, lo=0)
+    last_at = app_module._safe_int(row[3], default=0, lo=0)
     return {
-        "total": int(row[0] or 0),
-        "convs": int(row[1] or 0),
-        "last_24h": int(day_row[0] or 0),
+        "total": app_module._safe_int(row[0], default=0, lo=0),
+        "convs": app_module._safe_int(row[1], default=0, lo=0),
+        "last_24h": app_module._safe_int(day_row[0], default=0, lo=0),
         "last_ts": last_ts,
         "last_received_at": last_at,
         # 最近一条消息距今多久（天）；没有消息时为 None，前端据此显示「暂无」
         "age_days": max(0, (now_ms - last_ts) // DAY_MS) if last_ts else None,
-        "by_pkg": [{"pkg": r[0], "count": int(r[1] or 0)} for r in by_pkg],
-        "by_source": [{"source": r[0], "count": int(r[1] or 0)} for r in by_source],
+        "by_pkg": [{"pkg": r[0],
+                   "count": app_module._safe_int(r[1], default=0, lo=0)}
+                  for r in by_pkg],
+        "by_source": [{"source": r[0],
+                      "count": app_module._safe_int(r[1], default=0, lo=0)}
+                     for r in by_source],
     }
 
 
@@ -90,9 +110,9 @@ def _analysis_block():
     conn = app_module._connect()
     try:
         row = conn.execute(
-            "SELECT COUNT(*), COUNT(DISTINCT " + CONV_KEY_SQL + "), "
-            "SUM(CASE WHEN need_action = 1 THEN 1 ELSE 0 END), "
-            "MAX(received_at) FROM analyses").fetchone()
+            "SELECT COUNT(*), COUNT(DISTINCT " + CONV_KEY_SQL + "), " +
+            "SUM(CASE WHEN need_action = 1 THEN 1 ELSE 0 END), " +
+            MAX_RECEIVED + " FROM analyses").fetchone()
         todo = conn.execute(
             "SELECT COUNT(*), COUNT(DISTINCT " + CONV_KEY_SQL + ") FROM analyses "
             "WHERE need_action = 1").fetchone()
@@ -101,14 +121,14 @@ def _analysis_block():
             "WHERE redacted = 1").fetchone()
     finally:
         conn.close()
-    last_at = int(row[3] or 0)
+    last_at = app_module._safe_int(row[3], default=0, lo=0)
     return {
-        "total": int(row[0] or 0),
-        "convs": int(row[1] or 0),
-        "todo": int(row[2] or 0),
-        "todo_convs": int(todo[1] or 0),
-        "redacted_cases": int(redacted[0] or 0),
-        "redaction_hits": int(redacted[1] or 0),
+        "total": app_module._safe_int(row[0], default=0, lo=0),
+        "convs": app_module._safe_int(row[1], default=0, lo=0),
+        "todo": app_module._safe_int(row[2], default=0, lo=0),
+        "todo_convs": app_module._safe_int(todo[1], default=0, lo=0),
+        "redacted_cases": app_module._safe_int(redacted[0], default=0, lo=0),
+        "redaction_hits": app_module._safe_int(redacted[1], default=0, lo=0),
         "last_report": last_at,
         "age_days": max(0, (now_ms - last_at) // DAY_MS) if last_at else None,
     }
@@ -136,7 +156,8 @@ def _queue_block():
     for row in rows:
         state = row[0] or ""
         kind = row[1] or ""
-        updated_at = int(row[2] or 0)
+        # queue_tasks.updated_at 同样是 INTEGER 亲和：被写脏成 TEXT 时裸 int() 会 500
+        updated_at = app_module._safe_int(row[2], default=0, lo=0)
         kinds[kind] = kinds.get(kind, 0) + 1
         if (now_ms - updated_at) > storage_module.QUEUE_TTL_MS:
             out["stale"] += 1
