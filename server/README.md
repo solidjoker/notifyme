@@ -341,6 +341,36 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 返回 `{"ok": true, "count": n, "reports": [...]}`。数据存 `server/data/advisor_reports.jsonl`（追加写的主存储）+ `server/data/advisor_reports.json`（快照）。
 按 `report_id` 去重：重复上报计入 `duplicated` 不重复写，缺 `report_id` 或字段非法计入 `invalid` 并进 `rejected`（207）。
 
+### POST /queue —— 上报排队任务快照（需 token）
+
+请求体 `{"device_id": "android-1f2a3b4c", "tasks": [...]}`，按 `(device_id, task_id)` 整份覆盖
+（同一任务重报只刷新 `updated_at`，不会重复入库）。
+
+返回 `{"ok": true, "accepted": n, "rejected": [{"index": i, "reason": "..."}]}`；
+非法条目**逐条拒收**，不影响同批其余条目（这里不走 207，而是 200 + `rejected` 清单）。
+
+存储：表 `queue_tasks` 保留 7 天，`updated_at` 超 30 分钟未更新的条目读时算 `stale`（不回报写）。
+
+### GET /queue —— 查询排队任务（需 token）
+
+| 参数 | 说明 |
+| --- | --- |
+| `device_id` | 可选，精确匹配 |
+| `state` | 可选，`queued` / `running` / `failed` / `done`；非法值返回空列表 |
+| `limit` | 默认 200，上限 500 |
+
+返回 `{"ok": true, "tasks": [...], "summary": {...}, "devices": [...]}`。三段口径故意不同：
+
+- `tasks` 是**当前页** —— `device_id` / `state` / `limit` 三个条件都作用在它上面；
+- `summary` 是**全库口径** —— 只看 `device_id` / `state`，**不受 `limit` 截断**，与 `GET /stats` 的 `queue` 段同一套过期口径；
+  `total` = 全库行数，过期行只计进 `stale`、不再计入四个状态位；
+- `devices` 是**全库设备清单** —— 不受任何过滤影响，`summary.devices = len(devices)`；
+  每项含 `device_id` / `total` / `active`（`active` = queued + running）。
+
+> 为什么不按当前页统计：任务超一页（默认 200）时按页统计会把总数显示成 200，
+> 而同一时刻 `/stats` 与 `devices` 给的是全库真值，控制台「排队」Tab 与「统计」Tab 的数字就对不上。
+> 判定走 `storage.queue_summary()`，与 `/stats` 共用同一份过期口径。
+
 ### POST /admin/extract —— 触发安卓数据库提取（需 token）
 
 后台线程异步执行一次「直读安卓微信数据库」提取合并（见下章）。
