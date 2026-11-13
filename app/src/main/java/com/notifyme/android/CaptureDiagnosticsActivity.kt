@@ -24,14 +24,6 @@ import android.widget.TextView
  */
 class CaptureDiagnosticsActivity : Activity() {
 
-    private companion object {
-        /**
-         * 全量统计的扫描上限：历史无限增长时不能一次性读爆内存；
-         * 超出部分只影响统计口径（页面上会明确提示），不影响任何数据。
-         */
-        const val ALLTIME_SCAN_LIMIT = 200_000
-    }
-
     private lateinit var container: LinearLayout
 
     /** 异步统计的世代号：刷新后旧线程的结果直接丢弃，避免重复渲染。 */
@@ -124,82 +116,39 @@ class CaptureDiagnosticsActivity : Activity() {
     // ---------------- 4) 各 App 累计 ----------------
 
     /**
-     * 全部历史按 App 统计。解析整个 JSONL 可能上万行，**必须离开主线程**：
-     * 旧实现在主线程同步 readRecent(1_000_000)，历史变大后会直接 ANR。
+     * 全部历史按 App 统计。扫描数万行 + 逐行解析 JSON，**必须离开主线程**：
+     * 旧实现在主线程同步读全量，历史变大后会直接 ANR。
+     *
+     * 取数与聚合口径都在 [AllTimeStatsCore]：窗口由 Core 的 SCAN_LINES 决定
+     * （旧写法传 200000 进 readRecent，实际只拿到尾部 5000 行却自称全量）；
+     * 截断判定拿「扫到的原始行数」比「文件行数」，不是拿「解析出的消息数」比
+     * 「文件行数」—— 后者会把损坏行也算成被截断。
      */
     private fun renderAllTimeByApp() {
         section(getString(R.string.diag_section_alltime))
         val loading = hint(getString(R.string.diag_alltime_loading))
         val token = ++allTimeToken
         Thread {
+            val scan = MessageStore.allTimeStats(this)
             val totalLines = MessageStore.storageStats(this).totalLines
-            val all = MessageStore.readRecent(this, ALLTIME_SCAN_LIMIT)
-            val summary = AllTimeSummary.of(all)
             runOnUiThread {
                 if (token != allTimeToken || isFinishing || isDestroyed) return@runOnUiThread
                 container.removeView(loading)
-                renderAllTimeSummary(summary, totalLines)
+                renderAllTimeSummary(scan, totalLines)
             }
         }.start()
     }
 
-    /** 单遍聚合结果：避免对同一批消息反复 map/distinct 产生多份临时集合。 */
-    private class AllTimeSummary(
-        val total: Int,
-        val conversations: Int,
-        val selfMessages: Int,
-        val byPkg: List<PkgStat>
-    ) {
-        class PkgStat(
-            val pkg: String,
-            val messages: Int,
-            val conversations: Int,
-            val groups: Int,
-            val latest: Long
-        )
-
-        companion object {
-            fun of(messages: List<ChatMessage>): AllTimeSummary {
-                val allConvs = HashSet<ConvKey>()
-                val countByPkg = HashMap<String, Int>()
-                val convsByPkg = HashMap<String, HashSet<ConvKey>>()
-                val groupConvsByPkg = HashMap<String, HashSet<ConvKey>>()
-                val latestByPkg = HashMap<String, Long>()
-                var selfMessages = 0
-                messages.forEach { msg ->
-                    allConvs.add(msg.convKey)
-                    if (msg.isSelf) selfMessages += 1
-                    countByPkg[msg.pkg] = (countByPkg[msg.pkg] ?: 0) + 1
-                    convsByPkg.getOrPut(msg.pkg) { HashSet() }.add(msg.convKey)
-                    if (msg.isGroup) {
-                        groupConvsByPkg.getOrPut(msg.pkg) { HashSet() }.add(msg.convKey)
-                    }
-                    val cur = latestByPkg[msg.pkg] ?: 0L
-                    if (msg.timestamp > cur) latestByPkg[msg.pkg] = msg.timestamp
-                }
-                val stats = countByPkg.keys.sorted().map { pkg ->
-                    PkgStat(
-                        pkg = pkg,
-                        messages = countByPkg.getValue(pkg),
-                        conversations = convsByPkg[pkg]?.size ?: 0,
-                        groups = groupConvsByPkg[pkg]?.size ?: 0,
-                        latest = latestByPkg[pkg] ?: 0L
-                    )
-                }
-                return AllTimeSummary(messages.size, allConvs.size, selfMessages, stats)
-            }
-        }
-    }
-
-    private fun renderAllTimeSummary(s: AllTimeSummary, totalLines: Int) {
+    private fun renderAllTimeSummary(scan: AllTimeStatsCore.Scan, totalLines: Int) {
+        val s = scan.summary
         if (s.total == 0) {
             hint(getString(R.string.diag_no_data))
             return
         }
         valueRow(getString(R.string.diag_conversations), s.conversations.toString())
         valueRow(getString(R.string.diag_self_messages), s.selfMessages.toString())
-        if (totalLines > s.total) {
-            hint(templateText(R.string.diag_alltime_capped, ALLTIME_SCAN_LIMIT, totalLines))
+        if (AllTimeStatsCore.capped(totalLines, scan.scannedLines)) {
+            hint(templateText(R.string.diag_alltime_capped, scan.scannedLines, totalLines))
         }
         s.byPkg.forEach { st ->
             section(appLabelOf(st.pkg))
