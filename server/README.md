@@ -211,7 +211,7 @@ curl -X POST http://127.0.0.1:8000/weixin \
 | `conversation_match` | 传 `contains` 改成旧的包含匹配（`%x%`，`%` 与 `_` 按字面量转义）；默认前缀匹配 |
 | `date` | `YYYY-MM-DD`，按消息 `timestamp` 过滤当天 |
 | `limit` | 返回条数，默认 100，上限 1000 |
-| `before` | 游标翻页：把上一页返回的 `next_before` 原样回传（形如 `<毫秒>_<rowid>`，也可只给毫秒） |
+| `before` | 游标翻页：把上一页返回的 `next_before` 原样回传（形如 `<毫秒>_<rowid>`，也可只给毫秒）；毫秒与 rowid 任一段非法或越界都返回 400（`before out of range` / `before must be <ms> or <ms>_<rowid>`） |
 | `tz` | 可选时区（`+08:00` / `+0800` / `+8`），按该时区解释 `date` 的当天边界；不传则用服务器本地时区（与旧行为一致） |
 | `tz_offset` | 可选时区偏移（分钟，如 `480`），与 `tz` 二选一；非法值返回 400 |
 
@@ -290,7 +290,7 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 | `todo_only` | `1`/`true` 只看 `need_action=true` 的 |
 | `date` | `YYYY-MM-DD`，按分析完成时间 `analyzed_at` 过滤当天（毫秒与本地文本两种历史格式都兼容） |
 | `limit` | 默认 100，上限 1000 |
-| `before` | 游标翻页：把上一页返回的 `next_before` 原样回传（形如 `<received_at>_<rowid>`）；非法或越界返回 400 |
+| `before` | 游标翻页：把上一页返回的 `next_before` 原样回传（形如 `<received_at>_<rowid>`）；结构的毫秒段与 rowid 段**都**校验范围（`0 <= rowid <= 2^63-1`），非法或越界返回 400 |
 | `tz` / `tz_offset` | 可选时区 / 时区偏移（分钟），作用同 `/messages` |
 
 返回 `{"ok": true, "count": n, "analyses": [...]}`，`s1`/`s2`/`forks` 已解析回对象，按 `received_at DESC, rowid DESC` 倒序（第二排序键保证同毫秒记录不漏不重）。

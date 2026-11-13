@@ -904,3 +904,30 @@ E-38｜S2 摘要可用性评测：六项判据 + 云端 70% vs 端侧替身 15%�
 **验证**。`python -m pytest server/test_extract_common.py -q` → **53 passed**；`python -m pytest server/test_extract.py server/test_extract_cursor.py -q` → **41 passed**（monkeypatch 面全部仍生效）；`python -m pytest server/ -q` → **566 passed in 27.8s**（基线 513 + 53）；`python -m compileall -q server` 退出码 0。另写一次性探针 `loadcheck.py` 模拟 `storage.py` 的按路径加载（在仓库外的临时目录下运行、`sys.path` 里没有 `server/`）：两模块都加载成功，`mod._BatchWriter is m2._BatchWriter`、`mod.ExtractError is m2.ExtractError`（`except ExtractError` 与 `monkeypatch.setattr(ade._BatchWriter, "execute", boom)` 都依赖这同一性），各自 `_archive_path()` 分别指向自己的 `data/messages.jsonl`。
 
 **计数**。新增 `server/extract_common.py`（554 行 / 非空 474）、`server/test_extract_common.py`（465 行 / 53 条）；`android_db_extract.py` 1260 → **813**、`pc_db_extract.py` 1122 → **673**，`git diff --stat` 两文件 **+26 / −922**；服务端模块 **7+1 → 8+1**，全量 pytest 513 → **566 条**。图 01 / 07 重渲：01 `3970 × 1701` → **`3962 × 1724`**（多一行节点文本变高）、07 `6768 × 3555` → **`6798 × 3737`**（新增 `extract_common` 节点），索引表已回写。
+
+### E-46｜复合游标的 rowid 段校验（`util._parse_cursor`，feat/cursor-rowid-guard，2026-11-13）
+
+**问题**。`GET /messages` 的翻页游标 `before=<毫秒>_<rowid>` 只校验了毫秒段：`server/routes.py:246-273` 里 `int(parts[1])` 拿到 rowid 后**直接进 SQL**，没有范围检查。于是
+
+- `before=1700000000000_99999999999999999999999` → sqlite3 抛 `OverflowError: Python int too large to convert to SQLite INTEGER`，被 `server/app.py:150` 的 `_handle_internal_error` 兜成 JSON 500（整页不可用，且日志里只有一行 500，看不出是游标问题）；
+- `before=1700000000000_-1` → 不抛异常，行值比较 `(timestamp, rowid) < (?, -1)` 恒空，接口回 200 + 空列表 —— 客户端会当成「翻到底了」，静默丢历史。
+
+同一个文件里的 `GET /analysis`（旧 `routes.py:642-643`）**早就**有 `0 <= rid <= MAX_ROWID` 的校验、越界回 400 `before out of range`。也就是说两个端点在「同一种游标格式」上行为不一致，是拆分模块时把同一段逻辑抄了两遍、只补了一份。既有用例也只覆盖毫秒越界（`server/test_regression.py:172-175` 与 `:500-508`），rowid 段完全没测。
+
+**影响面判定**。控制台与 App 只把服务端返回的 `next_before` 原样回传，正常路径不会产生越界值 —— 所以这不是一个会被用户日常触发的 bug；但手写客户端、代理改写、老客户端拼串、以及任何把游标当「随便填的字符串」的调用方，都会把整页打成无诊断信息的 500。修复成本极低，收益是把这条路径变成可诊断的 400。
+
+**修法**。把两段校验收口成一个纯函数 `util._parse_cursor(before_str)`（`server/util.py:148`）：
+
+- 空值 / 纯空白 → `(None, None)`，调用方据此不追加游标条件（与「没有 before 参数」同义）；
+- 按 `_` 切分，**多于两段直接格式错误**（`<ms>_<rowid>_x` 不再被静默截断成合法游标）；
+- 两段各自 `int()`，任一失败 → `("error", "before must be <ms> or <ms>_<rowid>")`；
+- 毫秒段必须落在 `MIN_TS_MS..MAX_TS_MS`、rowid 段必须落在 `0..MAX_ROWID`，否则 → `("error", "before out of range")`；
+- 只给毫秒时 rowid 取 `MAX_ROWID`（int64 上界），保持老客户端兼容。
+
+`query_messages` 与 `query_analysis` 都改成「先取 `cursor = app_module._parse_cursor(before_str)`，`cursor[0] == "error"` 就 400，否则解包 `before_ms, rid`」。两个端点此后不可能再各自漂移。**故意不做的事**：不把 `_parse_cursor` 塞进 `storage.py`（它是纯字符串 → 整数的解析，无 I/O），也不改 `next_before` 的生成格式（控制台与 App 已经在回传，改格式等于同时改三端）。
+
+**测试**。`server/test_regression.py` 新增 4 条：`test_messages_cursor_rowid_out_of_range_returns_400`（4 组坏值：超 int64、恰为 2^63、负数、三段）、`test_messages_cursor_rowid_in_range_still_pages`（同毫秒 3 条消息按 `limit=2` 翻页，第二页恰好 1 条 —— 保证不是「一律拒掉」）、`test_messages_cursor_max_rowid_boundary`（`9223372036854775807` 是合法上界）、`test_analysis_cursor_rowid_out_of_range_returns_400`（/analysis 改走统一函数后仍 400）。`server/test_module_split.py:101` 的 `EXPECTED_OWNER` 补 `"_parse_cursor": "util.py"`，守住「新符号必须落在 util 而不是 app」。
+
+**踩坑**。插入新用例时把 `test_analysis_invalid_before_returns_400` 从中间劈开了：新块的 `def` 顶在 `resp = client.get("/analysis?before=9000…")` 之后，导致那两行 `assert` 变成孤儿语句、落在新函数尾部（Python 语法合法但语义错位，测试仍然 571 passed —— 属于「测试绿但结构坏」）。已重排成「老函数保留 3 个断言 + 新函数独立」，`test_regression.py` 933 → **985 行**。
+
+**验证**。`python -m pytest server/ -q` → **571 passed in 40.05s**（基线 566 + 5）；`python -m compileall -q server` 退出码 0。**计数**：`server/util.py` 289 → **322 行**、`server/routes.py` 1036 → **1013 行**（两处内联解析删掉，共 −23）、`server/app.py` 717 → **718 行**（import 列表多一行）、`server/test_regression.py` 933 → **985**、`server/test_module_split.py` 320 → **321**。图 07 的 util 节点 289 → 322 并补 `_parse_cursor @148`，01 的 FLASK 节点同步；全表 10 条路由行号随之位移（receive_analysis 322→309、query_analysis 548→535、receive_advisor 718→695、query_advisor 807→784、admin_extract 844→821、admin_extract_status 889→866、receive_queue 903→880、query_queue 976→953、register 1024→1001、add_url_rule 1026-1035→1003-1012），`app.py` 侧 console 系列整体 +1（503→504、517→518、523→524、531→532、543→544、check_token 275→276）。
