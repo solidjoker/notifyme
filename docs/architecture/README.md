@@ -15,7 +15,7 @@
 | # | 图 | 回答的问题 | 尺寸 (px) |
 |---|---|---|---|
 | 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3970 × 1701 |
-| 02 | [Android 分层架构](#02-android-分层架构) | 118 个顶层 Kotlin 文件各自属于哪一层？ | 12126 × 2007 |
+| 02 | [Android 分层架构](#02-android-分层架构) | 119 个顶层 Kotlin 文件各自属于哪一层？ | 12449 × 2007 |
 | 03 | [三条采集通道](#03-三条采集通道) | 消息是怎么进来的？为什么需要三条路？ | 3386 × 1048 |
 | 04 | [分析决策流水线](#04-分析决策流水线) | 一条消息如何变成一条待办？ | 2510 × 5356 |
 | 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1973 × 3290 |
@@ -50,7 +50,7 @@
 
 五层 + Application 入口。**刻意不引 Compose**：全部传统 View + RecyclerView，运行时依赖只有 5 个（core-ktx / recyclerview / work-runtime-ktx / okhttp / **litert-api**——`com.google.ai.edge.litert:litert:2.2.0`，端侧 LiteRT 推理用），把首次构建失败风险降到最低。JSON 用平台内置 `org.json`，不引 Gson/Moshi。
 
-源码规模：`app/src/main/java/com/notifyme/android/` **顶层 118 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 125 个；`app/src/test` 72 个 .kt / 1126 条（纯 JVM 单测）。
+源码规模：`app/src/main/java/com/notifyme/android/` **顶层 119 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 126 个；`app/src/test` 73 个 .kt / 1142 条（纯 JVM 单测）。
 
 ![Android 分层架构图](diagrams/02-android-layers.png)
 
@@ -59,10 +59,10 @@
 | ① UI 层 | **18 个 Activity**：Main（首页）· Console（控制台 8 卡）· Conversation（会话详情+分析面板）· AnalysisList · **AnalysisSettings（S1/S2 槽位）** · Watchlist · Sources（通知来源）· ReminderList · **ReminderSettings** · PromptEdit · ModelList · Onboarding · **Capture** · **CaptureDiagnostics** · **EngineSmoke** · **OverlaySettings** · **PrivacySettings** · **RedactorPreview** |
 | ② 采集与常驻层 | `NotifyMeListener`（通知监听）· `A11yExtractService`（无障碍直读，仅微信）· `KeepAliveService`（60s 看门狗 requestRebind）· `BootReceiver` · `ReminderReceiver` · **`OverlayService`**（悬浮窗）· **`OverlayActionReceiver`** |
 | ③ 后台任务层 | 4 个 Worker：Sync（三通道上报）· Analysis（逐会话窗口 case）· Advisor（近 7 天复盘）· ModelDownload（.part 断点续传）；3 个 Scheduler 全部 `enqueueUniquePeriodicWork` + UPDATE 策略 |
-| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 38 个 Core 逻辑内核**（见下表） |
+| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 39 个 Core 逻辑内核**（见下表） |
 | ⑤ 存储层 | 5 个 JSONL + `files/models/` 目录 + **22 个** SharedPreferences 文件（见下方存储清单） |
 
-**④ 层本轮新增的 38 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
+**④ 层本轮新增的 39 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
 
 | 主题 | 类 | 职责 |
 |---|---|---|
@@ -82,6 +82,7 @@
 | 文案与本地化 | `TopicLabelCore`（229） | topic / due_window 码值↔中文档名的唯一归一处（四处重复实现已全部删除）：`normalizeTopic` / `normalizeDue` 双向归一 + `topicRes` / `dueRes` 回资源 id，空值回落 notice / none、未知值原样显示；`displayDueCode` / `hasDisplayDue` / `displayDueLabel` / `editDueLabel` 统一「该显示哪一份截止」的优先序（todoDue → s2DueTime → s1DueWindow），修掉首页「截止：none」码值泄漏；`filtered` 单独映射为「已预筛过滤」 |
 | 日期与分组 | `DateKeyCore`（136） | 日期分组 key 与日期组头文案的唯一口径（此前四处各写一套，其中三处用 `SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())`）：`dayKeyOf(timestampMs, zone)` 只走 `java.time`（恒公历 ISO），`parts()` 按位取数字 + `LocalDate.of` 回读校验（`2026-02-30` 返 null），`labelOf()` 用年份**数值比较**算 `crossYear`（不再 `dayKey.startsWith(currentYear)`，那个写法在佛历 / 和历 Locale 下先错在 currentYear 本身），返回纯数值 `DayLabel` 供 `strings.xml` 渲染，`latestOf()` 收掉折叠态的字典序取最大值；同为 2026-11-12 15:30，`SimpleDateFormat` 在 th-TH 下给出 2569、在和历下给出 8，而 Core 恒 2026 —— 两处混用会让删天、折叠、跨年标签全部失效 |
 | 时间文本 | `DueTimeCore`（213） | 公历时间文本 ↔ 毫秒的唯一口径（`java.time`，恒公历）：`formatEventTime` / `defaultEventTimeText` / `parse`（完整年月日、M月d日、今天明天后天、周X、下午 +12、纯时刻五个分支）/ `dayStart` / `formatDay` / `parseDay`（严格回读，`2026-02-30` 返 null）/ `adjustPickedYear`（系统 DatePicker 年份按 Locale 历法显示，按改动年数平移回公历）。旧的 `SimpleDateFormat(_, Locale.getDefault())` + `Calendar.getInstance()` 两头都吃历法：泰语设备格式化出佛历 2569、和历出 `8-11-12`（`\d{4}` 不命中，日期被静默丢弃） |
+| 数字与时间戳文本 | `LocaleTextCore`（93） | 界面与模型输入里的**数字形态**口径（恒 ASCII）：短时间戳 `minutes` / `seconds` / `hourMinute` 走 `DateTimeFormatter.ofPattern(_, Locale.ROOT)`，此前 11 处 `SimpleDateFormat(_, Locale.getDefault())` 在 ar-EG / fa-IR / bn-BD 下会把 `11-12 18:10` 渲染成本地数字；小数 `fixed` / `percent` / `bytes`（十进制，模型下载）/ `binaryBytes`（1024 进制，诊断页）一律 `String.format(Locale.ROOT, ...)`，否则 de-DE 下 `0,80` 会破坏顾问摘要的 `need_action=0.80` 字段结构与报告 Markdown 表格 |
 | 提醒列表 | `ReminderListCore`（175） | 提醒列表的分组与排序：三组「需要处理 → 生效中 → 已过期」，组内按事件时间（attention/active 升序、expired 降序、无时间垫底）；chip 筛选只做一次分组判定、不动原则如下 —— 两条保守语义：`event_time <= 0` 不算过期（否则用户会删掉可能有效的记录）、`failed` 永不算过期（语义是「等你重试」）|
 | 会话窗口 | `ConvWindowCore`（187） | 会话详情页的消息窗口口径：此前是 `readRecent(500).filter { convKey }`——跨会话窗口，别的会话刷屏就把本会话历史挤掉，且同一窗口被当成「共 N 条」的分母。`requestLines(limit)` 按 8 倍取请求行数（默认 4000 / 硬上限 50000，避免退化成全量读）；`slice()` 先按 `convKey` 过滤再按时间升序、超 limit 保最近；`reachedHead()` 判是否已读到文件头；`preview()` 回可见条数 / 是否截断 / 条数是否可信三态，截断提示文案因此分三档。`MAX_RENDER = 200` 从 Activity 迁入 Core；`latest(window)` / `knownIsGroup(window)` 给「取本会话一条消息补上下文」的两处调用方用（日历事件描述的发送者 / 原文、a11y 提取的群聊标记）——旧写法都是 `readRecent(500)` 跨会话窗口，别的会话刷屏就取不到，而空窗口必须回 **null**（首次提取）不能回 false（写死私聊） |
 | 候选窗口 | `CandidateWindowCore`（69） | 分析候选的取样口径：此前是 `readRecent(500).groupBy { convKey }`——跨会话最近 500 条，几个群刷屏就把安静但有内容的会话整个挤出候选（数据在 messages.jsonl 里却永远不被分析）。改为按会话各留 `PER_CONV = 50` 条（5 倍 `AnalysisCase.WINDOW_SIZE`，给自定义过去区间留余量），组内按时间升序、`ts <= 0` 归 0 排最前、超限只保最近；`candidateGroups()` 在 `MessageStoreCore` 里只读尾部 `TAIL_LINES`，不做全量扫描 |
