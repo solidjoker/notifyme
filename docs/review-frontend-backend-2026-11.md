@@ -1218,3 +1218,37 @@ node 侧实证（抽出 `CONSOLE_HTML` 后用花括号配平抓函数体跑）�
 
 **计数.** `server/suggests.py` 322 → **344** 行（非空 280 → 301）、`server/console_ui.py` 3507 → **3526** 行（非空 3418 → 3437）、`server/test_stats_api.py` 670 → **716**、`server/test_console_ui.py` 488 → **505**；服务端用例 642 → **646** 条。新增行号：`suggests.py` `_advisor_state @38` · `_queue_state @74` · `_todo_counts @104` · `_convs_without_analysis @128` · `_pick @197` · `query_suggests_next @209` · `RULES @263` · `register @341`；`console_ui.py` `var ADVISORS_ERR @1381` · `ADVISORS_ERR = (res[2] && res[2].ok === false) @2043` · `errorState @2320` · `advisor_archive` meta @2327 · `emptyStateFor @2346` · `renderAdvisor @2976` · `CONSOLE_MANIFEST @3342` · `CONSOLE_SW @3388`。
 
+
+### E-59｜概览条的「N 台设备」把停报设备的僵尸行也算进去（`storage.count_live_devices`，feat/queue-devices-active，2026-11-14）
+
+**问题.** `/stats` 的 `queue.devices` 与 `GET /queue` 的 `summary.devices` 都是 `len(storage.queue_devices())`。`queue_devices()` 回答的是「库里出现过哪几台设备」，不是「现在有几台在跑」：设备停报（换机 / 卸载 / 关掉排队上报）之后，它的 `queue_tasks` 行要等 `QUEUE_RETENTION_MS`（7 天）才被清理，这期间设备仍在清单里、`active` 恒为 0。控制台概览条把 `devices` 当设备数，于是同一行渲染出 `当前没有排队任务 · 2 台设备` —— 0 个任务却有 2 台设备在跑，自相矛盾。
+
+**复现.** 三行库（`repro30.py`，按 `test_http_e2e.py` 的做法直接改 `app.DATA_DIR / DB_PATH / JSONL_PATH / ADVISOR_PATH`，不走不存在的 `WEIXIN_DATA_DIR`）：`android-live` 一条 fresh `running`，`android-zombie` 两条 `updated_at = now - QUEUE_TTL_MS - 60s`。不 POST、直接 `GET /stats` 与 `GET /queue`：
+
+```
+STATS_QUEUE  {"active": 1, "devices": 2, "stale": 2, "total": 3, "running": 1, ...}
+QUEUE_SUMMARY {"devices": 2, "stale": 2, "total": 3, "running": 1, ...}
+QUEUE_DEVICES [{"device_id":"android-live","active":1,"stale":0,"total":1},
+               {"device_id":"android-zombie","active":0,"stale":2,"total":2}]
+```
+
+`devices 2` 与 `devices` 里第二台 `active 0` 并列，概览条照样写「· 2 台设备」。
+
+**为什么 646 条全绿却没发现.** 现有用例只断言 `summary.devices == 2`（`test_stats_api.py:320`）与「过期只计 stale」（`test_stats_api.py:349-352`），两者都不矛盾 —— 缺陷恰恰被写进了期望：`test_devices_counts_stale_rows_in_total` 的语义是「过期行也算在设备总数里」，于是 `len(devices)` 看起来完全正确。没有一条用例把「设备清单长度」与「在跑台数」当成两个数去对。与第 28 轮的 chip 缺陷同型：口径在实现里成立、在界面语义上不成立。
+
+**修法.** 三层各补一次，语义在服务端定一次、前端只读：
+
+1. `server/storage.py` 新增 `count_live_devices(devices=None)`：数 `active > 0` 的台数，`None` 时自取 `queue_devices()`，值走 `_safe_int(item.get("active"), default=0, lo=0)` 与 `queue_devices()` 同口径。docstring 把「0 任务却 2 台设备」的真机复现写进去。
+2. `server/stats_api.py` 的 `_queue_block()` 与 `server/routes.py` 的 `query_queue()` 各加一个键 `devices_active`（`devices` 保留原义「清单里有几台」）。`_queue_block` 只查一次库：`devices = storage_module.queue_devices()` → `out["devices"] = len(devices)` → `out["devices_active"] = storage_module.count_live_devices(devices)`。
+3. `server/console_ui.py`：`renderOverview()` 的 `var devN = useSrv ? (STATS.queue.devices || 0) : QUEUE_DEVICES.length;` 改成 `statNum(['queue', 'devices_active'])` / 离线兜底 `liveDeviceCount()`；统计 Tab 排队卡改 `esc(deviceTallyText(STATS.queue))`；新增两个 helper —— `liveDeviceCount()`（遍历 `QUEUE_DEVICES` 数 `active > 0`）与 `deviceTallyText(q)`（`设备 N 台`，仅当 `live < all` 时补 `（在跑 M 台）`，`!q` 给 `设备 —`，缺 `devices_active` 的老服务端按「全在跑」保守处理，不能凭空报「在跑 0 台」）；`queueSummaryCard()` 脚注补一句口径说明。
+
+**测试.**
+
+- `server/test_queue.py` 760 → 812 行：新增 3 条 —— `test_devices_active_excludes_zombie_devices`（1 台在跑 + 1 台僵尸 → `devices 2` / `devices_active 1` / `running 1` / `stale 1`）、`test_devices_active_zero_when_all_stale`（全僵尸 → `devices_active 0` / `stale 2`）、`test_storage_count_live_devices_accepts_prefetched_list`（空表 0、脏值 `"zzz"` / 缺键 / 负数全按 0）。`test_get_empty_table_returns_zero_summary` 的**逐键全等**断言补 `devices_active: 0`（不补会红 —— 这正是「新键必须进全等断言」的价值）。
+- `server/test_stats_api.py` 716 → 778 行：新增 2 条（僵尸设备不计入 `devices_active`、全僵尸时 0）+ 3 处断言（空库 `devices_active == 0`、`test_stats_counts_queue_by_state_and_device` 里 `dev-a` 有活跃而 `dev-b` 只剩 `failed`/`done` → `devices 2` 但 `devices_active 1`、只剩过期行的那台设备 `devices 1` / `devices_active 0`）；补 `import storage as storage_module`。
+- `server/test_console_queue.py` 200 → 248 行：新增 5 条静态契约 —— 概览条读 `devices_active` 且旧写法 `var devN = useSrv ? (STATS.queue.devices || 0)` 已消失、`liveDeviceCount` 只数 `active > 0`、`deviceTallyText` 的两段文案与「老服务端缺键不补后半句」、统计 Tab 排队卡走同一 helper、脚注口径说明。
+- `server/test_module_split.py` 的 `EXPECTED_OWNER` 补登记 `count_live_devices` / `queue_summary` / `queue_devices` → `storage.py`（前两个此前漏登记，本轮随手补上）。
+
+**验证.** 定向 `pytest server/test_queue.py -q` → 58 passed；`pytest server/test_stats_api.py -q` → 38 passed；`pytest server/test_console_queue.py server/test_console_ui.py -q` → 64 passed；全量 `pytest server/ -q` → **659 passed in 30.03s**（基线 646 + 13）；`python -m compileall -q server` → 0。真实 HTTP 冒烟（`werkzeug.serving.make_server` + `urllib`）：`STATS_QUEUE ... "devices": 2, "devices_active": 1`、`QUEUE_SUMMARY ... "devices": 2, "devices_active": 1`、`DEVICES_MATCH True True`、`ACTIVE_MATCH True`。node harness（`vm` 抽 `liveDeviceCount` / `deviceTallyText` 函数体）：混合 1 / 全僵尸 0 / 脏值 1 / 空 0；文案 `设备 2 台（在跑 1 台）` / `设备 2 台` / `设备 0 台` / `设备 —`。
+
+**计数.** `server/storage.py` 864 → **885** 行（非空 803 → 821）、`server/routes.py` 1034 → **1039**（非空 974 → 979）、`server/stats_api.py` 212 → **220**（非空 187 → 194）、`server/console_ui.py` 3526 → **3555**（非空 3437 → 3466）、`server/test_queue.py` 760 → **812**（非空 663）、`server/test_stats_api.py` 716 → **778**（非空 660）、`server/test_console_queue.py` 200 → **248**（非空 176）、`server/test_module_split.py` 325 → **331**（非空 288）。服务端用例 646 → **659**。

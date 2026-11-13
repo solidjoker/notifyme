@@ -12,7 +12,7 @@
 | `util.py` | 纯函数工具层：数值归一、时间戳格式化、文本转义、来源包名映射 |
 | `storage.py` | 存储层：SQLite 连接与建库、JSONL 存档与轮转、顾问存档读写、抽库后台任务 |
 | `routes.py` | 数据面路由：`/weixin`、`/messages`、`/analysis`、`/advisor`、`/queue`、`/admin/extract`，由 `register(app)` 挂载 |
-| `stats_api.py` | 全库聚合 `/stats`：数值列一律走安全取值（脏值归 0，不让单行脏数据把整页打成 500）；消息段（含 `by_pkg` / `by_source`）、分析段（含脱敏证据）、排队段；**分析段不接受 `pkg` 过滤**；会话数（`convs` / `todo_convs`）按 `(pkg, conversation)` 计，与 `/messages` 行和控制台会话卡同口径；带 `?pkg=` 时消息段的 `by_pkg` / `by_source` 也一并跟着过滤（同一段内分布之和恒等于 `total`） |
+| `stats_api.py` | 全库聚合 `/stats`：数值列一律走安全取值（脏值归 0，不让单行脏数据把整页打成 500）；消息段（含 `by_pkg` / `by_source`）、分析段（含脱敏证据）、排队段（`devices` 台数 + `devices_active` 在跑台数）；**分析段不接受 `pkg` 过滤**；会话数（`convs` / `todo_convs`）按 `(pkg, conversation)` 计，与 `/messages` 行和控制台会话卡同口径；带 `?pkg=` 时消息段的 `by_pkg` / `by_source` 也一并跟着过滤（同一段内分布之和恒等于 `total`） |
 | `suggests.py` | 下一步建议 `/suggests/next`：6 条规则按 `priority` 降序取前 3，带 `why` / `how` / `evidence` / `jump`；`?pkg=` 是**真过滤**，只作用于 `todo` / `convs_missing` 两族规则的计数（排队按设备、顾问是全局报告，与来源无关，仍走全库口径） |
 | `console_ui.py` | 内嵌 PWA 控制台前端（HTML/CSS/JS，无外部依赖） |
 | `extract_common.py` | 两个抽取脚本的共享内核：结构化日志、原文 JSONL 存档与轮转、跨进程写锁、五列去重、分批提交、主库结构兜底；配置由 `activate(module)` 注入宿主模块，`_setting()` 每次调用时读取 |
@@ -381,6 +381,7 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 - `summary` 是**全库口径** —— 只看 `device_id` / `state`，**不受 `limit` 截断**，与 `GET /stats` 的 `queue` 段同一套过期口径；
   `total` = 全库行数，过期行只计进 `stale`、不再计入四个状态位；
 - `devices` 是**全库设备清单** —— 不受任何过滤影响，`summary.devices = len(devices)`；
+  `summary.devices_active` 只数其中 `active > 0` 的台数（`storage.count_live_devices`）——「几台设备在用」不能用清单长度：
   每项含 `device_id` / `total` / `active` / `stale`：`total` 是库里现存条数（不做过期剔除），  `active` 只算**未过期**的 `queued` + `running`，`stale` 是过期（或 `updated_at` 认不出）的条数。  设备维度的 `active` 必须与 `summary` 同一套过期口径，否则同一时刻设备 chip 说「2 活跃」  而汇总说 `running 0`。
 
 > 为什么不按当前页统计：任务超一页（默认 200）时按页统计会把总数显示成 200，
@@ -393,6 +394,13 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 > `tasks` 里全是排队中，chip 显示「已完成 0」而汇总卡显示「已完成 20」，同一屏两个数字打架。
 > 列表为空但全库有命中时，空态也必须区分「当前页没有」与「全库共有 N 条」（`queueEmptyHtml()`）；
 > 但搜索 / 设备筛选是「这一页里挑」，命中 0 就退回通用空态，不能拿全库数安慰用户。
+>
+> 概览条的「· N 台设备」读的是 `/stats` 的 `queue.devices_active`（不是 `devices`）：
+> 设备停报（换机 / 卸载 / 关掉排队上报）后它的过期行要等 7 天保留期才清，
+> 这期间它还挂在 `devices` 清单里但 `active` 恒为 0 —— 拿清单长度当设备数，
+> 概览条就会写出「当前没有排队任务 · 2 台设备」（0 个任务却有 2 台设备在跑）。
+> 统计 Tab 的排队卡用 `deviceTallyText()` 同口径渲染，总台数与「在跑」台数不等时才补后半句；
+> 前端离线兜底走 `liveDeviceCount()`（数 `QUEUE_DEVICES` 里 `active > 0`）。
 
 ### POST /admin/extract —— 触发安卓数据库提取（需 token）
 
