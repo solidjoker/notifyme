@@ -82,7 +82,7 @@ flowchart TB
         K1["AnalysisScanCursor.kt 265<br/>持久化字节游标 + FULL_PASS_INTERVAL_MS 环形重扫"]:::fork
         K2["AnalysisScheduleSummaryCore.kt 71<br/>Health：DISABLED / GLOBAL_OFF 等<br/>复用 ScheduleSelfHealCore.thresholdFor"]:::fork
         K3["TodoPanelCore.kt 27<br/>待办面板 DEFAULT_LIMIT=8 · 首页可见性联动"]:::fork
-        K4["AnalysisRejectCore.kt 238<br/>被拒计数 + 隔离（quarantine）"]:::fork
+        K4["AnalysisRejectCore.kt 201<br/>被拒计数 + 隔离（quarantine）<br/>逐行补丁走 JsonlPatchCore"]:::fork
     end
 
     K1 -.->|"扫描未同步记录"| REC

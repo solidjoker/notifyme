@@ -9,7 +9,7 @@ subgraph SRC["仓库 · notifyme Android 端"]
     SEC[("secrets.local.properties · gitignored<br/>GLM_BASE_URL / GLM_API_KEY / GLM_MODEL<br/>JEV_URL / JEV_API_KEY<br/>MONITOR_URL / MONITOR_TOKEN")]
     DEP["运行时依赖 5 个<br/>androidx.core:core-ktx:1.13.1<br/>androidx.recyclerview:recyclerview:1.3.2<br/>androidx.work:work-runtime-ktx:2.9.1<br/>com.squareup.okhttp3:okhttp:4.12.0<br/>com.google.ai.edge.litert:litert:2.2.0<br/>JSON 用平台内置 org.json（无 Gson/Moshi）"]
     NOWRAP["仓库内置 Gradle Wrapper 8.9<br/>gradlew.bat assembleOpenDebug / assembleBetaDebug"]
-    SRCSTAT["源码规模<br/>主源码 122 个 .kt（com.notifyme.android 顶层 115 + laya 7）<br/>app/src/test 69 个 .kt / 1054 条"]
+    SRCSTAT["源码规模<br/>主源码 122 个 .kt（com.notifyme.android 顶层 115 + laya 7）<br/>app/src/test 70 个 .kt / 1069 条"]
 end
 
 subgraph FLAVOR["productFlavors · flavorDimensions += channel"]
