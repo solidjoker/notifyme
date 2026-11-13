@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **115 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 122 个，`app/src/test` 68 个 / 1037 条），服务端已拆成 **7+1 模块**（`app.py` 605 / `util.py` 255 / `storage.py` 705 / `routes.py` 978 / `console_ui.py` 3341 / `stats_api.py` 157 / `suggests.py` 260 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **115 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 122 个，`app/src/test` 69 个 / 1045 条），服务端已拆成 **7+1 模块**（`app.py` 605 / `util.py` 255 / `storage.py` 705 / `routes.py` 978 / `console_ui.py` 3341 / `stats_api.py` 157 / `suggests.py` 260 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -59,10 +59,10 @@
 | ① UI 层 | **18 个 Activity**：Main（首页）· Console（控制台 8 卡）· Conversation（会话详情+分析面板）· AnalysisList · **AnalysisSettings（S1/S2 槽位）** · Watchlist · Sources（通知来源）· ReminderList · **ReminderSettings** · PromptEdit · ModelList · Onboarding · **Capture** · **CaptureDiagnostics** · **EngineSmoke** · **OverlaySettings** · **PrivacySettings** · **RedactorPreview** |
 | ② 采集与常驻层 | `NotifyMeListener`（通知监听）· `A11yExtractService`（无障碍直读，仅微信）· `KeepAliveService`（60s 看门狗 requestRebind）· `BootReceiver` · `ReminderReceiver` · **`OverlayService`**（悬浮窗）· **`OverlayActionReceiver`** |
 | ③ 后台任务层 | 4 个 Worker：Sync（三通道上报）· Analysis（逐会话窗口 case）· Advisor（近 7 天复盘）· ModelDownload（.part 断点续传）；3 个 Scheduler 全部 `enqueueUniquePeriodicWork` + UPDATE 策略 |
-| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 34 个 Core 逻辑内核**（见下表） |
+| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 35 个 Core 逻辑内核**（见下表） |
 | ⑤ 存储层 | 5 个 JSONL + `files/models/` 目录 + **22 个** SharedPreferences 文件（见下方存储清单） |
 
-**④ 层本轮新增的 34 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
+**④ 层本轮新增的 35 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
 
 | 主题 | 类 | 职责 |
 |---|---|---|
@@ -70,7 +70,7 @@
 | 拒绝与隔离 | `AnalysisRejectCore`（238）· `AdvisorRejectCore`（213）· `PendingRejectCore`（66） | 被拒次数累计 + 超限隔离，顾问通道复用分析通道实现 |
 | 扫描与调度 | `AnalysisScanCursor`（265）· `AnalysisScheduleSummaryCore`（71） | 持久化字节游标 + 环形重扫 · 调度健康（Health）自愈阈值 |
 | 脱敏与标签 | `RedactorCore`（293）· `AliasSaltCore`（143）· `ConvTagCore`（47） | 身份证/手机号/姓名等规则脱敏 · 姓名别名的**设备随机盐**（sha256(盐 ‖ 0x00 ‖ 名字) 取前 6 位，盐存 privacy_config/alias_salt，可重置；盐为空退化为 M3 初版的无盐 sha256）· 会话标签 NONE/TODO/TRACK/DONE/NOISE |
-| 顾问通道 | `AdvisorDigestCore`（179） | 顾问复盘摘要 + 报告上报的输入口径：从最近消息窗口反推每个会话的 `(conversation, isGroup, senders)` 三元组，补上分析记录里没有的窗口发送者名单，让 `NameAliases.nameMapFor` 的姓名别名在两条顾问通道上都生效（窗口查不到退回七类规则）；同时钉死摘要正文（≤50 个 case / 摘要截 30 字 / 会话名截 20 字） |
+| 顾问通道 | `AdvisorDigestCore`（196） | 顾问复盘摘要 + 报告上报的输入口径：从**每会话各留一窗**（`windowsOf(FeedWindowCore.Result)`，与首页/悬浮面板/关注名单同源）反推每个会话的 `(conversation, isGroup, senders)` 三元组，补上分析记录里没有的窗口发送者名单，让 `NameAliases.nameMapFor` 的姓名别名在两条顾问通道上都生效（窗口查不到退回七类规则）；同时钉死摘要正文（≤50 个 case / 摘要截 30 字 / 会话名截 20 字） |
 | 解析与口径 | `NotificationTextCore`（124）· `ConvNormalize`（82） | 未读前缀剥离（`[11条]`）+ 发言人切分（全角/半角冒号）+ 群聊判定（前缀是否等于/包含于会话名）· 会话名规范化（评测与展示共用） |
 | 版本与元信息 | `VersionInfoCore`（95） | 版本行必须带 versionCode（覆盖安装时 versionName 可能不变）+ 渠道/构建文案 + 空值条目不渲染 + 复制文本（报障时直接贴进 issue） |
 | 评测预算 | `S1EvalBudgetCore`（83） | 单次调用上限（默认 90s）+ 整轮预算（默认 15min），到期不再发起调用并把剩余样本写进报告 |
