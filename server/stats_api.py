@@ -10,6 +10,8 @@
 与 /messages、/analysis 的关系：
   - 过滤口径保持一致（pkg 精确匹配）；
   - 本接口不受 before 游标影响 —— 它统计的是全库，不是当前页。
+  - 会话数（convs / todo_convs）按 (pkg, conversation) 计，与控制台 ckOf() 同口径 ——
+    同名的两个会话来自不同 App 是两个会话，别只数 conversation 列。
 
 返回：{ok, generated_at, tz, tz_offset_minutes,
        messages: {total, convs, last_24h, last_ts, last_received_at, age_days, by_pkg, by_source},
@@ -28,6 +30,13 @@ from util import logger
 # 近 24 小时窗口长度（毫秒），与前端概览条同口径。
 DAY_MS = 24 * 3600 * 1000
 
+# 会话键的 SQL 口径：会话身份是 (pkg, conversation)，不是 conversation。
+# 控制台前端的 ckOf() 也是 pkg + SEP + conversation（console_classify.js），
+# 只数 conversation 会把「微信的王五」和「微博的王五」算成同一个会话，
+# 而 /messages 的行、控制台的会话卡都是按 (pkg, conversation) 分开的。
+# 分隔符用 char(1) 与前端 SEP 同值；conversation 为 NULL 时整体为 NULL，
+# COUNT(DISTINCT) 会跳过它 —— 与旧口径一致（脏数据仍不计入会话数）。
+CONV_KEY_SQL = "pkg || char(1) || conversation"
 
 def _messages_block(pkg=None):
     """消息侧聚合。pkg=None 表示不按来源 App 过滤（全库口径）。"""
@@ -38,7 +47,7 @@ def _messages_block(pkg=None):
     conn = app_module._connect()
     try:
         row = conn.execute(
-            "SELECT COUNT(*), COUNT(DISTINCT conversation), "
+            "SELECT COUNT(*), COUNT(DISTINCT " + CONV_KEY_SQL + "), "
             "MAX(timestamp), MAX(received_at) FROM messages" + where,
             params).fetchone()
         day_row = conn.execute(
@@ -79,11 +88,11 @@ def _analysis_block():
     conn = app_module._connect()
     try:
         row = conn.execute(
-            "SELECT COUNT(*), COUNT(DISTINCT conversation), "
+            "SELECT COUNT(*), COUNT(DISTINCT " + CONV_KEY_SQL + "), "
             "SUM(CASE WHEN need_action = 1 THEN 1 ELSE 0 END), "
             "MAX(received_at) FROM analyses").fetchone()
         todo = conn.execute(
-            "SELECT COUNT(*), COUNT(DISTINCT conversation) FROM analyses "
+            "SELECT COUNT(*), COUNT(DISTINCT " + CONV_KEY_SQL + ") FROM analyses "
             "WHERE need_action = 1").fetchone()
         redacted = conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(redaction_hits), 0) FROM analyses "
