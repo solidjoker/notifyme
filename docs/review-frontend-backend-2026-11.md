@@ -1000,3 +1000,25 @@ E-48｜提醒默认时间的「下一个整点」与单测夹具的时区依赖�
 **验证**。`python -m pytest server/ -q` → **612 passed in 32.38s**（基线 607 + 5）。只改实现不改期望时首跑 1 failed：`server\test_queue.py:524: assert body["summary"]["total"] == storage_module.QUEUE_MAX_LIMIT` → `E assert 520 == 500`，证明新实现确实在统计全库。定向 `pytest server/test_queue.py server/test_stats_api.py server/test_console_queue.py server/test_module_split.py -q` → **199 passed**。
 
 **计数**。`server/storage.py` 758 → **816 行 / 非空 759**（`queue_summary` @718、`queue_devices` 718 → **776**）；`server/routes.py` 1024 → **1022 行 / 非空 962**（删 13 行、docstring 加 10 行；`register` 1012 → **1010**、`add_url_rule` 映射 @1014-1023 → **@1012-1021**）；`server/console_ui.py` 3443 → **3452 行 / 非空 3363**（`CONSOLE_MANIFEST` 3259 → **3268**、`CONSOLE_SW` 3305 → **3314**）；`server/test_queue.py` 586 → **645 行 / 非空 519**；`server/test_console_queue.py` → **148 行 / 非空 98**。服务端用例 607 → **612 条**。
+
+### E-52｜`/stats` 的会话数只数 `conversation`、不分来源 App，与控制台会话卡对不上（`stats_api.CONV_KEY_SQL`，feat/stats-conv-scope，2026-11-14）
+
+**问题**。`server/stats_api.py` 三个会话计数都是 `COUNT(DISTINCT conversation)`：消息段 `:41` 的 `SELECT COUNT(*), COUNT(DISTINCT conversation), MAX(timestamp), MAX(received_at) FROM messages`、分析段 `:82` 的同一条、以及 `:86` 的 `SELECT COUNT(*), COUNT(DISTINCT conversation) FROM analyses WHERE need_action = 1`。但会话的身份**从来不是会话名**：`/messages` 的每一行都带 `pkg`，控制台会话卡的主键是 `ckOf(o) = pkg + SEP + conversation`（`server/console_ui.py:1447`，`SEP = String.fromCharCode(1)`；规则本体在 `server/console_classify.js:48`，注释写着「对齐安卓端 ConvKey」），安卓端也是 `ConvKey(pkg, conversation)`。于是同名的两个会话一旦来自不同 App，就出现「会话 Tab 数得出 2 张卡、统计 Tab 说 1 个会话」。
+
+**复现**。临时库里插两条消息：`("a","hi",now-1000,"王五","微信","com.tencent.mm")` 与 `("b","yo",now-2000,"王五","微博","com.sina.weibo")`。`GET /stats` 给 `messages.total = 2` 而 `messages.convs = 1`；同一批数据在 `GET /messages` 里 `distinct (pkg, conversation)` 是 2。分析侧同理：`("c1","王五",1,"com.tencent.mm")` + `("c2","王五",1,"com.sina.weibo")` 时 `analyses.convs = 1`、`todo_convs = 1`，而 `/suggests/next` 的 `_todo_counts()` 用的是 `GROUP BY pkg, conversation`，同库里它数出 2 —— **同一个仓库里两种会话口径**。
+
+**为什么 612 条全绿却没发现**。`server/test_stats_api.py` 的夹具全是「会话名互不相同」：`test_stats_counts_messages_convs_and_last_24h` 用 `conv1` / `conv2` 且 pkg 也不同，两种口径同值；`test_stats_pkg_filter_only_affects_messages` 只有 2 条、2 个会话名；`test_stats_counts_analysis_todo_and_redaction` 的 `conv1` / `conv2` 同样互不相同。**只要会话名不同，缺陷就照不出来** —— 而真实使用里「同一个群/同一个人在微信和飞书都出现」是常态。
+
+**修法**。`server/stats_api.py` 新增一个常量化口径，三处 SQL 全部引用它：
+
+```python
+CONV_KEY_SQL = "pkg || char(1) || conversation"
+```
+
+消息段改成 `"SELECT COUNT(*), COUNT(DISTINCT " + CONV_KEY_SQL + "), "` + `"MAX(timestamp), MAX(received_at) FROM messages" + where`，分析段两条同改。`char(1)` 与前端 `SEP` 同值，语义上就是「服务端数会话的方式与前端拼会话键的方式一致」。`conversation` 为 NULL 时整个表达式为 NULL，`COUNT(DISTINCT)` 跳过 NULL —— 脏行仍不计入会话数，与旧口径一致（不静默把它算成一个「空名会话」）。模块 docstring 补一条「会话数按 (pkg, conversation) 计」，让后来改这条 SQL 的人先看到口径。
+
+**测试**。`server/test_stats_api.py` 新增 3 条：`test_stats_message_convs_counts_pkg_and_conversation`（同名「王五」跨微信/微博 → `total = 3` / `convs = 2`，并断言 `?pkg=com.tencent.mm` 过滤后 `total = 2` / `convs = 1`）、`test_stats_analysis_convs_counts_pkg_and_conversation`（`total = 3` / `convs = 2` / `todo = 2` / `todo_convs = 2`）、`test_stats_conv_count_skips_null_conversation`（直接 INSERT 一行 `conversation = NULL` 的脏数据 → `total = 2` / `convs = 1`）。三条都带中文断言消息，红了能直接看出是哪个口径被改坏。
+
+**验证**。`python -m pytest server/test_stats_api.py -q` → **24 passed**（原 21 + 3）；`python -m pytest server/ -q` → **615 passed in 29.18s**（基线 612 + 3）；`python -m compileall -q server` 退出码 0。
+
+**计数**。`server/stats_api.py` 180 → **189 行 / 非空 164**（`CONV_KEY_SQL` @37、`_messages_block` @39、`_analysis_block` @78、`_queue_block` @113、`query_stats` @152、`register` @185）；`server/test_stats_api.py` 405 → **462 行 / 非空 385**（新三条在 @223 / @245 / @259）。服务端用例 612 → **615 条**。Android 侧不动：顶层 130 / 全树 137 / `app/src/test` 85 个 / 1369 条 / Core 49。
