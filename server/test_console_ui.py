@@ -486,3 +486,20 @@ def test_service_worker_never_caches_the_insight_endpoints():
     sw = _ui().CONSOLE_SW
     assert "url.pathname.indexOf('/stats') >= 0" in sw
     assert "url.pathname.indexOf('/suggests') >= 0" in sw
+
+
+def test_advisor_tab_surfaces_archive_corruption_instead_of_empty_state():
+    """顾问存档损坏（GET /advisor 回 200 + ok:false）不能渲染成「还没有顾问报告」。"""
+    html = _ui().CONSOLE_HTML
+    assert "var ADVISORS_ERR = '';" in html, "损坏原因要有独立全局"
+    assert "ADVISORS_ERR = (res[2] && res[2].ok === false)" in html
+    assert "res[2].detail || res[2].error" in html, "要优先展示 detail（带具体路径）"
+    # 错误分支必须排在空态分支之前，否则先命中 emptyStateFor('adv')
+    i_err = html.index("if (ADVISORS_ERR) {")
+    i_empty = html.index("if (!reports.length) {")
+    assert i_err < i_empty, "损坏分支必须在空态之前"
+    assert "errorState('advisor_archive'" in html
+    assert "这不是「没有报告」" in html
+    assert "advisor_archive: { ico: '🧯', title: '顾问存档损坏'" in html
+
+

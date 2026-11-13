@@ -36,10 +36,16 @@ def _now_ms():
 
 
 def _advisor_state():
-    """顾问存档（JSONL，每行一份报告）的份数与最近一次 created_at。
+    """顾问存档（JSONL，每行一份报告）的份数、最近一次 created_at、是否损坏。
 
     读取口径与 storage 的顾问存档一致（同一文件、同一 JSON 行格式），
     这里只关心份数与时间，不把报告正文载进来。
+
+    损坏时返回 (None, 0, True) —— **份数是 None 而不是 0**：存档读不出来
+    不等于「一份报告都没有」，把损坏说成 0 份会让 priority 50 那条建议
+    （advisor_total eq0）谎报「还没有顾问报告」，把用户引去等端上跑复盘，
+    而真因是服务端文件坏了、要人工处理。None 在 _hit 里视为前提不成立，
+    改由 advisor_broken 那条规则接手。
     """
     import app as app_module
     # 走 storage 的读取口径：它同时覆盖 JSONL 主存储与旧的 JSON 数组快照，
@@ -48,9 +54,9 @@ def _advisor_state():
     try:
         reports = app_module._load_advisor_reports()
     except app_module.AdvisorArchiveError as exc:
-        # 存档坏了：交给顾问 Tab 去报错，这里不猜、不给建议。
+        # 存档坏了：份数给 None（不是 0），交给 advisor_broken 那条规则报实情。
         logger.warning("suggests: advisor archive unreadable: %s", exc)
-        return 0, 0
+        return None, 0, True
     total = len(reports)
     last_ts = 0
     for item in reports:
@@ -62,7 +68,7 @@ def _advisor_state():
               or app_module._advisor_ts(item.get("received_at")))
         if ts > last_ts:
             last_ts = ts
-    return total, last_ts
+    return total, last_ts, False
 
 
 def _queue_state():
@@ -207,6 +213,7 @@ def query_suggests_next():
           只影响 todo / convs_missing 两族规则的计数 —— 排队按设备、顾问是
           全局报告，与来源无关；生效后的数字就是证据串里看到的数字。
     返回：{"ok": true, "suggests": [...], "count": n, "generated_at": ..., "pkg": ...}
+          顾问存档损坏时不会给「还没有顾问报告」，改给「顾问存档损坏」这条。
           每条：{type, priority, title, why, how, evidence, jump}
           jump：conv / todo / queue / adv / ""（空串 = 无需跳转）。
     """
@@ -219,7 +226,7 @@ def query_suggests_next():
     now = _now_ms()
 
     queue = _queue_state()
-    advisor_total, advisor_last = _advisor_state()
+    advisor_total, advisor_last, advisor_broken = _advisor_state()
     if advisor_last:
         advisor_age_days = max(0, (now - advisor_last) // 86400000)
     else:
@@ -238,6 +245,7 @@ def query_suggests_next():
         "todo_convs": todo_convs,
         "convs_missing": convs_missing,
         "advisor_total": advisor_total,
+        "advisor_broken": 1 if advisor_broken else 0,
         "advisor_age_days": advisor_age_days,
     }
 
@@ -272,6 +280,20 @@ RULES = (
         "how": "打开 Android 端确认后台同步活着，再手动触发一次同步。",
         "evidence": "过期 {queue_stale} 个 / 共 {queue_total} 个",
         "jump": "queue",
+    },
+    # 存档损坏是「事实错误」级别的问题：读接口回空、写接口回 500，
+    # 只说「还没有顾问报告」会把用户引去等端上跑复盘（永远等不到）。
+    {
+        "type": "check",
+        "priority": 85,
+        "field": "advisor_broken", "op": "gt", "bound": 0,
+        "title": "顾问存档损坏，报告读不出来",
+        "why": "服务端解析顾问存档（advisor_reports.jsonl）失败：为防历史报告被整份覆盖，" +
+               "写入已被拒绝，读接口只能回空列表。文件仍在服务器上，不是「没有报告」。",
+        "how": "登录服务器把损坏文件备份后修好或删掉（有备份就从备份恢复）；" +
+               "修好前新的顾问上报会一直失败。",
+        "evidence": "顾问存档无法解析（advisor archive is corrupted）",
+        "jump": "adv",
     },
     {
         "type": "check",
