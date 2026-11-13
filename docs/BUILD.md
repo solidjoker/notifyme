@@ -278,7 +278,8 @@ sha256 下载并缓存到 `~/.notifyme-tools/ktlint/1.8.0/`，不参与 Gradle �
 │   ├── suggests.py             # 下一步建议 /suggests/next（规则优先级队列）
 │   ├── console_ui.py           # 内嵌 PWA 控制台前端（HTML/CSS/JS，5 个 Tab，aura 设计语言，无外部依赖）
 │   ├── console_classify.js     # 控制台归类规则单一事实源（UMD：浏览器 + node 共用，node 可单测；含会话两级分组 groupMessages 与设备分组 groupQueueTasksByDevice）
-│   ├── android_db_extract.py / pc_db_extract.py / gen_icons.py  # 本地库提取与图标脚本
+│   ├── extract_common.py       # 两个抽取脚本的共享内核（结构化日志 / 原文存档 / 跨进程写锁 / 去重 / 分批提交 / 主库结构兜底，`activate()` 注入宿主配置）
+│   ├── android_db_extract.py / pc_db_extract.py / gen_icons.py  # 本地库提取与图标脚本（安卓 / PC）+ 图标生成
 │   └── test_*.py               # 服务端 pytest 用例（含 test_queue_contract.py 端云字段契约守卫）
 ├── docs/
 │   ├── BUILD.md                # 本文件

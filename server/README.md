@@ -15,6 +15,7 @@
 | `stats_api.py` | 全库聚合 `/stats`：消息段（含 `by_pkg` / `by_source`）、分析段（含脱敏证据）、排队段；**分析段不接受 `pkg` 过滤** |
 | `suggests.py` | 下一步建议 `/suggests/next`：6 条规则按 `priority` 降序取前 3，带 `why` / `how` / `evidence` / `jump` |
 | `console_ui.py` | 内嵌 PWA 控制台前端（HTML/CSS/JS，无外部依赖） |
+| `extract_common.py` | 两个抽取脚本的共享内核：结构化日志、原文 JSONL 存档与轮转、跨进程写锁、五列去重、分批提交、主库结构兜底；配置由 `activate(module)` 注入宿主模块，`_setting()` 每次调用时读取 |
 | `android_db_extract.py` / `pc_db_extract.py` / `gen_icons.py` | 安卓 / PC 本地库解密提取与图标生成脚本 |
 | `test_*.py` | pytest 用例（`python -m pytest server/` 全量跑） |
 

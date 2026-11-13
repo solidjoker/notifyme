@@ -81,9 +81,9 @@ subgraph STORE["server/data/ · 落地存储（备份=拷贝这些文件）"]
     PST[("pc_db/state.json")]
 end
 
-subgraph LEGS["提取腿 · 两条独立实现"]
+subgraph LEGS["提取腿 · 两条独立实现 + 共享内核"]
     direction TB
-    subgraph ALEG["android_db_extract.py · 1260 行"]
+    subgraph ALEG["android_db_extract.py · 813 行"]
         direction TB
         A1["MuMuManager.exe sh -v 0 -c<br/>root shell（adb shell 无 su）"]
         A2["定位 MicroMsg/ 下 32位hex 账户目录<br/>= md5('mm'+uin)，内含 EnMicroMsg.db"]
@@ -96,7 +96,7 @@ subgraph LEGS["提取腿 · 两条独立实现"]
         A9["写 messages.db source='android-db'<br/>跨源去重键 (conversation,sender,秒级ts,text)<br/>清理设备临时文件"]
         A1 --> A2 --> A3 --> A4 --> A5 --> A6 --> A7 --> A8 --> A9
     end
-    subgraph PLEG["pc_db_extract.py · 1122 行"]
+    subgraph PLEG["pc_db_extract.py · 673 行"]
         direction TB
         P1["PC 微信 4.x Msg*.db<br/>SQLCipher 4 · pageSize=4096<br/>HMAC-SHA512 · 256000 轮"]
         P2["密钥来自内存搜索/进程注入<br/>WX_TOOLCHAIN 环境变量<br/>参考 reverse/case-wechat4/wx_read_test.py"]
@@ -104,6 +104,9 @@ subgraph LEGS["提取腿 · 两条独立实现"]
         P4["snapshot_and_decrypt → 临时目录<br/>_contact_name_map / _resolve_self_username<br/>_parse_row → run_extract(full, account)"]
         P1 --> P2 --> P3 --> P4
     end
+    CMN["extract_common.py · 554 行<br/>结构化日志 / 原文 JSONL 存档与轮转 / 跨进程写锁 / 五列去重 / 分批提交 / 主库结构兜底<br/>activate(module) 把宿主模块登记为配置源，_setting() 每次调用时 getattr 读 MAIN_DB · PKG · SOURCE_TAG · 六个 env 常量<br/>import 时拷值会让测试把锁与存档写进真实 server/data/，所以必须运行时解析"]:::leg
+    ALEG -.->|"共用内核 15 个符号"| CMN
+    PLEG -.->|"共用内核 15 个符号"| CMN
 end
 
 AND -->|"HTTPS POST 四通道"| CK
@@ -162,3 +165,4 @@ class MU,MS,MR,MC,CC mod
 class RWX,RAN,RAD,RQ,QQ,QM,QA,QAD,AE,AS,BG,ST,CP,MF,SW,IC,IDX,LOCK,APP,WRITE,READ,EXTRACT,PWA,PARTIAL,MODS srv
 class JSONL,DB,ADV,ADB,AST,PST store
 class A1,A2,A3,A4,A5,A6,A7,A8,A9,P1,P2,P3,P4,ALEG,PLEG,LEGS leg
+class CMN leg
