@@ -4,7 +4,6 @@
 package com.notifyme.android
 
 import android.content.Context
-import org.json.JSONArray
 
 /**
  * M12 分析范围：**周期 + 对象多选**，全部收敛在这里，别在 Worker / 设置页各写一套。
@@ -213,21 +212,10 @@ object AnalysisScopeCore {
     const val KEY_CONV_IDS = "scope_conv_ids"
 
     /** 序列化成 JSON 数组字符串（会话 id 里含 `|`，逗号拼接会被群名里的逗号切坏）。 */
-    fun encodeConvIds(ids: Set<String>): String {
-        val arr = JSONArray()
-        ids.filter { it.isNotBlank() }.sorted().forEach { arr.put(it) }
-        return arr.toString()
-    }
+    fun encodeConvIds(ids: Set<String>): String =
+        PrefsJsonCore.encodeStrings(ids, sort = true, dropBlank = true)
 
-    fun decodeConvIds(raw: String?): Set<String> {
-        if (raw.isNullOrBlank()) return emptySet()
-        return runCatching {
-            val arr = JSONArray(raw)
-            (0 until arr.length()).mapNotNull { i ->
-                arr.optString(i).trim().takeIf { it.isNotEmpty() }
-            }.toSet()
-        }.getOrElse { emptySet() }
-    }
+    fun decodeConvIds(raw: String?): Set<String> = PrefsJsonCore.stringSet(raw, trim = true)
 }
 
 /**
