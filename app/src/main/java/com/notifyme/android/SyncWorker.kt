@@ -615,17 +615,16 @@ class SyncWorker(
         if (reports.isEmpty()) return
 
         // M3 CLOUD_REDACT：报告正文是模型产出的聚合文本，本身不含窗口发送者名单，
-        // 所以姓名映射只能从**最近消息窗口**反推（同 AdvisorWorker 摘要侧同一口径，
+        // 所以姓名映射只能从**消息窗口**反推（同 AdvisorWorker 摘要侧同一口径，
         // 见 AdvisorDigestCore.mergedNameMap）。窗口里出现过的会话名 / 发送者会被换成
         // 稳定别名（[人名xxxxxx] / [群xxxxxx]），其余自由文本走七类规则兜底；
         // type/report_id/model_used 等结构字段不动。
+        //
+        // 窗口取「每会话各留一窗」（FeedWindowCore）：跨会话的最近 N 条会被几个刷屏群
+        // 占满，安静会话的人名就换不成别名、原样随报告出设备。
         val reportCore = if (privacy.cloudRedact) {
-            val messages = MessageStore.readRecent(
-                applicationContext,
-                AdvisorDigestCore.DEFAULT_MESSAGE_WINDOW
-            )
             val nameMap = AdvisorDigestCore.mergedNameMap(
-                AdvisorDigestCore.windows(messages),
+                AdvisorDigestCore.windowsOf(MessageStore.feedGroups(applicationContext)),
                 AliasSaltStore.salt(applicationContext)
             )
             RedactorCore(privacy.enabledRules, nameMap)

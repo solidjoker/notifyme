@@ -146,12 +146,11 @@ class AdvisorWorker(
         val salt: ByteArray?
         val windows: Map<String, AdvisorDigestCore.ConvWindow>
         if (privacy.cloudRedact) {
-            val messages = MessageStore.readRecent(
-                applicationContext,
-                AdvisorDigestCore.DEFAULT_MESSAGE_WINDOW
-            )
+            // 窗口必须是**每会话各留一窗**（FeedWindowCore），不能是全库最近 N 条：
+            // 跨会话窗口被几个群刷满后，安静会话在这里一条消息都没有，姓名映射退化成
+            // 空表 —— 会话名与正文人名就原样出设备了（见 AdvisorDigestCore.windowsOf）。
             salt = AliasSaltStore.salt(applicationContext)
-            windows = AdvisorDigestCore.windows(messages)
+            windows = AdvisorDigestCore.windowsOf(MessageStore.feedGroups(applicationContext))
         } else {
             salt = null
             windows = emptyMap()
