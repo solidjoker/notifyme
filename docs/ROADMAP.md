@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 84 个 `.kt` / 1347 条（`app/src/test`）+ 服务端 `server/test_*.py`（566 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 84 个 `.kt` / 1347 条（`app/src/test`）+ 服务端 `server/test_*.py`（571 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -480,6 +480,11 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   压舱细节：`server/storage.py` 的 `_import_extract_module` 按**文件路径**加载脚本（`sys.path` 里没有 `server/`），所以两脚本先 `sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))` 再裸名导入；`import *` 会跳过下划线名，16 个符号必须显式列出。
   测试：`server/test_extract_common.py`（465 行 / **53 条**：配置注入 7 / 日志 4 / 存档 9 / 锁 5 / 去重 6 / 分批提交 5 / 主库结构 4 / `_cursor_int` 参数化 15 / `TYPE_PLACEHOLDER` 1），其中存档轮转一条是踩坑后重写（`_maybe_rotate()` 判的是**本批追加前**的字节数，且 `json.dumps` 给纯字符串加引号）。服务端全量 `python -m pytest server/ -q` → **566 passed**（基线 513 + 53），`test_extract.py` / `test_extract_cursor.py` 41 条仍全绿，`python -m compileall -q server` 干净。
   计数：`server/extract_common.py` 554 行（非空 474）+ `server/test_extract_common.py` 465 行；`android_db_extract.py` 1260 → **813**（非空 1095 → 709）、`pc_db_extract.py` 1122 → **673**（非空 981 → 595）；服务端模块从 7+1 → **8+1**。
+
+- **复合游标的 rowid 段校验（feat/cursor-rowid-guard）**：`GET /messages` 的 `before=<毫秒>_<rowid>` 只校验了毫秒段 —— rowid 直接进 SQL。`before=1700000000000_99999999999999999999999` 让 sqlite3 抛 `OverflowError: Python int too large to convert to SQLite INTEGER`，被 `app.py` 的 `_handle_internal_error` 兜成**无诊断信息的 500**；`before=1700000000000_-1` 更阴，行值比较恒空 → 200 + 空列表，客户端当成「翻到底了」静默丢历史。而同一文件里 `GET /analysis` 早就校验 `0 <= rid <= MAX_ROWID`（模块拆分时同一段逻辑抄了两遍、只补了一份），两端点行为不一致。
+  修法：收口成纯函数 `util._parse_cursor(before_str)` —— 空值返 `(None, None)`（等价「没有游标」）、`_` 切分多于两段直接格式错误（不再静默截断）、两段各自 `int()` 任一失败 → `must be <ms> or <ms>_<rowid>`、毫秒段落在 `MIN_TS_MS..MAX_TS_MS` 且 rowid 段落在 `0..MAX_ROWID`，越界 → `before out of range`；只给毫秒时 rowid 取 int64 上界保持老客户端兼容。`query_messages` / `query_analysis` 都改成「取 cursor → error 就 400 → 否则解包」，此后不可能各自漂移。刻意不做：不塞进 `storage.py`（纯解析无 I/O）、不改 `next_before` 生成格式（三端都在回传）。
+  测试：`server/test_regression.py` 新增 4 条（rowid 越界 4 组坏值、合法 rowid 仍能翻页、`2^63-1` 上界合法、`/analysis` 改走统一函数后仍 400），`test_module_split.py` 的 `EXPECTED_OWNER` 补 `_parse_cursor: util.py` 守住分层。踩坑：插入用例时把一个老测试从中间劈开、两行 `assert` 变成孤儿语句落在新函数尾部 —— 语法合法、测试仍全绿，属「绿但结构坏」，已重排。
+  验证与计数：`python -m pytest server/ -q` → **571 passed**（基线 566 + 5）；`util.py` 289 → **322**、`routes.py` 1036 → **1013**（两处内联解析 −23）、`app.py` 717 → **718**、`test_regression.py` 933 → **985**、`test_module_split.py` 320 → **321**。图 07 的 util 节点 289 → 322 并补 `_parse_cursor @148`，全表 10 条路由行号随之位移。
 
 ## 12. 决策门汇总
 

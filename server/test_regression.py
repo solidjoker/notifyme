@@ -175,6 +175,47 @@ def test_out_of_range_before_returns_400(client):
     assert resp.status_code == 400
 
 
+def test_messages_cursor_rowid_out_of_range_returns_400(client):
+    """第 17 轮：复合游标的 rowid 段同样要校验。
+
+    修前 only 毫秒段有范围校验，rowid 直接塞给 sqlite：
+    超 int64 抛 OverflowError（整页 500），负数不抛但静默返回空页
+    （看起来像「翻到底了」）。现在两段都走 util._parse_cursor → 400。
+    """
+    for bad in ("1700000000000_99999999999999999999999",
+                "1700000000000_9223372036854775808",
+                "1700000000000_-1",
+                "1700000000000_1_2"):
+        resp = client.get("/messages?before=" + bad)
+        assert resp.status_code == 400, bad
+        assert resp.get_json()["ok"] is False, bad
+
+
+def test_messages_cursor_rowid_in_range_still_pages(client):
+    """第 17 轮：合法 rowid 仍然能翻页（不是把所有复合游标一律拒掉）。"""
+    ts = 1700000000000
+    for i in range(3):
+        client.post("/weixin", json=[_msg(text="m" + str(i), ts=ts)],)
+    body = client.get("/messages?limit=2").get_json()
+    cursor = body["next_before"]
+    assert cursor and "_" in cursor
+    page2 = client.get("/messages?limit=2&before=" + cursor)
+    assert page2.status_code == 200
+    assert len(page2.get_json()["messages"]) == 1
+
+
+def test_messages_cursor_max_rowid_boundary(client):
+    """第 17 轮：int64 上界本身合法（老客户端只发毫秒时就等价于它）。"""
+    client.post("/weixin", json=[_msg(text="a", ts=1700000000000)])
+    resp = client.get(
+        "/messages?before=1700000000000_9223372036854775807")
+    assert resp.status_code == 200
+    # 行值比较 (timestamp, rowid) < (ms, MAX_ROWID)：同毫秒且 rowid 更小的行仍在页内，
+    # 上界只在「同一毫秒的最后一行之后」时才真的排空。
+    rows = resp.get_json()["messages"]
+    assert [m["text"] for m in rows] == ["a"]
+
+
 def test_message_text_length_limit(client):
     """B4：正文超过 64 KiB 被拒（1 MB 正文原来直接入库）。"""
     resp = client.post("/weixin", json=[_msg(text="x" * (1024 * 1024))])
@@ -506,6 +547,17 @@ def test_analysis_invalid_before_returns_400(client):
     assert resp.status_code == 400
     resp = client.get("/analysis?before=1700000000000_xyz")
     assert resp.status_code == 400
+
+
+def test_analysis_cursor_rowid_out_of_range_returns_400(client):
+    """第 17 轮：/analysis 的 rowid 段校验收口到 util._parse_cursor 后仍生效。"""
+    for bad in ("1700000000000_99999999999999999999999",
+                "1700000000000_9223372036854775808",
+                "1700000000000_-1",
+                "1700000000000_1_2"):
+        resp = client.get("/analysis?before=" + bad)
+        assert resp.status_code == 400, bad
+        assert resp.get_json()["ok"] is False, bad
 
 
 def test_analysis_date_filter_by_analyzed_at_day(client):
