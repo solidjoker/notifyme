@@ -14,8 +14,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
-import org.json.JSONObject
 
 /**
  * 顾问复盘 Worker（Fable 层）：通读最近 7 天的 case 分析结果，
@@ -167,16 +165,8 @@ class AdvisorWorker(
         var summary = ""
         val suggestions = mutableListOf<AdvisorReport.Suggestion>()
         try {
-            val content = JSONObject(raw)
-                .optJSONArray("choices")
-                ?.optJSONObject(0)
-                ?.optJSONObject("message")
-                ?.optString("content").orEmpty()
-            val start = content.indexOf('{')
-            val end = content.lastIndexOf('}')
-            val payload = if (start >= 0 && end > start) {
-                JSONObject(content.substring(start, end + 1))
-            } else null
+            // choices[0].message.content → 首个 { 到末个 }：与 S1/S2 同一条提取口径
+            val payload = AnalysisParsing.extractJsonPayload(raw)
             val answer = payload?.optJSONObject("answer") ?: payload
             if (answer != null) {
                 summary = answer.optString("summary", "").trim()
@@ -213,31 +203,11 @@ class AdvisorWorker(
 
     /** POST {url}/chat/completions（OpenAI 兼容），返回响应原文；非 2xx 抛 HttpException。 */
     private fun postChatCompletions(slot: AnalysisConfig.SlotConfig, userContent: String): String {
-        var url = slot.url.trim().trimEnd('/')
-        if (!url.endsWith("/chat/completions")) url += "/chat/completions"
-
-        val requestJson = JSONObject().apply {
-            put("model", slot.model)
-            put("messages", JSONArray().apply {
-                put(JSONObject().apply {
-                    put("role", "system")
-                    put("content", ADVISOR_SYSTEM_PROMPT)
-                })
-                put(JSONObject().apply {
-                    put("role", "user")
-                    put("content", userContent)
-                })
-            })
-            put("response_format", JSONObject().put("type", "json_object"))
-            // glm-5.3 等推理模型的 reasoning_tokens 也占 max_tokens 额度，
-            // 给太小会把正文顶空（实测 1500 下 content 为空串）
-            put("max_tokens", 4096)
-            put("stream", false)
-        }
-
         val request = Request.Builder()
-            .url(url)
-            .post(requestJson.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .url(ChatRequestCore.endpoint(slot.url))
+            // system 文案与端点归一 / max_tokens 口径统一在 ChatRequestCore；本通道只固定文案
+            .post(ChatRequestCore.payload(slot.model, ADVISOR_SYSTEM_PROMPT, userContent)
+                .toRequestBody(JSON_MEDIA_TYPE))
             .apply {
                 if (slot.key.isNotEmpty()) {
                     header("Authorization", "Bearer ${slot.key}")
