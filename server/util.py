@@ -145,6 +145,39 @@ def _parse_tz_offset(raw_tz, raw_offset):
         return ("error", "tz out of range")
     return sign * (hours * 60 + minutes)
 
+def _parse_cursor(before_str):
+    """解析游标分页参数 before，返回 (毫秒, rowid) 或 (None, None)。
+
+    before 有两种形态：
+        <毫秒>            老客户端只发毫秒 —— rowid 取 int64 上界（该毫秒之前的全部）
+        <毫秒>_<rowid>    新客户端把上一页的 next_before 原样回传
+    空值表示「没有游标」，返回 (None, None)。
+
+    非法 / 越界返回 ("error", 说明)，调用方据此回 400。**两段都必须校验**：
+    只校验毫秒段时，超过 int64 的 rowid 传给 sqlite 会抛 OverflowError
+    （/messages 曾因此整页 500），负 rowid 则静默返回空页 —— 看起来像「翻到底了」。
+    多余的下划线段（<ms>_<rowid>_x）按格式错误拒绝，不静默丢弃。
+    """
+    import app as app_module
+    text = (before_str or "").strip()
+    if not text:
+        return None, None
+    parts = text.split("_")
+    if len(parts) > 2:
+        return ("error", "before must be <ms> or <ms>_<rowid>")
+    try:
+        before_ms = int(parts[0])
+        before_rid = int(parts[1]) if len(parts) > 1 else None
+    except (ValueError, IndexError):
+        return ("error", "before must be <ms> or <ms>_<rowid>")
+    if not (app_module.MIN_TS_MS <= before_ms <= app_module.MAX_TS_MS):
+        return ("error", "before out of range")
+    rid = app_module.MAX_ROWID if before_rid is None else before_rid
+    if not (0 <= rid <= app_module.MAX_ROWID):
+        return ("error", "before out of range")
+    return before_ms, rid
+
+
 def _fmt_tz_offset(minutes):
     """分钟偏移 -> "+08:00" 形式的字符串；None 原样返回。"""
     if minutes is None:

@@ -244,27 +244,14 @@ def query_messages():
     # 只按 timestamp 比较会漏掉「同一毫秒但排序靠后」的多条消息，
     # 所以 next_before 带上 rowid，写成 <毫秒>_<rowid>（老客户端只发毫秒也兼容）。
     if before_str:
-        parts = before_str.split("_")
-        try:
-            before_ms = int(parts[0])
-            before_rid = int(parts[1]) if len(parts) > 1 else None
-        except (ValueError, IndexError):
-            return jsonify({
-                "ok": False,
-                "error": "before must be <ms> or <ms>_<rowid>",
-            }), 400
-        # 游标必须是合法毫秒时间戳：越界值（如 9*10**22）传给 sqlite
-        # 会抛 OverflowError → 整个查询 500
-        if not (app_module.MIN_TS_MS <= before_ms <= app_module.MAX_TS_MS):
-            return jsonify({
-                "ok": False,
-                "error": "before out of range",
-            }), 400
+        cursor = app_module._parse_cursor(before_str)
+        if cursor[0] == "error":
+            return jsonify({"ok": False, "error": cursor[1]}), 400
+        before_ms, rid = cursor
         # 行值比较 (timestamp, rowid) < (?, ?)：
         # 原来的 OR 谓词用不上索引（EXPLAIN 显示全表 SCAN），
         # 行值比较能走索引。老客户端只发毫秒时用 int64 上界当 rowid，
         # 顺带修掉「同一毫秒的多行被整批漏掉」的老问题。
-        rid = before_rid if before_rid is not None else app_module.MAX_ROWID
         if sqlite3.sqlite_version_info >= (3, 15, 0):
             conditions.append("(timestamp, rowid) < (?, ?)")
             params.extend([before_ms, rid])
@@ -627,20 +614,10 @@ def query_analysis():
     # （EXPLAIN：SEARCH analyses USING INDEX ... (received_at<?)），
     # 原来那种 OR 谓词则是全表 SCAN。只给毫秒时用 int64 上界当 rowid。
     if before_str:
-        parts = before_str.split("_")
-        try:
-            before_ms = int(parts[0])
-            before_rid = int(parts[1]) if len(parts) > 1 else None
-        except (ValueError, IndexError):
-            return jsonify({
-                "ok": False,
-                "error": "before must be <ms> or <ms>_<rowid>",
-            }), 400
-        if not (app_module.MIN_TS_MS <= before_ms <= app_module.MAX_TS_MS):
-            return jsonify({"ok": False, "error": "before out of range"}), 400
-        rid = before_rid if before_rid is not None else app_module.MAX_ROWID
-        if not (0 <= rid <= app_module.MAX_ROWID):
-            return jsonify({"ok": False, "error": "before out of range"}), 400
+        cursor = app_module._parse_cursor(before_str)
+        if cursor[0] == "error":
+            return jsonify({"ok": False, "error": cursor[1]}), 400
+        before_ms, rid = cursor
         if sqlite3.sqlite_version_info >= (3, 15, 0):
             conditions.append("(received_at, rowid) < (?, ?)")
             params.extend([before_ms, rid])
