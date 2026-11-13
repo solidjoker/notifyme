@@ -172,67 +172,30 @@ internal class AnalysisRejectFile(private val file: File) {
         return revived
     }
 
-    /** 当前被隔离的 case_id 集合（文件级扫描）。 */
-    fun quarantinedCaseIds(): Set<String> {
-        if (!file.exists()) return emptySet()
-        val out = LinkedHashSet<String>()
-        for (line in file.readLines(Charsets.UTF_8)) {
-            if (line.isBlank()) continue
-            val record = try {
-                AnalysisCaseRecord.fromJson(JSONObject(line))
-            } catch (e: Exception) {
-                null
-            } ?: continue
-            if (record.quarantined) out += record.caseId
-        }
-        return out
-    }
+    /** 当前被隔离的 case_id 集合（文件级扫描，只读、不重写文件）。 */
+    fun quarantinedCaseIds(): Set<String> = JsonlPatchCore.collect(
+        file = file,
+        keyOf = { it.caseId },
+        parse = { line -> AnalysisCaseRecord.fromJson(JSONObject(line)) },
+        include = { it.quarantined }
+    )
 
     /** 被隔离条数。 */
     fun quarantinedCount(): Int = quarantinedCaseIds().size
 
     /**
-     * 逐行打补丁后原子重写：只有真正发生变化的行才被改写，其余行原样保留
-     *（含解析不出来的损坏行）。返回文件是否被重写。
+     * 逐行打补丁后原子重写：口径全在 [JsonlPatchCore.patch]（只有真正变化的行才被改写、
+     * 损坏行与序列化失败的行一律原样保留、没变化就不碰文件）。
      */
     private fun patchRecords(
         target: Set<String>,
         patch: (AnalysisCaseRecord) -> AnalysisCaseRecord
-    ): Boolean {
-        if (!file.exists()) return false
-        val out = ArrayList<String>()
-        var changed = false
-        for (line in file.readLines(Charsets.UTF_8)) {
-            if (line.isBlank()) {
-                out += line
-                continue
-            }
-            val record = try {
-                AnalysisCaseRecord.fromJson(JSONObject(line))
-            } catch (e: Exception) {
-                null
-            }
-            if (record == null || record.caseId !in target) {
-                out += line
-                continue
-            }
-            val updated = patch(record)
-            if (updated == record) {
-                out += line
-                continue
-            }
-            val encoded = try {
-                updated.toJson().toString()
-            } catch (e: Exception) {
-                // 旧记录字段缺失导致序列化失败（例如 s1 块缺失 -> importance 为 NaN，
-                // org.json 不接受非有限数）：保留原行，既不丢用户数据，也不让整轮上报崩掉
-                out += line
-                continue
-            }
-            out += encoded
-            changed = true
-        }
-        if (changed) JsonlStore.atomicWrite(file, out)
-        return changed
-    }
+    ): Boolean = JsonlPatchCore.patch(
+        file = file,
+        target = target,
+        keyOf = { it.caseId },
+        parse = { line -> AnalysisCaseRecord.fromJson(JSONObject(line)) },
+        encode = { it.toJson().toString() },
+        patch = patch
+    )
 }
