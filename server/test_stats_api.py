@@ -220,6 +220,63 @@ def test_stats_counts_analysis_todo_and_redaction(api):
     assert ana["last_report"] > 0
 
 
+def test_stats_message_convs_counts_pkg_and_conversation(api):
+    """会话数按 (pkg, conversation) 计：同名会话来自不同 App 是两个会话。
+
+    控制台的会话卡与 /messages 的行都用 ckOf() = pkg + SEP + conversation 做身份，
+    统计只数 conversation 会让「微信的王五」和「微博的王五」合并成一个，
+    统计 Tab 的「总会话数」比实际少，和会话 Tab 的卡片数对不上。
+    """
+    now = _now_ms()
+    _insert_messages([
+        ("a", "hi", now - 1000, "王五", "微信", "com.tencent.mm"),
+        ("b", "yo", now - 2000, "王五", "微博", "com.sina.weibo"),
+        ("c", "ok", now - 3000, "王五", "微信", "com.tencent.mm"),
+    ])
+    msgs = api.get("/stats").get_json()["messages"]
+    assert msgs["total"] == 3
+    assert msgs["convs"] == 2, "同名会话来自不同 pkg 必须算两个"
+    # pkg 过滤后只剩微信的两条，会话数回到 1
+    filtered = api.get("/stats?pkg=com.tencent.mm").get_json()["messages"]
+    assert filtered["total"] == 2
+    assert filtered["convs"] == 1
+
+
+def test_stats_analysis_convs_counts_pkg_and_conversation(api):
+    """分析侧同一口径：convs 与 todo_convs 都按 (pkg, conversation) 分组。"""
+    _insert_analyses([
+        ("c1", "王五", 1, "com.tencent.mm", 0, 0),
+        ("c2", "王五", 1, "com.sina.weibo", 0, 0),
+        ("c3", "王五", 0, "com.tencent.mm", 0, 0),
+    ])
+    ana = api.get("/stats").get_json()["analyses"]
+    assert ana["total"] == 3
+    assert ana["convs"] == 2, "同名会话来自不同 pkg 必须算两个"
+    assert ana["todo"] == 2
+    assert ana["todo_convs"] == 2
+
+
+def test_stats_conv_count_skips_null_conversation(api):
+    """conversation 为 NULL 的脏行不计入会话数（与旧口径一致，别静默算成一个）。"""
+    now = _now_ms()
+    _insert_messages([
+        ("a", "hi", now - 1000, "conv1", "微信", "com.tencent.mm"),
+    ])
+    with app_module._write_lock:
+        conn = app_module._connect()
+        try:
+            conn.execute(
+                "INSERT INTO messages"
+                " (sender, text, timestamp, conversation, is_group, received_at, source, pkg)"
+                " VALUES (?, ?, ?, NULL, 0, ?, ?, ?)",
+                ("z", "dirty", now - 500, now - 500, "微信", "com.tencent.mm"))
+            conn.commit()
+        finally:
+            conn.close()
+    msgs = api.get("/stats").get_json()["messages"]
+    assert msgs["total"] == 2
+    assert msgs["convs"] == 1
+
 def test_stats_counts_queue_by_state_and_device(api):
     """排队段：按状态计数 + 设备台数（与 /queue 的 devices 同口径）。"""
     _insert_queue([
