@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **129 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 136 个，`app/src/test` 84 个 / 1347 条），服务端已拆成 **8+1 模块**（`app.py` 606 / `util.py` 284 / `storage.py` 705 / `routes.py` 955 / `console_ui.py` 3341 / `stats_api.py` 157 / `suggests.py` 260 / `extract_common.py` 474 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **130 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 137 个，`app/src/test` 85 个 / 1369 条），服务端已拆成 **8+1 模块**（`app.py` 606 / `util.py` 284 / `storage.py` 705 / `routes.py` 955 / `console_ui.py` 3341 / `stats_api.py` 157 / `suggests.py` 260 / `extract_common.py` 474 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -15,7 +15,7 @@
 | # | 图 | 回答的问题 | 尺寸 (px) |
 |---|---|---|---|
 | 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3962 × 1724 |
-| 02 | [Android 分层架构](#02-android-分层架构) | 129 个顶层 Kotlin 文件各自属于哪一层？ | 14840 × 2007 |
+| 02 | [Android 分层架构](#02-android-分层架构) | 130 个顶层 Kotlin 文件各自属于哪一层？ | 15150 × 2070 |
 | 03 | [三条采集通道](#03-三条采集通道) | 消息是怎么进来的？为什么需要三条路？ | 3386 × 1048 |
 | 04 | [分析决策流水线](#04-分析决策流水线) | 一条消息如何变成一条待办？ | 2510 × 5356 |
 | 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1973 × 3290 |
@@ -50,7 +50,7 @@
 
 五层 + Application 入口。**刻意不引 Compose**：全部传统 View + RecyclerView，运行时依赖只有 5 个（core-ktx / recyclerview / work-runtime-ktx / okhttp / **litert-api**——`com.google.ai.edge.litert:litert:2.2.0`，端侧 LiteRT 推理用），把首次构建失败风险降到最低。JSON 用平台内置 `org.json`，不引 Gson/Moshi。
 
-源码规模：`app/src/main/java/com/notifyme/android/` **顶层 129 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 136 个；`app/src/test` 84 个 .kt / 1347 条（纯 JVM 单测）。
+源码规模：`app/src/main/java/com/notifyme/android/` **顶层 130 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 137 个；`app/src/test` 85 个 .kt / 1369 条（纯 JVM 单测）。
 
 ![Android 分层架构图](diagrams/02-android-layers.png)
 
@@ -59,10 +59,10 @@
 | ① UI 层 | **18 个 Activity**：Main（首页）· Console（控制台 8 卡）· Conversation（会话详情+分析面板）· AnalysisList · **AnalysisSettings（S1/S2 槽位）** · Watchlist · Sources（通知来源）· ReminderList · **ReminderSettings** · PromptEdit · ModelList · Onboarding · **Capture** · **CaptureDiagnostics** · **EngineSmoke** · **OverlaySettings** · **PrivacySettings** · **RedactorPreview** |
 | ② 采集与常驻层 | `NotifyMeListener`（通知监听）· `A11yExtractService`（无障碍直读，仅微信）· `KeepAliveService`（60s 看门狗 requestRebind）· `BootReceiver` · `ReminderReceiver` · **`OverlayService`**（悬浮窗）· **`OverlayActionReceiver`** |
 | ③ 后台任务层 | 4 个 Worker：Sync（三通道上报）· Analysis（逐会话窗口 case）· Advisor（近 7 天复盘）· ModelDownload（.part 断点续传）；3 个 Scheduler 全部 `enqueueUniquePeriodicWork` + UPDATE 策略 |
-| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 48 个 Core 逻辑内核**（见下表） |
+| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 49 个 Core 逻辑内核**（见下表） |
 | ⑤ 存储层 | 5 个 JSONL + `files/models/` 目录 + **22 个** SharedPreferences 文件（见下方存储清单） |
 
-**④ 层本轮新增的 48 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
+**④ 层本轮新增的 49 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
 
 | 主题 | 类 | 职责 |
 |---|---|---|
@@ -83,6 +83,7 @@
 | 日期与分组 | `DateKeyCore`（136） | 日期分组 key 与日期组头文案的唯一口径（此前四处各写一套，其中三处用 `SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())`）：`dayKeyOf(timestampMs, zone)` 只走 `java.time`（恒公历 ISO），`parts()` 按位取数字 + `LocalDate.of` 回读校验（`2026-02-30` 返 null），`labelOf()` 用年份**数值比较**算 `crossYear`（不再 `dayKey.startsWith(currentYear)`，那个写法在佛历 / 和历 Locale 下先错在 currentYear 本身），返回纯数值 `DayLabel` 供 `strings.xml` 渲染，`latestOf()` 收掉折叠态的字典序取最大值；同为 2026-11-12 15:30，`SimpleDateFormat` 在 th-TH 下给出 2569、在和历下给出 8，而 Core 恒 2026 —— 两处混用会让删天、折叠、跨年标签全部失效 |
 | 时间文本 | `DueTimeCore`（213） | 公历时间文本 ↔ 毫秒的唯一口径（`java.time`，恒公历）：`formatEventTime` / `defaultEventTimeText` / `parse`（完整年月日、M月d日、今天明天后天、周X、下午 +12、纯时刻五个分支）/ `dayStart` / `formatDay` / `parseDay`（严格回读，`2026-02-30` 返 null）/ `adjustPickedYear`（系统 DatePicker 年份按 Locale 历法显示，按改动年数平移回公历）。旧的 `SimpleDateFormat(_, Locale.getDefault())` + `Calendar.getInstance()` 两头都吃历法：泰语设备格式化出佛历 2569、和历出 `8-11-12`（`\d{4}` 不命中，日期被静默丢弃） |
 | 数字与时间戳文本 | `LocaleTextCore`（161） | 界面与模型输入里的**数字形态**口径（恒 ASCII）：短时间戳 `minutes` / `seconds` / `hourMinute` 走 `DateTimeFormatter.ofPattern(_, Locale.ROOT)`，此前 11 处 `SimpleDateFormat(_, Locale.getDefault())` 在 ar-EG / fa-IR / bn-BD 下会把 `11-12 18:10` 渲染成本地数字；小数 `fixed` / `percent` / `bytes`（十进制，模型下载）/ `binaryBytes`（1024 进制，诊断页）一律 `String.format(Locale.ROOT, ...)`，否则 de-DE 下 `0,80` 会破坏顾问摘要的 `need_action=0.80` 字段结构与报告 Markdown 表格 |；同名文件还提供 `format(template, args)` 与 `requiredArgs`：资源模板的格式槽位用 Locale.ROOT 语义自己代入（数字与小数点恒 ASCII），调用侧走 `Context.templateText(id, ...)`（ContextTemplateText.kt）；此前 63 处 `getString(R.string.x, 数字)` 在 ar-EG 设备上会渲染成阿拉伯-印度数字与阿拉伯小数点，本轮把 LocaleTextCore 契约 ⑤ 的那条豁免撤销；悬空 % / 未知占位 / 缺参一律降级不抛异常
+| 提示词时间文本 | `PromptTimeCore`（112） | 提示词与报告里的**绝对时间文本**唯一口径（`java.time` + 显式 `ZoneId`，恒公历）：`chineseStamp` / `todayCn` / `todayEn` / `dueAnchor` / `isoStamp` / `messageLabel`。`DateTimeFormatter` 任何 Locale 都按 ISO 公历出年，而 `SimpleDateFormat` 的历法随**默认 Locale** 走 —— 实测 JDK 17 + `th-TH`：`Calendar.set(2026, 9, 25)` 落成公历 1483、`SimpleDateFormat("yyyy", getDefault())` 给 2569，旧题面因此写出「今天是 1483年10月25日」。`Locale.US` / `Locale.CHINESE` 只是钉语言，安全来自 Locale→calendar 映射表（巧合，已用对照用例固定）。「同年省略年份」改为 `ZonedDateTime.year` 数值比较；`zone` 参数可注入（单测钉 Asia/Shanghai 与 UTC）。五处提示词题面（`currentTimeHeader` / `todayLineCn` / `todayLineEn` / `messageLabel` / due_window 锚点）与 `S1Eval` 报告抬头已收口，22 条单测含佛历 / 和历 / 阿语 / `Locale.US` 对照回归 |
 | 文本截断 | `TextClipCore`（65） | 文本截断的唯一口径：**按 Unicode 码点切，不按 UTF-16 单元切**。`String.take(n)` / `substring(0, n)` 数的是 UTF-16 code unit，emoji 与 CJK 扩展 B 占两个 unit，截在中间会留下孤立代理——实测 `s.take(16)` 的末位是高代理 `\uD83D`，转 UTF-8 落成 `?`（替换字符）；`clip(s, 16)` 得 16 个完整码点、UTF-8 合法。受影响的全是**出设备或落盘的文本**：顾问摘要与顾问请求体（模型输入被残字打断）、`QueueStateCore` 上行标题/详情（服务端与控制台照原样存显）、日历事件标题 / 诊断文案 / 通知标题（用户直接看到）。四条契约：`clip` 是唯一入口且未超限返回同一实例；省略号**追加不占预算**（`clipWithEllipsis(s, 20)` 最多 21 码点，与旧 `take(20) + 省略号` 逐字一致）；ASCII 输入输出逐字节不变（历史文案与既有断言都不用改）；已知边界是「只保证不切断代理对，不保证不切断字素簇」（国旗 / ZWJ 家族可能被切在码点边界上，宁可少画一个 emoji 也不产出非法字符）。含 20 条单测（emoji / 扩展 B / ZWJ 家族 / 逐码点扫任何 n 都不产生替换字符 / ASCII 与 take 逐字节一致） |
 | 偏好存储 | `PrefsJsonCore`（135） | SharedPreferences 里「存 JSON 字符串」的读写口径：五处站点（`WatchlistStore` 的会话名单、`AppSourceStore` 的白名单/禁用/已观察、`ConvTagStore` 的标签映射、`ConvAnalysisScheduleStore` 的排期表、`AnalysisScopeCore` 的 Worker 会话 id 列表）此前各抄一份 `try { ... } catch (e: Exception) { }`，「损坏按空」只写在注释里、一条单测都没有。五条契约：① **读永不抛异常**且返回独立拷贝；② **只做形状裁剪、不做领域过滤**（`ConvTag.fromCode(v) != NONE` 这类语义判断留在 Store 层）；③ 元素走 `optString`（数字按文本取出，匹配不到任何包名等价于被忽略）；④ **写不做排序**（名单保持写入顺序，需要稳定输出显式 `sort = true`）；⑤ 与 `MessageStore` 的 JSONL 无关（那边逐行流式文件、这边单键整表）。`objects(raw, project)` 让单条坏数据只丢自己不牵连整表；29 条单测里有 3 条是与旧内联实现逐字对照的实验 |
 | 模型通道 | `ChatRequestCore`（61） | OpenAI 兼容 `chat/completions` 的**请求体构造口径**：`AnalysisWorker`（S1/S2 分析）、`AdvisorWorker`（顾问复盘）、`S1EvalRunner`（S1 评测）三处此前各抄一份同构的 ~20 行，URL 归一与 `max_tokens` 逐字相同，但注释里的实测值已经分叉（1024 / 1500 / 4096）、异常类型也不一致（前两处抛 `HttpException`、评测处抛 `IllegalStateException`）。三条契约：① **端点归一只有一个方向**（`trim` → 去尾斜杠 → 已带 `/chat/completions` 原样返回，否则追加），**不猜 provider 前缀**（不补 `/v1`，用户填到 `/v4` 就补在 `/v4` 后面）；② **`max_tokens` 只有一个默认值** `MAX_TOKENS = 4096`（推理模型的思考段计入额度，1024 被吃满后 `content` 是空串），要更小必须显式传参；③ **请求体键集合是契约**（`model` / `messages` / `response_format` / `max_tokens` / `stream`，`messages` 恒 `system` → `user` 两条），`payload()` 返回已序列化字符串。刻意不接管 HTTP、`Authorization` 与异常分类 —— 那是各通道的重试语义 |

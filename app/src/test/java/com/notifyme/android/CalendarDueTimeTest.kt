@@ -3,7 +3,11 @@
 
 package com.notifyme.android
 
-import java.util.Calendar
+import java.time.DayOfWeek
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.temporal.TemporalAdjusters
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -14,35 +18,29 @@ import org.junit.Test
  *  - 「周X」当天：时刻未到用当天，已过才顺延到下周（原先一律顺延，整周误差）；
  *  - 「明天/今天 HH:mm」按基准时间的日历日推算，不受跨月影响。
  *
- * 断言用 Calendar 现算期望值，因此不依赖运行时区。
+ * 夹具只用 java.time（恒公历）：以前用 `Calendar.getInstance()` 造基准时刻、读 `YEAR/MONTH`
+ * 做期望值，注释写「因此不依赖运行时区」——**这句在非公历默认 Locale 下不成立**：
+ * `th_TH` 佛历设备上 `set(2026, 9, 5)` 得到的是公历 **1483 年**，整套断言红在夹具上而代码是对的
+ * （2026-11-13 实测 `-Duser.language=th -Duser.country=TH` 下本文件 5 条红）。
  */
 class CalendarDueTimeTest {
 
-    /** 构造基准时刻（本地时区）。 */
-    private fun at(year: Int, month1: Int, day: Int, hour: Int, minute: Int): Long {
-        val c = Calendar.getInstance()
-        c.set(year, month1 - 1, day, hour, minute, 0)
-        c.set(Calendar.MILLISECOND, 0)
-        return c.timeInMillis
-    }
+    /** 构造基准时刻（本地时区，恒公历）。 */
+    private fun at(year: Int, month1: Int, day: Int, hour: Int, minute: Int): Long =
+        LocalDateTime.of(year, month1, day, hour, minute).atZone(ZoneId.systemDefault())
+            .toInstant().toEpochMilli()
 
     /** 从时间戳取出「年月日 时分」便于断言。 */
     private fun fields(ms: Long): List<Int> {
-        val c = Calendar.getInstance()
-        c.timeInMillis = ms
-        return listOf(
-            c.get(Calendar.YEAR), c.get(Calendar.MONTH) + 1, c.get(Calendar.DAY_OF_MONTH),
-            c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE)
-        )
+        val t = ZonedDateTime.ofInstant(java.time.Instant.ofEpochMilli(ms), ZoneId.systemDefault())
+        return listOf(t.year, t.monthValue, t.dayOfMonth, t.hour, t.minute)
     }
 
     /** 取基准时间所在周的指定星期几（本周内）的年月日。 */
-    private fun sameWeekDay(base: Long, target: Int): Triple<Int, Int, Int> {
-        val c = Calendar.getInstance()
-        c.timeInMillis = base
-        val diff = (target - c.get(Calendar.DAY_OF_WEEK) + 7) % 7
-        c.add(Calendar.DAY_OF_YEAR, diff)
-        return Triple(c.get(Calendar.YEAR), c.get(Calendar.MONTH) + 1, c.get(Calendar.DAY_OF_MONTH))
+    private fun sameWeekDay(base: Long, target: DayOfWeek): Triple<Int, Int, Int> {
+        val t = ZonedDateTime.ofInstant(java.time.Instant.ofEpochMilli(base), ZoneId.systemDefault())
+            .toLocalDate().with(TemporalAdjusters.nextOrSame(target))
+        return Triple(t.year, t.monthValue, t.dayOfMonth)
     }
 
     @Test
@@ -66,7 +64,7 @@ class CalendarDueTimeTest {
         // 2026-10-05 周一，目标周四：本周内的周四
         val base = at(2026, 10, 5, 9, 0)
         val due = CalendarHelper.parseDueTime("周四 16:30", base)
-        val (y, m, d) = sameWeekDay(base, Calendar.THURSDAY)
+        val (y, m, d) = sameWeekDay(base, DayOfWeek.THURSDAY)
         assertEquals(listOf(y, m, d, 16, 30), fields(due))
     }
 

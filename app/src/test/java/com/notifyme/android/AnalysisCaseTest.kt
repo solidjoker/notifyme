@@ -54,9 +54,7 @@ class AnalysisCaseTest {
     // M22：固定参考时间（1970-01-01 00:00:00Z 附近），与 msg() 的小时间戳同年，
     // 触发「同年省略年份」格式；期望值用同样的 formatter 在同一 JVM 时区算出，不写死时区。
     private val refNow = 86_400_000L
-    private fun label(ts: Long): String =
-        "[" + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US)
-            .format(java.util.Date(ts)) + "]"
+    private fun label(ts: Long): String = PromptTimeCore.messageLabel(ts, refNow)
 
     // ---------------- fromMessages ----------------
 
@@ -328,9 +326,8 @@ class AnalysisCaseTest {
     fun `currentTimeHeader 含年月日时分与中文星期`() {
         // 2026-10-25 是周日
         val header = AnalysisCase.currentTimeHeader(
-            java.util.Calendar.getInstance().apply {
-                clear(); set(2026, java.util.Calendar.OCTOBER, 25, 12, 14)
-            }.timeInMillis
+            java.time.LocalDateTime.of(2026, 10, 25, 12, 14)
+                .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
         )
         assertTrue(header, Regex("""当前时间：2026-10-25 周\S \d{2}:\d{2}""").containsMatchIn(header))
     }
@@ -342,9 +339,8 @@ class AnalysisCaseTest {
         val short = AnalysisCase.messageTimeLabel(2 * 86_400_000L, sameYear)
         assertTrue(short, Regex("""\[\d{2}-\d{2} \d{2}:\d{2}]""").matches(short))
         assertFalse(short.contains("1970"))
-        val ts2025 = java.util.Calendar.getInstance().apply {
-            clear(); set(2025, java.util.Calendar.DECEMBER, 31, 23, 59)
-        }.timeInMillis
+        val ts2025 = java.time.LocalDateTime.of(2025, 12, 31, 23, 59)
+            .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
         val label = AnalysisCase.messageTimeLabel(ts2025, refNow2026)
         assertTrue(label, Regex("""\[2025-12-31 \d{2}:\d{2}]""").matches(label))
     }
@@ -375,9 +371,8 @@ class AnalysisCaseTest {
         assertTrue(prompt, prompt.contains("${label(2_000L)} 对方: 有个事"))
     }
 
-    private val refNow2026 = java.util.Calendar.getInstance().apply {
-        clear(); set(2026, java.util.Calendar.OCTOBER, 25, 13, 9)
-    }.timeInMillis
+    private val refNow2026 = java.time.LocalDateTime.of(2026, 10, 25, 13, 9)
+        .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
 
     // ---------------- S1 题集 ----------------
 
