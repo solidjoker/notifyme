@@ -275,8 +275,9 @@ class S1EvalHttpTest {
         return sb.toString()
     }
 
-    private fun timestamp(): String =
-        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.CHINA).format(java.util.Date())
+    /** 报告抬头时间：走 java.time + Locale.ROOT（SimpleDateFormat 的历法随默认 Locale 走）。 */
+    private fun timestamp(): String = java.time.LocalDateTime.now()
+        .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", java.util.Locale.ROOT))
 
     private fun yn(v: Boolean?): String = when (v) {
         true -> "是"

@@ -5,9 +5,6 @@ package com.notifyme.android
 
 import android.content.Context
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * 云端 vs 端侧 S1 一致率的采集入口（ROADMAP M4 任务 6 / docs/ROADMAP.md:237）。
@@ -76,9 +73,8 @@ internal object S1Eval {
             background = background,
             onProgress = onProgress
         )
-        val generatedAt = SimpleDateFormat(
-            "yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US
-        ).format(Date())
+        // 口径在 PromptTimeCore.isoStamp（java.time，恒公历）：SimpleDateFormat 的历法随 Locale 走
+        val generatedAt = PromptTimeCore.isoStamp(System.currentTimeMillis())
 
         val sb = StringBuilder()
         sb.append("# 云端 vs 端侧 S1 判定一致率（M4 任务 6）\n")

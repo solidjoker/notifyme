@@ -4,9 +4,6 @@
 package com.notifyme.android
 
 import java.security.MessageDigest
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -149,32 +146,28 @@ data class AnalysisCase(
          * 这类相对时间必须显式喂给它。用中文星期（系统语言中文的设备显示「周日」）。
          */
         fun currentTimeHeader(nowMs: Long): String =
-            "当前时间：" + SimpleDateFormat("yyyy-MM-dd E HH:mm", Locale.CHINESE)
-                .format(Date(nowMs))
+            "当前时间：" + PromptTimeCore.chineseStamp(nowMs)
 
         /**
          * 「今天」行（M23）：用户要求当天日期直接进**提示词**（不是只放在用户内容里）。
          * 中文提示词用：如「今天是 2026年10月25日 星期日 13:09。」
          */
         fun todayLineCn(nowMs: Long): String =
-            "今天是 " + SimpleDateFormat("yyyy年M月d日 EEEE HH:mm", Locale.CHINESE)
-                .format(Date(nowMs)) + "。"
+            "今天是 " + PromptTimeCore.todayCn(nowMs) + "。"
 
         /** 同上，英文 S1 prompt 用：如「Today is Sunday, 2026-10-25, current time 13:09.」 */
         fun todayLineEn(nowMs: Long): String =
-            "Today is " + SimpleDateFormat(
-                "EEEE, yyyy-MM-dd, 'current time' HH:mm", Locale.US
-            ).format(Date(nowMs)) + "."
+            "Today is " + PromptTimeCore.todayEn(nowMs) + "."
 
         /**
-         * 单条消息时间标签：同年省略年份 [MM-dd HH:mm]，跨年带全年份
-         * [yyyy-MM-dd HH:mm]（SimpleDateFormat 非线程安全，每次现建；窗口 ≤10 条）。
+         * 单条消息时间标签：同年省略年份 [MM-dd HH:mm]，跨年带全年份 [yyyy-MM-dd HH:mm]。
+         *
+         * 口径在 [PromptTimeCore.messageLabel]（java.time，恒公历；同年判定按 year 数值比较）。
+         * 以前用 SimpleDateFormat("yyyy", Locale.US) 格式化后比较字符串：当前 Locale.US 恰好映射公历，
+         * 但那条隐式依赖一旦换成 getDefault()（th_TH 给 2569）就会永远判跨年。
          */
-        fun messageTimeLabel(timestamp: Long, nowMs: Long): String {
-            val yearOf = { ms: Long -> SimpleDateFormat("yyyy", Locale.US).format(Date(ms)) }
-            val pattern = if (yearOf(timestamp) == yearOf(nowMs)) "MM-dd HH:mm" else "yyyy-MM-dd HH:mm"
-            return "[" + SimpleDateFormat(pattern, Locale.US).format(Date(timestamp)) + "]"
-        }
+        fun messageTimeLabel(timestamp: Long, nowMs: Long): String =
+            PromptTimeCore.messageLabel(timestamp, nowMs)
 
         fun fromMessages(pkg: String, conversation: String, messages: List<ChatMessage>): AnalysisCase? {
             if (messages.isEmpty()) return null
@@ -265,8 +258,7 @@ data class AnalysisCase(
                         "sent time in [MM-dd HH:mm] brackets." +
                         if (nowMs > 0L) {
                             " The user's current time is " +
-                                SimpleDateFormat("EEEE yyyy-MM-dd HH:mm", Locale.US)
-                                    .format(Date(nowMs)) +
+                                PromptTimeCore.dueAnchor(nowMs) +
                                 "; the buckets today/tomorrow/this_week are relative to that time."
                         } else ""
                 put("instructions", dueInstructions)
