@@ -1252,3 +1252,38 @@ QUEUE_DEVICES [{"device_id":"android-live","active":1,"stale":0,"total":1},
 **验证.** 定向 `pytest server/test_queue.py -q` → 58 passed；`pytest server/test_stats_api.py -q` → 38 passed；`pytest server/test_console_queue.py server/test_console_ui.py -q` → 64 passed；全量 `pytest server/ -q` → **659 passed in 30.03s**（基线 646 + 13）；`python -m compileall -q server` → 0。真实 HTTP 冒烟（`werkzeug.serving.make_server` + `urllib`）：`STATS_QUEUE ... "devices": 2, "devices_active": 1`、`QUEUE_SUMMARY ... "devices": 2, "devices_active": 1`、`DEVICES_MATCH True True`、`ACTIVE_MATCH True`。node harness（`vm` 抽 `liveDeviceCount` / `deviceTallyText` 函数体）：混合 1 / 全僵尸 0 / 脏值 1 / 空 0；文案 `设备 2 台（在跑 1 台）` / `设备 2 台` / `设备 0 台` / `设备 —`。
 
 **计数.** `server/storage.py` 864 → **885** 行（非空 803 → 821）、`server/routes.py` 1034 → **1039**（非空 974 → 979）、`server/stats_api.py` 212 → **220**（非空 187 → 194）、`server/console_ui.py` 3526 → **3555**（非空 3437 → 3466）、`server/test_queue.py` 760 → **812**（非空 663）、`server/test_stats_api.py` 716 → **778**（非空 660）、`server/test_console_queue.py` 200 → **248**（非空 176）、`server/test_module_split.py` 325 → **331**（非空 288）。服务端用例 646 → **659**。
+
+
+### E-60｜概览条「待处理」的会话数读的是 `convs` 而不是 `todo_convs`（`console_ui.renderOverview`，feat/overview-todo-convs，2026-11-14）
+
+**问题.** 控制台概览条「待处理」那格的数字是待办条数（`statNum(['analyses', 'todo'])`），副标题却写 `全库真值 · 共 N 个会话`，N 取的是 `statNum(['analyses', 'convs'])` —— 也就是「**有分析结果**的会话数」。`/stats` 的分析段给了两个会话数：`convs`（有分析结果的会话数）与 `todo_convs`（其中有待办的会话数），`/suggests/next` 的证据串也一直是「待办 N 条，分布在 M 个会话」（`server/suggests.py` 的 `_todo_counts`）。概览条读错了键，同一屏两个数字就打架。
+
+**复现.** 造 4 条分析记录（`POST /analysis`，2 条 `need_action=true`，其中 3 条来自 `com.tencent.mm`、1 条来自 `com.sina.weibo`）→
+
+```text
+GET /stats  → analyses = { total: 4, convs: 4, todo: 2, todo_convs: 2, ... }
+GET /suggests/next → [{"priority":80,"title":"待办 2 条，分布在 2 个会话", ...}]
+概览条（改前）→ 数字「2」 + 副标题「全库真值 · 共 4 个会话」   ← 4 个会话里只有 2 个有待办
+```
+
+用户看到「待办 2 条 · 共 4 个会话」，第一反应是「还有 2 条没显示出来」，而服务端的建议已经明说只有 2 个会话有待办。
+
+**为什么 659 条全绿却没发现.** `todo_convs` 这个键在 `/stats` 里存在了好几轮（E-52 加 `CONV_KEY_SQL` 时一并收口的），但 `server/console_ui.py` 里从头到尾**没有消费点** —— 前端只读 `analyses.convs`。既有用例 `test_console_ui.py` 全是「某个字符串在 / 不在 HTML 里」的静态契约，没有任何一条断言「概览条的会话数与 `/suggests/next` 用同一口径」。`test_stats_api.py` 有 `todo_convs` 的数值断言，但那是服务端；两个数字分别被测到，交叉一致性没人测。
+
+**修法.**
+
+1. `renderOverview()` 的 `sTodo` 分支把 `statNum(['analyses', 'convs'])` 改成 `statNum(['analyses', 'todo_convs'])`，并在原位留 4 行注释写明理由（不能拿 convs；与 `/suggests/next` 同口径）。
+2. `server/test_console_ui.py` 新增 `test_overview_todo_sub_uses_todo_convs_not_all_analyzed_convs`，同时断言新键在、旧键不在 —— 只断言「新键在」挡不住两个键并存的情况。
+3. `server/README.md` 的排队脚注区补一条同族说明（概览条「待处理」的会话数读 `todo_convs`）。
+
+**测试.** `python -m pytest server/test_console_ui.py server/test_console_queue.py -q` → **65 passed**；全量 `python -m pytest server/ -q` → **660 passed**（基线 659 + 1）；`python -m compileall -q server` → 退出码 0。
+
+**验证.** 用 python `ast` 从 `server/console_ui.py` 抽出 `CONSOLE_HTML`（111647 字符）写成文件，node 侧按 `function name(` + 花括号配平抓 `statNum` / `setOv` / `countLast24h` / `renderOverview` 函数体，注入假 `STATS` 跑真函数（仓库外的临时目录下的 `h32.js`）：
+
+```text
+改前（git show HEAD:server/console_ui.py 的 HTML）→ todo_sub = "全库真值 · 共 4 个会话"
+改后（工作区）                              → todo_sub = "全库真值 · 共 2 个会话"
+```
+
+**计数.** `server/console_ui.py` 3555 → **3559** 行（非空 3466 → 3470）、`CONSOLE_MANIFEST` @3371 → **@3375**、`CONSOLE_SW` @3417 → **@3421**；`server/test_console_ui.py` 488 → **521** 行（非空 389 → 417）。服务端用例 659 → **660**。
+

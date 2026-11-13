@@ -23,7 +23,7 @@ subgraph APP["server/app.py · Flask 壳 742 行<br/>app.run host=0.0.0.0 port=P
         MR["routes.py · 1039 行<br/>数据面路由<br/>register @1027 · add_url_rule 映射 @1029-1038"]:::mod
         MST["stats_api.py · 220 行<br/>全库聚合 /stats · 会话数按 (pkg, conversation)<br/>数值列 typeof 守卫 · 分布 by_pkg/by_source 跟随 pkg 过滤<br/>排队段给 devices + devices_active（只数在跑台数）<br/>query_stats @185 · INT_ONLY_TS @47 · MAX_TS @51<br/>_messages_block @55 · _analysis_block @103 · _queue_block @138"]:::mod
         MSN["suggests.py · 344 行<br/>下一步建议 /suggests/next<br/>query_suggests_next @209 · _pick @197<br/>pkg 只作用于 todo / convs_missing 两族<br/>排队按设备 · 顾问是全局报告<br/>_advisor_state 返三元组 · 损坏时 priority 85"]:::mod
-        MC["console_ui.py · 3555 行<br/>控制台前端常量（5 个 Tab）<br/>CONSOLE_HTML @13 · CONSOLE_MANIFEST @3371<br/>CONSOLE_SW @3417 · refreshSuggests @1931<br/>排队 chip 计数与空态走 summary 全库口径<br/>queueStateTotal @3141 · queueEmptyHtml @3214<br/>概览条设备数只算在跑（liveDeviceCount @3103 / deviceTallyText @3112）<br/>ADVISORS_ERR @1381 · renderAdvisor @2976"]:::mod
+        MC["console_ui.py · 3559 行<br/>控制台前端常量（5 个 Tab）<br/>CONSOLE_HTML @13 · CONSOLE_MANIFEST @3375<br/>CONSOLE_SW @3421 · refreshSuggests @1931<br/>排队 chip 计数与空态走 summary 全库口径<br/>queueStateTotal @3141 · queueEmptyHtml @3214<br/>概览条设备数只算在跑（liveDeviceCount @3103 / deviceTallyText @3112）<br/>ADVISORS_ERR @1381 · renderAdvisor @2976"]:::mod
         CC["console_classify.js · 434 行<br/>归类规则单一事实源（UMD）<br/>normPkg · ckOf · senderKey · groupBySender<br/>groupTodosByImportance · groupSuggestions<br/>groupMessages 两级分组 · groupQueueTasksByDevice"]:::mod
     end
 
@@ -61,8 +61,8 @@ subgraph APP["server/app.py · Flask 壳 742 行<br/>app.run host=0.0.0.0 port=P
     subgraph PWA["PWA 控制台 · 零 CDN 全内联"]
         direction LR
         CP["GET /console  @app.py:528<br/>console_page()<br/>HTML+CSS+JS 全在 console_ui.py 的 CONSOLE_HTML @13<br/>?token= 写 localStorage 后从地址栏抹除"]:::srv
-        MF["GET /console/manifest.json  @app.py:542<br/>CONSOLE_MANIFEST @console_ui.py:3371<br/>免鉴权"]:::srv
-        SW["GET /sw.js  @app.py:556<br/>console_sw()<br/>CONSOLE_SW @console_ui.py:3417 · CACHE wx-console-v5<br/>免鉴权 · 骨架 cache-first · API 永远走网络"]:::srv
+        MF["GET /console/manifest.json  @app.py:542<br/>CONSOLE_MANIFEST @console_ui.py:3375<br/>免鉴权"]:::srv
+        SW["GET /sw.js  @app.py:556<br/>console_sw()<br/>CONSOLE_SW @console_ui.py:3421 · CACHE wx-console-v5<br/>免鉴权 · 骨架 cache-first · API 永远走网络"]:::srv
         IC["GET /console/icons/&lt;path&gt;  @app.py:548"]:::srv
     end
 
