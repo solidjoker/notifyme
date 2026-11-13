@@ -95,7 +95,11 @@ class LocaleTextCoreTest {
     fun oldSimpleDateFormatIsSafeWhenLocaleIsPinned() {
         // AnalysisCase 里钉了 Locale.US 的那几处：钉了就安全，别去动。
         withLocale("ar-EG") {
-            val pinned = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(ms))
+            // 时区必须显式钉住：这里要证明的是「Locale 钉了就安全」，不是「默认时区是 +08」
+            // （CI 的 runner 是 UTC，不钉时区会得到 10:10）。
+            val pinned = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).apply {
+                timeZone = TimeZone.getTimeZone(zone)
+            }.format(Date(ms))
             assertEquals("2026-11-12 18:10", pinned)
         }
     }

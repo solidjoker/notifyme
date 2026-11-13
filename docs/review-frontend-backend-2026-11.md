@@ -678,5 +678,7 @@ E-35｜数字与短时间戳文本统一到 `LocaleTextCore`（feat/locale-text-
 
 **测试**　新建 `app/src/test/java/com/notifyme/android/LocaleTextCoreTest.kt`（212 行，**16 条**），两条是**根因本身的回归**「旧写法确实会变」：`ar-EG` 下 `SimpleDateFormat` 输出里一个 ASCII 数字都没有（`old.none { it.code in 48..57 }`）、`de-DE` 下 `"%.2f".format(0.8)` 是 `0,80`。其余覆盖：8 种 Locale（含 `ja-JP-u-ca-japanese`）的三种时间戳逐字节相同、`fixed` 的 0 / 负位数退化与四舍五入、`percent` 边界（`0%` / `100.0%` / `82%`）、`bytes` 与 `binaryBytes` 故意不同（同一 1 MiB 分别是 `1.0 MB` / `1.00 MB`，两处单位口径不同不能合并）、`zone` 缺省取系统时区而显式传入才换区、顾问摘要拼出的字段里没有逗号小数点。
 
+**踩坑**　单测里要验证「Locale 钉住就安全」时，时区也必须显式钉住：`SimpleDateFormat(_, Locale.US)` 只固定数字形态，不固定时区，CI runner 是 UTC、本机是 +08，不钉会得到 `10:10` 而非 `18:10`（本轮 CI 就是这条先红）。
+
 **计数**　主源码顶层 `.kt` 119（全树 126）、`app/src/test` 73 个 / 1142 条、Core 内核 39 个；三张架构图重渲（01 `3970×1701`、02 `12449×2007`、08 `6850×4895`），README 索引表 02 行尺寸已按新 viewBox 回写。
 

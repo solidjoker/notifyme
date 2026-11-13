@@ -310,3 +310,4 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ④ **时间戳 `<= 0` 不在这里兜底**：调用方各自保留「—」/「无时间」文案，Core 只做格式化。
   ⑤ **别把这条口径推广到 `getString(R.string.x, 数字)`**：资源里的 `%1$.1f`（`chip_importance`）与 `%1$.0f%%`（`analysis_prob_fmt`）走 `Configuration` 的 Locale，要固定得先改资源调用方式，属于另一件事（当前 `res/` 只有 `values/`、界面纯中文）。
   另有三类**刻意的例外**，别顺手改：`"%02x".format(it)` 的 hex 摘要（盐编码 / 别名 / 校验和，十六进制不受 Locale 影响）、`AnalysisCase` 里已钉 `Locale.US` / `Locale.CHINESE` 的题面时间（钉了就安全）、`S1Eval` 的 `Locale.US` ISO 时间。改格式或加新站点前先跑 `LocaleTextCoreTest.kt`（16 条，含 `ar-EG` / `de-DE` 两条根因回归）。
+  写这类对照单测时有一个坑：「`Locale.US` 钉住就安全」只证明数字形态，不证明时区 —— `SimpleDateFormat` 取系统默认时区，CI runner 是 UTC、本机是 +08，不显式 `timeZone = TimeZone.getTimeZone(zone)` 就会得到 `10:10` 而非 `18:10`（本轮 CI 就是这条先红）。
