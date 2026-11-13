@@ -209,7 +209,7 @@ curl -X POST http://127.0.0.1:8000/weixin \
 | `pkg` | 来源 App 包名，精确匹配（如 `com.tencent.mm`）；缺省不按 App 过滤 |
 | `conversation` | 会话名，**前缀匹配**（`项目组` 命中 `项目组`、`项目组A`，不命中 `老项目组`）；走 `(conversation, timestamp)` 索引，不做全表扫 |
 | `conversation_match` | 传 `contains` 改成旧的包含匹配（`%x%`，`%` 与 `_` 按字面量转义）；默认前缀匹配 |
-| `date` | `YYYY-MM-DD`，按消息 `timestamp` 过滤当天 |
+| `date` | `YYYY-MM-DD`，按消息 `timestamp` 过滤当天；解析失败返回 400 `date must be YYYY-MM-DD`，换算后超出时间戳范围返回 400 `date out of range`（`1970-01-01` 之前 / `9999-12-31` 等边界不再抛 500；空串等于不按日期过滤） |
 | `limit` | 返回条数，默认 100，上限 1000 |
 | `before` | 游标翻页：把上一页返回的 `next_before` 原样回传（形如 `<毫秒>_<rowid>`，也可只给毫秒）；毫秒与 rowid 任一段非法或越界都返回 400（`before out of range` / `before must be <ms> or <ms>_<rowid>`） |
 | `tz` | 可选时区（`+08:00` / `+0800` / `+8`），按该时区解释 `date` 的当天边界；不传则用服务器本地时区（与旧行为一致） |
@@ -288,7 +288,7 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 | `pkg` | 来源 App 包名，精确匹配 |
 | `conversation` | 会话名，**前缀匹配**（同 `/messages`）；传 `conversation_match=contains` 改成包含匹配 |
 | `todo_only` | `1`/`true` 只看 `need_action=true` 的 |
-| `date` | `YYYY-MM-DD`，按分析完成时间 `analyzed_at` 过滤当天（毫秒与本地文本两种历史格式都兼容） |
+| `date` | `YYYY-MM-DD`，按分析完成时间 `analyzed_at` 过滤当天（毫秒与本地文本两种历史格式都兼容）；越界与解析失败的两条 400 口径同 `/messages` |
 | `limit` | 默认 100，上限 1000 |
 | `before` | 游标翻页：把上一页返回的 `next_before` 原样回传（形如 `<received_at>_<rowid>`）；结构的毫秒段与 rowid 段**都**校验范围（`0 <= rowid <= 2^63-1`），非法或越界返回 400 |
 | `tz` / `tz_offset` | 可选时区 / 时区偏移（分钟），作用同 `/messages` |
