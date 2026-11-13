@@ -32,7 +32,7 @@ def api():
     tmp = tempfile.mkdtemp(prefix="notifyme_stats_")
     old = (app_module.DATA_DIR, app_module.DB_PATH, app_module.JSONL_PATH,
            app_module.ADVISOR_PATH, app_module.TOKEN, app_module.ALLOW_NO_AUTH,
-           app_module._db_ready)
+           app_module._db_ready, app_module._queue_cleanup_at)
     app_module.DATA_DIR = tmp
     app_module.DB_PATH = os.path.join(tmp, "messages.db")
     app_module.JSONL_PATH = os.path.join(tmp, "messages.jsonl")
@@ -40,12 +40,14 @@ def api():
     app_module.TOKEN = ""
     app_module.ALLOW_NO_AUTH = "1"
     app_module._db_ready = False
+    # 排队过期行清理是进程级节流：不复位会让「插了老行再断言」的用例随执行顺序飘。
+    app_module._queue_cleanup_at = 0
     app_module.init_db()
     app_module._auth_fail_events.clear()
     yield flask_app.test_client()
     (app_module.DATA_DIR, app_module.DB_PATH, app_module.JSONL_PATH,
      app_module.ADVISOR_PATH, app_module.TOKEN, app_module.ALLOW_NO_AUTH,
-     app_module._db_ready) = old
+     app_module._db_ready, app_module._queue_cleanup_at) = old
     app_module._db_ready = False
 
 
@@ -322,7 +324,12 @@ def test_stats_counts_queue_by_state_and_device(api):
 
 
 def test_stats_marks_stale_queue_tasks_and_excludes_from_state(api):
-    """updated_at 超过 TTL 的条目算 stale，且不计入活跃 / 失败。"""
+    """updated_at 超过 TTL 的条目算 stale，且不计入活跃 / 失败。
+
+    老行的 updated_at 取「一小时前」而不是 1：读取路径现在会顺带清掉超过
+    保留期（7 天）的行，1970 年的行在 before_request 就被删掉了，
+    这里要验的是「过期但还在库里」的中间态。
+    """
     with app_module._write_lock:
         conn = app_module._connect()
         try:
@@ -330,7 +337,8 @@ def test_stats_marks_stale_queue_tasks_and_excludes_from_state(api):
                 "INSERT OR REPLACE INTO queue_tasks"
                 " (device_id, task_id, kind, title, state, detail, queued_at, updated_at)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                ("dev-a", "old", "sync", "老任务", "running", "", 0, 1))
+                ("dev-a", "old", "sync", "老任务", "running", "", 0,
+                 _now_ms() - 60 * 60 * 1000))
             conn.commit()
         finally:
             conn.close()

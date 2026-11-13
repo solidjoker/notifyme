@@ -31,6 +31,7 @@ def client():
         "TOKEN": app_module.TOKEN,
         "ALLOW_NO_AUTH": app_module.ALLOW_NO_AUTH,
         "_db_ready": app_module._db_ready,
+        "_queue_cleanup_at": app_module._queue_cleanup_at,
     }
     app_module.DATA_DIR = tmp
     app_module.DB_PATH = os.path.join(tmp, "test.db")
@@ -39,6 +40,9 @@ def client():
     app_module.TOKEN = ""
     app_module.ALLOW_NO_AUTH = "1"
     app_module._db_ready = False
+    # 清理节流时间戳是进程级的：不复位的话上一条用例刚清过，这一条就不清了，
+    # 「无写入也会清」的用例会随执行顺序飘。
+    app_module._queue_cleanup_at = 0
     app_module.init_db()
     with flask_app.test_client() as c:
         yield c
@@ -360,6 +364,62 @@ def test_old_rows_cleaned_on_write(client):
     rows = _rows()
     assert [r[1] for r in rows] == ["fresh"]
 
+def test_old_rows_cleaned_without_any_write(client):
+    """没有设备再上报时，读取路径也会按保留期清行。
+
+    以前清理只写在 upsert_queue_tasks 里：所有设备停报（换机 / 卸载 /
+    关掉排队上报）之后过期行永远是脏数据，devices 一直挂着僵尸设备。
+    现在 before_request 按 QUEUE_CLEANUP_INTERVAL_MS 节流清一次。
+    """
+    now = int(time.time() * 1000)
+    _insert_row("android-gone", "ancient", now - 8 * 24 * 60 * 60 * 1000,
+                state="running")
+    assert _row_count() == 1
+    body = client.get("/queue").get_json()
+    assert _row_count() == 0
+    assert body["tasks"] == []
+    assert body["devices"] == []
+    assert body["summary"]["total"] == 0
+
+
+def test_rows_within_retention_survive_cleanup(client):
+    """保留期内的过期行不清：它是「端上大概停了」的证据，还要给用户看。"""
+    now = int(time.time() * 1000)
+    _insert_row(DEVICE, "stale-but-kept",
+                now - storage_module.QUEUE_TTL_MS - 60 * 1000,
+                state="running")
+    body = client.get("/queue").get_json()
+    assert [t["task_id"] for t in body["tasks"]] == ["stale-but-kept"]
+    assert body["tasks"][0]["stale"] is True
+    assert body["summary"]["stale"] == 1
+
+
+def test_cleanup_is_throttled_by_interval(client):
+    """清理按小时节流：刚清过就不再扫全表（updated_at 上没有索引）。"""
+    now = int(time.time() * 1000)
+    _insert_row(DEVICE, "ancient-1", now - 8 * 24 * 60 * 60 * 1000)
+    client.get("/queue")
+    assert _row_count() == 0
+    # 刚清过：再请求一次不会重复扫，新插的老行这轮留着
+    _insert_row(DEVICE, "ancient-2", now - 8 * 24 * 60 * 60 * 1000)
+    client.get("/queue")
+    assert _row_count() == 1
+    # 节流过期后（模拟一小时过去）再请求就会清
+    app_module._queue_cleanup_at = now - storage_module.QUEUE_CLEANUP_INTERVAL_MS - 1
+    client.get("/queue")
+    assert _row_count() == 0
+
+
+def test_cleanup_failure_does_not_break_requests(client, monkeypatch):
+    """清理抛异常只记日志，不能把整页请求打成 500。"""
+    def boom(now_ms=None):
+        raise RuntimeError("cleanup exploded")
+    # app.py 在 import 时把函数绑进了自己的命名空间，要 patch app 模块那个名字。
+    monkeypatch.setattr(app_module, "cleanup_queue_tasks", boom)
+    app_module._queue_cleanup_at = 0
+    r = client.get("/queue")
+    assert r.status_code == 200, r.get_data(as_text=True)
+
 
 # ---------------------------------------------------------------- 字段回显
 
@@ -610,17 +670,19 @@ def test_devices_only_counts_accepted_rows_of_a_device(client):
 
 
 def test_storage_queue_devices_returns_list(client):
-    """存储层直调：返回 [{"device_id","total","active"}] 列表。"""
+    """存储层直调：返回 [{"device_id","total","active","stale"}] 列表。"""
     _post(client, [_task(task_id="a1", state="queued"),
                    _task(task_id="a2", state="done")], device_id="android-a")
     devices = storage_module.queue_devices()
     assert isinstance(devices, list)
-    assert devices == [{"device_id": "android-a", "total": 2, "active": 1}]
+    assert devices == [{"device_id": "android-a", "total": 2, "active": 1,
+                       "stale": 0}]
     for item in devices:
-        assert set(item) == {"device_id", "total", "active"}
+        assert set(item) == {"device_id", "total", "active", "stale"}
         assert isinstance(item["device_id"], str)
         assert isinstance(item["total"], int)
         assert isinstance(item["active"], int)
+        assert isinstance(item["stale"], int)
 
 
 def test_storage_queue_devices_without_table_returns_empty(client):
@@ -636,13 +698,24 @@ def test_storage_queue_devices_without_table_returns_empty(client):
 
 
 def test_devices_counts_stale_rows_in_total(client):
-    """过期行仍计入 total（设备维度口径＝库里现存多少条，不做过期剔除）。"""
+    """过期行仍计入 total，但不计入 active —— 口径与 queue_summary 一致。
+
+    以前设备维度的 active 不看 TTL：「2 活跃」在汇总里却可能是 running 0，
+    两台设备都停报之后僵尸设备会一直挂着 active=2。total 仍是库里现存条数
+    （不做过期剔除），过期条数单独落在 stale 里。
+    """
     now = int(time.time() * 1000)
     _post(client, [_task(task_id="fresh", state="queued")])
     _insert_row(DEVICE, "old", now - storage_module.QUEUE_TTL_MS - 60000,
                 state="running")
-    devices = client.get("/queue").get_json()["devices"]
-    assert _devices_by_id(devices)[DEVICE] == {"total": 2, "active": 2}
+    body = client.get("/queue").get_json()
+    devices = body["devices"]
+    assert _devices_by_id(devices)[DEVICE] == {"total": 2, "active": 1}
+    assert devices[0]["stale"] == 1
+    # 设备维度的「在跑」与全库汇总必须对得上（同一次响应内不打架）：
+    # summary 没有 active 键，活跃 = queued + running。
+    assert body["summary"]["running"] == 0
+    assert body["summary"]["queued"] + body["summary"]["running"] == 1
 
 
 # ---------------------------------------------------------------- 脏数值行
@@ -668,6 +741,11 @@ def test_get_queue_survives_text_updated_at(client):
     assert body["summary"]["queued"] == 1
     dirty = [t for t in body["tasks"] if t["task_id"] == "dirty-1"][0]
     assert dirty["stale"] is True
+    # 设备维度同口径：脏 updated_at 按过期处理，不拿它冒充「在跑」
+    dev = body["devices"][0]
+    assert dev["total"] == 2
+    assert dev["active"] == 1
+    assert dev["stale"] == 1
 
 
 def test_get_queue_survives_text_queued_at(client):

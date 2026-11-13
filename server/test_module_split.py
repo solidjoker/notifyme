@@ -130,6 +130,7 @@ EXPECTED_OWNER = {
     "_import_extract_module": "storage.py",
     "_run_extract_bg": "storage.py",
     "_probe_main_db_writable": "storage.py",
+    "cleanup_queue_tasks": "storage.py",
     # routes.py：数据面路由
     "receive_weixin": "routes.py",
     "query_messages": "routes.py",
@@ -162,6 +163,7 @@ EXPECTED_OWNER = {
     "_ensure_db_ready": "app.py",
     "_security_headers": "app.py",
     "_require_token_configured": "app.py",
+    "_maybe_cleanup_queue": "app.py",
 }
 
 # 运行期可变状态：只允许在 app 模块里出现
@@ -173,6 +175,7 @@ RUNTIME_STATE = [
     "TOKEN",
     "ALLOW_NO_AUTH",
     "_db_ready",
+    "_queue_cleanup_at",
     "_extract_status",
     "_extract_lock",
     "_auth_fail_events",

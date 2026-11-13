@@ -3134,7 +3134,9 @@ function queueSummaryCard() {
     html += '<div class="q-note">排队任务接口暂不可用：' + esc(QUEUE_ERR) + '。其它数据不受影响。</div>';
   } else {
     html += '<div class="q-note">数据来自手机端同步上报：分析任务的排队 / 运行 / 失败状态，以及待同步消息队列。超过 30 分钟未更新的条目算「已过期」。' +
-      '上方汇总为全库口径（与「统计」Tab 一致），下方列表最多显示最近 500 条。</div>';
+      '上方汇总为全库口径（与「统计」Tab 一致），下方列表最多显示最近 500 条。' +
+      '设备 chip 上的「活跃」只算未过期的条目，「已过期」是那台设备挂着但已经不在跑的任务数。' +
+      '7 天前的行会在读取或上报时顺带清掉。</div>';
   }
   return html;
 }
@@ -3161,9 +3163,13 @@ function queueFilterBar() {
     QUEUE_DEVICES.forEach(function (d) {
       var did = (d && d.device_id != null) ? String(d.device_id) : '';
       var ac = Number((d && d.active) || 0);
+      var sl = Number((d && d.stale) || 0);
+      // active 是「未过期的排队中 + 运行中」，与上方汇总结算口径一致；
+      // stale 单列一句，替用户解释「这台设备挂着任务但已经不在跑了」。
+      var tail = ' ' + esc(ac) + ' 活跃' + (sl > 0 ? ' · ' + esc(sl) + ' 已过期' : '');
       html += '<button type="button" class="chip-btn" aria-pressed="' + (QUEUE_DEVICE === did ? 'true' : 'false') +
         '" data-action="queue-device" data-device="' + esc(did) + '">' + esc(did || '未知设备') +
-        ' ' + esc(ac) + ' 活跃</button>';
+        tail + '</button>';
     });
     html += '</div>';
   }
