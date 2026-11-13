@@ -3088,6 +3088,20 @@ function queueActiveCount() {
   }
   return n;
 }
+// 单个状态的条数（全库口径）。状态 chip 的计数与上方汇总必须同源：
+// 直接数 QUEUE 数组数的是「最近 500 条这一页」，600 条排队中 + 20 条已完成时
+// 会把 chip 的「已完成」显示成 0，而汇总卡（走 summary）显示 20 —— 同屏两个数打架。
+// summary 拿不到（排队接口挂了）才退回数已加载的列表，至少不比空白差。
+function queueStateTotal(st) {
+  var sm = QUEUE_SUMMARY;
+  if (sm && typeof sm[st] === 'number') return Number(sm[st] || 0);
+  if (st === 'total') return QUEUE.length;
+  var n = 0;
+  for (var i = 0; i < QUEUE.length; i++) {
+    if ((QUEUE[i].state || '') === st) n++;
+  }
+  return n;
+}
 function setQueueState(st) {
   QUEUE_STATE = st || '';
   renderData();
@@ -3136,6 +3150,7 @@ function queueSummaryCard() {
     html += '<div class="q-note">数据来自手机端同步上报：分析任务的排队 / 运行 / 失败状态，以及待同步消息队列。超过 30 分钟未更新的条目算「已过期」。' +
       '上方汇总为全库口径（与「统计」Tab 一致），下方列表最多显示最近 500 条。' +
       '设备 chip 上的「活跃」只算未过期的条目，「已过期」是那台设备挂着但已经不在跑的任务数。' +
+      '状态 chip 上的数字同样是全库口径（过期行只计入「已过期」），不是这一页的条数。' +
       '7 天前的行会在读取或上报时顺带清掉。</div>';
   }
   return html;
@@ -3147,10 +3162,7 @@ function queueFilterBar() {
     '" data-action="queue-filter" data-state="">全部</button>';
   states.forEach(function (st) {
     var meta = QUEUE_STATE_META[st];
-    var cnt = 0;
-    for (var i = 0; i < QUEUE.length; i++) {
-      if ((QUEUE[i].state || '') === st) cnt++;
-    }
+    var cnt = queueStateTotal(st);
     html += '<button type="button" class="chip-btn" aria-pressed="' + (QUEUE_STATE === st ? 'true' : 'false') +
       '" data-action="queue-filter" data-state="' + st + '">' + esc(meta.label) + ' ' + esc(cnt) + '</button>';
   });
@@ -3196,13 +3208,28 @@ function queueCard(t) {
     full: true
   };
 }
+// 空态有两种成因，不能混成一句「当前没有排队任务」：
+// 任务超一页时选了「已完成」、而这一页全是排队中 —— 列表为空，chip 却说全库有 20 条。
+// 这种时候要给「当前页没有命中 + 全库有多少」的解释，否则用户以为任务丢了。
+function queueEmptyHtml() {
+  // 搜索 / 设备筛选是「这一页里挑」，命中为 0 时不能拿全库数安慰用户，交回通用空态。
+  if (QUERY.trim() || QUEUE_DEVICE) return emptyStateFor('queue');
+  var want = QUEUE_STATE ? queueStateTotal(QUEUE_STATE) : queueStateTotal('total');
+  if (want > 0) {
+    var name = QUEUE_STATE ? ('「' + queueStateLabel(QUEUE_STATE) + '」') : '';
+    return emptyState('当前页没有' + (name || '') + '任务',
+      '全库共有 ' + want + ' 条' + (name || '') + '任务，它们不在这最近 500 条里。',
+      '上方汇总与状态 chip 的计数是全库口径，下方列表最多显示最近 500 条；换一个状态筛选，或等更早的任务被清理后再看。');
+  }
+  return emptyStateFor('queue');
+}
 function renderQueue() {
   var tasks = filteredQueues();
   var out = [];
   out.push({ key: 'queue-sum', html: queueSummaryCard(), full: true });
   out.push({ key: 'queue-filter', html: queueFilterBar(), full: true });
   if (!tasks.length) {
-    out.push({ key: 'queue-empty', html: emptyStateFor('queue'), full: true });
+    out.push({ key: 'queue-empty', html: queueEmptyHtml(), full: true });
     out.push({ key: 'queue-note', html: refreshNote(), full: true });
     return out;
   }
