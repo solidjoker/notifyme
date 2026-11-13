@@ -1140,3 +1140,48 @@ devices = [{active: 2, device_id: android-zombie, total: 2},
 **计数**：`storage.py` 819 → **864**（非空 762 → **803**），`app.py` 719 → **742**（607 → **627**），`console_ui.py` 3474 → **3480**（3385 → **3391**），
 `test_queue.py` 682 → **760**，`test_stats_api.py` 662 → **670**，`test_console_queue.py` 148 → **163**，`test_module_split.py` 325 → **328**；服务端用例 631 → **639**。
 
+### E-57｜排队 Tab 的状态 chip 数的是「这一页」而不是全库（`console_ui.queueStateTotal`，feat/queue-chip-scope，2026-11-14）
+
+**问题**：`server/console_ui.py` 的 `queueFilterBar()` 在五个状态 chip 里遍历 `QUEUE`（当前页，最多 500 条）数 `state`：
+```js
+var cnt = 0;
+for (var i = 0; i < QUEUE.length; i++) {
+  if ((QUEUE[i].state || '') === st) cnt++;
+}
+```
+而同一屏下方的 `queueSummaryCard()` 读的是 `QUEUE_SUMMARY`（服务端 `storage.queue_summary()` 全库口径）。
+`GET /queue` 的 `tasks` 有 `limit=500` 上限，`summary` 没有 —— 两者在任务超一页时必然分叉。
+
+**复现**（探针 `probe28.py`）：造 `android-aaaa` 600 条 `queued` + `android-bbbb` 20 条 `done`，全部 fresh，
+`GET /queue?limit=500` 返回 `summary={devices:2,done:20,failed:0,queued:600,running:0,stale:0,total:620}`、
+`len(tasks)=500`、当前页状态集合 `{queued:500}`。
+控制台于是 chip 显示「已完成 0」、汇总卡显示「已完成 20」；点「已完成」筛完列表为空，
+空态还只说「当前没有排队任务」，用户会以为那 20 条任务丢了。
+
+**为什么 639 条全绿没发现**：既有用例只断言「`queueActiveCount()` 优先读 summary」和「汇总卡读 `QUEUE_SUMMARY`」，
+chip 的计数压根没有用例 —— 服务端 639 条覆盖的是接口与全库聚合，前端 chip 属于「有断言的地方才有守卫」。
+
+**修法**（四条）：
+
+1. 新增 `queueStateTotal(st)`（`server/console_ui.py` @3095）：先读 `QUEUE_SUMMARY[st]`（`typeof === 'number'` 才认），
+   `'total'` 退回 `QUEUE.length`，summary 缺失（接口不可用 / 离线）才降级数列表 —— 与 `queueActiveCount()` 同一个降级出口。
+2. `queueFilterBar()` 的计数循环换成单行 `var cnt = queueStateTotal(st);`；汇总卡脚注补
+   「状态 chip 上的数字同样是全库口径（过期行只计入「已过期」），不是这一页的条数。」
+3. 新增 `queueEmptyHtml()`（@3214）：`if (QUERY.trim() || QUEUE_DEVICE) return emptyStateFor('queue');` 先挡掉「这一页里挑」的场景，
+   然后 `want = queueStateTotal(QUEUE_STATE || 'total')`，`want > 0` 时报「当前页没有「已完成」任务 / 全库共有 20 条「已完成」任务，
+   它们不在这最近 500 条里。」，否则退回通用空态。`renderQueue()` 的 `html:` 改调它。
+4. `server/README.md` 的 `GET /queue` 段补「控制台的三个数字必须同源」与空态口径。
+
+**测试**：`server/test_console_queue.py` 163 → **200 行**（+3 条）：`test_queue_state_chip_counts_use_server_summary`
+（helper 存在、优先读 summary、chip 走 helper，并断言旧计数循环已消失）、`test_queue_note_states_chip_scope`、
+`test_queue_empty_state_distinguishes_page_and_library`（含「搜索 / 设备筛选命中 0 必须退回通用空态」这条守卫）。
+
+**验证**：`pytest server/test_console_queue.py server/test_console_ui.py -q` → **58 passed**；
+全量 `python -m pytest server/ -q` → **642 passed in 29.76s**；`python -m compileall -q server` EXIT=0；
+内联脚本四个 `<script>` 块过 `node --check` 全 OK。
+node 侧实证（抽出 `CONSOLE_HTML` 后用花括号配平抓函数体跑）：`QUEUE_SUMMARY={queued:600,running:0,failed:0,done:20,stale:0,total:620}`
++ 500 条 `QUEUE` 时 `chips: running=0 queued=600 failed=0 done=20`（修前 `done=0`），summary 置 null 降级为 `queued=500 done=0 total=500`；
+空态三分支分别为 `当前页没有「已完成」任务 / 全库共有 20 条「已完成」任务，它们不在这最近 500 条里。`、`当前没有排队任务`、`没有匹配结果`。
+
+**计数**：`console_ui.py` 3480 → **3507 行 / 非空 3418**（`CONSOLE_MANIFEST` @3323 · `CONSOLE_SW` @3369 · `queueStateTotal` @3095 · `queueEmptyHtml` @3214）；
+`test_console_queue.py` 163 → **200 行 / 非空 139**；服务端用例 639 → **642 条**。

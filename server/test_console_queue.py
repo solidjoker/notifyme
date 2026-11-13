@@ -108,6 +108,43 @@ def test_queue_device_chip_shows_stale_and_retention_note():
         "排队脚注没有说明保留期清理"
 
 
+def test_queue_state_chip_counts_use_server_summary():
+    """状态 chip 的条数必须走 summary（全库口径），不能数当前页。
+
+    真机口径：某设备 600 条排队中 + 20 条已完成，GET /queue?limit=500 的 tasks
+    只有 500 条排队中。chip 若数列表，会显示「已完成 0」而汇总卡显示「已完成 20」，
+    同一屏两个数字打架。现在两者同源（QUEUE_SUMMARY），降级出口才退回数列表。
+    """
+    assert "function queueStateTotal(" in HTML, "缺少状态计数 helper"
+    assert "if (sm && typeof sm[st] === 'number') return Number(sm[st] || 0);" in HTML, \
+        "状态计数没有优先读 summary"
+    assert "var cnt = queueStateTotal(st);" in HTML, "chip 没有走状态计数 helper"
+    # 旧写法（在 chip 里遍历 QUEUE 数 state）必须已经消失
+    assert "for (var i = 0; i < QUEUE.length; i++) {\r\n      if ((QUEUE[i].state || '') === st) cnt++;" not in HTML, \
+        "chip 里还留着按当前页计数的旧循环"
+
+
+def test_queue_note_states_chip_scope():
+    """脚注要说清 chip 数字也是全库口径，免得用户拿它和列表条数对。"""
+    assert "状态 chip 上的数字同样是全库口径" in HTML, "脚注没有说明 chip 口径"
+    assert "过期行只计入「已过期」" in HTML, "脚注没有说明过期行不计入四状态"
+
+
+def test_queue_empty_state_distinguishes_page_and_library():
+    """列表空但全库有命中时，别只说「当前没有排队任务」。
+
+    任务超一页时选「已完成」、这一页全是排队中：列表为空、chip 说全库 20 条。
+    此时空态必须解释「当前页没有 / 全库有多少」，否则用户以为任务丢了。
+    """
+    assert "function queueEmptyHtml(" in HTML, "缺少排队空态裁决函数"
+    assert "html: queueEmptyHtml()" in HTML, "renderQueue 没用空态裁决函数"
+    assert "'当前页没有' + (name || '') + '任务'" in HTML, "空态没有区分当前页与全库"
+    assert "它们不在这最近 500 条里" in HTML, "空态没有解释为什么不在这页"
+    # 搜索 / 设备筛选是「本页里挑」，命中 0 时不能拿全库数安慰
+    assert "if (QUERY.trim() || QUEUE_DEVICE) return emptyStateFor('queue');" in HTML, \
+        "搜索、设备筛选为 0 命中时必须退回通用空态"
+
+
 def test_queue_empty_state_registered():
     assert "emptyStateFor('queue')" in HTML, "排队 tab 没有空态"
 
