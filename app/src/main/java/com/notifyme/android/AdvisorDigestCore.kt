@@ -15,6 +15,11 @@ package com.notifyme.android
  * isGroup / sender，足以重建与 [redactCase] 完全一致的窗口级映射，
  * 不用给分析记录加 schema。
  *
+ * 窗口取「每会话各留一窗」（[FeedWindowCore]）而不是全库最近 N 条：以前两条通道都用
+ * `MessageStore.readRecent(500)` —— 跨会话的最近 500 条，几个群刷满窗口后安静会话在窗口里
+ * 一条都没有，`nameMapFor()` 如实返回空表，于是 PRIVACY.md 承诺的窗口级别名在该会话上
+ * 静默失效（说话的人名原样出设备）。这是 readRecent 同源隐患的**第六处**，见 [windowsOf]。
+ *
  * 下限（同步写进 PRIVACY.md 与 AGENTS.md，别当零风险）：
  *  - 窗口内一条消息都没有的会话（保留策略已剪掉、或换机后新装）只能退回七类规则，
  *    正文里出现的人名不会被换成别名 —— 那是「无法无中生有地识别人名」，不是漏脱敏；
@@ -22,9 +27,6 @@ package com.notifyme.android
  *    也意味着别名可关联（见 [AliasSaltCore] 的边界说明）。
  */
 internal object AdvisorDigestCore {
-
-    /** 反推窗口级映射时取的最近消息条数（与消息通道 / 分析通道的窗口口径一致）。 */
-    const val DEFAULT_MESSAGE_WINDOW = 500
 
     /** 输入摘要最多携带的 case 数（防爆 token）：取**最新**的这些条。 */
     const val MAX_CASES_IN_PROMPT = 50
@@ -83,6 +85,21 @@ internal object AdvisorDigestCore {
             ConvWindow(id, b.conversation, b.isGroup, b.senders.toList())
         }
     }
+
+    /**
+     * 顾问两条通道唯一的窗口入口：先按会话各留一窗（[FeedWindowCore]），再反推窗口事实。
+     *
+     * 为什么不能直接用 `MessageStore.readRecent(500)`：那是**跨会话**的最近 500 条，
+     * 一个群刷屏就能把安静会话整个挤出窗口 —— `nameMapFor()` 如实返回空表，该会话的
+     * 会话名与正文人名**原样出设备**，而 PRIVACY.md 承诺的是窗口级别名。
+     * 这是 readRecent 同源隐患的第六处（前五处：详情页 / latest+knownIsGroup / 回看原文 /
+     * 分析候选 / 首页信息流），已由 [FeedWindowCore] 收口。
+     *
+     * 口径与首页同源：会话数上限 [FeedWindowCore.MAX_CONVERSATIONS]、每会话条数按会话数
+     * 自适应 —— 别名映射需要的是「这个会话最近说过话的人」，多留几条只会更准。
+     */
+    fun windowsOf(feed: FeedWindowCore.Result): Map<String, ConvWindow> =
+        windows(feed.buckets.flatMap { it.messages })
 
     /**
      * 单会话的姓名映射：窗口里查不到该会话时返回空表（只走七类规则）。
