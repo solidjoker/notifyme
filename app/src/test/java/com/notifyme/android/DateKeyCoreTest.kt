@@ -88,9 +88,14 @@ class DateKeyCoreTest {
 
     @Test
     fun dayKeySurvivesNonGregorianDefaultLocale() {
+        // 这里故意走「默认时区」重载，所以时间点必须按默认时区现造：
+        // 写死 noon 在 UTC+14（Pacific/Kiritimati）下已经是 11-13，断言会误红。
         Locale.setDefault(Locale.forLanguageTag("th-TH"))
-        assertEquals("2026-11-12", DateKeyCore.dayKeyOf(noon))
-        assertEquals("2026-11-12", DateKeyCore.dayKeyOf(noon, zone))
+        val defaultZone = ZoneId.systemDefault()
+        val localNoon = java.time.LocalDateTime.of(2026, 11, 12, 15, 30)
+            .atZone(defaultZone).toInstant().toEpochMilli()
+        assertEquals("2026-11-12", DateKeyCore.dayKeyOf(localNoon))
+        assertEquals("2026-11-12", DateKeyCore.dayKeyOf(localNoon, defaultZone))
     }
 
     @Test

@@ -24,8 +24,14 @@ import org.junit.Test
 class ManualReminderCoreTest {
 
     /** 造时间点：用 java.time（公历）而不是 `Calendar.getInstance()`，测试本身也别吃默认 Locale 的历法。 */
-    private fun at(year: Int, month1: Int, day: Int, hour: Int, minute: Int): Long =
-        LocalDate.of(year, month1, day).atTime(hour, minute).atZone(zone).toInstant().toEpochMilli()
+    private fun at(
+        year: Int,
+        month1: Int,
+        day: Int,
+        hour: Int,
+        minute: Int,
+        atZone: ZoneId = zone
+    ): Long = LocalDate.of(year, month1, day).atTime(hour, minute).atZone(atZone).toInstant().toEpochMilli()
 
     private fun fields(ms: Long): List<Int> {
         val t = Instant.ofEpochMilli(ms).atZone(zone)
@@ -60,9 +66,19 @@ class ManualReminderCoreTest {
 
     @Test
     fun `默认时间是下一个整点且可被解析`() {
-        val now = at(2026, 10, 22, 22, 17)
-        assertEquals("2026-10-22 23:00", ManualReminderCore.defaultTimeText(now))
-        assertEquals(at(2026, 10, 22, 23, 0), CalendarHelper.tryParseDueTime(ManualReminderCore.defaultTimeText(now), now))
+        // 两个时区都验：偏移带 45 分钟的 Asia/Kathmandu 下，「epoch 整除一小时」旧写法会把
+        // 默认值填成 22:45（不是整点）；Core 按本地钟点对齐，两个时区都落在 23:00。
+        for (zone in listOf(ZoneId.systemDefault(), ZoneId.of("Asia/Kathmandu"), ZoneId.of("Asia/Shanghai"))) {
+            val now = at(2026, 10, 22, 22, 17, zone)
+            assertEquals("2026-10-22 23:00", ManualReminderCore.defaultTimeText(now, zone))
+            assertEquals(
+                at(2026, 10, 22, 23, 0, zone),
+                CalendarHelper.tryParseDueTime(ManualReminderCore.defaultTimeText(now, zone), now, zone)
+            )
+            assertEquals(at(2026, 10, 22, 23, 0, zone), ManualReminderCore.nextWholeHour(now, zone))
+            // 正落在整点上也必须往后推一小时（严格大于）
+            assertEquals(at(2026, 10, 23, 0, 0, zone), ManualReminderCore.nextWholeHour(at(2026, 10, 22, 23, 0, zone), zone))
+        }
     }
 
     @Test
