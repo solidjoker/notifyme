@@ -1650,6 +1650,7 @@ function setAppFilter(p) {
   renderOverview();
   renderBadges();
   renderData();
+  refreshSuggests();
   toast(APP_FILTER ? ('已筛选：' + pkgLabel(APP_FILTER)) : '已显示全部来源');
 }
 function clearAppFilter() {
@@ -1659,6 +1660,7 @@ function clearAppFilter() {
   renderOverview();
   renderBadges();
   renderData();
+  refreshSuggests();
   toast('已清除来源过滤');
 }
 function renderFilterBar(force) {
@@ -1917,9 +1919,25 @@ async function fetchStats(signal) {
   return await api('stats', { signal: signal });
 }
 // 下一步建议：服务端表驱动规则，最多 3 条
+// 带来源筛选时必须把包名发给服务端：待办条数与「未分析会话」数都是在 SQL 里按
+// pkg 算的全库数字，前端对已加载那一页做过滤得到的数对不上。
 async function fetchSuggests(signal) {
-  var r = await api('suggests/next', { signal: signal });
-  return { items: r.suggests || [] };
+  var url = 'suggests/next';
+  if (APP_FILTER) url += '?pkg=' + encodeURIComponent(APP_FILTER);
+  var r = await api(url, { signal: signal });
+  return { items: r.suggests || [], pkg: r.pkg || '' };
+}
+// 换来源筛选后重取建议：证据串里的数字是服务端按 pkg 算的，不重取就还是上一份。
+async function refreshSuggests() {
+  if (!TOKEN) return;
+  try {
+    var r = await fetchSuggests();
+    SUGGESTS = r.items || [];
+  } catch (e) {
+    // 建议是兜底通道：失败就清空，别拿上一份别的来源的数字冒充
+    SUGGESTS = [];
+  }
+  renderData();
 }
 // 由当前 ANALYSES 重建派生索引：同一复合会话保留 received_at 最新的一条待办
 function rebuildDerived() {
@@ -2237,9 +2255,13 @@ function suggestHtml(s) {
 }
 function suggestSections() {
   if (!SUGGESTS || !SUGGESTS.length) return [];
+  // 标题带来源口径：待办 / 未分析会话这两族数字是服务端按 pkg 算的，不标出来
+  // 用户会以为「已筛选：飞书」下面的数字还是全库的。
+  var scope = APP_FILTER ? (' · 仅 ' + pkgLabel(APP_FILTER)) : '';
   var out = [{
     key: 'suggest-head',
-    html: '<div class="sec-head">下一步建议（' + SUGGESTS.length + '）</div>',
+    html: '<div class="sec-head">下一步建议（' + SUGGESTS.length + '）' +
+      esc(scope) + '</div>',
     full: true
   }];
   SUGGESTS.forEach(function (s, i) {

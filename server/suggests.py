@@ -95,17 +95,22 @@ def _queue_state():
     return out
 
 
-def _todo_counts():
+def _todo_counts(pkg=None):
     """待办总数与涉及会话数：analyses 里 need_action = 1 的行。
 
     按 (pkg, conversation) 分组数一遍，比「取回所有行再在 Python 里数」省内存。
+    pkg 非空时只数该来源 App 的待办（控制台选了来源筛选就把包名传进来）。
     """
     import app as app_module
     conn = app_module._connect()
+    sql = ("SELECT pkg, conversation, COUNT(*) FROM analyses"
+           " WHERE need_action = 1")
+    params = ()
+    if pkg:
+        sql += " AND pkg = ?"
+        params = (pkg,)
     try:
-        rows = conn.execute(
-            "SELECT pkg, conversation, COUNT(*) FROM analyses"
-            " WHERE need_action = 1 GROUP BY pkg, conversation").fetchall()
+        rows = conn.execute(sql + " GROUP BY pkg, conversation", params).fetchall()
     finally:
         conn.close()
     total = 0
@@ -114,26 +119,31 @@ def _todo_counts():
     return total, len(rows)
 
 
-
-
-def _convs_without_analysis():
+def _convs_without_analysis(pkg=None):
     """消息里出现过、但 analyses 里没有的 (pkg, conversation) 数。
 
     一条 SQL 搞定：NOT EXISTS 相关子查询，走 idx_messages_conv_ts 与 analyses 的
     同名列比较；不把两边的会话列表拉到 Python 里做差集。
+    pkg 非空时只数该来源 App 的会话（与 _todo_counts 同口径）。
     """
     import app as app_module
     conn = app_module._connect()
+    where = ["NOT EXISTS ("
+             "  SELECT 1 FROM analyses AS a"
+             "  WHERE a.pkg IS m.pkg AND a.conversation IS m.conversation"
+             ")"]
+    params = ()
+    if pkg:
+        where.append("m.pkg = ?")
+        params = (pkg,)
+    sql = ("SELECT COUNT(*) FROM ("
+           "  SELECT m.pkg AS pkg, m.conversation AS conversation"
+           "  FROM messages AS m"
+           "  WHERE " + " AND ".join(where) +
+           "  GROUP BY m.pkg, m.conversation"
+           ")")
     try:
-        row = conn.execute("SELECT COUNT(*) FROM ("
-            "  SELECT m.pkg AS pkg, m.conversation AS conversation"
-            "  FROM messages AS m"
-            "  WHERE NOT EXISTS ("
-            "    SELECT 1 FROM analyses AS a"
-            "    WHERE a.pkg IS m.pkg AND a.conversation IS m.conversation"
-            "  )"
-            "  GROUP BY m.pkg, m.conversation"
-            ")").fetchone()
+        row = conn.execute(sql, params).fetchone()
     finally:
         conn.close()
     if row is None:
@@ -194,6 +204,8 @@ def query_suggests_next():
     """GET /suggests/next —— 下一步建议（最多 3 条，带依据与跳转指令）。
 
     参数：pkg（可选，来源 App 过滤，与 /messages、/analysis 同口径）。
+          只影响 todo / convs_missing 两族规则的计数 —— 排队按设备、顾问是
+          全局报告，与来源无关；生效后的数字就是证据串里看到的数字。
     返回：{"ok": true, "suggests": [...], "count": n, "generated_at": ..., "pkg": ...}
           每条：{type, priority, title, why, how, evidence, jump}
           jump：conv / todo / queue / adv / ""（空串 = 无需跳转）。
@@ -213,8 +225,10 @@ def query_suggests_next():
     else:
         advisor_age_days = None
 
-    todo, todo_convs = _todo_counts()
-    convs_missing = _convs_without_analysis()
+    # pkg 只作用于「与来源 App 相关」的两族规则（待办 / 未分析会话）；
+    # 排队按设备、顾问是全局报告，两段与 pkg 无关，保持全库口径。
+    todo, todo_convs = _todo_counts(pkg)
+    convs_missing = _convs_without_analysis(pkg)
 
     ctx = {
         "queue_failed": queue["failed"],

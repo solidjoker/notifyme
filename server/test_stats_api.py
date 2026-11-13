@@ -483,3 +483,64 @@ def test_suggests_echoes_pkg(api):
     assert data["pkg"] == "com.tencent.mm"
     blank = api.get("/suggests/next").get_json()
     assert blank["pkg"] is None
+
+
+def test_suggests_pkg_filters_todo_counts(api):
+    """E-54：pkg 必须真的参与过滤 —— 待办条数与涉及会话数按来源 App 算。
+
+    修前 pkg 只原样回显，六条规则一条都没用它：控制台选中「飞书」后建议块
+    仍然报全库的待办数（与旁边按 pkg 过滤过的列表对不上）。
+    """
+    _insert_analyses([
+        ("c1", "conv1", 1, "com.tencent.mm", 0, 0),
+        ("c2", "conv2", 1, "com.tencent.mm", 0, 0),
+        ("c3", "conv3", 1, "com.larkoffice.app", 0, 0),
+    ])
+    full = api.get("/suggests/next").get_json()
+    todo = [item for item in full["suggests"] if item["jump"] == "todo"][0]
+    assert "3" in todo["evidence"] and "3" in todo["title"]
+    one = api.get("/suggests/next?pkg=com.larkoffice.app").get_json()
+    assert one["pkg"] == "com.larkoffice.app"
+    todo1 = [item for item in one["suggests"] if item["jump"] == "todo"][0]
+    assert "1" in todo1["title"], todo1
+    assert "1 条" in todo1["evidence"] and "1 个会话" in todo1["evidence"], todo1
+
+
+def test_suggests_pkg_filters_missing_conversation_counts(api):
+    """未分析会话数同样按 pkg 算：别的来源的会话不该算进这一条建议。"""
+    now = _now_ms()
+    _insert_messages([
+        ("a", "hi", now - 1000, "conv1", "微信", "com.tencent.mm"),
+        ("b", "yo", now - 1000, "conv2", "飞书", "com.larkoffice.app"),
+    ])
+    _insert_analyses([("c1", "conv1", 0, "com.tencent.mm", 0, 0)])
+    data = api.get("/suggests/next?pkg=com.tencent.mm").get_json()
+    types = [item["type"] for item in data["suggests"]]
+    assert "rerun" not in types, data["suggests"]
+    other = api.get("/suggests/next?pkg=com.larkoffice.app").get_json()
+    conv = [item for item in other["suggests"] if item["jump"] == "conv"]
+    assert len(conv) == 1, other["suggests"]
+    assert "1 个会话" in conv[0]["evidence"], conv[0]
+
+
+def test_suggests_pkg_does_not_touch_queue_or_advisor_rules(api):
+    """排队按设备、顾问是全局报告 —— 两族规则不受 pkg 影响（别把口径抹平）。"""
+    _insert_queue([("dev-a", "t1", "analysis", "A", "failed", "")])
+    data = api.get("/suggests/next?pkg=com.larkoffice.app").get_json()
+    queue = [item for item in data["suggests"] if item["jump"] == "queue"]
+    assert len(queue) == 1, data["suggests"]
+    assert queue[0]["priority"] == 100
+    adv = [item for item in data["suggests"] if item["jump"] == "adv"]
+    assert len(adv) == 1, data["suggests"]
+    assert adv[0]["priority"] == 50
+
+
+def test_suggests_pkg_that_has_no_data_silences_own_rules(api):
+    """选中的来源一条待办都没有时，不该再报「有 N 条待办」（那是全库的数）。"""
+    _insert_analyses([("c1", "conv1", 1, "com.tencent.mm", 0, 0)])
+    data = api.get("/suggests/next?pkg=com.larkoffice.app").get_json()
+    jumps = [item["jump"] for item in data["suggests"]]
+    assert "todo" not in jumps, data["suggests"]
+    # 同一条待办数据在「全部」口径下仍然要报出来
+    full = api.get("/suggests/next").get_json()
+    assert "todo" in [item["jump"] for item in full["suggests"]], full["suggests"]
