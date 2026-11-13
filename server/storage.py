@@ -715,6 +715,64 @@ def query_queue_tasks(device_id=None, state=None, limit=QUEUE_DEFAULT_LIMIT):
     return tasks
 
 
+def queue_summary(device_id=None, state=None):
+    """排队任务的计数（全库口径，不受分页 limit 截断）。
+
+    GET /queue 的 tasks 只回一页（默认 200 / 上限 500），但控制台要回答
+    「一共有多少条任务、多少还在跑」—— 按页统计会让任务超一页时把总数
+    显示成 200，而 /stats 与 devices 给的是全库真值，同一时刻两个 Tab
+    的数字对不上（真机 260 条任务时列表页统计 200、统计页 260）。
+
+    过滤口径与 query_queue_tasks 一致（device_id / state），但**不看 limit**：
+    - total：过滤后命中的全部行数（含已过期）
+    - stale：其中 updated_at 距今超过 QUEUE_TTL_MS 的行数（与状态计数互斥，
+      与 /stats 的 queue 段同口径）
+    - queued / running / failed / done：未过期行按 state 计数
+    state 非法时返回全 0，与 query_queue_tasks 的「空列表」口径对齐。
+
+    devices 不在这里算：设备维度恒为全库（不受 device_id / state 过滤），
+    由调用方填 summary["devices"] = len(queue_devices())。
+    """
+    import app as app_module
+    device_id = (device_id or "").strip()
+    state = (state or "").strip()
+    summary = {"queued": 0, "running": 0, "failed": 0, "done": 0,
+               "stale": 0, "total": 0}
+    if state and state not in QUEUE_STATES:
+        return summary
+    sql = "SELECT state, updated_at FROM queue_tasks"
+    params = []
+    conditions = []
+    if device_id:
+        conditions.append("device_id = ?")
+        params.append(device_id)
+    if state:
+        conditions.append("state = ?")
+        params.append(state)
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
+    conn = app_module._connect()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError as e:
+        # 表还没建（老库没跑过 init_db）：当「没有任务」，不抛异常
+        if "no such table" in str(e).lower():
+            return summary
+        raise
+    finally:
+        conn.close()
+    now_ms = int(time.time() * 1000)
+    summary["total"] = len(rows)
+    for row in rows:
+        updated_at = int(row[1] or 0)
+        if (now_ms - updated_at) > QUEUE_TTL_MS:
+            summary["stale"] += 1
+            continue
+        row_state = row[0]
+        if row_state in QUEUE_STATES:
+            summary[row_state] += 1
+    return summary
+
 def queue_devices():
     """统计库里出现过哪几台设备（回答「有哪几台设备」）。
 

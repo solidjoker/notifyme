@@ -43,7 +43,7 @@ def test_queue_is_in_tab_order_everywhere():
 
 def test_queue_data_is_fetched_from_queue_api():
     assert "async function fetchQueue(" in HTML, "缺少 fetchQueue"
-    assert "api('queue?limit=200'" in HTML, "排队数据应从 GET /queue 拉"
+    assert "api('queue?limit=500'" in HTML, "排队数据应从 GET /queue 拉（取服务端上限 500）"
 
 
 def test_queue_fetch_failure_does_not_break_the_console():
@@ -73,6 +73,25 @@ def test_queue_summary_shows_five_counters():
     for cell in ("qs-running", "qs-queued", "qs-failed", "qs-done", "qs-stale"):
         assert cell in HTML, "排队汇总缺少 %s" % cell
 
+
+def test_queue_badge_uses_server_side_summary():
+    """活跃任务数（概览条 / tab 角标）必须优先用服务端全库 summary。
+
+    服务端 GET /queue 的 summary 是全库口径（不再按当前页统计），
+    前端若还去数 QUEUE 数组，任务超一页时角标会一直停在页大小上，
+    与概览条（走 /stats）对不上。
+    """
+    assert "var sm = QUEUE_SUMMARY;" in HTML, "活跃数没有优先读 summary"
+    assert "return Number(sm.queued || 0) + Number(sm.running || 0);" in HTML, \
+        "summary 口径下活跃 = queued + running"
+    # 降级出口：summary 缺失时仍数已加载列表
+    assert "if (sm && typeof sm.queued === 'number'" in HTML, "缺少 summary 可用性判定"
+
+
+def test_queue_summary_card_states_full_library_scope():
+    """文案必须说明「汇总＝全库口径、列表最多 500 条」，避免用户误读。"""
+    assert "上方汇总为全库口径" in HTML, "排队汇总没有标注全库口径"
+    assert "下方列表最多显示最近 500 条" in HTML, "排队列表没有标注条数上限"
 
 def test_queue_empty_state_registered():
     assert "emptyStateFor('queue')" in HTML, "排队 tab 没有空态"
