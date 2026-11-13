@@ -369,4 +369,63 @@ class AnalysisWindowCoreTest {
         assertTrue(AnalysisWindowCore.UNLIMITED < 0)
         assertFalse(AnalysisWindowCore.TAIL_LINES > 50_000)
     }
+
+    // ---------- since（顾问复盘的近 N 天） ----------
+
+    @Test
+    fun `since 只回窗口内的记录并按分析时间升序`() {
+        val records = listOf(
+            rec("late", analyzedAt = 5_000L),
+            rec("early", conversation = "乙群", analyzedAt = 1_000L),
+            rec("out", conversation = "丙群", analyzedAt = 100L)
+        )
+        val hit = AnalysisWindowCore.since(records, 900L)
+        assertEquals(listOf("early", "late"), hit.map { it.caseId })
+    }
+
+    @Test
+    fun `since 空输入返回空表`() {
+        assertTrue(AnalysisWindowCore.since(emptyList(), 0L).isEmpty())
+    }
+
+    @Test
+    fun `文件级 since 能读到尾部 500 行之外的安静会话`() {
+        // 600 条噪声分析时间很新，本会话 2 条更早 —— 旧 readRecent(500) 里一条都没有
+        val noise = (1..600).map {
+            rec(
+                caseId = "noise$it",
+                conversation = "乙闲聊群",
+                windowEnd = 1_000L + it,
+                analyzedAt = 10_000L + it
+            )
+        }
+        val mine = listOf(
+            rec("mine1", windowEnd = 100L, analyzedAt = 100L),
+            rec("mine2", windowEnd = 200L, analyzedAt = 200L)
+        )
+        val file = writeFile(mine + noise)
+        val store = JsonlStore(file)
+
+        // 旧写法：尾部 500 行里没有本会话
+        val oldWindow = store.readTailLines(500).mapNotNull {
+            try {
+                AnalysisCaseRecord.fromJson(JSONObject(it))
+            } catch (e: Exception) {
+                null
+            }
+        }
+        assertTrue(oldWindow.none { it.conversation == "甲项目群" })
+
+        // 新写法：7 天窗口内本会话的 case 全在，且顺序是时间轴
+        val hit = AnalysisWindowFile(store).since(50L)
+        assertEquals(602, hit.size)
+        assertEquals(listOf("mine1", "mine2"), hit.take(2).map { it.caseId })
+        assertTrue(hit.zipWithNext().all { (a, b) -> a.analyzedAt <= b.analyzedAt })
+    }
+
+    @Test
+    fun `顾问窗口必须比旧实现的 500 行更宽`() {
+        assertTrue(AnalysisWindowCore.ADVISOR_LINES > 500)
+        assertTrue(AnalysisWindowCore.ADVISOR_LINES >= AnalysisWindowCore.TAIL_LINES)
+    }
 }

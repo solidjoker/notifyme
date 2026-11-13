@@ -106,15 +106,14 @@ class PrivacySettingsActivity : Activity() {
                 .show()
         }
 
-        // 白名单多选：候选 = 消息库里出现过的会话（readRecent 倒序，按首次出现保留）
+        // 白名单多选：候选 = 消息库里出现过的会话（按会话各留一窗，安静的会话也在）
         btnBypass.setOnClickListener {
-            // readRecent 是整文件解析，1000 条也要读整个 messages.jsonl：
-            // 放后台线程，避免历史一大点击就卡住
+            // 解析整窗要读 messages.jsonl 尾部 20000 行：放后台线程，避免点击就卡住
             Thread {
-                val keys = mutableListOf<ConvKey>()
-                MessageStore.readRecent(this, 1000).forEach { m ->
-                    if (m.conversation.isNotEmpty() && m.convKey !in keys) keys.add(m.convKey)
-                }
+                // 不能再用 readRecent(1000)：跨会话尾部窗口会被活跃会话占满，
+                // 安静会话根本进不了白名单候选（口径见 [FeedWindowCore]）。
+                val keys = MessageStore.feedGroups(this).keys()
+                    .filter { it.conversation.isNotEmpty() }
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
                     if (keys.isEmpty()) {

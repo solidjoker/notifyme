@@ -429,6 +429,17 @@ object AnalysisStore {
     fun latestByConvKey(context: Context): Map<ConvKey, AnalysisCaseRecord> =
         AnalysisWindowFile(JsonlStore(storeFile(context))).latestByConvKey()
 
+    /**
+     * 分析时间 `>= cutoffMs` 的 case（按分析时间升序），从 [AnalysisWindowCore.ADVISOR_LINES] 行窗口里取。
+     *
+     * 顾问复盘（7 天）专用：旧写法是 `readRecent(context, 500).filter { analyzedAt >= since }`，
+     * 尾部 500 行被活跃会话占满时，安静会话在复盘窗口里一条都没有 —— `readRecent` 同源隐患
+     * 在分析侧的第三处复现（前两处是列表 / 首页 feed / `latestByConvKey`）。
+     */
+    @Synchronized
+    fun readSince(context: Context, cutoffMs: Long): List<AnalysisCaseRecord> =
+        AnalysisWindowFile(JsonlStore(storeFile(context))).since(cutoffMs)
+
     /** 删除一条 case 记录（闪电标记阅读后清除），返回是否实际删除。 */
     @Synchronized
     fun deleteCase(context: Context, caseId: String): Boolean =

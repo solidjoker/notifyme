@@ -107,6 +107,40 @@ internal object FeedWindowCore {
     }
 
     /**
+     * 从一次取样里**轮流**取最多 [limit] 条，按时间**升序**。
+     *
+     * 给「逐条列表」型页面用（脱敏预览要按时间正序逐行列出最近若干条）。为什么不是
+     * 「全表最近 limit 条再排序」：那等于把旧 `readRecent(200)` 的行为又做了一遍 ——
+     * 活跃会话刷满 200 行后，安静会话的消息在预览里一条都不出现，用户无法核对它的规则效果。
+     * 轮流取（第 1 轮各会话各取最新一条，第 2 轮各取次新……）保证只要名额够、每个会话都有代表。
+     *
+     * 同一会话内按时间升序取尾部（保最新若干条）。`timestamp <= 0` 归 0 排最前
+     * （与 [group] / [ConvWindowCore.slice] 同口径）；`limit <= 0` 或结果为空返回空表。
+     */
+    fun sample(result: Result, limit: Int): List<ChatMessage> {
+        if (result.buckets.isEmpty() || limit <= 0) return emptyList()
+        val ascending = result.buckets.map { bucket ->
+            bucket.messages.sortedBy { if (it.timestamp <= 0L) 0L else it.timestamp }
+        }.filter { it.isNotEmpty() }
+        if (ascending.isEmpty()) return emptyList()
+        val picked = ArrayList<ChatMessage>(limit)
+        var round = 0
+        while (picked.size < limit) {
+            var takenThisRound = 0
+            for (list in ascending) {
+                if (picked.size >= limit) break
+                val idx = list.size - 1 - round
+                if (idx < 0) continue
+                picked += list[idx]
+                takenThisRound++
+            }
+            if (takenThisRound == 0) break
+            round++
+        }
+        return picked.sortedBy { if (it.timestamp <= 0L) 0L else it.timestamp }
+    }
+
+    /**
      * 把一份消息列表切成「每会话一窗」，并按最近活跃度倒序。
      *
      * 排序口径与旧实现 `groupBy { convKey }.sortedByDescending { list.last().timestamp }` 一致：

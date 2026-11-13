@@ -50,6 +50,17 @@ internal object AnalysisWindowCore {
     const val LIST_LIMIT = 200
 
     /**
+     * 顾问复盘（7 天周期）读的尾部行窗口（原始行数）。
+     *
+     * 比 [TAIL_LINES] 大一个量级：顾问要的是「近 7 天全部会话的 case」，周期 15 分钟一轮、
+     * 每轮可能落多条，7 天的行数轻松上千；窗口只给 500 行时，活跃会话照样能把安静会话
+     * 的 case 挤出窗口 —— [AdvisorWorker] 此前就是 `readRecent(applicationContext, 500)`。
+     * 一次 7 天的后台任务，20 000 行的解析代价可接受（[JsonlStore.readTailLines] 从尾部读，
+     * 内存只与窗口成正比）。
+     */
+    const val ADVISOR_LINES = 20_000
+
+    /**
      * 按会话分组，组内按 `windowEnd` 升序。
      *
      * 分组顺序保持首次出现序（`LinkedHashMap`），配合稳定排序，同一份输入永远得到
@@ -113,6 +124,21 @@ internal object AnalysisWindowCore {
         return records.sortedByDescending { it.analyzedAt }.take(limit)
     }
 
+    /**
+     * 分析时间 `>= cutoffMs` 的记录，按分析时间**升序**。
+     *
+     * 顾问 digest 的输入序就是时间轴顺序（`AdvisorDigestCore.digest` 逐条追加、超
+     * `MAX_CASES_IN_PROMPT` 时保留较早的并追加省略行），所以这里必须升序，别在调用方
+     * 再 `sortedBy { analyzedAt }` 一遍。
+     *
+     * 跨会话取「近 N 天」不能拿 `readRecent(limit).filter { analyzedAt >= since }`：
+     * 尾部 limit 行可能全来自几个活跃会话，安静会话 7 天里的 case 一条都进不了复盘。
+     */
+    fun since(records: List<AnalysisCaseRecord>, cutoffMs: Long): List<AnalysisCaseRecord> {
+        if (records.isEmpty()) return emptyList()
+        return records.filter { it.analyzedAt >= cutoffMs }.sortedBy { it.analyzedAt }
+    }
+
     /** 「不限条数」的显式取值，避免调用方在 0 与 -1 之间猜语义。 */
     const val UNLIMITED = -1
 }
@@ -156,4 +182,9 @@ internal class AnalysisWindowFile(private val store: JsonlStore) {
         limit: Int = AnalysisWindowCore.LIST_LIMIT,
         lines: Int = AnalysisWindowCore.TAIL_LINES
     ): List<AnalysisCaseRecord> = AnalysisWindowCore.recent(readAll(lines), limit)
+
+    fun since(
+        cutoffMs: Long,
+        lines: Int = AnalysisWindowCore.ADVISOR_LINES
+    ): List<AnalysisCaseRecord> = AnalysisWindowCore.since(readAll(lines), cutoffMs)
 }

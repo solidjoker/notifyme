@@ -818,21 +818,22 @@ class AnalysisSettingsActivity : Activity() {
         tintStatus(tvAnalysisStatus, analysisConfig.lastAnalysisResult)
 
         // 分析结果统计（case 版）：已分析会话数 / 待办会话数（按会话去重）。
-        // H5 评审：readRecent(500) 全量读上后台，回来只更新两个文案字段。
+        // H5 评审：整段读上后台，回来只更新两个文案字段。
+        // 不能再用 readRecent(500)：那是文件尾部 500 行，活跃会话刷满后安静会话
+        // 既不算「已分析」也不算「待办」，统计凭空变小（口径见 [AnalysisWindowCore]）。
         val token = ++statsToken
         Thread {
-            val records = AnalysisStore.readRecent(this, 500)
-            val conversations = records.map { it.conversation }.toSet()
-            val todoConversations = records.filter { it.s1NeedAction }
-                .map { it.conversation }.toSet()
+            val groups = AnalysisStore.readGrouped(this)
+            val conversations = groups.keys.size
+            val todoConversations = groups.count { (_, list) -> list.any { it.s1NeedAction } }
             runOnUiThread {
                 if (token != statsToken || isFinishing || isDestroyed) return@runOnUiThread
                 tvAnalysisStats.text = getString(
-                    R.string.analysis_stats_format, conversations.size, todoConversations.size
+                    R.string.analysis_stats_format, conversations, todoConversations
                 )
                 tvAnalysisStats.setTextColor(
                     getColor(
-                        if (todoConversations.isNotEmpty()) R.color.accent_orange
+                        if (todoConversations > 0) R.color.accent_orange
                         else R.color.status_gray
                     )
                 )

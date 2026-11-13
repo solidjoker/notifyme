@@ -270,3 +270,9 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ④ **条数是下限时必须写成 `N+ 条`**：`Bucket.truncated` 分两档判定 —— 行窗口**读到文件头**（`Result.complete`）时 `size > keep`，**没读到文件头**时 `size >= keep`（刚好顶到名额也可能还有更早的没读进来）。首页会话头据此走 `R.string.msg_count_at_least`，不要拿窗口内条数冒充本会话总数。
   ⑤ **`MessageStore.feedGroups` 必须 `internal`**（返回 `internal` 的 `FeedWindowCore.Result`，public 会报 `public function exposes its internal return type`）；`MessageStoreCore.feedGroups` 的 `requested = FeedWindowCore.REQUEST_LINES = 20000` 比 `TAIL_LINES = 5000` 大是刻意的 —— 安静会话本来就在文件靠前的位置，行窗口太浅照样读不到。
   改名额公式、排序方向或截断判据前先跑 `app/src/test/java/com/notifyme/android/FeedWindowCoreTest.kt`（22 条，含「600 条噪声 + 本会话仍在首页」与旧写法对照实验）。
+
+- **分析记录 / 消息侧的「近 N 条」取数只有三种口径，别再新写 `readRecent(N)`**（第七批同源隐患，2026-11-13 收口）：
+  ① **要「某个时间区间内的全部记录」→ `AnalysisStore.readSince(context, cutoffMs)`**（内部走 `AnalysisWindowCore.since` + `ADVISOR_LINES = 20000` 行窗口）。顾问复盘就是这一档：旧写法 `AnalysisStore.readRecent(ctx, 500).filter { analyzedAt >= since }` 在 7 天内 case 超 500 条、或活跃会话占满尾部时，安静会话的 case 进不了报告，`AdvisorDigestCore.nameMapFor()` 随之返回空表、姓名原样出设备。`ADVISOR_LINES` 比 `TAIL_LINES = 5000` 更宽是刻意的，别合并成一个常量。
+  ② **要「全库聚合 / 每会话一条」→ `AnalysisStore.readGrouped` / `latestByConvKey`；要「会话候选集」→ `MessageStore.feedGroups(context).keys()`**。设置页统计（会话数 / 待办会话数）与隐私页白名单候选都属于这一档：旧 `readRecent(500)` / `readRecent(1000)` 数出来的是窗口内命中数，超窗口就是错数、也漏掉安静会话。
+  ③ **要「逐条列表」→ `FeedWindowCore.sample(MessageStore.feedGroups(context), limit)`**（脱敏预览用 `PREVIEW_LIMIT = 200`）。**别用 `recent()` 那类「全表最近 N 条再排序」**：那样等于把旧 `readRecent` 行为又写了一遍，600 条噪声下安静会话仍是 0 条 —— 这条是第一版实现被单测当场证伪后改的（`FeedWindowCoreTest > sample 在别的会话刷满行窗口时仍能看到安静会话` 先红后修）。`sample` 是**按会话轮流取**：第 1 轮各会话各取最新一条、第 2 轮各取次新……同一会话内取时间尾部，最后整体按时间升序；`timestamp <= 0` 归 0 排最前，**并列时先后由取出顺序决定**（两条未标注日期的消息不要断言成输入顺序）。
+  改这几处口径前先跑 `app/src/test/java/com/notifyme/android/AnalysisWindowCoreTest.kt`（27 条）与 `FeedWindowCoreTest.kt`（27 条），两边都有「旧写法对照实验」。

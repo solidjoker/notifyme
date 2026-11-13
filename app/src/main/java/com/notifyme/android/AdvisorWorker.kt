@@ -96,9 +96,10 @@ class AdvisorWorker(
         }
 
         val since = System.currentTimeMillis() - PERIOD_DAYS * 24L * 3600_000L
-        val cases = AnalysisStore.readRecent(applicationContext, 500)
-            .filter { it.analyzedAt >= since }
-            .sortedBy { it.analyzedAt }
+        // 近 PERIOD_DAYS 天的 case 必须是「全库该时间段」而不是「文件尾部 500 行里该时间段」：
+        // 尾部被活跃会话占满时，安静会话 7 天里的一条都不会进复盘（readRecent 同源隐患）。
+        // 窗口与排序口径见 [AnalysisWindowCore.since]（升序，直接喂 digest）。
+        val cases = AnalysisStore.readSince(applicationContext, since)
         if (cases.isEmpty()) {
             AdvisorStore.recordResult(applicationContext, "成功：近 $PERIOD_DAYS 天无分析记录，未生成报告")
             Log.i(TAG, "顾问复盘跳过：窗口内无 case")
