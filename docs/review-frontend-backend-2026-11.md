@@ -654,7 +654,7 @@ E-34｜公历时间文本 ↔ 毫秒统一到 `DueTimeCore`（feat/due-time-core
 
 **测试**　新建 `DueTimeCoreTest.kt`（318 行，**31 条**），含四条根因回归：`th-TH` 下 `SimpleDateFormat` 给出 `2569-11-12` 且 `Calendar.YEAR == 2569`、和历下旧写法丢四位年份、佛历下 `dayStart`/`parseDay` 仍是公历零点（对照 `Calendar` 极限 1483）、佛历下的往返与公历设备一致；另覆盖五分支逐条、闰年边界、1 分钟容差、往返一致 4 样本、`adjustPickedYear` 三种历法。`ManualReminderCoreTest.kt` 同步改到 15 条（`eventTimeText`）。定向四类 83 条全绿；全量 **1192 条**（`COUNT_FILES=71`，失败 0），lint 仍 3 warning / 0 error。
 
-**计数**　主源码顶层 `.kt` 118（全树 125）、`app/src/test` 72 个 / 1192 条、Core 内核 38 个；三张架构图重渲（01 `3970×1701`、02 `12126×2007`、08 `6850×4895`），README 索引表 02 行尺寸已按新 viewBox 回写。
+**计数**　主源码顶层 `.kt` 118（全树 125）、`app/src/test` 72 个 / 1126 条、Core 内核 38 个；三张架构图重渲（01 `3970×1701`、02 `12126×2007`、08 `6850×4895`），README 索引表 02 行尺寸已按新 viewBox 回写。
 
 E-35｜数字与短时间戳文本统一到 `LocaleTextCore`（feat/locale-text-core，2026-11-13）
 
@@ -680,7 +680,7 @@ E-35｜数字与短时间戳文本统一到 `LocaleTextCore`（feat/locale-text-
 
 **踩坑**　单测里要验证「Locale 钉住就安全」时，时区也必须显式钉住：`SimpleDateFormat(_, Locale.US)` 只固定数字形态，不固定时区，CI runner 是 UTC、本机是 +08，不钉会得到 `10:10` 而非 `18:10`（本轮 CI 就是这条先红）。
 
-**计数**　主源码顶层 `.kt` 119（全树 126）、`app/src/test` 74 个 / 1192 条、Core 内核 39 个；三张架构图重渲（01 `3970×1701`、02 `12449×2007`、08 `6850×4895`），README 索引表 02 行尺寸已按新 viewBox 回写。
+**计数**　主源码顶层 `.kt` 119（全树 126）、`app/src/test` 74 个 / 1142 条、Core 内核 39 个；三张架构图重渲（01 `3970×1701`、02 `12449×2007`、08 `6850×4895`），README 索引表 02 行尺寸已按新 viewBox 回写。
 
 E-36｜资源字符串的数字槽位统一走 `templateText`（feat/format-template，2026-11-13）
 
@@ -772,4 +772,4 @@ E-38｜S2 摘要可用性评测：六项判据 + 云端 70% vs 端侧替身 15%�
 **四、数字不可复现（本轮最重要的教训）**　`S2EvalHttpTest.chat()` 原本不带采样参数，同一批样本两次跑给出 15/20 与 16/20；本轮补了 `temperature=0` + `seed=20261113`（`private companion object` 里两个常量），三轮实测**仍是 14/15/14 与 2/2/3** —— 不可复现来自 llama-server / ROCm 推理本身，不是请求参数。因此文档与 ROADMAP 一律写「区间 + 单轮数字」（云端 70~75%、端侧替身 10~15%），不写死某个百分点；`S2EvalHttpTest` 只断言「评测跑通」不断言答对多少，也是同一理由。顺带修掉报告侧一个缺陷：机器报告 §五 原本对原始输出调 `esc()`（`take(120)`），落盘只剩半截 JSON，现在给完整响应体（含 `usage` / `timings`），只中和代码围栏。
 **计数**　新增 `S2Usability.kt`（349 行）+ `S2UsabilityTest.kt`（34 条）+ `S2EvalHttpTest.kt`（HTTP 侧入口）；主源码顶层 120 → **121**（全树 128）、`app/src/test` 74 → **76 个 .kt**、全量单测 1157 → **1192 条**。
 
-**记录**　手写解说 `docs/评测-云端vs端侧S2.md`（八节：为什么 / 六项判据口径 / 实测 / 五条限制 / 原始输出对比 / 复现 / 真机路径 / 文件表）+ 机器生成 `docs/eval-s2-cloud-vs-local.md`。
+**记录**　手写解说 `docs/评测-云端vs端侧S2.md`（八节：为什么 / 六项判据口径 / 实测 / 六条限制（含「数字是区间」）/ 原始输出对比 / 复现 / 真机路径 / 文件表）+ 机器生成 `docs/eval-s2-cloud-vs-local.md`。
