@@ -643,3 +643,40 @@ def test_devices_counts_stale_rows_in_total(client):
                 state="running")
     devices = client.get("/queue").get_json()["devices"]
     assert _devices_by_id(devices)[DEVICE] == {"total": 2, "active": 2}
+
+
+# ---------------------------------------------------------------- 脏数值行
+#
+# queue_tasks.updated_at / queued_at 也是 INTEGER 亲和：直连改库、老库迁移、
+# 第三方脚本都能把它写成 TEXT，裸 int("zzz") 会把 /queue 整页打成 500。
+
+
+def test_get_queue_survives_text_updated_at(client):
+    """updated_at 被写成文本时 /queue 必须 200，且该行按「过期」保守处理。"""
+    now = int(time.time() * 1000)
+    _insert_row(DEVICE, "good-1", now, state="queued")
+    _insert_row(DEVICE, "dirty-1", "zzz", state="running")
+    r = client.get("/queue")
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    ids = [t["task_id"] for t in body["tasks"]]
+    assert set(ids) == {"good-1", "dirty-1"}, ids
+    # 认不出的 updated_at 按 0 → 远超 TTL → 只计 stale，不冒充 running
+    assert body["summary"]["total"] == 2
+    assert body["summary"]["stale"] == 1
+    assert body["summary"]["running"] == 0
+    assert body["summary"]["queued"] == 1
+    dirty = [t for t in body["tasks"] if t["task_id"] == "dirty-1"][0]
+    assert dirty["stale"] is True
+
+
+def test_get_queue_survives_text_queued_at(client):
+    """queued_at 同族：坏值归一成 0，不让整页挂掉。"""
+    now = int(time.time() * 1000)
+    _insert_row(DEVICE, "dirty-2", now, state="queued", queued_at="soon")
+    r = client.get("/queue")
+    assert r.status_code == 200, r.get_data(as_text=True)
+    task = r.get_json()["tasks"][0]
+    assert task["task_id"] == "dirty-2"
+    assert task["queued_at"] == 0
+

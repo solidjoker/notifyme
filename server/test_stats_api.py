@@ -544,3 +544,119 @@ def test_suggests_pkg_that_has_no_data_silences_own_rules(api):
     # 同一条待办数据在「全部」口径下仍然要报出来
     full = api.get("/suggests/next").get_json()
     assert "todo" in [item["jump"] for item in full["suggests"]], full["suggests"]
+
+# ---------------------------------------------------------------- 脏数值行
+#
+# SQLite 的类型亲和只是「建议」：timestamp / received_at 声明成 INTEGER，
+# 写不进整数时会被原样存成 TEXT（直连改库、老库迁移、第三方脚本都能造出来）。
+# 裸 int(row[x] or 0) 对 "abc" 完全无效 —— or 只拦假值 —— 整个 /stats 直接 500；
+# 而排序里 TEXT 恒大于所有数字，脏行会排第一页最前并被拼进 next_before，
+# 客户端拿 "abc_1" 翻页直接 400，永远看不到第二页。
+
+
+def _exec(sql, params=()):
+    """绕过接口直接写库（造脏行用）。"""
+    with app_module._write_lock:
+        conn = app_module._connect()
+        try:
+            conn.execute(sql, params)
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def _insert_text_ts_message(ts, conv="脏会话", pkg="com.tencent.mm"):
+    _exec(
+        "INSERT INTO messages"
+        " (sender, text, timestamp, conversation, is_group, received_at,"
+        "  source, pkg)"
+        " VALUES (?, ?, ?, ?, 0, ?, ?, ?)",
+        ("dirty", "脏行", ts, conv, ts, "android-notification", pkg))
+
+
+def test_stats_survives_text_timestamp_dirty_row(api):
+    """timestamp 被写成文本时 /stats 必须 200，且 MAX 跳过脏行。"""
+    now = _now_ms()
+    _insert_messages([
+        ("a", "hi", now - 1000, "conv1", "微信", "com.tencent.mm"),
+        ("b", "yo", now - 500, "conv1", "微信", "com.tencent.mm"),
+    ])
+    _insert_text_ts_message("abc")
+    resp = api.get("/stats")
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    messages = resp.get_json()["messages"]
+    # 脏行仍算进总数（它是真实存在的一行），但不能参与「最近时间」与近 24h
+    assert messages["total"] == 3
+    assert messages["last_ts"] == now - 500
+    assert messages["last_24h"] == 2
+
+
+def test_messages_pagination_skips_text_timestamp_row(api):
+    """脏行不得排进第一页、更不得毒化 next_before 把第二页打成 400。"""
+    now = _now_ms()
+    _insert_messages([
+        ("a", "hi", now - 1000, "conv1", "微信", "com.tencent.mm"),
+        ("b", "yo", now - 500, "conv1", "微信", "com.tencent.mm"),
+    ])
+    # TEXT 在排序里恒大于所有数字 → 不设 typeof 守卫时它必然排第一
+    _insert_text_ts_message("abc")
+    first = api.get("/messages?limit=1")
+    assert first.status_code == 200, first.get_data(as_text=True)
+    body = first.get_json()
+    assert body["messages"][0]["text"] == "yo", body["messages"]
+    assert body["messages"][0]["timestamp"] == now - 500
+    cursor = body["next_before"]
+    assert cursor is not None
+    # 游标毫秒段必须是数字（修前是 "abc_<rowid>"）
+    assert cursor.split("_")[0].isdigit(), cursor
+    second = api.get("/messages?limit=1&before=" + cursor)
+    assert second.status_code == 200, second.get_data(as_text=True)
+    assert second.get_json()["messages"][0]["text"] == "hi"
+
+
+def test_stats_survives_text_received_at_dirty_row(api):
+    """analyses.received_at 同族：/stats 的 last_at 要跳过脏行。"""
+    now = _now_ms()
+    _insert_analyses([("c1", "conv1", 0, "com.tencent.mm", 0, 0)])
+    _exec(
+        "INSERT INTO analyses"
+        " (case_id, conversation, window_end, message_count, need_action,"
+        "  importance, escalated, s1, s2, analyzed_at, protocol, received_at,"
+        "  pkg, redacted, redaction_hits, todo_text, todo_due)"
+        " VALUES (?, ?, ?, 1, 0, ?, 0, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+        ("dirty-case", "脏会话", now, "high", "{}", "{}", "2026-11-14 10:00:00",
+         "v2", "boom", "com.tencent.mm", "{}", "", 0))
+    resp = api.get("/stats")
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    analyses = resp.get_json()["analyses"]
+    assert analyses["total"] == 2
+    assert analyses["last_report"] == now
+
+
+def test_analysis_pagination_skips_text_received_at_row(api):
+    """analyses 的脏 received_at 同样不能毒化 /analysis 的游标。"""
+    now = _now_ms()
+    _insert_analyses([
+        ("c1", "conv1", 0, "com.tencent.mm", 0, 0),
+        ("c2", "conv2", 0, "com.tencent.mm", 0, 0),
+    ])
+    _exec(
+        "INSERT INTO analyses"
+        " (case_id, conversation, window_end, message_count, need_action,"
+        "  importance, escalated, s1, s2, analyzed_at, protocol, received_at,"
+        "  pkg, redacted, redaction_hits, todo_text, todo_due)"
+        " VALUES (?, ?, ?, 1, 0, ?, 0, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+        ("dirty-case", "脏会话", now, "high", "{}", "{}", "2026-11-14 10:00:00",
+         "v2", "boom", "com.tencent.mm", "{}", "", 0))
+    first = api.get("/analysis?limit=1")
+    assert first.status_code == 200, first.get_data(as_text=True)
+    body = first.get_json()
+    assert body["analyses"][0]["case_id"] != "dirty-case", body["analyses"]
+    cursor = body["next_before"]
+    assert cursor is not None
+    assert cursor.split("_")[0].isdigit(), cursor
+    second = api.get("/analysis?limit=1&before=" + cursor)
+    assert second.status_code == 200, second.get_data(as_text=True)
+    ids = [one["case_id"] for one in second.get_json()["analyses"]]
+    assert ids and "dirty-case" not in ids, ids
+
