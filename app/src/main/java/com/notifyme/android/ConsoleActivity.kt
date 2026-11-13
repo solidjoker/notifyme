@@ -209,13 +209,13 @@ class ConsoleActivity : Activity() {
             status.health == AnalysisScheduleSummaryCore.Health.GLOBAL_OFF ->
                 getString(R.string.console_schedule_global_off)
             status.health == AnalysisScheduleSummaryCore.Health.NEVER_RUN ->
-                getString(R.string.console_schedule_never, status.intervalMinutes)
+                templateText(R.string.console_schedule_never, status.intervalMinutes)
             status.nextRunAt <= 0L ->
-                getString(R.string.console_schedule_last, status.intervalMinutes, last)
+                templateText(R.string.console_schedule_last, status.intervalMinutes, last)
             status.nextRunAt <= System.currentTimeMillis() ->
-                getString(R.string.console_schedule_running_soon, status.intervalMinutes, last)
+                templateText(R.string.console_schedule_running_soon, status.intervalMinutes, last)
             else ->
-                getString(
+                templateText(
                     R.string.console_schedule_running,
                     status.intervalMinutes,
                     last,
@@ -224,7 +224,7 @@ class ConsoleActivity : Activity() {
         }
         if (status.health == AnalysisScheduleSummaryCore.Health.STALE) {
             tvScheduleWarn.visibility = View.VISIBLE
-            tvScheduleWarn.text = getString(
+            tvScheduleWarn.text = templateText(
                 R.string.console_schedule_stale,
                 status.minutesSinceLast,
                 status.staleThresholdMs / 60_000L,
@@ -238,15 +238,15 @@ class ConsoleActivity : Activity() {
             llScheduleConvs.addView(scheduleLine(getString(R.string.console_schedule_convs_none), R.color.text_secondary))
         } else {
             llScheduleConvs.addView(
-                scheduleLine(getString(R.string.console_schedule_convs_title, rows.size), R.color.text_primary, bold = true)
+                scheduleLine(templateText(R.string.console_schedule_convs_title, rows.size), R.color.text_primary, bold = true)
             )
             rows.take(5).forEach { row ->
                 val name = ConvKey.parse(row.convKeyId).conversation
                 val text = when {
-                    row.gatedOut -> getString(R.string.console_schedule_conv_gated, name, row.intervalMinutes)
+                    row.gatedOut -> templateText(R.string.console_schedule_conv_gated, name, row.intervalMinutes)
                     row.nextRunAt <= 0L || row.nextRunAt <= System.currentTimeMillis() ->
-                        getString(R.string.console_schedule_conv_row_soon, name, row.intervalMinutes)
-                    else -> getString(
+                        templateText(R.string.console_schedule_conv_row_soon, name, row.intervalMinutes)
+                    else -> templateText(
                         R.string.console_schedule_conv_row,
                         name,
                         row.intervalMinutes,
@@ -259,7 +259,7 @@ class ConsoleActivity : Activity() {
             }
             if (rows.size > 5) {
                 llScheduleConvs.addView(
-                    scheduleLine(getString(R.string.console_schedule_convs_more, rows.size - 5), R.color.text_secondary)
+                    scheduleLine(templateText(R.string.console_schedule_convs_more, rows.size - 5), R.color.text_secondary)
                 )
             }
         }
@@ -271,7 +271,7 @@ class ConsoleActivity : Activity() {
                 .joinToString(" · ") { ConvTagPicker.badgeText(this, it) + " " + counts[it] }
             val stopped = (counts[ConvTag.DONE] ?: 0) + (counts[ConvTag.NOISE] ?: 0)
             val body = if (stopped > 0) {
-                parts + " · " + getString(R.string.console_schedule_stop_hint, stopped)
+                parts + " · " + templateText(R.string.console_schedule_stop_hint, stopped)
             } else parts
             tvScheduleTags.text = getString(R.string.console_schedule_tags, body)
         }

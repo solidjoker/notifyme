@@ -103,7 +103,7 @@ class CaptureDiagnosticsActivity : Activity() {
         if (byPkg.isNotEmpty()) {
             section(getString(R.string.diag_section_session_pkg))
             byPkg.forEach { (pkg, n) ->
-                valueRow(appLabelOf(pkg), getString(R.string.msg_count, n))
+                valueRow(appLabelOf(pkg), templateText(R.string.msg_count, n))
             }
         }
     }
@@ -201,7 +201,7 @@ class CaptureDiagnosticsActivity : Activity() {
         valueRow(getString(R.string.diag_conversations), s.conversations.toString())
         valueRow(getString(R.string.diag_self_messages), s.selfMessages.toString())
         if (totalLines > s.total) {
-            hint(getString(R.string.diag_alltime_capped, ALLTIME_SCAN_LIMIT, totalLines))
+            hint(templateText(R.string.diag_alltime_capped, ALLTIME_SCAN_LIMIT, totalLines))
         }
         s.byPkg.forEach { st ->
             section(appLabelOf(st.pkg))

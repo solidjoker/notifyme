@@ -7,6 +7,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.regex.Pattern
 
 /**
  * 界面与模型输入里的**数字 / 短时间戳文本**口径（恒 ASCII：数字系统与小数点不随系统语言变）。
@@ -41,8 +42,12 @@ import java.util.Locale
  *  ③ `Locale.ROOT` 只影响**数字形态**，不影响时区：`zone` 缺省仍是 `ZoneId.systemDefault()`，
  *     「用户看到的是本地时间」这条语义不变。
  *  ④ 时间戳 `<= 0`（未标注）不在这里兜底 —— 调用方各自保留「—」/「无时间」文案，Core 只做格式化。
- *  ⑤ 别把这条口径推广到 `getString(R.string.x, 数字)`：资源里的 `%1$d` 走 `Configuration` 的 Locale，
- *     要固定得先改资源调用方式，属于另一件事（当前 UI 只有中文，暂不动）。
+ *  ⑤ 资源字符串里的格式槽位走 `Context.templateText(id, ...)`（= [format]）而不是 `getString(id, 数字)`：
+ *     `Resources.getString` 带参走 `String.format(Configuration.locale)`，ar-EG 下 `%1$d` 就是 `١٠`、
+ *     `%1$.1f` 就是 `٢٫٠`（真机实测）；[format] 用 `Locale.ROOT` 语义自己代入，数字与小数点恒 ASCII。
+ *     模板本身不改（`%1$d` / `%1$.1f` 保留精度意图），只换调用方式。
+ *  ⑥ [format] 只认 `%N$d` / `%N$.Mf` / `%N$s` 与 `%%`：悬空 `%`、未知占位、缺参都原样/空串降级 ——
+ *     宁可少一个数也不要抛异常把整条文案吞掉。
  */
 internal object LocaleTextCore {
 
@@ -72,6 +77,69 @@ internal object LocaleTextCore {
     fun fixed(value: Double, digits: Int): String {
         if (digits <= 0) return String.format(Locale.ROOT, "%.0f", value)
         return String.format(Locale.ROOT, "%.${digits}f", value)
+    }
+
+    /** 资源模板里的一个槽位：`%N$d` / `%N$.Mf` / `%N$s`（N 从 1 起，精度可选）。 */
+    private val SLOT = Pattern.compile("%(\\d+)\\$(?:\\.(\\d+))?([dfs])")
+
+    /**
+     * 资源模板 → 文本：`%N$` 用 [args] 的第 N 个（从 1 起）顶替，`%%` 恒字面 `%`。
+     *
+     * 与 `String.format` 的三处差别，都是为了「数字不随系统语言变形」：
+     *  - 固定 `Locale.ROOT`（`String.format` 吃 `Configuration.locale`，ar-EG 下出 `٢٫٠`）；
+     *  - `%N$d` 吃任何 `Number`（`String.format` 对 `Double` 抛 `IllegalFormatConversionException`）；
+     *  - 悬空 `%` / 未知占位 / 缺参一律降级，不抛异常。
+     */
+    fun format(template: String, args: List<Any?>): String {
+        if (template.indexOf('%') < 0) return template
+        val m = SLOT.matcher(template)
+        val sb = StringBuilder(template.length + 16)
+        var i = 0
+        while (i < template.length) {
+            if (template[i] != '%' || i + 1 >= template.length) {
+                sb.append(template[i])
+                i++
+                continue
+            }
+            if (template[i + 1] == '%') {
+                sb.append('%')
+                i += 2
+                continue
+            }
+            m.region(i, template.length)
+            if (!m.lookingAt()) {   // 悬空 `%` 或未知占位：原样保留
+                sb.append(template[i])
+                i++
+                continue
+            }
+            val n = m.group(1)?.toIntOrNull() ?: 0
+            val digits = m.group(2)?.toIntOrNull()
+            sb.append(render(args.getOrNull(n - 1), m.group(3) ?: "s", digits))
+            i = m.end()
+        }
+        return sb.toString()
+    }
+
+    private fun render(arg: Any?, conv: String, digits: Int?): String = when (conv) {
+        "d" -> when (arg) {
+            is Int -> arg.toString()
+            is Long -> arg.toString()
+            is Number -> arg.toLong().toString()
+            else -> arg?.toString().orEmpty()
+        }
+        "f" -> if (arg is Number) fixed(arg.toDouble(), digits ?: 6) else arg?.toString().orEmpty()
+        else -> arg?.toString().orEmpty()
+    }
+
+    /** 模板要几个槽位（= 出现过的最大 `%N$` 的 N）；资源契约测试用它。 */
+    fun requiredArgs(template: String): Int {
+        val m = SLOT.matcher(template)
+        var max = 0
+        while (m.find()) {
+            val n = m.group(1)?.toIntOrNull() ?: continue
+            if (n > max) max = n
+        }
+        return max
     }
 
     /** `1.5 KB` / `12.3 MB` / `1.20 GB`（十进制单位，与 [LocalModelStore] 同口径）。 */

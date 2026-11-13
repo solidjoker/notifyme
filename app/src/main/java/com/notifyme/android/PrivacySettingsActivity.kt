@@ -57,10 +57,10 @@ class PrivacySettingsActivity : Activity() {
                 state.cloudRedact -> getString(R.string.privacy_mode_cloud_desc)
                 else -> getString(R.string.privacy_mode_local_desc)
             }
-            btnRules.text = getString(
+            btnRules.text = templateText(
                 R.string.privacy_rules_btn, state.enabledRules.size, RedactorRules.ALL.size
             )
-            btnBypass.text = getString(R.string.privacy_bypass_btn, state.bypassConvIds.size)
+            btnBypass.text = templateText(R.string.privacy_bypass_btn, state.bypassConvIds.size)
             btnAliasSalt.text = getString(
                 if (AliasSaltStore.hasSalt(this)) R.string.privacy_alias_btn_set
                 else R.string.privacy_alias_btn_unset

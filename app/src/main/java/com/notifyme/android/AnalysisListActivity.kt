@@ -236,11 +236,11 @@ class AnalysisListActivity : Activity() {
             holder.tvSender.text = ctx.getString(
                 R.string.analysis_sender_line,
                 TopicLabelCore.topicLabel(ctx, record.s1Topic),
-                ctx.getString(R.string.chip_importance, record.s1Importance)
+                ctx.templateText(R.string.chip_importance, record.s1Importance)
             )
             // 摘要：S2 深分析摘要优先，否则给 S1 判定概率
             holder.tvSummary.text = if (record.escalated) record.s2Summary
-            else ctx.getString(R.string.analysis_prob_fmt, record.s1NeedActionProb * 100)
+            else ctx.templateText(R.string.analysis_prob_fmt, record.s1NeedActionProb * 100)
             // 截止：S2 具体时间优先，其次 S1 截止桶（none 不显示）
             val dueText = record.s2DueTime.ifEmpty {
                 TopicLabelCore.dueLabel(ctx, record.s1DueWindow)
@@ -266,7 +266,7 @@ class AnalysisListActivity : Activity() {
                     record.s2SuggestedAction
                 )
             } else {
-                ctx.getString(R.string.msg_count, record.messageCount)
+                ctx.templateText(R.string.msg_count, record.messageCount)
             }
             // M13 窗口原文：折叠 4 行，点击展开/收起；无原文（旧消息已裁剪）隐藏
             val source = sources[record.caseId]

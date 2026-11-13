@@ -333,12 +333,12 @@ class MainActivity : Activity() {
     /** 确认框正文：总量 + 前几组样例（让用户自己判断是不是同一句话）。 */
     private fun dedupeMessage(plan: MessageDedupeCore.Plan): String {
         val sb = StringBuilder()
-        sb.append(getString(R.string.dedupe_body, plan.removed, plan.groups.size))
+        sb.append(templateText(R.string.dedupe_body, plan.removed, plan.groups.size))
         plan.groups.take(3).forEach { group ->
-            sb.append('\n').append(getString(R.string.dedupe_sample, group.count, group.preview))
+            sb.append('\n').append(templateText(R.string.dedupe_sample, group.count, group.preview))
         }
         if (plan.groups.size > 3) {
-            sb.append('\n').append(getString(R.string.dedupe_more, plan.groups.size - 3))
+            sb.append('\n').append(templateText(R.string.dedupe_more, plan.groups.size - 3))
         }
         return sb.toString()
     }
@@ -358,7 +358,7 @@ class MainActivity : Activity() {
                     refreshMessages()
                     Toast.makeText(
                         this,
-                        getString(R.string.dedupe_done, done.removed),
+                        templateText(R.string.dedupe_done, done.removed),
                         Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -469,7 +469,7 @@ class MainActivity : Activity() {
     private fun syncSelection() {
         adapter.selectionActive = batchActionMode != null
         adapter.selectedConversations = selectedConversations.toSet()
-        batchActionMode?.title = getString(R.string.batch_selected_n, selectedConversations.size)
+        batchActionMode?.title = templateText(R.string.batch_selected_n, selectedConversations.size)
         adapter.refreshSelectionState()
     }
 
@@ -502,13 +502,13 @@ class MainActivity : Activity() {
         val keys = selectedConversations.toList()
         if (keys.isEmpty()) return
         AlertDialog.Builder(this)
-            .setMessage(getString(R.string.confirm_delete_conversations, keys.size))
+            .setMessage(templateText(R.string.confirm_delete_conversations, keys.size))
             .setNegativeButton(R.string.common_cancel, null)
             .setPositiveButton(R.string.common_delete) { _, _ ->
                 deleteConversationsFully(keys) { n ->
                     batchActionMode?.finish()
                     refreshMessages()
-                    Toast.makeText(this, getString(R.string.delete_done, n), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, templateText(R.string.delete_done, n), Toast.LENGTH_SHORT).show()
                 }
             }
             .show()
@@ -552,7 +552,7 @@ class MainActivity : Activity() {
             .setPositiveButton(R.string.common_delete) { _, _ ->
                 deleteConversationsFully(listOf(key)) { n ->
                     refreshMessages()
-                    Toast.makeText(this, getString(R.string.delete_done, n), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, templateText(R.string.delete_done, n), Toast.LENGTH_SHORT).show()
                 }
             }
             .setOnCancelListener { adapter.notifyItemChanged(position) }
@@ -569,7 +569,7 @@ class MainActivity : Activity() {
     ) {
         AlertDialog.Builder(this)
             .setMessage(
-                getString(
+                templateText(
                     R.string.confirm_delete_date,
                     "${key.conversation} · $label", count
                 )
@@ -584,7 +584,7 @@ class MainActivity : Activity() {
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         refreshMessages()
-                        Toast.makeText(this, getString(R.string.delete_done, n), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, templateText(R.string.delete_done, n), Toast.LENGTH_SHORT).show()
                     }
                 }.start()
             }
@@ -829,10 +829,10 @@ class MainActivity : Activity() {
             val star = visibleGroups.filter { it.first in watchedKeys }
             val others = visibleGroups.filter { it.first !in watchedKeys }
             if (star.isNotEmpty()) {
-                sections.add(getString(R.string.section_watchlist, star.size) to star)
+                sections.add(templateText(R.string.section_watchlist, star.size) to star)
             }
             if (others.isNotEmpty()) {
-                sections.add(getString(R.string.section_others, others.size) to others)
+                sections.add(templateText(R.string.section_others, others.size) to others)
             }
         }
 
@@ -908,11 +908,11 @@ class MainActivity : Activity() {
                     val label = when {
                         dayLabel.unknown -> getString(R.string.date_unknown_label)
                         dayLabel.crossYear ->
-                            getString(
+                            templateText(
                                 R.string.date_label_cross_year,
                                 dayLabel.year, dayLabel.month, dayLabel.day
                             )
-                        else -> getString(R.string.date_label_same_year, dayLabel.month, dayLabel.day)
+                        else -> templateText(R.string.date_label_same_year, dayLabel.month, dayLabel.day)
                     }
                     items += FeedItem.DateHeader(
                         key = key,
@@ -1044,7 +1044,7 @@ class MainActivity : Activity() {
         }
         section.visibility = View.VISIBLE
         findViewById<TextView>(R.id.tvHomeTodosTitle).text =
-            getString(R.string.home_todos_count, todos.size)
+            templateText(R.string.home_todos_count, todos.size)
         rows.removeAllViews()
         for (rec in todos) {
             val row = layoutInflater.inflate(R.layout.item_home_todo, rows, false)
@@ -1184,7 +1184,7 @@ class MainActivity : Activity() {
             // M6：以结构化 created 判定成功（日历插入/闹钟挂上），不再耦合「成功」文案前缀；
             // 明示提前量，免得用户以为不会响
             val text = if (outcome.created) {
-                getString(R.string.todo_calendar_lead, outcome.note, config.reminderLeadMinutes)
+                templateText(R.string.todo_calendar_lead, outcome.note, config.reminderLeadMinutes)
             } else {
                 outcome.note
             }
@@ -1430,9 +1430,9 @@ class MainActivity : Activity() {
             bindTag(holder.tvTag, header.isGroup)
             holder.tvConversation.text = key.conversation
             holder.tvCount.text = if (header.countAtLeast) {
-                ctx.getString(R.string.msg_count_at_least, header.count)
+                ctx.templateText(R.string.msg_count_at_least, header.count)
             } else {
-                ctx.getString(R.string.msg_count, header.count)
+                ctx.templateText(R.string.msg_count, header.count)
             }
             holder.tvPreview.text = header.preview
             // M16：会话级折叠恢复——箭头可见可点，收起/展开整组；批量选择态隐藏箭头避免误点
@@ -1467,7 +1467,7 @@ class MainActivity : Activity() {
                     holder.tvAnalysisBadge.visibility = View.VISIBLE
                     val todoCount = if (case.s2Tasks.isNotEmpty()) case.s2Tasks.size else 1
                     holder.tvAnalysisBadge.text =
-                        ctx.getString(R.string.header_badge_todo, todoCount)
+                        ctx.templateText(R.string.header_badge_todo, todoCount)
                     holder.tvAnalysisBadge.setBackgroundResource(R.drawable.bg_tag_todo)
                     holder.tvAnalysisBadge.setTextColor(ctx.getColor(R.color.card_bg))
                 }
@@ -1573,7 +1573,7 @@ class MainActivity : Activity() {
         private fun bindDateHeader(holder: DateVH, header: FeedItem.DateHeader) {
             val ctx = holder.itemView.context
             holder.tvDateLabel.text = header.label
-            holder.tvDateCount.text = ctx.getString(R.string.msg_count, header.count)
+            holder.tvDateCount.text = ctx.templateText(R.string.msg_count, header.count)
             holder.tvDateArrow.text = if (header.collapsed) "▶" else "▼"
             // 整行点击折叠/展开该日期组（M14：折叠的唯一层级）
             holder.itemView.setOnClickListener {
@@ -1602,7 +1602,7 @@ class MainActivity : Activity() {
             // 同天多次分析追加「等N次分析」
             val analysis = item.analysis
             val suffix = if (item.analysisCount > 1) {
-                "（" + ctx.getString(R.string.analysis_times_suffix, item.analysisCount) + "）"
+                "（" + ctx.templateText(R.string.analysis_times_suffix, item.analysisCount) + "）"
             } else ""
             when {
                 analysis == null -> holder.tvAnalysis.visibility = View.GONE
@@ -1642,7 +1642,7 @@ class MainActivity : Activity() {
                     holder.tvAnalysis.text = ctx.getString(
                         R.string.analysis_topic_item,
                         topicLabel(ctx, analysis.s1Topic),
-                        ctx.getString(R.string.chip_importance, analysis.s1Importance),
+                        ctx.templateText(R.string.chip_importance, analysis.s1Importance),
                         suffix
                     )
                 }
