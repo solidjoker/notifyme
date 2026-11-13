@@ -48,7 +48,7 @@ flowchart TB
 
     subgraph MANUAL["手动提醒（不经过分析链路）"]
         direction TB
-        M1["用户在会话页手填提醒时间<br/>ManualReminderCore.kt 117<br/>EVENT_TIME_PATTERN = yyyy-MM-dd HH:mm"]:::in
+        M1["用户在会话页手填提醒时间<br/>ManualReminderCore.kt 128<br/>EVENT_TIME_PATTERN = yyyy-MM-dd HH:mm"]:::in
         M2{"解析成功？"}:::dec
         M3["解析失败 → 不落库<br/>提示格式错误 · 不产生僵尸记录"]:::fail
         M4["解析成功 → 写 reminders.jsonl<br/>dedupKey = 手动时间戳 + 会话名<br/>再走同一条三级降级链"]:::lv

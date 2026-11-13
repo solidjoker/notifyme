@@ -64,6 +64,8 @@ dist/
 *.jsonl
 !app/src/test/resources/**/*.jsonl
 !docs/**/*.jsonl
+# gh CLI 在仓库根写的设备状态（不影响仓库内容）
+/.local/
 # 端侧运行时数据目录（消息原文 / 分析结果 / 提醒 / 顾问报告 / 端侧模型）
 /files/
 /app/files/
