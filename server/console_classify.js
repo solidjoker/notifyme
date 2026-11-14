@@ -490,6 +490,35 @@
     return { devices: groups.length, active: active, total: total };
   }
 
+  // 顾问报告按来源 App 过滤后的「可见口径」。顾问报告**本身不一定带 pkg**：
+  // storage._normalize_advisor_report 只在端上带了这个字段时才落库（老报告没有）。
+  // 控制台此前只按「有没有 APP_FILTER」决定说明文案，一律写「无法按…过滤，
+  // 下面显示的是全部报告」——而带 pkg 的报告确实被来源筛掉了，说明与事实相反。
+  // 三种真实情形必须分开说，所以这里把计数口径收成一份：
+  //   mode='all'      未筛选（调用方不该渲染说明）
+  //   mode='untagged' 没有任何一份带 pkg —— 真的无法过滤，列表就是全部报告
+  //   mode='mixed'    一部分带 pkg（已按来源筛掉别的），不带的仍会显示
+  //   mode='exact'    全部带 pkg —— 列表严格等于「该来源的报告」
+  // total=存档内报告数 / shown=按来源筛出的份数 / hidden=被筛掉的份数 /
+  // untagged=不带 pkg 且仍会显示的份数。空白 pkg 与 null 一律当「不带」。
+  function advisorPkgScope(reports, pkg) {
+    var list = (reports || []).filter(function (r) { return r && typeof r === 'object'; });
+    var total = list.length;
+    if (!pkg) {
+      return { mode: 'all', pkg: '', total: total, shown: total, hidden: 0, untagged: 0 };
+    }
+    var want = normPkg(pkg);
+    var shown = 0, hidden = 0, untagged = 0, tagged = 0;
+    list.forEach(function (r) {
+      var raw = r.pkg == null ? '' : String(r.pkg);
+      if (!raw.replace(/^\s+|\s+$/g, '')) { untagged += 1; shown += 1; return; }
+      tagged += 1;
+      if (normPkg(raw) === want) { shown += 1; } else { hidden += 1; }
+    });
+    var mode = tagged === 0 ? 'untagged' : (untagged > 0 ? 'mixed' : 'exact');
+    return { mode: mode, pkg: want, total: total, shown: shown, hidden: hidden, untagged: untagged };
+  }
+
   return {
     VERSION: VERSION,
     QUEUE_STATE_ORDER: QUEUE_STATE_ORDER,
@@ -519,6 +548,7 @@
     groupQueueTasks: groupQueueTasks,
     groupMessages: groupMessages,
     groupQueueTasksByDevice: groupQueueTasksByDevice,
-    queueDeviceSummary: queueDeviceSummary
+    queueDeviceSummary: queueDeviceSummary,
+    advisorPkgScope: advisorPkgScope
   };
 });

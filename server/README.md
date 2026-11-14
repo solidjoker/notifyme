@@ -373,6 +373,19 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 存档损坏分支同样回 `total: 0` / `has_more: false`，前端不会拿到 `undefined`。
 按 `report_id` 去重：重复上报计入 `duplicated` 不重复写，缺 `report_id` 或字段非法计入 `invalid` 并进 `rejected`（207）。
 
+**顾问报告的 `pkg` 是可选字段，所以「按来源过滤」必须交代真实范围**：端上 `AdvisorStore.toUploadJson` 当前**不写** `pkg`（服务端 schema 允许），
+而 `GET /advisor?pkg=` 与控制台的前端过滤都只在确实带字段的行上生效 —— 没有字段的行一律保留。控制台顾问 Tab 的说明由
+`console_classify.advisorPkgScope(reports, pkg)` 判定（纯函数、UMD、node 可测），返回
+`{mode, total, tagged, untagged, shown, hidden}`：
+
+- `all` —— 没选来源，说明不显示；
+- `untagged` —— **一份都不带字段**，这时才可以说「顾问报告不携带来源 App 字段，无法按「X」过滤」；
+- `mixed` —— 过滤掉了 `hidden` 份别的来源，另有 `untagged` 份不带字段仍会显示（「这一项会随端上补齐上报字段而减少」）；
+- `exact` —— 全都带字段，过滤是真过滤：`shown` 为 0 时单独说「已加载的 M 份报告里没有来自该来源的」。
+
+`console_ui.advisorScopeNote()` 只负责按四态挑措辞，判定不写进 `renderAdvisor`；规则脚本缺失时 `try/catch` 兜 `null`，
+沿用旧文案。旧实现只要选了来源就无条件写「无法按「X」过滤」，下面是清一色的该来源报告 —— 说明与事实相反。
+
 ### POST /queue —— 上报排队任务快照（需 token）
 
 请求体 `{"device_id": "android-1f2a3b4c", "tasks": [...]}`，按 `(device_id, task_id)` 整份覆盖
