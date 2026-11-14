@@ -224,6 +224,53 @@
     other: '其它'
   };
 
+  // ---------- 文本截断：按码点，不按 UTF-16 单元 ----------
+  // 为什么必须按码点：JS 的 String.length / slice 数的是 **UTF-16 code unit**，
+  // 而 emoji（U+1F600）与 CJK 扩展 B 起的生僻字各占两个 unit（高代理 + 低代理）。
+  // 按 unit 截断会把代理对切成孤半代理，JSON 序列化后是 \ud83d，浏览器渲染成 U+FFFD
+  // —— 标题末尾凭空多一个「?」。实测（node 22）："a"*255 + 😀 截到 256 unit 后
+  // 末位是 0xd83d（孤立高代理），clipCodePoints 给出的则是完整的 😀。
+  //
+  // 三层口径必须一致：端上 QueueStateCore 走 TextClipCore.clip（码点）、服务端
+  // storage._normalize_queue_task 用 Python len()（也是码点，Python 字符串是码点序列），
+  // 只有控制台这一处曾按 unit 数 —— 端上报 256 个 emoji 的标题（512 unit）能入库，
+  // 却在展示前被再截成 128 个码点，用户看到的和库里存的不是同一条。
+  //
+  // 契约：不超过上限时**原样返回同一份字符串**；超限时截到第 maxCodePoints 个码点边界，
+  // **不追加省略号**（旧的 slice(0, 256) 也不加，换口径不能顺手改长度语义）；
+  // ASCII 输入输出与旧实现逐字节相同。
+  function codePointLength(s) {
+    var n = 0;
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+        var d = s.charCodeAt(i + 1);
+        if (d >= 0xdc00 && d <= 0xdfff) { i++; }
+      }
+      n++;
+    }
+    return n;
+  }
+
+  function clipCodePoints(s, maxCodePoints) {
+    if (!(maxCodePoints > 0)) { return ''; }
+    // 每个码点至少占 1 个 unit：unit 数没超过上限，码点数一定也没超
+    if (s.length <= maxCodePoints) { return s; }
+    var n = 0;
+    var i = 0;
+    while (i < s.length && n < maxCodePoints) {
+      var c = s.charCodeAt(i);
+      if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+        var d = s.charCodeAt(i + 1);
+        if (d >= 0xdc00 && d <= 0xdfff) { i++; }
+      }
+      i++;
+      n++;
+    }
+    return s.slice(0, i);
+  }
+
+
   // 归一化一条排队任务：字段越界就截断、非法枚举退回默认值、空 id 直接丢弃
   function normalizeQueueTasks(raw) {
     var list = [];
@@ -232,15 +279,19 @@
     for (var i = 0; i < arr.length; i++) {
       var t = arr[i] || {};
       var id = t.task_id == null ? '' : String(t.task_id).trim();
-      if (!id || id.length > 128) continue;
+      // 上限同样按码点判：storage._normalize_queue_task 用的是 Python len()（码点），
+      // 端上 QueueStateCore 用 id.length（Kotlin String 是 UTF-16，但端上生成的 id 恒 ASCII）。
+      // 这里若按 unit 判，同样的报文会在控制台被丢弃、在服务端被接受 —— 三方口径必须一致。
+      if (!id || codePointLength(id) > 128) continue;
       var dev = t.device_id == null ? '' : String(t.device_id);
       var kind = QUEUE_KIND_LABELS[t.kind] ? String(t.kind) : 'other';
       var state = QUEUE_STATE_LABELS[t.state] ? String(t.state) : 'queued';
       var title = t.title == null ? '' : String(t.title).trim();
       if (!title) title = '未命名任务';
-      if (title.length > 256) title = title.slice(0, 256);
+      // 空标题兜底必须排在截断之前：「未命名任务」本身没超限，顺序反了会白截一刀。
+      title = clipCodePoints(title, 256);
       var detail = t.detail == null ? '' : String(t.detail);
-      if (detail.length > 512) detail = detail.slice(0, 512);
+      detail = clipCodePoints(detail, 512);
       var queuedAt = Number(t.queued_at) || 0;
       if (queuedAt < 0) queuedAt = 0;
       var updatedAt = Number(t.updated_at) || queuedAt;
@@ -449,6 +500,8 @@
     ADVISOR_TYPE_ORDER: ADVISOR_TYPE_ORDER,
     IMPORTANCE_ORDER: IMPORTANCE_ORDER,
     IMPORTANCE_LABELS: IMPORTANCE_LABELS,
+    codePointLength: codePointLength,
+    clipCodePoints: clipCodePoints,
     normPkg: normPkg,
     pkgLabel: pkgLabel,
     ckOf: ckOf,

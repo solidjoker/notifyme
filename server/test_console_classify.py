@@ -561,6 +561,107 @@ def test_normalize_queue_tasks_truncates_long_text(call):
     assert len(out[0]["title"]) == 256, "标题应截断到 256"
     assert len(out[0]["detail"]) == 512, "详情应截断到 512"
 
+def _has_lone_surrogate(s):
+    """是否存在孤立代理（高代理后面不跟低代理，或低代理前面没有高代理）。"""
+    for i, ch in enumerate(s):
+        cp = ord(ch)
+        if 0xD800 <= cp <= 0xDBFF:
+            nxt = ord(s[i + 1]) if i + 1 < len(s) else 0
+            if not (0xDC00 <= nxt <= 0xDFFF):
+                return True
+        elif 0xDC00 <= cp <= 0xDFFF:
+            prev = ord(s[i - 1]) if i > 0 else 0
+            if not (0xD800 <= prev <= 0xDBFF):
+                return True
+    return False
+
+
+def test_normalize_queue_tasks_truncates_by_code_point(call):
+    """截断按 Unicode 码点数，不是 UTF-16 单元数。
+
+    回归：旧实现用 s.slice(0, 256) 按 unit 切，'a' * 255 + 😀（257 unit / 256 码点）
+    会被切成 256 unit，末位留成孤立高代理 0xD83D，浏览器渲染成 U+FFFD —— 端上
+    QueueStateCore 走 TextClipCore.clip（码点）、服务端 storage 用 Python len（码点），
+    只有控制台按 unit，导致「入库的标题」和「看到的标题」不是同一条。
+    """
+    emoji = "\U0001F600"
+    raw = "a" * 255 + emoji  # 257 unit / 256 码点 => 恰好不超限
+    out = call("normalizeQueueTasks", [_qtask(title=raw)])
+    title = out[0]["title"]
+    assert title == raw, "256 个码点应原样保留，实际 %r" % (title,)
+    assert not _has_lone_surrogate(title), "不得留下孤立代理：%r" % (title,)
+
+
+def test_normalize_queue_tasks_keeps_256_emoji_title(call):
+    """256 个 emoji 的标题（512 unit）必须原样保留，不能被砍半。"""
+    emoji = "\U0001F600"
+    raw = emoji * 256
+    assert len(raw) == 256 and len(raw.encode("utf-16-le")) // 2 == 512
+    out = call("normalizeQueueTasks", [_qtask(title=raw)])
+    title = out[0]["title"]
+    assert title == raw, "256 个 emoji 应原样保留，实际长度 %d" % (len(title),)
+    assert len(title) == 256, "码点数应仍是 256，实际 %d" % (len(title),)
+
+
+def test_normalize_queue_tasks_truncates_over_limit_emoji(call):
+    """超限的 emoji 标题截到 256 个码点，不产生孤立代理。"""
+    emoji = "\U0001F600"
+    out = call("normalizeQueueTasks", [_qtask(title=emoji * 300)])
+    title = out[0]["title"]
+    assert title == emoji * 256, "应截到 256 个码点，实际 %d" % (len(title),)
+    assert len(title) == 256, "码点数为 256 时 unit 数是 512，实际 unit %d" % (len(title),)
+    assert not _has_lone_surrogate(title), "不得留下孤立代理：%r" % (title,)
+
+
+def test_normalize_queue_tasks_detail_truncates_by_code_point(call):
+    """详情同口径：512 个码点，不是 512 个 unit。"""
+    emoji = "\U0001F600"
+    out = call("normalizeQueueTasks", [_qtask(detail=emoji * 600)])
+    detail = out[0]["detail"]
+    assert detail == emoji * 512, "详情应截到 512 个码点，实际 %d" % (len(detail),)
+    assert not _has_lone_surrogate(detail), "详情不得留下孤立代理：%r" % (detail,)
+
+
+def test_normalize_queue_tasks_ascii_truncation_unchanged(call):
+    """ASCII 输入与旧实现逐字节相同（300 个 a 截成 256 个 a）。"""
+    out = call("normalizeQueueTasks", [_qtask(title="a" * 300, detail="b" * 600)])
+    assert out[0]["title"] == "a" * 256, "ASCII 标题应截成 256 个 a"
+    assert out[0]["detail"] == "b" * 512, "ASCII 详情应截成 512 个 b"
+
+
+def test_normalize_queue_tasks_task_id_limit_counts_code_points(call):
+    """task_id 的 128 上限也按码点判：128 个 emoji（256 unit）合法，129 个丢弃。
+
+    服务端 storage._normalize_queue_task 用的是 Python len()（码点），对照组在
+    test_queue_contract.py；控制台若按 unit 判，同一条报文会「服务端收、控制台丢」。
+    """
+    emoji = "\U0001F600"
+    keep = call("normalizeQueueTasks", [_qtask(task_id=emoji * 128)])
+    assert len(keep) == 1, "128 个码点的 task_id 应保留（服务端也收）"
+    drop = call("normalizeQueueTasks", [_qtask(task_id=emoji * 129)])
+    assert drop == [], "129 个码点的 task_id 应丢弃：%r" % (drop,)
+
+
+def test_clip_code_points_contract(call):
+    """clipCodePoints 契约：不超限原样返回、上限 <=0 返空、超限截在码点边界。"""
+    emoji = "\U0001F600"
+    assert call("clipCodePoints", "abc", 3) == "abc", "不超限应原样返回"
+    assert call("clipCodePoints", emoji * 2, 2) == emoji * 2, "两个 emoji 不超限"
+    assert call("clipCodePoints", "abc", 0) == "", "上限 0 应返空串"
+    assert call("clipCodePoints", "abc", -1) == "", "负上限应返空串"
+    clipped = call("clipCodePoints", "a" + emoji * 3, 2)
+    assert clipped == "a" + emoji, "应截到第 2 个码点，实际 %r" % (clipped,)
+    assert not _has_lone_surrogate(clipped), "不得留下孤立代理：%r" % (clipped,)
+
+
+def test_code_point_length_matches_python_len(call):
+    """codePointLength 必须与 Python len() 完全一致（Python 字符串就是码点序列）。"""
+    emoji = "\U0001F600"
+    samples = ["", "a", "abc", emoji, emoji * 3, "a" + emoji + "b", "标" * 5, emoji + "标" + emoji]
+    for s in samples:
+        got = call("codePointLength", s)
+        assert got == len(s), "codePointLength(%r)=%d，Python len=%d" % (s, got, len(s))
+
 
 def test_normalize_queue_tasks_negative_queued_at_becomes_zero(call):
     """负的 queued_at 归零。"""
