@@ -224,6 +224,93 @@
     other: '其它'
   };
 
+  // ---------- 展示文案：码值 → 中文（唯一一份） ----------
+  // 为什么必须集中：同一份 kind 在排队 Tab 的卡片里渲染成「分析」，统计 Tab 的
+  // 排队卡却把 GROUP BY 出来的原码直接拼成「analysis 3 / sync 2」—— 同一屏两种
+  // 语言。来源（source）更糟：前端只翻 android-db / android-notification 两档，
+  // a11y-extract / pc-db / eval / unknown 全是英文码，用户看到不知道是什么。
+  // 契约：
+  //   sourceLabel 认不出就把原码原样回显（不吞信息），空值 / null 归 unknown 的中文；
+  //   queueKindLabel / queueStateLabel 认不出返 null —— 让 UI 自己决定兜底措辞，
+  //   规则层不替界面决定「未知该写其它还是未知」。
+  var SOURCE_LABELS = {
+    'android-notification': '通知',
+    'android-db': '从数据库导入',
+    'pc-db': '从电脑数据库导入',
+    'a11y-extract': '无障碍直读',
+    eval: '评测数据',
+    unknown: '未知来源'
+  };
+
+  function sourceLabel(source) {
+    var k = (source == null) ? '' : String(source).trim();
+    if (!k) { return SOURCE_LABELS.unknown; }
+    return Object.prototype.hasOwnProperty.call(SOURCE_LABELS, k) ? SOURCE_LABELS[k] : k;
+  }
+
+  // 消息上的来源徽标：只有「不是默认通知通道」的来源才挂，文案与样式都留在这里。
+  // 为什么必须在规则层：旧写法在 UI 里硬写 `m.source === 'android-db'`，于是
+  // a11y-extract（无障碍直读，时间戳还是估算值）的消息没有任何标记 —— 用户无法
+  // 分辨「这条是通知抓的」还是「这条是从别处读出来的」。CSS 的 --badge-nt /
+  // .badge.b-nt 早就定义了，一直没人用。
+  var SOURCE_BADGES = {
+    'android-db': { text: '库', cls: 'b-db' },
+    'pc-db': { text: '库', cls: 'b-db' },
+    'a11y-extract': { text: '读', cls: 'b-nt' }
+  };
+
+  function sourceBadge(source) {
+    var k = (source == null) ? '' : String(source).trim();
+    return Object.prototype.hasOwnProperty.call(SOURCE_BADGES, k) ? SOURCE_BADGES[k] : null;
+  }
+
+  function _labelOf(table, key) {
+    var k = (key == null) ? '' : String(key);
+    return Object.prototype.hasOwnProperty.call(table, k) ? table[k] : null;
+  }
+
+  function queueKindLabel(kind) {
+    return _labelOf(QUEUE_KIND_LABELS, kind);
+  }
+
+  function queueStateLabel(state) {
+    return _labelOf(QUEUE_STATE_LABELS, state);
+  }
+
+  // 分布文案拼接：pairs 是 [[键, 次数], ...]（pairList / distPairs 的输出）。
+  // 0 / 负数 / 非数字的条目一律丢弃（与 mergePairsBy 的「丢零次数」同口径），
+  // labelOf 回 null 时写「未知」—— 不许把 null 拼成字符串给用户看。
+  // 标签函数可以按名字传：控制台的内联脚本与 node 单测都走 JSON 边界，函数没法过
+  // JSON.stringify。`pairText(pairs, 'source')` 里的 'source' 在这里解析成 sourceLabel，
+  // 认不出的名字一律当「不翻译」（拼原码），不抛。
+  var PAIR_LABELERS = {
+    source: sourceLabel,
+    kind: queueKindLabel,
+    state: queueStateLabel
+  };
+
+  function _labelerOf(spec) {
+    if (typeof spec === 'function') { return spec; }
+    var k = (spec == null) ? '' : String(spec);
+    return Object.prototype.hasOwnProperty.call(PAIR_LABELERS, k) ? PAIR_LABELERS[k] : null;
+  }
+
+  function pairText(pairs, labeler) {
+    if (!pairs || !pairs.length) { return ''; }
+    var fn = _labelerOf(labeler);
+    var parts = [];
+    for (var i = 0; i < pairs.length; i++) {
+      var pair = pairs[i] || [];
+      var n = Number(pair[1]);
+      if (!(isFinite(n) && n > 0)) { continue; }
+      var key = (pair[0] == null) ? '' : String(pair[0]);
+      var label = fn ? fn(key) : key;
+      if (label == null || label === '') { label = '未知'; }
+      parts.push(label + ' ' + Math.floor(n));
+    }
+    return parts.join(' / ');
+  }
+
   // ---------- 文本截断：按码点，不按 UTF-16 单元 ----------
   // 为什么必须按码点：JS 的 String.length / slice 数的是 **UTF-16 code unit**，
   // 而 emoji（U+1F600）与 CJK 扩展 B 起的生僻字各占两个 unit（高代理 + 低代理）。
@@ -671,6 +758,14 @@
     DEFAULT_STATS_LIST_CAP: DEFAULT_STATS_LIST_CAP,
     statsListState: statsListState,
     badgeState: badgeState,
-    syncCounters: syncCounters
+    syncCounters: syncCounters,
+    SOURCE_LABELS: SOURCE_LABELS,
+    sourceLabel: sourceLabel,
+    queueKindLabel: queueKindLabel,
+    queueStateLabel: queueStateLabel,
+    pairText: pairText,
+    PAIR_LABELERS: PAIR_LABELERS,
+    SOURCE_BADGES: SOURCE_BADGES,
+    sourceBadge: sourceBadge
   };
 });

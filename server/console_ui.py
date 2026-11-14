@@ -2764,12 +2764,25 @@ function convGroupHtml(baseKey, g) {
   return html;
 }
 
+// 来源徽标：文案与色号在规则层（console_classify.SOURCE_BADGES），这里只拼 DOM。
+// 旧写法硬判 android-db，于是「无障碍直读」（a11y-extract，时间戳是估算值）
+// 的消息没有任何标记，用户分不清它是通知抓的还是从别处读出来的；CSS 的
+// .badge.b-nt 定义了却从来没被用过。规则脚本缺失时退回旧口径。
+function sourceBadgeHtml(source) {
+  var sb = null;
+  if (CC && CC.sourceBadge) {
+    try { sb = CC.sourceBadge(source); } catch (e) { sb = null; }
+  }
+  if (!sb && source === 'android-db') { sb = { text: '库', cls: 'b-db' }; }
+  return sb ? ('<span class="badge ' + sb.cls + '">' + esc(sb.text) + '</span>') : '';
+}
+
 // 单条消息的 HTML（会话卡内复用）
 function msgHtml(m) {
   var badges = (m.is_group ? '<span class="badge b-grp">群</span>' : '') +
     (normPkg(m.pkg) !== PKG_WX ? '<span class="badge b-app">' +
       esc(pkgLabel(m.pkg)) + '</span>' : '') +
-    (m.source === 'android-db' ? '<span class="badge b-db">库</span>' : '');
+    sourceBadgeHtml(m.source);
   return '<div class="msg"><div class="m-meta">' + badges + esc(m.sender) +
     ' · ' + esc(fmtTime(m.timestamp)) + '</div>' +
     '<div class="m-text">' + esc(m.text) + '</div></div>';
@@ -3055,10 +3068,19 @@ function renderStats() {
   }
   var srcPairs = distPairs(bySrc, 'source', function (s) { return s ? String(s) : 'unknown'; });
   var appPairs = distPairs(byApp, 'pkg', normPkg);
-  var srcTxt = srcPairs.map(function (p) {
-    return (p[0] === 'android-db' ? '数据库' : p[0] === 'android-notification' ? '通知' : p[0]) +
-      ' ' + p[1];
-  }).join(' / ');
+  // 来源文案走规则层 SOURCE_LABELS（唯一一份）：旧写法只翻 android-db /
+  // android-notification 两档，a11y-extract / pc-db / eval / unknown 全是英文码直出。
+  // 规则脚本缺失时退回旧映射。
+  var srcTxt = '';
+  if (CC && CC.pairText) {
+    try { srcTxt = CC.pairText(srcPairs, 'source'); } catch (e) { srcTxt = ''; }
+  }
+  if (!srcTxt) {
+    srcTxt = srcPairs.map(function (p) {
+      return (p[0] === 'android-db' ? '数据库' : p[0] === 'android-notification' ? '通知' : p[0]) +
+        ' ' + p[1];
+    }).join(' / ');
+  }
   var appTxt = appPairs.map(function (p) {
     return pkgLabel(p[0]) + ' ' + p[1];
   }).join(' / ');
@@ -3086,9 +3108,16 @@ function renderStats() {
     // 有过期行时必须把「不含 N 条已过期」写在旁边：否则用户看到
     // 「analysis 3 / sync 2」会以为 5 条都在跑，而同一行只说「活跃 1 · 陈旧 3」
     // —— 同一屏 5 vs 2 对不上账（真机口径事故）。
-    var kindTxt = pairList(STATS.queue.by_kind || [], 'kind').map(function (p) {
-      return p[0] + ' ' + p[1];
-    }).join(' / ');
+    // kind 文案走规则层 QUEUE_KIND_LABELS（与排队 Tab 卡片同一个表）：旧写法把
+    // GROUP BY 出来的原码直接拼成「analysis 3 / sync 2」，同一屏两种语言。
+    var kindPairs = pairList(STATS.queue.by_kind || [], 'kind');
+    var kindTxt = '';
+    if (CC && CC.pairText) {
+      try { kindTxt = CC.pairText(kindPairs, 'kind'); } catch (e) { kindTxt = ''; }
+    }
+    if (!kindTxt && kindPairs.length) {
+      kindTxt = kindPairs.map(function (p) { return p[0] + ' ' + p[1]; }).join(' / ');
+    }
     var staleN = Number(STATS.queue.stale || 0);
     var kindScope = kindTxt ? (staleN > 0 ? '（不含 ' + staleN + ' 条已过期）' : '') : '';
     out.push({
@@ -3357,18 +3386,24 @@ var QUEUE_STATE_META = {
   failed: { label: '失败', cls: 'q-failed' },
   done: { label: '已完成', cls: 'q-done' }
 };
-var QUEUE_KIND_META = {
-  analysis: '分析',
-  sync: '同步',
-  model: '模型',
-  other: '其它'
-};
+// 状态与类型的展示文案只有一份：规则层 QUEUE_STATE_LABELS / QUEUE_KIND_LABELS。
+// 这里保留 QUEUE_STATE_META 只是为了 q-running / q-done 这些样式类名。
+// 旧写法在 UI 里又抄了一份 QUEUE_KIND_META，两处文案迟早分叉 —— 已删。
 function queueStateLabel(st) {
+  var cc = null;
+  if (CC && CC.queueStateLabel) {
+    try { cc = CC.queueStateLabel(st); } catch (e) { cc = null; }
+  }
+  if (cc) return cc;
   var m = QUEUE_STATE_META[st || ''];
   return m ? m.label : '排队中';
 }
 function queueKindLabel(k) {
-  return QUEUE_KIND_META[k || ''] || '其它';
+  var cc = null;
+  if (CC && CC.queueKindLabel) {
+    try { cc = CC.queueKindLabel(k); } catch (e) { cc = null; }
+  }
+  return cc || '其它';
 }
 // 「还在跑的设备」台数：devices 清单里 active > 0 的那些。
 // 清单本身回答「库里出现过哪几台设备」，设备停报（换机 / 卸载 / 关掉上报）后
