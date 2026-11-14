@@ -383,6 +383,54 @@ def test_stats_devices_active_excludes_zombie_device(api):
     assert queue["running"] == 1
     assert queue["stale"] == 1
 
+def test_stats_by_kind_counts_fresh_rows_only(api):
+    """排队类型分布只数未过期行，与四个状态同口径（陈旧行只进 stale）。
+
+    缺陷现场：统计卡同一行写「analysis 3 / sync 2」（含 3 条早已停跑的僵尸
+    任务）与「活跃 1 · 陈旧 3」，两个数对不上 —— 用户会以为 5 条都在跑。
+    """
+    _insert_queue([("dev-a", "t1", "analysis", "在跑", "running", "")])
+    with app_module._write_lock:
+        conn = app_module._connect()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO queue_tasks"
+                " (device_id, task_id, kind, title, state, detail, queued_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("dev-b", "z1", "analysis", "僵尸1", "running", "", 0,
+                 _now_ms() - storage_module.QUEUE_TTL_MS - 60 * 1000))
+            conn.execute(
+                "INSERT OR REPLACE INTO queue_tasks"
+                " (device_id, task_id, kind, title, state, detail, queued_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("dev-b", "z2", "sync", "僵尸2", "queued", "", 0,
+                 _now_ms() - storage_module.QUEUE_TTL_MS - 60 * 1000))
+            conn.commit()
+        finally:
+            conn.close()
+    queue = api.get("/stats").get_json()["queue"]
+    assert queue["total"] == 3
+    assert queue["stale"] == 2
+    # 分布只留未过期的那一条 analysis；stale 的两条不进分布
+    assert queue["by_kind"] == [{"kind": "analysis", "count": 1}]
+    assert sum(item["count"] for item in queue["by_kind"]) == queue["total"] - queue["stale"]
+
+
+def test_stats_by_kind_survives_text_kind_rows_and_matches_state_sums(api):
+    """脏 kind（TEXT 空）与四状态之和必须对得上：sum(by_kind) == 未过期行数。"""
+    _insert_queue([
+        ("dev-a", "t1", "analysis", "分析", "running", ""),
+        ("dev-a", "t2", "sync", "同步", "queued", ""),
+        ("dev-b", "t3", "model", "模型", "done", ""),
+        ("dev-b", "t4", "analysis", "失败", "failed", "busy"),
+    ])
+    queue = api.get("/stats").get_json()["queue"]
+    fresh_states = queue["running"] + queue["queued"] + queue["done"] + queue["failed"]
+    assert fresh_states == 4
+    assert sum(item["count"] for item in queue["by_kind"]) == fresh_states
+    kinds = {item["kind"]: item["count"] for item in queue["by_kind"]}
+    assert kinds == {"analysis": 2, "sync": 1, "model": 1}
+
 
 def test_stats_devices_active_zero_when_every_device_is_zombie(api):
     """全部设备都停报：devices 仍报台数，devices_active 必须是 0。"""

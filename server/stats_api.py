@@ -18,6 +18,10 @@
        analyses: {total, convs, todo, todo_convs, redacted_cases, redaction_hits, last_report, age_days},
        queue:    {total, active, queued, running, failed, done, stale,
                   devices, devices_active, by_kind}}
+
+queue 段的 by_kind 只数**未过期**行（与 queued/running/failed/done 同口径），
+所以 sum(by_kind.count) == total - stale。写成全量会让统计卡同一行出现
+「analysis 3 / sync 2」与「活跃 1 · 陈旧 3」两个对不上的数。
 """
 
 import time
@@ -161,10 +165,14 @@ def _queue_block():
         kind = row[1] or ""
         # queue_tasks.updated_at 同样是 INTEGER 亲和：被写脏成 TEXT 时裸 int() 会 500
         updated_at = app_module._safe_int(row[2], default=0, lo=0)
-        kinds[kind] = kinds.get(kind, 0) + 1
         if (now_ms - updated_at) > storage_module.QUEUE_TTL_MS:
             out["stale"] += 1
             continue
+        # 类型分布只数未过期行，与上面四个状态 / active 同口径：
+        # 放在过期判定之前会让「analysis 3 / sync 2」把早已停跑的僵尸任务
+        # 也算进去，而同一张卡的「活跃 1 · 失败 1 · 陈旧 3」不含它们 ——
+        # 同屏 5 条 vs 2 条，用户对不上账（实测 5 行里 3 条过期）。
+        kinds[kind] = kinds.get(kind, 0) + 1
         # 状态集合引用 storage 的常量，不在这里再写一份字面量
         if state in storage_module.QUEUE_STATES:
             out[state] += 1
