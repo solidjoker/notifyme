@@ -1509,3 +1509,49 @@ node harness（抽 `CONSOLE_HTML` 到 `c39.html`、`new Function` 注入 `pairLi
 **计数.** `console_ui.py` 3590 / 3501 → **3609 / 3520**（`distPairs` @2903 · `stat-app` @2966 · `stat-src` @2971 · `CONSOLE_MANIFEST` @3425 · `CONSOLE_SW` @3471 · `liveDeviceCount` @3157 · `deviceTallyText` @3166 · `queueStateTotal` @3195 · `queueEmptyHtml` @3316 · `renderAdvisor` @3023）；`console_classify.js` 434 / 407 → **463 / 433**（`mergePairsBy` @108 · `mergePkgPairs` @121 · `mergeSourcePairs` @126）；`test_console_classify.py` 1165 / 953 → **1212 / 997**；`test_console_ui.py` 574 / 461 → **592 / 476**；服务端用例 673 → **679 条**。Android 侧计数不变（130 / 137 / 85 / 1369）。
 
 **教训.** 「同一个键在展示层有归一函数」时，任何**按该键分组的分布**都必须过归一后再合并 —— 服务端按原始列分组是对的（不同真值必须能分开），但渲染层的归一必然产生重名条目。判据可以写成一句：**归一函数覆盖到的取值域，必须与分布分组粒度一致，否则先 `merge` 再渲染**。这个缺陷在 673 条全绿下活了很久，因为两侧用例各自只钉了自己那一半：「服务端分组之和恒等」与「前端读过这个键」。
+### E-65｜`mergePairsBy` 只做了归并没做重排：分布最多的那个排在最后（`console_classify.mergePairsBy` / `console_ui.distPairs`，fix/stats-dist-order，2026-11-14）
+
+**现象.** 统计卡的「来源 App」分布出现「微博 2 / 微信 3」—— 次数最多的那条反而排在末尾；同一份数据在 `/stats` 的 SQL 里是按 `ORDER BY COUNT(*) DESC, pkg ASC` 出的，前端渲染顺序与服务端口径相反。
+
+**根因.** E-64 引入的 `mergePairsBy(pairs, normalize)` 用 `order` 数组保**首次出现序**，注释也据此写了「服务端已按次数降序，合并后仍是次数降序」—— 这句话的前提是错的：**归并本身就会改变次数**。反例（`/stats` 真实返回形状）：
+
+```
+by_pkg = [["com.sina.weibo",2],[null,1],["",1],["com.tencent.mm",1]]
+  → 归并（NULL/空串折成 com.tencent.mm）：微博 2 / 微信 3
+  → 保首次出现序渲染：「微博 2 / 微信 3」，最大头排最后
+```
+
+同一份数据若次数恰好相等（`[[com.tencent.mm,1],[null,1],["",1],[com.sina.weibo,1]]`）时顺序是对的，E-64 的用例正好是这一组等值样本，所以 679 条全绿没拦住。
+
+**修法.** `mergePairsBy` 末尾在 `.filter(p => p[1] > 0)` 之后接一次排序，两条渲染路径必须同口径：
+
+```
+.filter(function (p) { return p[1] > 0; })
+.sort(function (a, b) {
+  if (a[1] !== b[1]) return b[1] - a[1];        // 次数降序
+  return a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0);  // 同次数键名码点升序
+});
+```
+
+1. `server/console_classify.js:110` 的 `mergePairsBy` 改上述实现，注释由「服务端已按次数降序，合并后仍是次数降序」改成「归并会改变次数，所以顺序必须重新按次数降序排：沿用首次出现序会出「微博 2 / 微信 3」这种升序错位……同次数按键名码点升序，保证同一份数据永远得到同一串」。
+2. `server/console_ui.py:2905` 的 `distPairs(obj, keyName, normalize)` —— 规则脚本缺失时走的**就地兜底分支**补同一个 `.sort(...)`（注释加「与 /stats 的 `ORDER BY COUNT(*) DESC, key ASC` 对齐」）。只用 `CC.mergePairsBy` 时这条分支不执行，但两处一旦分叉，旧版规则脚本缓存的浏览器就会看到另一种顺序。
+
+**测试.** 改 2 条、加 1 条断言，基线 679 不变（改写不新增）：
+- `test_merge_pkg_pairs_keeps_first_seen_order` → **`test_merge_pkg_pairs_sorts_by_count_desc`**：① 微博 2 + 微信 NULL1/空串1/1（共 3）→ `[[PKG_WX,3],["com.sina.weibo",2]]`；② 同次数 `[["b",2],["a",2]]` → `[["a",2],["b",2]]`（码点升序）；③ 三档混合 `[["com.b",3],[None,2],["com.a",1],["",3]]` → `[[PKG_WX,5],["com.b",3],["com.a",1]]`（NULL 2 + 空串 3 先折成 5，再压过 com.b 的 3）。
+- `test_merge_source_pairs_folds_blank_into_unknown` 期望由 `[["android-notification",2],["unknown",4]]` 改为 `[["unknown",4],["android-notification",2]]`（4 > 2）。
+- `server/test_console_ui.py` 的 `test_stats_dist_merges_pkg_and_source_before_render` 末尾追加 `assert html.count("if (a[1] !== b[1]) return b[1] - a[1];") == 1` —— **只数 `distPairs` 兜底那一处**（规则层由 classify 用例守着）。首跑写成 `== 2` 直接红：`AssertionError: distPairs 兜底分支没有按次数降序排` / `assert 1 == 2`，说明这条断言确实钉住了兜底分支而不是规则层。
+
+**验证.**
+
+```
+node -e 'const C=require("./server/console_classify.js"); console.log(JSON.stringify(C.mergePkgPairs([["com.sina.weibo",2],[null,1],["",1],["com.tencent.mm",1]])))'
+  → [["com.tencent.mm",3],["com.sina.weibo",2]]
+node -e '... mergePkgPairs([["com.tencent.mm",1],[null,1],["",1],["com.sina.weibo",1]])'
+  → [["com.tencent.mm",3],["com.sina.weibo",1]]   ← 等值样本顺序不变，E-64 的结论没有被推翻
+pytest server/test_console_classify.py server/test_console_ui.py -q → 126 passed
+pytest server/ -q                                                       → 679 passed in 35.68s
+```
+
+**计数.** `console_ui.py` 3609 / 3520 → **3615 / 3526**（`distPairs` @2905 · `srcPairs` @2924 · `appPairs` @2925 · `kindTxt` @2957 仍是 `pairList`（kind 无脏值，刻意不合并）· `CONSOLE_MANIFEST` @3431 · `CONSOLE_SW` @3477 · `liveDeviceCount` @3163 · `deviceTallyText` @3172 · `queueStateTotal` @3201 · `queueEmptyHtml` @3322 · `renderAdvisor` @3029）；`console_classify.js` 463 / 433 → **471 / 441**（`mergePairsBy` @110 · `mergePkgPairs` @129 · `mergeSourcePairs` @134）。
+
+**教训.** 「合并同类项」这个操作**天然破坏输入顺序**——只要分组键的取值会变（这里是把 NULL / 空串折成微信），输出的顺序就不再是输入的顺序，任何「输入有序所以输出有序」的注释都是假前提。判据：**凡是聚合函数，输出顺序必须由它自己排，不能继承输入的顺序**；配的用例也必须包含「合并后次数反超」的样本，全用等值样本等于只测了一半。

@@ -432,7 +432,9 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 > 库里 `pkg` 为 `NULL` 或空串时 SQL 会各成一个分组，而前端 `normPkg()` 把它们都归成微信，
 > 直接渲染就是「微信 1 / 微信 1 / 微博 1 / 微信 1」。
 > 归并在 `console_classify.mergePairsBy(pairs, normalize)`（`mergePkgPairs` / `mergeSourcePairs` 两个薄包装），
-> 顺序保首次出现（`Object.create(null)` 计数，防 `__proto__`）；归并后次数为 0 的分组直接丢弃（`[null, null]` 这类缺列脏数据）。
+> 计数容器用 `Object.create(null)`（防 `__proto__` / `constructor` 原型键）；归并后次数为 0 的分组直接丢弃（`[null, null]` 这类缺列脏数据）。
+> **顺序必须重排**：归并本身会改次数，「保首次出现序」会让 `微博 2 / 微信 1+1+1` 渲染成「微博 2 / 微信 3」—— 最大头排最后。
+> 所以归并后按次数降序、同次数键名码点升序排（与 `ORDER BY COUNT(*) DESC, key ASC` 对齐）；`console_ui.distPairs` 的兜底分支同口径。
 > 服务端不合并：分组之和恒等于 `total`，归并只发生在展示层，且归并后之和仍等于 `total`。
 
 ### POST /admin/extract —— 触发安卓数据库提取（需 token）
