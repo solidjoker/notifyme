@@ -1821,5 +1821,123 @@ python -m pytest server/ -q                                              → 699
 **计数.** `console_classify.js` 554 / 520 → **570 / 535**（`advisorListState` @529 · 导出块 @537-570）；`console_ui.py` 3647 / 3557 → **3678 / 3587**（`advisorListNote` @3072 · `renderAdvisor` @3087 · 取数 @3122）；`test_console_classify.py` 1379 → **1423**；`test_console_ui.py` 621 → **645**；服务端用例 694 → **699**。
 
 **教训.** 凡是「列表被缩短」的说明，都必须先说清**缩短的原因**是哪一种：数据缺失、接口截断、还是用户筛选。三者混在一个比较式里，数字就会跟着用户操作走，而用户操作恰恰不改变数据量 —— 这类缺陷在「有筛选」的功能里必然出现，不是文案问题而是判定缺一个维度。判据两句：① **「被截掉」与「被筛掉」必须各自有独立标志**，且都从「总量 / 已加载 / 可见」三个数算，不许把可见数当已加载数用；② **降级路径要保留旧行为但必须可测**（旧分支退场时用例跟着改锚点，别整条删掉，否则规则脚本缺失时没人发现说明消失了）。
+### E-69｜来源筛选下的空态把三种成因混成一句：全库 300 条来自微博照样显示「暂时没有可展示的内容」（`console_classify.appEmptyScope`，fix/app-filter-empty-scope，2026-11-14）
 
+**现象.** 控制台四个列表（会话 / 待办 / 统计 / 顾问）都只渲染已经拉下来的那几页（`PAGE_LIMIT = 200`，`MSG_PAGES` 从 1 开始累加），按来源筛选是在**已加载页**上做的客户端过滤。于是只要 `APP_FILTER` 生效、过滤后为空，`emptyStateFor(tab)` 就统一输出：
+
+```text
+该来源下暂无数据
+当前只看「微博」，这个来源下暂时没有可展示的内容。
+下一步：点「查看全部 App」切回全部来源，或在过滤条上换一个来源。
+```
+
+三种完全不同的处境共用这句话：① 全库这个来源真的一条都没有（这个 App 从没来过消息）；② 全库有 N 条，但都不在已加载的这几页里（更早的页没拉）；③ 拿不到全库分布（首屏 `/stats` 还没回来 / 老服务端没有 `by_pkg`）。第 ② 种最常见也最误导 —— 一个全库 300 条来自微博的控制台，选了「微博」看到的就是「暂时没有可展示的内容」，用户会以为这个 App 从来没来过消息，而事实上只是没点「加载更多」。
+
+同一族的先例是排队 tab 的 `queueEmptyHtml()`（E-61 收口）：它已经区分「当前页没有」与「全库共有 N 条，它们不在这最近 500 条里」。区别在于排队侧的全库数字由 `GET /queue` 的 `summary` 直接给（无 `LIMIT`），而四个列表侧要靠 `/stats` 的 `messages.by_pkg`。
+
+**根因.** `emptyStateFor(tab)` 的签名只有 `tab`，拿不到「已加载多少 / 筛出多少 / 全库多少」三个数，而这三者恰好是唯一能分开三种成因的判据。原来的实现把「有没有可见条目」当成「这个来源有没有数据」，等于默认「已加载页 = 全库」。
+
+第二个坑是**哪一段的分布能用**：`/stats` 返回 `messages: {..., by_pkg}` 与 `analyses: {..., total, todo}` —— 只有 messages 段给按来源的分布。`stats_api._analysis_block()` 刻意不接受 `pkg`（那一块要回答「整库分析了多少」，见 E-59 附近的口径说明），所以「待办 / 分析结果」两个 tab 拿不到「全库某来源有多少分析」，绝不能拿 `messages.by_pkg` 顶上 —— 那会把消息条数当成分析条数报出来。
+
+第三个坑：排队任务条目里根本没有 `pkg` 字段（`storage._normalize_queue_task` 只留 `task_id / kind / state / title / detail / device_id`），`APP_FILTER` 对排队列表不生效。旧代码在所有 tab 上一视同仁，于是选了「微博」之后再去看排队 tab，空态会写「当前只看「微博」，这个来源下没有任务」—— 而排队从来就没按来源分过。
+
+**修法.** 判定收进规则层 `server/console_classify.js`，UI 只挑措辞：
+
+```js
+function pkgCount(byPkg, pkg) {
+  if (byPkg == null) return null;
+  var isArr = Object.prototype.toString.call(byPkg) === "[object Array]";
+  if (!isArr && typeof byPkg !== "object") return null;
+  var want = normPkg(pkg), total = 0;
+  if (isArr) {
+    byPkg.forEach(function (x) {
+      if (!x || typeof x !== "object") return;
+      if (normPkg(x.pkg) === want) total += _countOf(x.count);
+    });
+  } else {
+    Object.keys(byPkg).forEach(function (k) {
+      if (normPkg(k) === want) total += _countOf(byPkg[k]);
+    });
+  }
+  return total;
+}
+
+function appEmptyScope(pkg, loaded, shown, byPkg) {
+  var L = _countOf(loaded), S = _countOf(shown);
+  if (!pkg) return { pkg: "", loaded: L, shown: L, db: null, mode: "loaded" };
+  if (S > L) S = L;
+  var db = pkgCount(byPkg, pkg);
+  var mode = (S > 0) ? "loaded" : (db === null ? "unknown" : (db > 0 ? "elsewhere" : "none"));
+  return { pkg: normPkg(pkg), loaded: L, shown: S, db: db, mode: mode };
+}
+```
+
+四个 `mode`：`loaded`（还有可见条目，调用方不该渲染空态）、`none`（全库计数 0，确实没有）、`elsewhere`（全库有 `db` 条但都不在已加载页里）、`unknown`（拿不到分布，不敢断言）。
+
+UI 侧（`server/console_ui.py`）：新增 `appScopeCounts(tab)`，让「已加载 / 已筛出」与各自列表构造走同一段过滤代码 —— 会话读 `filteredMsgs()`，待办读 `filteredTodos()`，统计读 `filteredAnalyses()`，顾问用与 `renderAdvisor` 完全同形的 `ADVISORS.filter(...)`。这是刻意的：两个数各自手写一遍，改过滤条件时必然分叉，而分叉的后果是空态开始报错数。
+
+接线段：
+
+```js
+if (APP_FILTER && tab !== 'queue') {
+  var scope = null;
+  if (CC && CC.appEmptyScope) {
+    try {
+      var cnt = appScopeCounts(tab);
+      var byPkg = (tab === 'conv' && STATS) ? STATS.messages.by_pkg : null;
+      scope = CC.appEmptyScope(APP_FILTER, cnt.loaded, cnt.shown, byPkg);
+    } catch (e) { scope = null; }
+  }
+  var who = pkgLabel(APP_FILTER);
+  var what = { conv: '消息', todo: '待办', stat: '分析结果', adv: '顾问报告' }[tab] || '内容';
+  if (scope && scope.mode === 'none') { /* 「X」还没有消息 */ }
+  if (scope && scope.mode === 'elsewhere') { /* 当前页没有来自「X」的消息 */ }
+  if (scope && scope.mode === 'unknown') { /* 这一页里没有来自「X」的消息 */ }
+  return emptyState('该来源下暂无数据', /* 原文案，规则层缺失时的保守回退 */);
+}
+```
+
+四档措辞（实测输出，`tab='conv'` / `APP_FILTER='com.sina.weibo'`）：
+
+| `mode` | 标题 | 说明 |
+|---|---|---|
+| `none` | 「钉钉」还没有消息 | 全库统计里这个来源还没有任何消息。 |
+| `elsewhere` | 当前页没有来自「微博」的消息 | 全库共有 3 条来自「微博」的消息，都不在已加载的 0 条里（更早的页）。 |
+| `unknown` | 这一页里没有来自「微博」的消息 | 已加载的 0 条里没有这个来源；列表只覆盖最近几页，更早的内容还没加载。 |
+| 规则层缺失 | 该来源下暂无数据 | 当前只看「微博」，这个来源下暂时没有可展示的内容。 |
+
+`unknown` 档与回退档的措辞刻意不同：前者已经知道「这一页里没有」（`shown === 0`），只是不知道全库；后者连规则层都没有，只能给原话。两档的下一步都指向「加载更多」，而不是「刷新」—— 刷新重拉 `/stats` 只会解决「口径缺失」，不会把更早的页拉到本地。
+
+**几个刻意的取舍.**
+
+- `db` 与 `shown` **没有大小关系**，判定只能信 `db === 0`。跨页、脏行被 `typeof` 守卫跳过（E-54）、`source` 与 `pkg` 两个维度都可能让两个数对不齐；写成 `db < shown` 就会在「全库 5 条 / 本页 3 条」时误判成「还有更多没加载」。
+- `pkgCount` 的键一律过 `normPkg` 再比：库里 `pkg` 为 `NULL` 与空串时各成一组，`normPkg` 把两者都归成 `com.tencent.mm` —— 与统计卡 `distPairs`（E-64）同一口径。不归一会得出「微信全库 5 条」而统计卡写「微信 8 条」，同一屏两个数同时成立。
+- `pkgCount` 吃两种形状：`[{pkg, count}]`（`/stats` 的真实形状）与 `{包名: 次数}`（前端本地估算的 `byApp`）。返回 `null` 表示「拿不到」，返回 `0` 表示「拿到了、确实是 0」—— 两者在空态里是完全不同的结论，不能都用 `0`。
+- 只有会话 tab 传 `byPkg`，其余三个传 `null`：待办 / 分析 / 顾问没有按来源的全库分布，宁可落到 `unknown`（说法停在「这一页里没有」），也不许拿消息分布冒充。
+- 排队 tab 直接绕过整个分支（`tab !== 'queue'`）：条目没有 `pkg`，`APP_FILTER` 对它不生效。
+
+**测试.** 新增 5 条规则层用例（`server/test_console_classify.py`）+ 1 条 UI 用例（`server/test_console_ui.py`）：
+
+| 用例 | 钉住什么 |
+|---|---|
+| `test_pkg_count_merges_null_and_blank_into_weixin` | `[{wx,5},{None,2},{'',1},{wb,3}]` → 微信 8 / 微博 3；不存在的来源回 `0` 而不是 `null` |
+| `test_pkg_count_accepts_map_shape` | `{包名: 次数}` 形状同样能用；`NULL`/空串归并仍在 |
+| `test_pkg_count_returns_none_when_unavailable` | `None` / `"abc"` / `42` → `null`（不是 `0`） |
+| `test_app_empty_scope_separates_missing_from_not_loaded` | `none` / `elsewhere` / `unknown` / `loaded` 四档；`APP_FILTER` 为空时不能落到「这个来源没有」 |
+| `test_app_empty_scope_clamps_and_tolerates_bad_input` | `shown > loaded` 夹紧；`"x"` / `-3` 全 0；`count: 0` 判 `none` |
+| `test_app_filter_empty_state_separates_three_causes`（UI） | `appScopeCounts` 在、判定走 `CC.appEmptyScope(APP_FILTER, cnt.loaded, cnt.shown, byPkg)`、`byPkg` 只在 `tab === 'conv'` 时取 `STATS.messages.by_pkg`、三档 `mode` 都在、`elsewhere` 报条数与「都不在已加载的」、`unknown` 不许断言全库、`tab !== 'queue'` 守卫在、原文案仍在（回退路径） |
+
+**验证.**
+
+```
+python -m pytest server/test_console_classify.py -q          → 110 passed in 34.65s
+python -m pytest server/test_console_ui.py server/test_console_queue.py -q → 73 passed in 0.19s
+python -m pytest server/ -q                                  → 705 passed in 44.71s
+```
+
+另做了两个直接验证：① 从 `CONSOLE_HTML` 抽出 4 段内联脚本拼成单文件跑 `node --check` → 退出码 0（改完的空态分支不是语法上的死代码）；② 用真实 `console_classify.js` 拼一个最小 DOM 桩（`MSGS` / `ANALYSES` / `ADVISORS` / `STATS` 全手工喂），`eval` 出 `appScopeCounts` + `emptyStateFor` 逐档跑一遍，六种输入分别得到上表四档措辞 + 待办 tab 落 `unknown` + 排队 tab 走默认文案。
+
+**计数.** `console_classify.js` 570 / 535 → **622 / 584**（`_countOf` @539 · `pkgCount` @551 · `appEmptyScope` @578 · 导出块 @587-621）；`console_ui.py` 3678 / 3587 → **3728 / 3637**（`appScopeCounts` @2370 · `emptyStateFor` @2382 · 接线段 @2394-2428）；`test_console_classify.py` 1423 → **1485**；`test_console_ui.py` 645 → **673**；服务端用例 699 → **705**。
+
+**教训.** 空态文案是「数据边界的翻译」，它的正确性完全取决于背后拿了几个数。凡是列表只覆盖一部分数据（分页、游标、窗口、截断），空态就必须能回答**两个独立的量**：*全库有多少*、*我手里有多少*；只给一个，就只能说「没有」，而「没有」在部分覆盖的视图里几乎总是错的。判据三条：① **空态判定要接受三个入参**（全库 / 已加载 / 可见），不许只吃 `tab` 或只吃一个布尔；② **拿不到全库口径时必须有一档「不知道」**，措辞停在「这一页里没有」，绝不许用「没有」冒充「不知道」；③ **降级路径保留旧文案但要可测**（`CC` 缺失时仍回原文案，用例里钉住这句字符串），否则规则脚本没加载时没人发现说明退化。
 
