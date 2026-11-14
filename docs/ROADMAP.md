@@ -599,6 +599,12 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 测试：`test_console_classify.py` +5 条（合并 NULL/空串→微信、首次出现序、`__proto__` / `constructor` 原型键、空白 source→unknown、坏输入）、`test_console_ui.py` +1 条（`distPairs` 在、`CC.mergePairsBy` 在、旧的 `pairList(byApp, 'pkg')` 不在）。服务端 673 → 679 条。
   - 计数：`console_ui.py` 3590 / 3501 → **3609 / 3520**（`distPairs` @2903 · `stat-app` @2966 · `stat-src` @2971 · `CONSOLE_MANIFEST` @3425 · `CONSOLE_SW` @3471 · `liveDeviceCount` @3157 · `deviceTallyText` @3166 · `queueStateTotal` @3195 · `queueEmptyHtml` @3316 · `renderAdvisor` @3023）；`console_classify.js` 434 / 407 → **463 / 433**（`mergePairsBy` @108 · `mergePkgPairs` @121 · `mergeSourcePairs` @126）；`test_console_classify.py` 1165 → 1212、`test_console_ui.py` 574 → 592。
 
+- **分布归并后的顺序没跟次数走（fix/stats-dist-order）**
+  - 问题：`mergePairsBy` 保留首次出现序，注释还写着「服务端已按次数降序，合并后仍是次数降序」—— 这个前提是错的，归并本身就会改次数。反例：`/stats` 返回 `微博 2 / NULL 1 / 空串 1 / 微信 1` 时，微信三个分组合并后是 3 却排在微博 2 之后，统计卡渲染成「微博 2 / 微信 3」：最大头排最后，且与 `ORDER BY COUNT(*) DESC, pkg ASC` 的服务端口径相反。上一轮 6 条用例全绿，因为它们都只造「归一后恰好仍是降序」的样本。
+  - 修法：归并后 `.filter(p => p[1] > 0).sort(...)` —— 次数降序、同次数键名码点升序（与 SQL 的 `ORDER BY COUNT(*) DESC, key ASC` 对齐，同一份数据永远同一串）；`console_ui.distPairs` 的就地兜底分支（规则脚本缺失时走的那条）补同一个比较器，两条路径同口径。
+  - 测试：`test_merge_pkg_pairs_keeps_first_seen_order` 改写为 **`test_merge_pkg_pairs_sorts_by_count_desc`**（微博 2 / 微信 3 反例 + 同次数升序 `[["b",2],["a",2]] → [["a",2],["b",2]]` + 三档混合 微信5/微博3/其它1）；`test_merge_source_pairs_folds_blank_into_unknown` 期望改为 `[["unknown",4],["android-notification",2]]`；`test_console_ui.py` 追加断言兜底分支含 `if (a[1] !== b[1]) return b[1] - a[1];` 恰 1 次。服务端仍 **679 条**（改写不新增）。
+  - 计数：`console_ui.py` 3609 / 3520 → **3615 / 3526**（`distPairs` @2905 · `srcPairs` @2924 · `appPairs` @2925 · `CONSOLE_MANIFEST` @3431 · `CONSOLE_SW` @3477 · `liveDeviceCount` @3163 · `deviceTallyText` @3172 · `queueStateTotal` @3201 · `queueEmptyHtml` @3322 · `renderAdvisor` @3029）；`console_classify.js` 463 / 433 → **471 / 441**（`mergePairsBy` @110 · `mergePkgPairs` @129 · `mergeSourcePairs` @134）；`test_console_classify.py` 1212 → **1221**、`test_console_ui.py` 592 → **596**。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：
