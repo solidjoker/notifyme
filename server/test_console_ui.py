@@ -722,3 +722,25 @@ def test_tab_badges_prefer_library_total_over_loaded_page():
         "角标还在数已加载页"
     # 读屏文案必须带口径，否则「99+」既可能是全库也可能是本页
     assert "（本页）" in html, "aria-label 没有区分本页 / 全库口径"
+
+
+def test_sync_line_reports_each_counter_with_its_own_scope():
+    """状态行里「消息 / 分析」两个数各有口径：旧写法只看 messages.total 定整句，
+    同一句里混写「已加载消息 5 · 分析 40」，analyses.total 缺失时还会拼出
+    「分析 null」。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "function syncCountText()" in html, "缺少状态行口径 helper"
+    assert "CC.syncCounters(mLoad, aLoad, mTotal, aTotal, !!APP_FILTER)" in html, \
+        "状态行没有走规则层判定"
+    # 两个计数必须各读各的总数，不能只看一侧就定整句
+    assert "var mTotal = statNum(['messages', 'total']);" in html
+    assert "var aTotal = statNum(['analyses', 'total']);" in html
+    assert "'已加载' + label" in html, "退回已加载口径时必须标注"
+    # 旧整句双分支必须整体退场（否则会出现「分析 null」与混口径两种写法并存）
+    assert "' · 已加载消息 ' + MSGS.length" not in html, \
+        "旧的整句口径还在：消息侧与「消息 N」两种写法并存"
+    assert "' · 消息 ' + mTotal + ' · 分析 ' + aTotal" not in html, \
+        "旧句直接拼 aTotal，缺失时渲染成「分析 null」"
+    assert "txt = '已同步 ' + fmtClock(LAST_SYNC) + ' · ' + syncCountText();" in html, \
+        "状态行没有接线"
