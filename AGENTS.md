@@ -357,7 +357,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 ② 前端 `fetchSuggests` 拼 `?pkg=`，`setAppFilter` / `clearAppFilter` 后要 `refreshSuggests()`；拉失败就清空 `SUGGESTS`，别拿上一份别的来源的数字冒充。
 ③ 加参数别只改回显：既有 `test_suggests_echoes_pkg` 只断言回显，621 条全绿照样漏了这个缺陷 —— 新过滤逻辑必须补「带/不带 pkg 结果不同」的用例。
 - **数值列的脏行守卫：`server/stats_api.INT_ONLY_TS` / `MAX_TS`**（`test_stats_api.py` 4 条 + `test_queue.py` 2 条守着）。SQLite 列有 INTEGER 亲和但**能存字符串**，单行脏值就让整页 500 / 游标毒化。① 过滤用 `typeof(timestamp) IN (`'integer','real'`)` 作**常驻条件**，聚合用 `MAX(CASE WHEN typeof(...) THEN x END)`；② **别换 CAST**：`EXPLAIN` 实测 typeof 仍走索引，CAST 退化成全表 SCAN；③ 出参数字走 `_safe_int(...)`。
-- **排队过期行的清理与设备维度过期口径：`storage.cleanup_queue_tasks` / `queue_devices`**（`test_queue.py` 6 条守着）。① 清理不能只挂上报路径：设备全停报后僵尸行永远挂在 devices 上；读取路径 `_ensure_db_ready` 也要调 `_maybe_cleanup_queue`，按 `QUEUE_CLEANUP_INTERVAL_MS`（1h）节流。② 设备 chip 的 `active` 只算未过 TTL 的 queued+running，另加第 4 键 `stale`。③ 用例 fixture 必须复位 `app_module._queue_cleanup_at`。
+- **排队过期行的清理与设备维度过期口径：`storage.cleanup_queue_tasks` / `queue_devices`**（`test_queue.py` 6 条）。① 清理不能只挂上报路径（设备全停报后僵尸行永挂 devices），读取路径 `_ensure_db_ready` 也要调 `_maybe_cleanup_queue` 按 `QUEUE_CLEANUP_INTERVAL_MS`（1h）节流；② 设备 chip 的 `active` 只算未过 TTL 的 queued+running，另加第 4 键 `stale`；③ 用例 fixture 必须复位 `app_module._queue_cleanup_at`。
 - **排队 Tab 的状态 chip / 空态与汇总同源**（`console_ui.queueStateTotal` / `queueEmptyHtml`）。① chip 计数走 `queueStateTotal(st)`（优先 `QUEUE_SUMMARY[st]`）——数当前页会让 600 排队 + 20 已完成显示「已完成 0」；② 列表空但全库有命中时报「当前页没有…/全库共 N 条…」，搜索/设备筛选命中 0 退回通用空态；③ 先加「chip 与 summary 一致」用例。
 - **顾问存档损坏不能冒充「没有报告」**（`suggests._advisor_state` 返三元组 + `ADVISORS_ERR`；`test_stats_api.py` 3 条守着）。
 ① 损坏时份数必须给 `None`（`return None, 0, True`），给 `0` 会让 priority 50 的「还没有顾问报告 / 顾问存档 0 份」规则命中 —— 真实状态是存档坏、历史报告还在盘上；
@@ -370,7 +370,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **概览条「待处理」的会话数读 `todo_convs` 不是 `convs`**（`console_ui.renderOverview`，`test_console_ui.py` 1 条守着）。① `/stats` 有两个会话数：`convs`=有分析结果的、`todo_convs`=其中有待办的；那格数字是待办条数，副标题须配 `todo_convs`，否则与 `/suggests/next` 的「分布在 N 个会话」同屏打架。② 加键要接消费点。③ 断言写「新键在 + 旧键不在」。
 
-- **`/messages` 与 `/analysis` 必须回报被脏值守卫挡掉的行数：`skipped`**（`routes.query_messages` / `query_analysis`）。① 只数 Python 侧 `except` 恒 0（脏行早在 `typeof` 守卫被挡），须发独立 `SELECT COUNT(*) WHERE NOT (guard) [AND 过滤段]`；② **无过滤也照算**；③ 口径 = 过滤范围内、不含游标段，`count + skipped == /stats`；④ 前端只能覆盖（`loadMore` 用 `Math.max`）。
+- **`/messages` 与 `/analysis` 必须回报被脏值守卫挡掉的行数：`skipped`**。① 只数 Python 侧 `except` 恒 0（脏行早在 `typeof` 守卫被挡），须发独立 `SELECT COUNT(*) WHERE NOT (guard) [AND 过滤段]`；② 无过滤也照算，`count + skipped == /stats`；③ 前端只能覆盖（`Math.max`）。
 - **列表接口夹了上限就必须回「总数 / 是否截断」**（`routes.query_advisor`：`min(limit, 100)`，存档上限 `ADVISOR_MAX_REPORTS`=1000）。① 响应体补 `total`（截断前条数）与 `has_more = total > count`，损坏分支也回 `0 / false`；② 角标读 `ADVISOR_TOTAL`（缺省退回已加载条数）；③ 截断用例别钉末位（三批可落同一毫秒），只钉首位最新 + 长度。
 
 - **顾问 Tab 的来源过滤说明必须跟事实走：`console_classify.advisorPkgScope`**（`test_console_classify.py` 6 条 + `test_console_ui.py` 1 条守着）。① `pkg` 可选（老报告与端上 `toUploadJson` 都不写）；② 四态 `all`/`untagged`/`mixed`/`exact`；③ UI 只挑措辞。
@@ -378,4 +378,6 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **来源筛选下的空态必须分三成因：`console_classify.appEmptyScope`**（5 条规则层 + 1 条 UI 守着）。① 列表只覆盖已加载页，`mode` 四态 `loaded`/`none`/`elsewhere`/`unknown`，只有 `db === 0` 敢说「没有」；② `db` 与 `shown` 无大小关系（跨页 + 脏行 skip）；③ 键过 `normPkg` 与 `distPairs` 同口径，`null`（拿不到）≠ `0`；④ 只有会话 tab 传 `byPkg`（`/stats` 只有 messages 段有分布），排队直接绕过。
 - **列表只画一部分时，标题与切片必须同源：`console_classify.statsListState`**（3 条规则层 + 1 条 UI 守着）。① `capped`（数据超上限，决定给不给开关）与 `expanded`（用户没点开）两个正交标志；② 上限由 UI 传（`STATS_LIST_CAP=30`），脏值回落 `DEFAULT_STATS_LIST_CAP`；③ `shown` 由函数算、调用方不许传；④ 标题 / note / more 三处读同一 `listState`，展开态只存内存。
 
-- **同一段里的分布与标量必须能对上：`stats_api._queue_block.by_kind`、`console_classify.mergePairsBy`**（`test_stats_api.py` 2 + `test_console_ui.py` 2 + `test_console_classify.py` 5）。① 类型计数必须在「过期 → `stale += 1; continue`」**之后**：写在之前会把停跑僵尸数进去，5 行里 3 条停跑时同屏写「analysis 3 / sync 2」与「活跃 1 · 陈旧 3」；② 契约 `sum(by_kind.count) == total - stale`，有过期行前端补「（不含 N 条已过期）」；③ `/stats.by_pkg` 按原始列 GROUP BY，NULL / 空串各成分组而 `normPkg()` 都折成微信 → 渲染出三个「微信」；展示层 `mergePairsBy(pairs, normPkg)` 归并后**按次数降序、同次数键名升序重排**（`distPairs` 兜底同口径），服务端不合并；④ 加分布字段先问该不该跟同段过期/过滤口径走，配「分布之和 == 标量」用例。
+- **角标这类聚合数字默认口径是全库：`console_classify.badgeState`**（4 条规则层 + 1 条 UI 守着）。① `{value, scope}` 两态 `library`/`loaded`；② `total` 缺失/负数/非小数一律回落本页，`null`（拿不到）≠ `0`；③ 用户已筛选（`APP_FILTER` 或搜索）时不报全库；④ 读屏在 `scope` 为 `loaded` 时补「（本页）」；排队与顾问不套。
+
+- **同一段里的分布与标量必须能对上：`stats_api._queue_block.by_kind`、`console_classify.mergePairsBy`**（`test_stats_api.py` 2 + `test_console_ui.py` 2 + `test_console_classify.py` 5）。① 类型计数必须在「过期 → `stale += 1; continue`」**之后**（写在之前会把停跑僵尸数进去）；② 契约 `sum(by_kind.count) == total - stale`；③ `by_pkg` 的 NULL / 空串各成分组而 `normPkg()` 都折成微信 → 展示层 `mergePairsBy` 归并后**按次数降序、同次数键名升序重排**（`distPairs` 同口径），服务端不合并；④ 加分布字段先问该不该跟同段过期口径走。

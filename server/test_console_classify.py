@@ -1531,3 +1531,50 @@ def test_stats_list_state_defaults_cap_and_tolerates_bad_input(call):
     # 小数按向下取整：42.9 条已加载没有意义，但不能出现 32.9 这种「另有 N 条」
     got = call("statsListState", 42.9, 10)
     assert got["loaded"] == 42 and got["shown"] == 10 and got["hidden"] == 32, f"{got!r}"
+
+
+# --------------------------------------------------------------------------
+# Tab 角标的数字口径（badgeState）
+# 缺陷背景：三个列表角标一律数「已加载页」的条数 —— 待办 Tab 写「15」，而同一屏
+# 的概览条（读 /stats 的 analyses.todo）写「40」，用户无从判断哪个是真的。
+# 能说全库就说全库；只有拿不到真值、或用户正在客户端筛选（来源 App / 搜索只作用
+# 于已加载页）时才退回本页计数。
+# --------------------------------------------------------------------------
+
+
+def test_badge_state_prefers_library_total(call):
+    """能拿到全库真值且没有客户端筛选时，角标必须报全库。"""
+    got = call("badgeState", 15, 40, False)
+    assert got["value"] == 40 and got["scope"] == "library", f"{got!r}"
+    # 全库恰好 0 也是「真值」：不能退成本页计数（那会显示本页的 0，看着一样
+    # 但 scope 变了，读屏文案会跟着错）
+    got = call("badgeState", 0, 0, False)
+    assert got["value"] == 0 and got["scope"] == "library", f"{got!r}"
+
+
+def test_badge_state_falls_back_when_client_side_filtering(call):
+    """来源筛选 / 搜索只作用于已加载页，此时全库数不能代表列表内容。"""
+    got = call("badgeState", 15, 40, True)
+    assert got["value"] == 15 and got["scope"] == "loaded", f"{got!r}"
+    # 筛到 0 条也一样：报 40 会让 tab 角标指着「有 40 条待办」，点进去却是空的
+    got = call("badgeState", 0, 40, True)
+    assert got["value"] == 0 and got["scope"] == "loaded", f"{got!r}"
+
+
+def test_badge_state_falls_back_when_total_missing(call):
+    """拿不到 /stats（老服务端）时退回本页计数，别把「没有数」渲染成 0。"""
+    # float("nan") 进不了 JSON（json.dumps 会写 NaN、node JSON.parse 直接拒收），
+    # 脏值用字符串与负数覆盖
+    for bad in (None, "abc", -3, "3.5.1"):
+        got = call("badgeState", 12, bad, False)
+        assert got["value"] == 12 and got["scope"] == "loaded", f"{bad!r} {got!r}"
+
+
+def test_badge_state_clamps_dirty_loaded(call):
+    """本页计数是脏值时不许出 NaN / 负数（NaN 参与比较恒 false 会静默吞数）。"""
+    got = call("badgeState", "7", "40", False)
+    assert got["value"] == 40 and got["scope"] == "library", f"{got!r}"
+    got = call("badgeState", -2, None, False)
+    assert got["value"] == 0 and got["scope"] == "loaded", f"{got!r}"
+    got = call("badgeState", 12.9, 40.7, False)
+    assert got["value"] == 40 and got["scope"] == "library", f"{got!r}"

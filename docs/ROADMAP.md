@@ -633,6 +633,13 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 修法：判定搬进 `console_classify.js` 的 `statsListState(loaded, cap, expanded)`（纯函数，UMD，node 可测），返回 `{loaded, shown, cap, hidden, capped, expanded}`，`shown = expanded ? loaded : min(loaded, cap)`、`hidden = loaded - shown`、`capped = loaded > cap`。四条约定 —— ① `capped` 与 `expanded` 两个正交标志（前者答「数据有没有超上限」决定是否给开关，后者答「用户有没有点开」，合成一个布尔会让「展开了但没超上限」与「没展开且不超上限」分不开）；② 上限由 UI 传入（`STATS_LIST_CAP = 30`），脏值 / 0 / 负数回落 `DEFAULT_STATS_LIST_CAP = 30`，规则层不写死调用方上限；③ `shown` 由函数自己算，调用方不许传（传了就有第二份口径，切片与文案必然分叉）；④ 标题、`stat-list-note`、`stat-list-more` 三处读同一个 `listState`。展开状态 `STATS_LIST_OPEN` 只存内存不落盘；规则脚本缺失时 `try/catch` 兜 `null`，就地算同样六键，退化成「只画前 30 条 + 说明」。
   - 测试：`test_console_classify.py` +3 条（200/30 报 hidden 170 与 capped、展开后 shown=loaded 且 hidden 0、上限脏值回落 30 与 `loaded=0`）、`test_console_ui.py` +1 条（`statsListNote` / `statsListMore` / `setStatsListOpen` 在、三处读同一 `listState`、`slice(0, listState.shown)` 在、旧的 `list.slice(0, 30)` 已不存在）；另做 `node --check` + 最小 DOM 桩实测四档文案。
   - 计数：`console_classify.js` 622 / 584 → **642 / 602**（`DEFAULT_STATS_LIST_CAP` @595 · `statsListState` @597 · 导出块 @605-641）；`console_ui.py` 3728 / 3637 → **3780 / 3689**（`STATS_LIST_CAP` @1431 · `statsListNote` @2922 · `statsListMore` @2931 · `setStatsListOpen` @2938 · `renderStats` @2942）；服务端用例 705 → **709**。
+
+- **Tab 角标一律数「已加载页」：待办写 15、同一屏的概览条写 40，两个数打架（fix/tab-badge-scope）**
+  - 问题：底部三个列表角标读 `filteredMsgs().length` / `filteredTodos().length` / `filteredAnalyses().length`，而这些函数是「客户端筛选**已加载页**」；控制台一页 `PAGE_LIMIT = 200`，库里待办超过一页时同一屏同时出现「待办 15」（角标）与「待处理 40」（概览条读 `/stats`）。两个数都写着「待办」，谁也没说明口径 —— 用户只能二选一相信，通常相信更小的那个，然后以为待办丢了。顾问角标早就是全库口径（`ADVISOR_TOTAL`），说明这是同族问题只修了一处。
+  - 修法：判定搬进 `console_classify.js` 的 `badgeState(loaded, total, filtered)`（纯函数，UMD，node 可测），返回 `{value, scope}` 两态 `library` / `loaded`。三条保守约定 —— ① `total` 缺失 / 负数 / `NaN` / 非数字一律回落 `loaded`，**不许折成 0**（折成 0 会把「接口没给数」渲染成「全库一条都没有」；`Number("abc")` 是 `NaN`，只判 `>= 0` 挡不住）；② 筛选态（`APP_FILTER` 或搜索词非空）不报全库，哪怕真值在手上；③ `scope` 进位读屏文案（`（本页）`），角标视觉上只有一个数字。UI 侧 `console_ui.badgeCount(kind)` 只取数（conv → `messages.total` / todo → `analyses.todo` / stat → `analyses.total`），`renderBadges` 取 `.value`；规则脚本缺失时兜底 `{value: loaded, scope: "loaded"}`。排队与顾问角标不套这条规则（本来就是全库口径）。
+  - 测试：`test_console_classify.py` +4 条（优先全库 / 筛选态回落 / `total` 缺失回落且不折 0 / 脏值夹紧）、`test_console_ui.py` +1 条（`badgeCount` 在、判定走 `CC.badgeState`、`filtered` 口径在、`messages.total` 与 `analyses.todo` 都在、旧 `setBadge('badge-todo', filteredTodos().length)` 已退场、`（本页）` 在）。实测七组输入见评审文档 E-71。
+  - 计数：`console_classify.js` 642 / 602 → **662 / 621**（`badgeState` @611 · 导出块 @619-661）；`console_ui.py` 3780 / 3689 → **3812 / 3721**（`badgeCount` @1890 · `renderBadges` @1909）；服务端用例 709 → **714**。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：

@@ -1882,23 +1882,55 @@ function setBadge(id, n) {
   if (!n) { el.textContent = ''; return; }
   el.textContent = n > 99 ? '99+' : String(n);
 }
+// 三个列表角标的数字口径：能说「全库」就说全库，只有拿不到真值（/stats 失败 /
+// 老服务端）或用户正在客户端筛选（来源 App / 搜索只作用于已加载页）时，才退回
+// 已加载页内的命中数。旧写法一律数已加载数组：待办 Tab 写「15」而同一屏的概览条
+// （读 /stats 的 analyses.todo）写「40」，用户无从判断哪个是真的。
+// 判定收在 console_classify.badgeState，这里只取数。
+function badgeCount(kind) {
+  var filtered = !!(APP_FILTER || QUERY.trim());
+  var loaded, total = null;
+  if (kind === 'conv') {
+    loaded = filteredMsgs().length;
+    total = statNum(['messages', 'total']);
+  } else if (kind === 'todo') {
+    loaded = filteredTodos().length;
+    total = statNum(['analyses', 'todo']);
+  } else {
+    loaded = filteredAnalyses().length;
+    total = statNum(['analyses', 'total']);
+  }
+  if (CC && CC.badgeState) {
+    try { return CC.badgeState(loaded, total, filtered); } catch (e) { }
+  }
+  // 规则脚本缺失：退回旧口径（数已加载页），至少不比空白差
+  return { value: loaded, scope: 'loaded' };
+}
 function renderBadges() {
-  setBadge('badge-conv', filteredMsgs().length);
-  setBadge('badge-todo', filteredTodos().length);
-  setBadge('badge-stat', filteredAnalyses().length);
+  var cConv = badgeCount('conv');
+  var cTodo = badgeCount('todo');
+  var cStat = badgeCount('stat');
+  setBadge('badge-conv', cConv.value);
+  setBadge('badge-todo', cTodo.value);
+  setBadge('badge-stat', cStat.value);
   // 角标报存档总数（接口一次最多 100 份）：只数已加载时，400 份也只写 100
   setBadge('badge-adv', ADVISOR_TOTAL || ADVISORS.length);
   setBadge('badge-queue', queueActiveCount());
   var pairs = [
-    ['tab-conv', '会话', filteredMsgs().length, '条消息'],
-    ['tab-todo', '待办', filteredTodos().length, '条待办'],
+    ['tab-conv', '会话', cConv, '条消息'],
+    ['tab-todo', '待办', cTodo, '条待办'],
     ['tab-queue', '排队', queueActiveCount(), '个任务'],
-    ['tab-stat', '统计', filteredAnalyses().length, '条分析'],
+    ['tab-stat', '统计', cStat, '条分析'],
     ['tab-adv', '顾问', ADVISOR_TOTAL || ADVISORS.length, '份报告']
   ];
+  // 读屏文案要跟数字的**口径**一起播报，否则「99+」既可能是全库也可能是本页
   pairs.forEach(function (p) {
     var b = $(p[0]);
-    if (b) b.setAttribute('aria-label', p[1] + '，' + p[2] + ' ' + p[3]);
+    if (!b) return;
+    var v = p[2];
+    var num = (v && typeof v === 'object') ? v.value : v;
+    var sc = (v && typeof v === 'object' && v.scope === 'loaded' && (p[0] === 'tab-conv' || p[0] === 'tab-todo' || p[0] === 'tab-stat')) ? '（本页）' : '';
+    b.setAttribute('aria-label', p[1] + '，' + num + ' ' + p[3] + sc);
   });
 }
 

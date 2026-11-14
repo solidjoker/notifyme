@@ -602,6 +602,25 @@
     return { loaded: L, shown: S, cap: C, hidden: L - S, capped: L > C, expanded: open };
   }
 
+  // Tab 角标的数字口径：能说「全库」的时候必须说全库，只有拿不到真值 / 用户正在
+  // 客户端筛选时，才退回「已加载页内的命中数」—— 那时后者是唯一真实的数。
+  // 旧写法一律数已加载数组：待办 Tab 把「全库 40 条待办」写成「15」，而同一屏的
+  // 概览条（读 /stats 的 analyses.todo）写着 40，两个数字当场打架。
+  // loaded=已加载页内条数；total=服务端全库总数（拿不到给 null）；filtered=是否有
+  // 来源筛选 / 搜索（客户端过滤只作用于已加载页，此时全库数不能代表列表内容）。
+  function badgeState(loaded, total, filtered) {
+    var L = _countOf(loaded);
+    // 全库数只接受「认得出的非负整数」：null / 负数 / NaN / 非数字一律当「拿不到」，
+    // 不能折成 0 —— 那会把「接口没给数」渲染成「全库一条都没有」。
+    var T = null;
+    if (total != null) {
+      var x = Number(total);
+      if (isFinite(x) && x >= 0) { T = Math.floor(x); }
+    }
+    if (filtered || T === null) { return { value: L, scope: 'loaded' }; }
+    return { value: T, scope: 'library' };
+  }
+
   return {
     VERSION: VERSION,
     QUEUE_STATE_ORDER: QUEUE_STATE_ORDER,
@@ -637,6 +656,7 @@
     pkgCount: pkgCount,
     appEmptyScope: appEmptyScope,
     DEFAULT_STATS_LIST_CAP: DEFAULT_STATS_LIST_CAP,
-    statsListState: statsListState
+    statsListState: statsListState,
+    badgeState: badgeState
   };
 });
