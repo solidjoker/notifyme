@@ -257,6 +257,12 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 
 返回里还有 `next_before`：**还有下一页时**给游标字符串，**没有下一页时为 `null`**（不要按「满页」判断）。
 
+**`skipped`（脏行计数）**：响应里固定带 `skipped` —— 当前过滤范围内被 `typeof(timestamp)` 守卫挡掉的行数。
+它不含游标段（游标是页边界，不是过滤条件），所以翻页时这个数不随页码变。
+为什么必须有：这些行真实存在于库里，`/stats` 的 `messages.total` 照算；只给列表不给解释，用户看到「库存 3、列表 2」
+只会以为分页漏数据。口径是 `count + skipped == 库存`（同一组过滤下），控制台的脏数据横幅就是读它。
+无过滤条件时也照算（控制台首屏就是 `messages?limit=200`，那正是最需要解释的场景）。
+
 ### POST /analysis —— 接收分析结果（需 token）
 
 接收 App 侧的会话级分析结果（JSON 数组），每条：
@@ -307,7 +313,9 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 只有**确实还有下一页**时才返回 `next_before`，最后一页返回 `null`。
 每条还带归一后的 `need_action`（布尔）与 `importance`（`high`/`medium`/`low`），以及 `redacted` / `redaction_rules` / `redaction_hits` / `todo_text` / `todo_due`。
 库里被写脏的数值列（`window_end`/`message_count` 不是数字）返回 `null` 而不是 500；
-单行构造失败只跳过该行并计入响应里的 `skipped`，不影响整页返回。
+**`skipped`（脏行计数）**：与 `/messages` 同口径 —— 当前过滤范围内被 `typeof(received_at)` 守卫挡掉的行数，
+再加上单行构造失败的行数（后者修前是唯一来源，而守卫在 SQL 侧就把脏行挡掉了，那条分支命不中，`skipped` 恒 0）。
+同样不含游标段，`count + skipped == 库存`（`/stats` 的 `analyses.total`），控制台横幅读它。
 
 ### POST /advisor —— 接收 AI 顾问复盘报告（需 token）
 

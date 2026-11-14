@@ -214,7 +214,8 @@ def query_messages():
     # 脏行会排在第一页最前面，还会被写进 next_before，下一页直接 400。
     # 实测 typeof 守卫不破坏索引（仍是 SEARCH ... idx_messages_ts），
     # 换 CAST(timestamp AS INTEGER) 才退化成全表 SCAN。
-    conditions = ["typeof(timestamp) IN ('integer','real')"]
+    guard = "typeof(timestamp) IN ('integer','real')"
+    conditions = [guard]
     params = []
 
     # 来源 App 精确过滤
@@ -246,6 +247,12 @@ def query_messages():
             return jsonify({"ok": False, "error": str(exc)}), 400
         conditions.append("timestamp >= ? AND timestamp < ?")
         params.extend([day_start, day_end])
+
+    # 被 guard 挡掉的脏行数：在「整段过滤范围」内算，不含游标 —— 游标是页边界，
+    # 不是过滤条件。这些行真实存在于库里（/stats 的 total 也把它们算进去），
+    # 只是这条接口展示不出来；不报这个数，前端「条数少于实际库存」就无从解释。
+    n_filters = len(conditions)
+    filter_params = list(params)
 
     # 游标分页：按 (timestamp, rowid) 往前翻，避免 LIMIT/OFFSET 深翻页全表扫描。
     # 只按 timestamp 比较会漏掉「同一毫秒但排序靠后」的多条消息，
@@ -283,6 +290,21 @@ def query_messages():
 
     has_more = len(rows) > limit
     rows = rows[:limit]
+    skipped = 0
+    # 无过滤参数时也要算：控制台首屏就是 messages?limit=200，没有过滤条件 ——
+    # 这正是「列表条数少于库存」最需要解释的场景。库里脏行极少，
+    # 这条 COUNT 是全表扫一次，相对整页序列化可以忽略。
+    skip_where = "NOT (" + guard + ")"
+    if n_filters > 1:
+        skip_where += " AND " + " AND ".join(conditions[1:n_filters])
+    skip_sql = "SELECT COUNT(*) FROM messages WHERE " + skip_where
+    conn = app_module._connect()
+    try:
+        skip_row = conn.execute(skip_sql, filter_params).fetchone()
+    finally:
+        conn.close()
+    skipped = app_module._safe_int(skip_row[0] if skip_row else 0,
+                                   default=0, lo=0)
     messages = [
         {
             # conversation / sender / text 允许为 NULL：回 null 会让控制台
@@ -309,6 +331,8 @@ def query_messages():
         "count": len(messages),
         "messages": messages,
         "next_before": next_before,
+        # guard 挡掉的脏行数：调用方能看出「返回条数 < 库存」不是分页漏数据
+        "skipped": skipped,
         # 实际用的时区：显式给了 tz / tz_offset 就回显偏移，
         # 没给就是服务器本地时区（null）。
         "tz": app_module._fmt_tz_offset(tz_offset_min),
@@ -589,7 +613,8 @@ def query_analysis():
     # 数值列 typeof 守卫是常驻条件（与 /messages 同款）：received_at 是 INTEGER
     # 亲和，被写脏成 TEXT 时排序里会排最前，还会被拼进 next_before（"boom_2"），
     # 客户端拿它翻页直接 400 —— 脏行不该毒化整个分页链。
-    conditions = ["typeof(received_at) IN ('integer','real')"]
+    guard = "typeof(received_at) IN ('integer','real')"
+    conditions = [guard]
     params = []
     if pkg:
         conditions.append("pkg = ?")
@@ -624,6 +649,12 @@ def query_analysis():
             "  AND CAST(analyzed_at AS INTEGER) < ?) "
             "OR (analyzed_at LIKE ? AND analyzed_at < ?))")
         params.extend([day_start, day_end, date_str + "%", next_day])
+    # 被 guard 挡掉的脏行数：与 /messages 同口径，在「整段过滤范围」内算、不含游标
+    # （游标是页边界不是过滤条件）。analyses 侧原来只数 Python 映射异常，
+    # 而 typeof 守卫把脏行挡在 SQL 外，那条分支永远命中不了 —— skipped 恒 0。
+    n_filters = len(conditions)
+    filter_params = list(params)
+
     # 游标分页（B7）：与 /messages 同款复合游标 before=<received_at>_<rowid>。
     # 行值比较 (received_at, rowid) < (?, ?) 能走 idx_analyses_received_at
     # （EXPLAIN：SEARCH analyses USING INDEX ... (received_at<?)），
@@ -654,8 +685,22 @@ def query_analysis():
 
     has_more = len(rows) > limit
     rows = rows[:limit]
-    analyses = []
+    # 两条来源相加：SQL 侧被 guard 挡掉的脏行 + Python 侧映射失败的行
+    # （后者理论上不会再出现，留着做兜底，别让异常行悄悄消失）
     skipped = 0
+    # 与 /messages 同口径：无过滤时也数（脏 received_at 行不在任何一页里）。
+    skip_where = "NOT (" + guard + ")"
+    if n_filters > 1:
+        skip_where += " AND " + " AND ".join(conditions[1:n_filters])
+    skip_sql = "SELECT COUNT(*) FROM analyses WHERE " + skip_where
+    conn = app_module._connect()
+    try:
+        skip_row = conn.execute(skip_sql, filter_params).fetchone()
+    finally:
+        conn.close()
+    skipped = app_module._safe_int(skip_row[0] if skip_row else 0,
+                                   default=0, lo=0)
+    analyses = []
     for r in rows:
         try:
             analyses.append({

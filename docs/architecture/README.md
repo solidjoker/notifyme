@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **130 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 137 个，`app/src/test` 85 个 / 1369 条），服务端已拆成 **8+1 模块**（`app.py` 627 / `util.py` 384 / `storage.py` 821 / `routes.py` 979 / `console_ui.py` 3470 / `stats_api.py` 194 / `suggests.py` 301 / `extract_common.py` 474 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **130 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 137 个，`app/src/test` 85 个 / 1369 条），服务端已拆成 **8+1 模块**（`app.py` 627 / `util.py` 384 / `storage.py` 821 / `routes.py` 1022 / `console_ui.py` 3475 / `stats_api.py` 194 / `suggests.py` 301 / `extract_common.py` 474 + `console_classify.js` 435），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -20,7 +20,7 @@
 | 04 | [分析决策流水线](#04-分析决策流水线) | 一条消息如何变成一条待办？ | 2510 × 5356 |
 | 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1973 × 3290 |
 | 06 | [功能全景脑图](#06-功能全景脑图) | 这个 App 到底有哪些功能？ | 3135 × 1556 |
-| 07 | [服务端架构](#07-服务端架构) | 服务端 8+1 模块里各装了什么？路由在哪一行？ | 6947 × 3884 |
+| 07 | [服务端架构](#07-服务端架构) | 服务端 8+1 模块里各装了什么？路由在哪一行？ | 6953 × 3905 |
 | 08 | [构建与部署](#08-构建与部署) | 从源码到手机、从手机到公网的完整链路 | 6850 × 4895 |
 | 09 | [同步时序](#09-同步时序) | 冷启动回填与三通道上报的精确行为 | 5769 × 7926 |
 
@@ -245,12 +245,12 @@ prefs queue_state               QueueStateCollector.kt  排队上报的 device_s
 | `server/app.py` | 742 | Flask 壳：鉴权、错误处理、`/console` 与落地页、`create_app`、排队过期行清理节流 | `check_token` @300 · `MAX_CONTENT_LENGTH`=8 MiB @89 · `_handle_too_large` @169 · `_ensure_db_ready` @130 · `_maybe_cleanup_queue` @112 · `console_page` @528 · `create_app` @696 |
 | `server/util.py` | 432 | 纯函数工具层（校验、转义、时区换算、格式化、游标解析、顾问时间归一） | `_advisor_ts` @88 · `_validate_item` @400 · `_safe_int` @50 · `_esc_html` @363 · `_fmt_ts` @313 · `_parse_cursor` @195 · `_utc_ms` @236 · `_local_offset_min` @247 · `_local_ms` @270 · `_day_bounds_ms` @283 |
 | `server/storage.py` | 885 | SQLite / JSONL 存档 / 顾问存档 / 抽库后台 / 排队任务表（含全库聚合 `queue_summary`、保留期清理 `cleanup_queue_tasks`、在跑设备计数 `count_live_devices`） | `init_db` @58 · `_append_jsonl` @197 · `_advisor_jsonl_path` @216 · `_run_extract_bg` @437 · `_probe_main_db_writable` @479 · `upsert_queue_tasks` @616 · `cleanup_queue_tasks` @662 · `query_queue_tasks` @692 · `queue_summary` @753 · `queue_devices` @812 · `count_live_devices` @864 |
-| `server/routes.py` | 1039 | 数据面路由，`register(app)` 挂载 10 条 | `register` @1027 · `add_url_rule` 映射 @1029-1038 · `receive_queue` @903 · `query_queue` @976 |
-| `server/console_ui.py` | 3559 | 控制台前端常量（HTML/CSS/JS 全内联，5 个 Tab，aura 设计语言）；**顾问存档损坏时渲染 `ADVISORS_ERR` 错误态而不是「还没有顾问报告」**；概览条设备数只算在跑台数（`liveDeviceCount` / `deviceTallyText`）；**概览条待办的会话数读 `todo_convs` 不是 `convs`** | `CONSOLE_HTML` @13 · `CONSOLE_MANIFEST` @3375 · `CONSOLE_SW` @3421 · `renderOverview` @1812 · `liveDeviceCount` @3103 · `deviceTallyText` @3112 |
+| `server/routes.py` | 1084 | 数据面路由，`register(app)` 挂载 10 条；`/messages` 与 `/analysis` 都返回 `skipped`（被 `typeof` 守卫挡掉的脏行数，让前端能解释「列表条数 < 库存」） | `register` @1072 · `add_url_rule` 映射 @1074-1083 · `receive_queue` @948 · `query_queue` @1021 · `query_messages` @169 · `query_analysis` @568 |
+| `server/console_ui.py` | 3564 | 控制台前端常量（HTML/CSS/JS 全内联，5 个 Tab，aura 设计语言）；**顾问存档损坏时渲染 `ADVISORS_ERR` 错误态而不是「还没有顾问报告」**；概览条设备数只算在跑台数（`liveDeviceCount` / `deviceTallyText`）；**概览条待办的会话数读 `todo_convs` 不是 `convs`** | `CONSOLE_HTML` @13 · `CONSOLE_MANIFEST` @3380 · `CONSOLE_SW` @3426 · `skipNoticeHtml` @1915 · `renderOverview` @1812 · `liveDeviceCount` @3103 · `deviceTallyText` @3112 |
 | `server/stats_api.py` | 220 | 全库聚合 `/stats`（消息 / 分析 / 排队三段）；**会话数按 `(pkg, conversation)` 计**（`CONV_KEY_SQL`，与前端 `ckOf()` 同口径）；排队段同时给 `devices`（台数）与 `devices_active`（其中在跑的台数） | `query_stats` @185 · `_messages_block` @55 · `_analysis_block` @103 · `_queue_block` @138 · `register` @218 · `CONV_KEY_SQL` @39 · `INT_ONLY_TS` @47 · `MAX_TS` @51 |
 | `server/suggests.py` | 344 | 下一步建议 `/suggests/next`（规则优先级队列；`pkg` 只作用于「待办 / 未分析会话」两族规则，排队按设备、顾问是全局报告）；`_advisor_state()` 返三元组，损坏时份数是 `None` 不是 0，产出 priority 85 的「顾问存档损坏」 | `query_suggests_next` @209 · `_advisor_state` @38 · `_queue_state` @74 · `_todo_counts` @104 · `_convs_without_analysis` @128 · `_pick` @197 · `register` @341 |
 | `server/extract_common.py` | 554 | 两个抽取脚本的共享内核：结构化日志 / 原文 JSONL 存档与轮转 / 跨进程写锁 / 五列去重 / 分批提交 / 主库结构兜底 | `activate` @83 · `_setting` @97 · `_log_event` @119 · `_archive_path` @139 · `_JsonlArchiver` @182 · `_FileLock` @251 · `_Dedup` @359 · `_BatchWriter` @419 · `_ensure_main_schema` @516 · `_cursor_int` @532 |
-> 行数为当前源码的**文件总行数**（wc -l 口径）；若只计非空行，依次为 app.py 627 / util.py 384 / storage.py 821 / routes.py 979 / console_ui.py 3470 / stats_api.py 194 / suggests.py 301 / console_classify.js 407 / extract_common.py **474** / android_db_extract.py **709** / pc_db_extract.py **595**。
+> 行数为当前源码的**文件总行数**（wc -l 口径）；若只计非空行，依次为 app.py 627 / util.py 384 / storage.py 821 / routes.py 1022 / console_ui.py 3475 / stats_api.py 194 / suggests.py 301 / console_classify.js 407 / extract_common.py **474** / android_db_extract.py **709** / pc_db_extract.py **595**。
 
 ![服务端架构图](diagrams/07-server-architecture.png)
 
@@ -259,15 +259,15 @@ prefs queue_state               QueueStateCollector.kt  排队上报的 device_s
 | 方法 | 路径 | 处理函数 | 说明 |
 |---|---|---|---|
 | POST | `/weixin` | `receive_weixin` @routes.py:20 | 接收消息数组，返回 `{ok, received, duplicated, invalid}` |
-| GET | `/messages` | `query_messages` @routes.py:169 | `conversation` 模糊 / `date` / `limit`≤1000，timestamp DESC |
-| POST | `/analysis` | `receive_analysis` @routes.py:318 | `case_id` 唯一键去重 |
-| GET | `/analysis` | `query_analysis` @routes.py:544 | `todo_only=1` 只看待办，s1/s2 反解析为对象 |
-| POST | `/advisor` | `receive_advisor` @routes.py:711 | `report_id` 去重 |
-| GET | `/advisor` | `query_advisor` @routes.py:800 | |
-| POST | `/admin/extract` | `admin_extract` @routes.py:844 | `full=1` + `source ∈ android\|pc\|all`，409 = 已在跑 |
-| GET | `/admin/extract/status` | `admin_extract_status` @routes.py:889 | `{ok, running, last}` |
-| POST | `/queue` | `receive_queue` @routes.py:903 | 手机端上报排队任务快照（整份覆盖，非法条目逐条拒收） |
-| GET | `/queue` | `query_queue` @routes.py:976 | `device_id` / `state` / `limit`≤500，返回 `{ok, tasks, summary, devices}`（`devices` 是按 `device_id` 聚合的设备清单：`total`（现存条数）/ `active`（**已过 TTL 口径**，只算未过期的排队中+运行中）/ `stale`（过期或 `updated_at` 认不出）；`summary` 是**全库口径**，只受 `device_id` / `state` 过滤、不受 `limit` 截断，与 `/stats` 的 `queue` 段同口径；`summary.devices_active` 只数其中 `active > 0` 的台数 —— 设备停报后过期行要等 7 天保留期才清，拿 `devices` 当「几台在跑」会写出「0 个任务 · 2 台设备」） |
+| GET | `/messages` | `query_messages` @routes.py:169 | `conversation` 模糊 / `date` / `limit`≤1000，timestamp DESC；返回体含 `skipped`（当前过滤范围内被 `typeof(timestamp)` 守卫挡掉的脏行数，不含游标段） |
+| POST | `/analysis` | `receive_analysis` @routes.py:342 | `case_id` 唯一键去重 |
+| GET | `/analysis` | `query_analysis` @routes.py:568 | `todo_only=1` 只看待办，s1/s2 反解析为对象 |
+| POST | `/advisor` | `receive_advisor` @routes.py:756 | `report_id` 去重 |
+| GET | `/advisor` | `query_advisor` @routes.py:845 | |
+| POST | `/admin/extract` | `admin_extract` @routes.py:889 | `full=1` + `source ∈ android\|pc\|all`，409 = 已在跑 |
+| GET | `/admin/extract/status` | `admin_extract_status` @routes.py:934 | `{ok, running, last}` |
+| POST | `/queue` | `receive_queue` @routes.py:948 | 手机端上报排队任务快照（整份覆盖，非法条目逐条拒收） |
+| GET | `/queue` | `query_queue` @routes.py:1021 | `device_id` / `state` / `limit`≤500，返回 `{ok, tasks, summary, devices}`（`devices` 是按 `device_id` 聚合的设备清单：`total`（现存条数）/ `active`（**已过 TTL 口径**，只算未过期的排队中+运行中）/ `stale`（过期或 `updated_at` 认不出）；`summary` 是**全库口径**，只受 `device_id` / `state` 过滤、不受 `limit` 截断，与 `/stats` 的 `queue` 段同口径；`summary.devices_active` 只数其中 `active > 0` 的台数 —— 设备停报后过期行要等 7 天保留期才清，拿 `devices` 当「几台在跑」会写出「0 个任务 · 2 台设备」） |
 | GET | `/stats` | `query_stats` @stats_api.py:185 | 全库真值：消息段（含 `by_pkg` / `by_source` 对象数组）+ 分析段（含 `redacted_cases` / `redaction_hits`）+ 排队段；**分析段不接受 `pkg` 过滤**；消息段的 `by_pkg` / `by_source` 也跟随 `pkg` 过滤（同一段内分布之和恒等于 `total`）；`convs` / `todo_convs` 按 `(pkg, conversation)` 计（与 `/messages` 行及控制台会话卡同口径）；排队段的 `devices_active` 是在跑台数，概览条只读它 |
 | GET | `/suggests/next` | `query_suggests_next` @suggests.py:209 | 最多 3 条下一步建议，按 `priority` 降序；每条含 `type` / `title` / `why` / `how` / `evidence` / `jump`；`pkg` 是**真过滤**（只影响 `todo` / `convs_missing` 两族的计数，`evidence` 里的数字按该来源 App 算） |
 | GET | `/console` | `console_page` @app.py:528 | PWA 单页，HTML/CSS/JS 全在 `console_ui.py` 的 `CONSOLE_HTML` @console_ui.py:13 |
