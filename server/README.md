@@ -427,6 +427,13 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 > 曾经先按 kind 计数再判过期，5 行里 3 条早已停跑时，卡片会同时写
 > 「analysis 3 / sync 2」和「活跃 1 · 陈旧 3」—— 同一屏 5 vs 2，用户对不上账。
 > 所以 `sum(by_kind 的 count) == total - stale`；有过期行时前端还会在分布后面补一句「（不含 N 条已过期）」。
+>
+> 统计卡的两条分布（`by_pkg` / `by_source`）在渲染前还要先**按标签归并**：
+> 库里 `pkg` 为 `NULL` 或空串时 SQL 会各成一个分组，而前端 `normPkg()` 把它们都归成微信，
+> 直接渲染就是「微信 1 / 微信 1 / 微博 1 / 微信 1」。
+> 归并在 `console_classify.mergePairsBy(pairs, normalize)`（`mergePkgPairs` / `mergeSourcePairs` 两个薄包装），
+> 顺序保首次出现（`Object.create(null)` 计数，防 `__proto__`）；归并后次数为 0 的分组直接丢弃（`[null, null]` 这类缺列脏数据）。
+> 服务端不合并：分组之和恒等于 `total`，归并只发生在展示层，且归并后之和仍等于 `total`。
 
 ### POST /admin/extract —— 触发安卓数据库提取（需 token）
 

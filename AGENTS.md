@@ -345,8 +345,8 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 ① **只走 `DateTimeFormatter` + `Instant.atZone(zone)`**：`SimpleDateFormat` 历法随**默认 Locale** 走，钉 `Locale.US`/`CHINESE` 只钉语言（安全来自映射表，是巧合）；th-TH 下 `Calendar.set(2026,9,25)` 是公历 **1483**。
 ② `zone` 可注入且单测必须钉。③ 「同年省略年份」用 `ZonedDateTime.year` 数值比较。④ 文案逐字保持。改前跑三个测试类 + `-Duser.language=th -Duser.country=TH` 全量。
 
-- **顾问报告的时间字段只有一份归一口径：`server/util._advisor_ts`**（`test_regression.py` 3 条 + `test_stats_api.py` 2 条守着）。① None/bool/空串/认不出 → 0；纯数字当毫秒，`1e9 <= n < 1e11` 视秒 ×1000；越界 → 0；文本走 `_local_ms`。② `routes.query_advisor` 排序键必须是 `(_advisor_ts(received_at), _advisor_ts(created_at))` —— 裸取遇字符串行 500。③ `suggests._advisor_state` 读三 fallback。④ 新增 util 函数必须登记 `EXPECTED_OWNER`。
-- **`?date=YYYY-MM-DD` 的换算口径在 `server/util._day_bounds_ms`**（底座 `_utc_ms` / `_local_offset_min` / `_local_ms`；`/messages` 与 `/analysis` 共用）。① 必须按 **UTC 基准**换算再套时区偏移，别用 `datetime(...).timestamp()` —— 1970 前 / 9999 后落 `OSError` 兜成 500。② 解析失败 400 `date must be YYYY-MM-DD`、越界 400 `date out of range`；**空串 `?date=` 等于不过滤**。③ 新增 util 函数必须改进 `app.py` 的 import 与 `EXPECTED_OWNER`。
+- **顾问报告的时间字段只有一份归一口径：`server/util._advisor_ts`**（`test_regression.py` 3 条 + `test_stats_api.py` 2 条守着）。① None/bool/空串/认不出 → 0；纯数字当毫秒，`1e9 <= n < 1e11` 视秒 ×1000；越界 → 0；文本走 `_local_ms`。② `routes.query_advisor` 排序键必须是 `(_advisor_ts(received_at), _advisor_ts(created_at))` —— 裸取遇字符串行 500。③ 新增 util 函数登记 `EXPECTED_OWNER`。
+- **`?date=YYYY-MM-DD` 的换算口径在 `server/util._day_bounds_ms`**（底座 `_utc_ms` / `_local_offset_min` / `_local_ms`；`/messages` 与 `/analysis` 共用）。① 必须按 **UTC 基准**换算再套时区偏移，别用 `datetime(...).timestamp()` —— 1970 前 / 9999 后落 `OSError` 兜成 500。② 解析失败 400 `date must be YYYY-MM-DD`、越界 400 `date out of range`；**空串 `?date=` 等于不过滤**。③ 新增 util 函数要改进 `app.py` 的 import。
 
 - **`GET /queue` 的 summary 是全库口径：`server/storage.queue_summary`**（`query_queue` 用它；`tasks` 才是当前页）。① 无 `LIMIT`，只受 `device_id` / `state` 过滤；过期行只计 `stale` 不再计四状态。② `state` 非法返全 0、表不存在返全 0。③ 前端 `queueActiveCount()` 必须优先读 summary（数列表会在超一页时停在 200）。④ 别把 `/stats` 的 `queue` 段与它写成两套过期口径。
 
@@ -371,9 +371,6 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **概览条「待处理」的会话数读 `todo_convs` 不是 `convs`**（`console_ui.renderOverview`，`test_console_ui.py` 1 条守着）。① `/stats` 给了两个会话数：`convs`=有分析结果的、`todo_convs`=其中有待办的；那格数字是待办条数，副标题必须配 `todo_convs`，否则与 `/suggests/next` 的「分布在 N 个会话」同屏打架。② 加键要接消费点（`todo_convs` 存在好几轮，前端从没读过）。③ 断言写「新键在 + 旧键不在」。
 
 - **`/messages` 与 `/analysis` 必须回报被脏值守卫挡掉的行数：`skipped`**（`routes.query_messages` / `query_analysis`）。① 只数 Python 侧 `except` 会**恒 0**（脏行早在 `typeof` 守卫被挡出结果集），必须发独立 `SELECT COUNT(*) WHERE NOT (guard) [AND 过滤段]`。② **无过滤也照算**（控制台首屏就是这条路）。③ 口径 = 当前过滤范围内、不含游标段，`count + skipped == /stats` 库存。④ 前端只能覆盖不能累加：每页报同一个常量，`loadMore` 用 `Math.max`。
-- **列表接口夹了上限就必须回「总数 / 是否截断」**（`routes.query_advisor`：`min(limit, 100)` 而存档上限 `ADVISOR_MAX_REPORTS`=1000）。① 响应体补 `total`（截断前条数）与 `has_more = total > count`，损坏分支也回 `0 / false`，别让前端拿到 `undefined`。② 前端角标读 `ADVISOR_TOTAL`（缺省退回已加载条数），列表在总数大于页长时先插「只显示最近 N 份（存档共 M 份）」。③ 只用 `count` 时「存档正好 100 份」与「400 份只给 100 份」在界面上完全一样。④ 截断用例别断言「列表末位是哪一条」：三批写入可落在同一毫秒，并列顺序随调度漂移（本机 `r050`、CI `r051`），只钉「首位最新 + 长度 + 最旧的被截掉」。
+- **列表接口夹了上限就必须回「总数 / 是否截断」**（`routes.query_advisor`：`min(limit, 100)` 而存档上限 `ADVISOR_MAX_REPORTS`=1000）。① 响应体补 `total`（截断前条数）与 `has_more = total > count`，损坏分支也回 `0 / false`，别让前端拿到 `undefined`。② 前端角标读 `ADVISOR_TOTAL`（缺省退回已加载条数），总数大于页长时先插「只显示最近 N 份（存档共 M 份）」。③ 截断用例别断言「末位是哪一条」：三批写入可落同一毫秒，本机 `r050`、CI `r051`，只钉「首位最新 + 长度 + 最旧的被截掉」。
 
-- **同一段里的分布与标量必须能对上：`stats_api._queue_block` 的 `by_kind`**（`test_stats_api.py` 2 条 + `test_console_ui.py` 1 条守着）。
-  ① 类型计数必须放在「过期 → `stale += 1; continue`」**之后**：写在之前会数进早停跑的僵尸任务，5 行里 3 条停跑时统计卡同屏写「analysis 3 / sync 2」与「活跃 1 · 陈旧 3」（5 vs 2）。
-  ② 契约是 `sum(by_kind.count) == total - stale`；有过期行时前端 `renderStats` 补「（不含 N 条已过期）」，别只写「（未过期）」让用户自己对账。
-  ③ 加分布类字段先问「它该不该跟着同段的过期 / 过滤口径走」，并配一条「分布之和 == 标量」的用例；只断言键名的用例两种写法都绿。
+- **同一段里的分布与标量必须能对上：`stats_api._queue_block` 的 `by_kind`、`console_classify.mergePairsBy`**（`test_stats_api.py` 2 条 + `test_console_ui.py` 2 条 + `test_console_classify.py` 5 条守着）。① 类型计数必须放在「过期 → `stale += 1; continue`」**之后**：写在之前会数进早停跑的僵尸任务，5 行里 3 条停跑时同屏写「analysis 3 / sync 2」与「活跃 1 · 陈旧 3」。② 契约 `sum(by_kind.count) == total - stale`，有过期行前端补「（不含 N 条已过期）」，别只写「（未过期）」。③ `/stats` 的 `by_pkg` 按原始列 GROUP BY，pkg 为 NULL / 空串时各成分组，而 `normPkg()` 把两者都折成微信 → 渲染出三个「微信」；展示层必须先 `mergePairsBy(pairs, normPkg)`（`Object.create(null)` + 首次出现序 + 丢零次数），**服务端不合并**（分组之和恒等于 `total`）。④ 加分布类字段先问它该不该跟同段的过期 / 过滤口径走，并配「分布之和 == 标量」用例；只断言键名的用例两种写法都绿。
