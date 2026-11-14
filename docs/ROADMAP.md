@@ -646,6 +646,13 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 测试：`test_console_classify.py` +4 条（两侧全库 / 逐侧退化且 `mixed` 为真 / `analyses.total` 缺失或脏值回落已加载且 0 仍是全库 / 筛选态两侧一起退化）、`test_console_ui.py` +1 条（`syncCountText` 在、走 `CC.syncCounters`、两个计数各读各的总数、旧的整句双分支已退场、状态行已接线）；另做 `node --check` + 最小桩实测七档文案（两侧全库 / 两侧缺失 / 只缺 analysis / 只缺 messages / 筛选 / 全 0 / 脏值）。
   - 计数：`console_classify.js` 662 / 621 → **676 / 635**（`syncCounters` @632 · 导出块 @637-675）；`console_ui.py` 3812 / 3721 → **3830 / 3739**（`syncCountText` @1599 · `renderSyncLine` @1621）；服务端用例 714 → **719**。
 
+
+- **统计 Tab 的分布文案直出原码：同一屏「分析」与「analysis」并存，无障碍直读的消息没有任何来源标记（fix/dist-labels）**
+  - 问题：统计 Tab 的排队卡把 `by_kind` 原码直接拼进副标题（`p[0] + ' ' + p[1]`），渲染成「analysis 3 / sync 2」；而同一屏排队 Tab 的卡片走 `QUEUE_KIND_META` 渲染「分析 / 同步」—— 同一个枚举两种语言。来源卡更糟：只翻 `android-db` / `android-notification` 两个码值，`a11y-extract`（无障碍直读，时间戳是估算值）、`pc-db`、`unknown` 全部英文原码直出。消息行的来源徽标同理，只给 `= android-db` 挂「库」，无障碍直读的消息没有任何标记（CSS 里的 `--badge-nt` 与 `.badge.b-nt` 定义了却从未被使用）。根因是映射抄成三份（`console_classify.QUEUE_KIND_LABELS` / `console_ui.QUEUE_KIND_META` / `renderStats` 里的内联三元）还缺一份。
+  - 修法：映射收进规则层 `server/console_classify.js` —— `SOURCE_LABELS`（六档中文）+ `sourceLabel()`、`SOURCE_BADGES` + `sourceBadge()`（`android-db` / `pc-db` → 「库」，`a11y-extract` → 「读」，通知渠道不打标）、`queueKindLabel()` / `queueStateLabel()`（走 `_labelOf`，认不出返 `null` 让调用方定兜底措辞）、`PAIR_LABELERS` + `pairText(pairs, "source"|"kind")`（丢 `count <= 0`、认不出回显原码、空值折「未知来源」）。`console_ui.py` 删掉 `QUEUE_KIND_META` 整块，`srcTxt` / `kindTxt` / `queueStateLabel` / `queueKindLabel` / `msgHtml` 全部走规则层，只保留 `try/catch` 降级。
+  - 测试：`test_console_classify.py` +9 条（来源全集覆盖 / 空白折 `unknown` 但保留陌生码 / 未知枚举返 `null` / 原型链脏值不命中 / `pairText` 翻码值并丢零次数 / 只认名字表不认函数 / 空与脏输入 / 来源分布读成中文 / 非通知通道打徽标）、`test_console_ui.py` +2 条（分布文案与徽标来自规则层 / 枚举文案不再在 UI 里重复）；另做 `node --check`（抽 4 段内联脚本 91151 B）+ 最小桩实测八档渲染。
+  - 计数：`console_classify.js` 676 / 635 → **771 / 720**（`SOURCE_LABELS` @236 · `sourceLabel` @245 · `SOURCE_BADGES` @256 · `sourceBadge` @262 · `queueKindLabel` @272 · `queueStateLabel` @276 · `PAIR_LABELERS` @286 · `pairText` @298 · 导出块 @724-769）；`console_ui.py` 3830 / 3739 → **3865 / 3773**（`sourceBadgeHtml` @2771 · `msgHtml` @2781 · `srcTxt` @3074 · `kindTxt` @3114 · `queueStateLabel` @3392 · `queueKindLabel` @3401）；服务端用例 719 → **730**。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：

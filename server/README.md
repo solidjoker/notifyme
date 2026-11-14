@@ -442,6 +442,13 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 三条约定：① `null`（拿不到）≠ `0`（真的是 0），与角标同一口径；② `filtered` 为真时两侧一起退回已加载，全库数不能代表筛选后的列表；③ 界面只在 `scope === 'loaded'` 的那一侧加「已加载」前缀（`消息 40 · 已加载分析 3`），没退化的一侧不加前缀 —— 两侧都加会让人以为整句都是估算。
 规则脚本缺失时 `syncCountText()` 兜底：两侧都能拿到全库数才整句报全库，否则两侧一起退回已加载（宁可少报，也不混口径）。
 
+**来源 / 类型 / 状态的文案映射只在 `console_classify.js`，别在 `console_ui.py` 里再抄一份**：控制台的统计 Tab 曾把 `by_kind` / `by_source` 的原码直接拼进卡片（「analysis 3 / sync 2」「a11y-extract 1」），
+而同一屏的排队卡片用另一份 `QUEUE_KIND_META` 渲染「分析 / 同步」—— 同一个枚举在两张卡上两种语言；三条非通知通道（`android-db` / `pc-db` / `a11y-extract`）里只有第一条在消息行有「库」徽标，无障碍直读的消息完全看不出是估时数据。
+映射收进规则层：`SOURCE_LABELS`（通知 / 从数据库导入 / 从电脑数据库导入 / 无障碍直读 / 评测数据 / 未知来源）+ `sourceLabel()`、`SOURCE_BADGES` + `sourceBadge()`（`android-db` / `pc-db` → 「库」，`a11y-extract` → 「读」，通知渠道不打标）、`queueKindLabel()` / `queueStateLabel()`（走 `_labelOf`，认不出返 `null` 让调用方决定兜底措辞），
+以及 `PAIR_LABELERS` + `pairText(pairs, "source"|"kind")` 供 `[{key,count}]` 形状的分布直接出中文。
+三条约定：① **认不出的原码原样回显，空值才折 `unknown`（「未知来源」）** —— 服务端将来加一条采集通道，控制台不会先渲染成空白；② **映射表查键必须走 `Object.prototype.hasOwnProperty.call`**，`source = "constructor"` / `"__proto__"` 这类脏值不许命中原型链；③ **`pairText` 丢掉 `count <= 0` 的项并按传入顺序拼接**，零次数不该占位。
+UI 侧只保留降级：`console_ui.sourceBadgeHtml()` 在规则脚本缺失时仍给 `android-db` 打「库」，其余通道打空（宁可不标也不标错）。新增一条采集通道时改 `SOURCE_LABELS` 一处即可，`server/test_console_classify.py` 的 `test_source_label_covers_every_source_the_server_can_write` 会钉住全集。
+
 ### POST /queue —— 上报排队任务快照（需 token）
 
 请求体 `{"device_id": "android-1f2a3b4c", "tasks": [...]}`，按 `(device_id, task_id)` 整份覆盖
