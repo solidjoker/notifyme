@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（665 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（666 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -575,7 +575,9 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
 - **`/messages` 与 `/analysis` 从不告诉调用方「有多少行被脏值守卫挡掉了」（feat/skip-count）**
   - 问题：脏 `timestamp` / `received_at` 行被 `typeof(...)` 常驻守卫挡在 SQL 外，于是「库存 3、列表 2」这种差额没有任何解释；`/stats` 的 `total` 把脏行照算，两个接口的数字对不上。控制台早就有 `SKIP_NOTICE` 横幅与 `skipNoticeHtml()` 文案，但它读的 `r.skipped` 服务端从来没给过 —— 横幅永远渲染不出来。`/analysis` 更阴：它本来就返回 `skipped`，可那个数只统计 Python 侧映射异常，而守卫让脏行进不了 SQL 结果集，分支永远命不中 → `skipped` 恒 0（660 条全绿也照样漏）。
   - 修法：两条查询各加一次 `SELECT COUNT(*) ... WHERE NOT (<guard>) [AND <其余过滤>]`，同名返回键 `skipped`。口径三条：① **在「整段过滤范围」内算、不含游标段**（游标是页边界不是过滤条件，翻页时这个数不能变）；② **无过滤条件时也照算**（控制台首屏就是 `messages?limit=200`，那正是最需要解释的场景）；③ `/analysis` 的 `skipped` = SQL 侧被挡行数 + Python 侧映射失败行数（后者留作兜底）。控制台的横幅文案补上「时间列不是数字或无法映射」，别只说「格式损坏」。
-  - 测试：`test_stats_api.py` +4 条（无过滤时 `count + skipped == /stats.total`、`skipped` 跟随 `conversation`/`pkg` 过滤、`/analysis` 脏 `received_at` 计入、干净库恒 0）；`test_console_ui.py` +1 条（横幅文案含成因）。服务端 660 → 665 条。
+  - 测试：`test_stats_api.py` +4 条（无过滤时 `count + skipped == /stats.total`、`skipped` 跟随 `conversation`/`pkg` 过滤、`/analysis` 脏 `received_at` 计入、干净库恒 0）；`test_console_ui.py` +2 条（横幅文案含成因、翻页不累加）。服务端 660 → 666 条。
+
+  同一轮后段又揪出第二个缺陷：`loadMore()` 把每页返回的 `skipped` **累加**（`SKIP_NOTICE.msg = (SKIP_NOTICE.msg || 0) + (r.skipped || 0)`），而这个数是「整段过滤范围内」的常量 —— 4 条正常 + 2 条脏、`limit=2` 时两页各报 `skipped 2`，前端显示「4 条被跳过」，3 页就是 6 条。改成 `Math.max` 取最大值；既有那条只断言「字符串存在」的用例断言的正是错误写法，已同步改并新增「翻页不翻倍」用例。
   - 计数：`routes.py` 1039 → 1084 行（`query_messages` @169 / `query_analysis` @568 / `register` @1072 / 映射 @1074-1083）；`console_ui.py` 3559 → 3564（`skipNoticeHtml` @1915、`CONSOLE_MANIFEST` @3380、`CONSOLE_SW` @3426）；`test_stats_api.py` 778 → 849、`test_console_ui.py` 521 → 532。
 
 ## 12. 决策门汇总

@@ -1982,12 +1982,14 @@ async function loadMore(kind) {
       ANALYSES = ANALYSES.concat(r.items);
       ANA_NEXT = r.next;
       ANA_PAGES++;
-      SKIP_NOTICE.ana = (SKIP_NOTICE.ana || 0) + (r.skipped || 0);
+      // skipped 是「整段过滤范围内」的常量，翻页会原样再报一次 —— 累加会把 2 条脏行
+      // 说成 4 条（3 页就 6 条）。多页里取最大值即可，别做加法。
+      SKIP_NOTICE.ana = Math.max(SKIP_NOTICE.ana || 0, Number(r.skipped || 0));
     } else {
       MSGS = MSGS.concat(r.items);
       MSG_NEXT = r.next;
       MSG_PAGES++;
-      SKIP_NOTICE.msg = (SKIP_NOTICE.msg || 0) + (r.skipped || 0);
+      SKIP_NOTICE.msg = Math.max(SKIP_NOTICE.msg || 0, Number(r.skipped || 0));
     }
     rebuildDerived();
   } catch (e) {
