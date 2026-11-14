@@ -1339,5 +1339,21 @@ conn = app_module._connect()
   GET /stats                                → analyses.total 3   （2 + 1 恒等）
 ```
 
-**计数.** `server/routes.py` 1039 → **1084** 行（非空 979 → 1022），`query_messages` @169、`query_analysis` @568、`receive_analysis` @342、`receive_advisor` @756、`query_advisor` @845、`admin_extract` @889、`admin_extract_status` @934、`receive_queue` @948、`query_queue` @1021、`register` @1072、`add_url_rule` 映射 @1074-1083；`server/console_ui.py` 3559 → **3564**（非空 3470 → 3475，`skipNoticeHtml` @1915、`CONSOLE_MANIFEST` @3380、`CONSOLE_SW` @3426）；`server/test_stats_api.py` 778 → **849**；`server/test_console_ui.py` 521 → **532**。服务端用例 660 → **665**。
+**计数.** `server/routes.py` 1039 → **1084** 行（非空 979 → 1022），`query_messages` @169、`query_analysis` @568、`receive_analysis` @342、`receive_advisor` @756、`query_advisor` @845、`admin_extract` @889、`admin_extract_status` @934、`receive_queue` @948、`query_queue` @1021、`register` @1072、`add_url_rule` 映射 @1074-1083；`server/console_ui.py` 3559 → **3566**（非空 3470 → 3477，`skipNoticeHtml` @1915、`loadMore` @1971、`CONSOLE_MANIFEST` @3382、`CONSOLE_SW` @3428）；`server/test_stats_api.py` 778 → **849**；`server/test_console_ui.py` 521 → **542**。服务端用例 660 → **666**。
+
+**同一轮后段发现的第二个缺陷：翻页把 `skipped` 累加，脏行条数随页数翻倍.**
+
+`loadMore()`（`console_ui.py` @1971）旧写法是 `SKIP_NOTICE.msg = (SKIP_NOTICE.msg || 0) + (r.skipped || 0)`。但 `skipped` 按第 1 条口径是「整段过滤范围内」的**常量** —— 与游标无关，每一页都会原样再报一次。实测（4 条正常 + 2 条脏、`limit=2`）：
+
+```text
+GET /messages?limit=2                  → count 2, skipped 2, next=1794615290986_2
+GET /messages?limit=2&before=..._2     → count 2, skipped 2, next=None
+前端累加结果（旧）: 2 + 2 = 4   （真实脏行只有 2 条）
+```
+
+3 页就是 6 条、10 页就是 20 条 —— 明明库里只有 2 行脏数据，横幅会说「有 20 条因格式损坏被跳过」。修法是**取最大值**而不是求和：`Math.max(NOTICE.x || 0, Number(r.skipped || 0))`；首屏 `load()` 仍是直接赋值（不带累加）。
+
+这一条同样是「660 条全绿照样漏」：既有的 `test_skipped_rows_are_surfaced_instead_of_silently_dropped` 只断言那两个字符串**存在**，而它断言的正是错误写法；改成取最大值后该断言必须同步改（本轮已改），并新增 `test_load_more_does_not_double_count_skipped`（同时断言新写法在、旧写法不在）。
+
+**教训.** 接口返回「与过滤范围绑定、与分页无关」的统计量时，前端**只能覆盖不能累加** —— 判据是「这个数会不会随游标变」。加这类键时，消费点必须配一条「翻两页不翻倍」的用例，否则页数一多就离谱。
 
