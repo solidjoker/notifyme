@@ -1790,3 +1790,116 @@ def test_queue_empty_scope_clamps_and_tolerates_bad_input(call):
     # 设备清单里查得到就按清单算，summary 的脏值不影响设备维度
     assert dirty["db"] == 9, dirty
     assert call("queueEmptyScope", None, None, None, None, None, None)["mode"] == "unknown"
+
+# ---------- S1 码值（topic / due_window / 重要度）的展示文案 ----------
+# 端上唯一真源是 TopicLabelCore（33 条单测），控制台曾把 s1.topic 原样拼进 chip，
+# 同一条记录在手机上是「工作任务」、在控制台是「work_task」；due_window = none 还会
+# 渲染成「截止 none」。下面这些用例把规则层的口径钉住，UI 只挑措辞。
+
+
+def test_topic_label_translates_codes_and_keeps_unknown_raw(call):
+    """码值翻中文；中文桶名反向也认（老缓存 / 人手改过的行）；认不出的原样回显。"""
+    for code, text in (
+        ("work_task", "工作任务"),
+        ("schedule", "日程安排"),
+        ("notice", "通知公告"),
+        ("smalltalk", "闲聊"),
+        ("risk", "风险信号"),
+        ("filtered", "已预筛过滤"),
+    ):
+        assert call("topicLabel", code) == text, code
+        # 大小写与两侧空白不该影响映射
+        assert call("topicLabel", "  " + code.upper() + " ") == text, code
+    # 中文桶名进来也要归一：端上 normalizeTopic 认这些别名
+    assert call("topicLabel", "工作任务") == "工作任务"
+    assert call("topicLabel", "日程") == "日程安排"
+    assert call("topicLabel", "预筛过滤") == "已预筛过滤"
+    # 认不出的原样回显（不是「通知公告」）：宁可露原码也别编一个中文
+    assert call("topicLabel", "urgent_xyz") == "urgent_xyz"
+    # 只有空值才回落 notice
+    assert call("topicLabel", "") == "通知公告"
+    assert call("topicLabel", None) == "通知公告"
+    assert call("normalizeTopic", "  ") == ""
+    assert call("normalizeTopic", "Work_Task") == "work_task"
+    assert call("normalizeTopic", "闲聊") == "smalltalk"
+
+
+def test_due_label_translates_codes_but_keeps_free_text(call):
+    """due_window 是枚举、s2.due_time 是自由文本：枚举翻中文，自由文本原样。"""
+    for code, text in (
+        ("none", "无明确时间"),
+        ("today", "今天"),
+        ("tomorrow", "明天"),
+        ("this_week", "本周内"),
+        ("later", "更晚"),
+    ):
+        assert call("dueLabel", code) == text, code
+    assert call("dueLabel", "本周") == "本周内"
+    assert call("dueLabel", "明天15:00") == "明天15:00"
+    assert call("dueLabel", "") == "无明确时间"
+    # none 是码值：isNoDue 为真时 UI 整段不渲染，别再写「截止 none」
+    assert call("isNoDue", "none") is True
+    assert call("isNoDue", "无明确时间") is True
+    assert call("isNoDue", "") is True
+    assert call("isNoDue", None) is True
+    assert call("isNoDue", "today") is False
+    assert call("isNoDue", "明天15:00") is False
+
+
+def test_display_due_prefers_todo_then_s2_then_s1(call):
+    """「该显示哪一份截止」的优先序与端上 displayDue / AnalysisStore 同序，别在 UI 里再排一次。"""
+    # 手填的 todo_due 最权威，哪怕 s2/s1 还有值
+    assert call("displayDueCode", " 2026-11-20 ", "明天", "none") == "2026-11-20"
+    # 没有 todo_due 时 s2 的自由文本优先于 s1 的桶
+    assert call("displayDueCode", "", "明天15:00", "today") == "明天15:00"
+    assert call("displayDueCode", None, None, "today") == "today"
+    assert call("displayDueCode", None, None, None) == ""
+    assert call("hasDisplayDue", "", "", "none") is False
+    assert call("hasDisplayDue", "", " ", "none") is False
+    assert call("hasDisplayDue", "", "", "today") is True
+    assert call("hasDisplayDue", "明天15:00", "", "none") is True
+    # 桶名翻中文、自由文本原样
+    assert call("displayDueLabel", "", "", "this_week") == "本周内"
+    assert call("displayDueLabel", "2026-11-20 15:00", "", "none") == "2026-11-20 15:00"
+    assert call("displayDueLabel", "", "", "none") == "无明确时间"
+
+
+def test_importance_chip_keeps_numbers_short_and_drops_junk(call):
+    """控制台 chip 位窄：数值重要度用「高/中/低」，认不出的原样回显而不是编一档。"""
+    assert call("importanceKey", 7) == "high"
+    assert call("importanceKey", 6) == "high"
+    assert call("importanceKey", 3) == "mid"
+    assert call("importanceKey", 2.9) == "low"
+    assert call("importanceKey", 0) == "low"
+    assert call("importanceKey", "HIGH") == "high"
+    assert call("importanceKey", " mid ") == "mid"
+    # 文本不是四档之一 → 空串（调用方回落原值），别硬塞进 low
+    assert call("importanceKey", "urgent") == ""
+    assert call("importanceKey", None) == ""
+    assert call("importanceKey", True) == ""
+    assert call("importanceChip", 7) == "高"
+    assert call("importanceChip", "mid") == "中"
+    assert call("importanceChip", 0) == "低"
+    assert call("importanceChip", "urgent") == "urgent"
+    assert call("importanceChip", None) == ""
+
+
+def test_analysis_code_parts_lift_codes_and_labels_into_search(call):
+    """搜索面必须同时收码值与中文：搜「work_task」与搜「工作任务」都得命中。"""
+    rec = {"s1": {"topic": "work_task", "due_window": "today", "importance": 7}}
+    parts = call("analysisCodeParts", rec)
+    assert "work_task" in parts and "工作任务" in parts, parts
+    assert "today" in parts and "今天" in parts, parts
+    assert "high" in parts and "高重要度" in parts, parts
+    # none 不计入：否则搜「none」命中全部记录（端上 SearchCore 同样排除）
+    only_none = call("analysisCodeParts", {"s1": {"topic": "notice", "due_window": "none"}})
+    assert "notice" in only_none and "通知公告" in only_none, only_none
+    assert "none" not in only_none, only_none
+    # s1 没有 due 但 s2 有自由文本：截止也算内容，进搜索面
+    s2_due = call("analysisCodeParts", {"s1": {"topic": "schedule", "due_window": "none"}, "s2": {"due_time": "明天15:00"}})
+    assert "schedule" in s2_due and "日程安排" in s2_due, s2_due
+    assert "明天15:00" in s2_due, s2_due
+    # 没有 s1（老记录）→ 空数组，调用方别拼出 "undefined"
+    assert call("analysisCodeParts", {}) == []
+    assert call("analysisCodeParts", None) == []
+    assert call("analysisCodeParts", {"s1": None}) == []

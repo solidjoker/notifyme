@@ -1749,6 +1749,15 @@ function analysisSearchText(a) {
   if (a.s2) { try { parts.push(JSON.stringify(a.s2)); } catch (e) { } }
   if (a.todo_text) parts.push(String(a.todo_text));
   if (a.todo_due) parts.push(String(a.todo_due));
+  // S1 的 topic / due_window / 重要度 是码值：JSON.stringify(a.s1) 只让用户搜得到「work_task」
+  // 「today」，搜「工作任务」「今天」反而命中不了。规则层 analysisCodeParts 把码值与中文标签
+  // 都拼进来（none 排除，否则搜 none 会命中全部记录）。
+  if (CC && CC.analysisCodeParts) {
+    try {
+      var codes = CC.analysisCodeParts(a);
+      if (codes && codes.length) parts.push(codes.join(' '));
+    } catch (e) { }
+  }
   // 脱敏证据也能被搜到：命中规则名与条数决定要不要重点看这条
   if (a.redaction_rules) {
     try { parts.push(JSON.stringify(a.redaction_rules)); } catch (e) { }
@@ -2873,6 +2882,49 @@ function impCls(v) {
   return '';
 }
 
+// ---------- S1 码值的展示文案 / 搜索面（规则层算，UI 只挑措辞） ----------
+// 为什么不让 UI 自己翻：topic / due_window / 重要度 的码值 → 中文映射在端上已经收敛到
+// TopicLabelCore（33 条单测），控制台曾把 s1.topic 原样拼进 chip，于是同一条记录在手机上
+// 是「工作任务」、在控制台是「work_task」。规则层 console_classify 里有一份同口径实现
+// （normalizeTopic/normalizeDue/topicLabel/dueLabel/isNoDue/displayDueCode/hasDisplayDue/
+// displayDueLabel/importanceChip/analysisCodeParts），这里只做降级与措辞。
+// 降级口径（规则脚本缺失 / 老缓存）：英文码值原样显示、none 不渲染、搜索面只拼原文 ——
+// 宁可显示原码，也不要在没有映射表的情况下自己编一个中文（那会与端上不一致）。
+function impChipText(v) {
+  if (CC && CC.importanceChip) {
+    try {
+      var t = CC.importanceChip(v);
+      if (t) return String(t);
+    } catch (e) { }
+  }
+  return String(v == null ? '' : v);
+}
+function topicChipText(topic) {
+  var raw = String(topic == null ? '' : topic).trim();
+  if (!raw) return '';
+  if (CC && CC.topicLabel) {
+    try { return String(CC.topicLabel(raw) || raw); } catch (e) { }
+  }
+  return raw;
+}
+// 「截止」chip 的文案：空串 = 整段不渲染（none / 没填 / 认不出都归这里，由规则层判定）。
+function displayDueText(a) {
+  var s2Due = (a.s2 && typeof a.s2 === 'object') ? a.s2.due_time : '';
+  var s1Due = (a.s1 && typeof a.s1 === 'object') ? a.s1.due_window : '';
+  if (CC && CC.hasDisplayDue && CC.displayDueLabel) {
+    try {
+      if (!CC.hasDisplayDue(a.todo_due, s2Due, s1Due)) return '';
+      return String(CC.displayDueLabel(a.todo_due, s2Due, s1Due) || '');
+    } catch (e) { }
+  }
+  // 降级：按 todo_due → s2 → s1 的优先序取第一个非空，none 与空串不出。
+  var code = String(a.todo_due == null ? '' : a.todo_due).trim() ||
+    String(s2Due == null ? '' : s2Due).trim() ||
+    String(s1Due == null ? '' : s1Due).trim();
+  if (!code || code.toLowerCase() === 'none') return '';
+  return code;
+}
+
 function renderAnalysisBlock(a) {
   var html = '<div class="todo-block">';
   if (a.s1) {
@@ -2886,17 +2938,22 @@ function renderAnalysisBlock(a) {
     var impVal = importanceOf(a);
     if (impVal) {
       chips += '<span class="chip' + (impLabel(impVal) === 'high' ? ' warn' : '') +
-        '">重要度 ' + esc(impVal) + '</span>';
+        '">重要度 ' + esc(impChipText(impVal)) + '</span>';
     }
-    if (s1.due_window) chips += '<span class="chip">截止 ' + esc(s1.due_window) + '</span>';
-    if (s1.topic) chips += '<span class="chip">' + esc(s1.topic) + '</span>';
+    // 「截止」走 displayDueText（规则层定「该不该出」与「翻成什么」）：旧写法
+    // `if (s1.due_window)` 对字符串 'none' 为真，未编辑过的待办卡当场显示「截止 none」。
+    var dueText = displayDueText(a);
+    if (dueText) chips += '<span class="chip">截止 ' + esc(dueText) + '</span>';
+    var topicText = topicChipText(s1.topic);
+    if (topicText) chips += '<span class="chip">主题 ' + esc(topicText) + '</span>';
     if (chips) html += '<div class="chips">' + chips + '</div>';
   }
   if (a.s2) {
     var s2 = a.s2;
     html += '<div class="s2">';
     if (s2.summary) html += '<div class="row"><span class="label">摘要</span><br>' + esc(s2.summary) + '</div>';
-    if (s2.due_time) html += '<div class="row"><span class="label">截止时间</span> ' + esc(s2.due_time) + '</div>';
+    // S2 的截止不再单独占一行：它已经（按 todo_due -> s2 -> s1 的优先序）进了上面的
+    // 「截止」chip —— 同一张卡把同一个时间写两遍，而且旧写法把桶名 today 原样贴出来。
     if (s2.suggested_action) html += '<div class="row"><span class="label">建议动作</span><br>' + esc(s2.suggested_action) + '</div>';
     if (s2.tasks && s2.tasks.length) {
       html += '<div class="row"><span class="label">任务</span><ul>';
@@ -2919,7 +2976,7 @@ function todoSection(a) {
     '<span class="conv-main"><span class="conv-title-row">' + appBadge +
     '<span class="conv-name">' + esc(a.conversation) + '</span>' +
     '<span class="' + impCls(importanceOf(a)) + '">' +
-    esc(importanceOf(a)) + '</span></span></span>' +
+    esc(impChipText(importanceOf(a))) + '</span></span></span>' +
     '<span class="conv-count">窗口消息 ' + esc(a.message_count == null ? 0 : a.message_count) + ' 条</span>' +
     '</div></div>' +
     renderAnalysisBlock(a) +
@@ -3179,7 +3236,7 @@ function renderStats() {
         '<span class="conv-name">' + esc(a.conversation) + '</span>' +
         '<span class="conv-count">' + esc(a.case_id || '') + '</span>' +
         redactBadge(a) + '</div>' +
-        '<div class="ana-meta">重要度 ' + esc(importanceOf(a) || '—') +
+        '<div class="ana-meta">重要度 ' + esc(impChipText(importanceOf(a)) || '—') +
         ' · 分析于 ' + esc(a.analyzed_at || '') +
         ' · 消息 ' + esc(a.message_count == null ? 0 : a.message_count) + ' 条</div>' +
         (summary ? '<div class="conv-preview"><span class="pv-text">' +

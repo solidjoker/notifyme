@@ -786,3 +786,54 @@ def test_queue_kind_and_state_labels_are_not_duplicated_in_the_ui():
     # 降级分支仍在（规则脚本缺失时排队卡不能渲染成空白 chip）
     assert "return m ? m.label : '排队中';" in html, "状态标签缺降级"
     assert "return cc || '其它';" in html, "类型标签缺降级"
+
+
+def test_s1_code_labels_come_from_the_rule_layer():
+    """S1 的 topic / due_window / 重要度 是码值，展示文案只有规则层一份（端上 TopicLabelCore 同口径）。
+
+    旧写法三处直出原码：① esc(s1.due_window) → 待办卡显示「截止 today」，
+    due_window = "none" 时连「截止 none」都渲染出来；② esc(s1.topic) → 显示「work_task」；
+    ③ 重要度 chip 直接贴英文 high。同一条记录在手机上是「工作任务 / 今天 / 高」，
+    在控制台却是原码 —— 用户会以为两端显示的不是同一份数据。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "function topicChipText(topic)" in html, "缺少主题文案 helper"
+    assert "function displayDueText(a)" in html, "缺少截止文案 helper"
+    assert "function impChipText(v)" in html, "缺少重要度文案 helper"
+    assert "CC.topicLabel" in html, "主题没有走规则层"
+    assert "CC.hasDisplayDue" in html, "该不该出截止没有走规则层"
+    assert "CC.displayDueLabel" in html, "截止文案没有走规则层"
+    assert "CC.importanceChip" in html, "重要度没有走规则层"
+    assert "esc(s1.due_window)" not in html, "截止 chip 还在直出原码"
+    assert "esc(s1.topic)" not in html, "主题 chip 还在直出原码"
+    assert "截止时间" not in html, "S2 的截止还单独占一行（与截止 chip 重复）"
+    theme_chip = "<span class=" + chr(34) + "chip" + chr(34) + ">主题 "
+    assert theme_chip in html, "主题 chip 缺前缀"
+    assert html.count("impChipText(importanceOf(a))") >= 2, "重要度 chip 未统一走 helper"
+
+
+def test_s1_due_none_is_not_rendered_at_all():
+    """none 是「没有明确时间」，不是一条要显示的内容 —— 整段不渲染，别显示「截止 none」。"""
+    html = _ui().CONSOLE_HTML
+    assert "var dueText = displayDueText(a);" in html, "截止 chip 没有走 displayDueText"
+    assert "if (dueText) chips +=" in html, "截止 chip 没做空值判断"
+    none_needle = "code.toLowerCase() === " + chr(39) + "none" + chr(39)
+    assert none_needle in html, "降级路径没排除 none"
+    assert "if (!code ||" in html, "降级路径没排除空值"
+
+
+def test_analysis_search_covers_both_codes_and_chinese_labels():
+    """搜索面必须同时收码值与中文标签：搜「工作任务」与搜「work_task」都得命中同一条。
+
+    旧搜索面只有 JSON.stringify(a.s1)：能搜到 work_task / today，搜中文反而命中不了
+    —— 用户在手机上搜的是「今天」，在控制台搜不到。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "CC.analysisCodeParts" in html, "搜索面没有收规则层的码值/标签"
+    join_needle = "parts.push(codes.join(" + chr(39) + " " + chr(39) + "))"
+    assert join_needle in html, "搜索面没有拼进码值与标签"
+    classify = os.path.join(ROOT, "server", "console_classify.js")
+    with open(classify, "r", encoding="utf-8") as fh:
+        src = fh.read()
+    assert "function analysisCodeParts(a)" in src, "规则层缺少 analysisCodeParts"
+    assert "hasDisplayDue(a.todo_due, s2Due, s1.due_window)" in src, "搜索面没有用 hasDisplayDue 排除 none"
