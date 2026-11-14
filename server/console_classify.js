@@ -621,6 +621,19 @@
     return { value: T, scope: 'library' };
   }
 
+  // 顶部同步状态行报的是「同步了多少」，两个计数各自有口径：/stats 给得出全库真值
+  // 就说全库，拿不到（老服务端 / analyses 段缺失 / 接口失败）或用户正在按来源筛选
+  // 时，退回「已加载页」的数并显式标注。
+  // 旧写法只看 messages.total 就决定整行口径：① 同一句里混写「已加载消息 5 · 分析 40」；
+  // ② analyses.total 缺失时直接拼出「分析 null」（字符串 null 渲染到状态行）；
+  // ③ 两侧各自能拿到全库数、只有一侧退化为已加载时，用户无法判断哪个数是哪一档。
+  // 所以两个计数分别定档（复用 badgeState 的「拿不到不许折 0」语义），并回报
+  // mixed —— 两侧口径不同时界面必须把两侧都标出来。
+  function syncCounters(msgLoaded, anaLoaded, msgTotal, anaTotal, filtered) {
+    var m = badgeState(msgLoaded, msgTotal, filtered);
+    var a = badgeState(anaLoaded, anaTotal, filtered);
+    return { msg: m, ana: a, mixed: m.scope !== a.scope };
+  }
   return {
     VERSION: VERSION,
     QUEUE_STATE_ORDER: QUEUE_STATE_ORDER,
@@ -657,6 +670,7 @@
     appEmptyScope: appEmptyScope,
     DEFAULT_STATS_LIST_CAP: DEFAULT_STATS_LIST_CAP,
     statsListState: statsListState,
-    badgeState: badgeState
+    badgeState: badgeState,
+    syncCounters: syncCounters
   };
 });

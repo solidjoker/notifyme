@@ -1578,3 +1578,48 @@ def test_badge_state_clamps_dirty_loaded(call):
     assert got["value"] == 0 and got["scope"] == "loaded", f"{got!r}"
     got = call("badgeState", 12.9, 40.7, False)
     assert got["value"] == 40 and got["scope"] == "library", f"{got!r}"
+
+
+def test_sync_counters_report_library_when_both_sides_have_totals(call):
+    """两侧都能拿到 /stats 的全库数时，状态行整行都是全库口径。"""
+    got = call("syncCounters", 5, 3, 40, 40, False)
+    assert got["msg"] == {"value": 40, "scope": "library"}, f"{got!r}"
+    assert got["ana"] == {"value": 40, "scope": "library"}, f"{got!r}"
+    assert got["mixed"] is False, f"{got!r}"
+
+
+def test_sync_counters_fall_back_per_side_not_as_a_whole(call):
+    """旧写法只看 messages.total 定整行口径：一侧退化会把另一侧静默拉下水。"""
+    got = call("syncCounters", 5, 3, 40, None, False)
+    assert got["msg"] == {"value": 40, "scope": "library"}, f"{got!r}"
+    assert got["ana"] == {"value": 3, "scope": "loaded"}, f"{got!r}"
+    assert got["mixed"] is True, f"{got!r}"
+    got = call("syncCounters", 5, 3, None, 40, False)
+    assert got["msg"] == {"value": 5, "scope": "loaded"}, f"{got!r}"
+    assert got["ana"] == {"value": 40, "scope": "library"}, f"{got!r}"
+    assert got["mixed"] is True, f"{got!r}"
+    # 两侧都拿不到：整行退回已加载，不算混合
+    got = call("syncCounters", 5, 3, None, None, False)
+    assert got["msg"] == {"value": 5, "scope": "loaded"}, f"{got!r}"
+    assert got["ana"] == {"value": 3, "scope": "loaded"}, f"{got!r}"
+    assert got["mixed"] is False, f"{got!r}"
+
+
+def test_sync_counters_never_render_null_or_zero_for_missing_totals(call):
+    """analyses.total 缺失时旧写法直接拼出「分析 null」：缺失一律回落已加载。"""
+    got = call("syncCounters", 5, 3, 40, "abc", False)
+    assert got["ana"] == {"value": 3, "scope": "loaded"}, f"{got!r}"
+    got = call("syncCounters", 5, 3, 40, -1, False)
+    assert got["ana"] == {"value": 3, "scope": "loaded"}, f"{got!r}"
+    # 0 是「真的没有」，不是「拿不到」：仍报全库 0
+    got = call("syncCounters", 5, 3, 0, 0, False)
+    assert got["msg"] == {"value": 0, "scope": "library"}, f"{got!r}"
+    assert got["ana"] == {"value": 0, "scope": "library"}, f"{got!r}"
+
+
+def test_sync_counters_respect_client_side_filtering(call):
+    """按来源筛选 / 搜索时列表只剩一页的量，全库数不能代表列表内容。"""
+    got = call("syncCounters", 5, 3, 40, 40, True)
+    assert got["msg"] == {"value": 5, "scope": "loaded"}, f"{got!r}"
+    assert got["ana"] == {"value": 3, "scope": "loaded"}, f"{got!r}"
+    assert got["mixed"] is False, f"{got!r}"

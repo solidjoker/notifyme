@@ -1592,6 +1592,31 @@ function copyConvNameByKey(ck) {
   });
 }
 
+// 同步状态行的两个计数各带口径：全库有真值就写全库，退回已加载页时两侧都标
+// 「已加载」，混合档（只有一侧拿到全库数）也把两侧各自标出来 —— 旧写法只看
+// messages.total 定整行口径，analyses.total 缺失时会直接拼出「分析 null」，
+// 也只有一侧退化时整句仍装成全库口径。判定收在 console_classify.syncCounters。
+function syncCountText() {
+  var mLoad = MSGS.length;
+  var aLoad = ANALYSES.length;
+  var mTotal = statNum(['messages', 'total']);
+  var aTotal = statNum(['analyses', 'total']);
+  var st = null;
+  if (CC && CC.syncCounters) {
+    try { st = CC.syncCounters(mLoad, aLoad, mTotal, aTotal, !!APP_FILTER); } catch (e) { st = null; }
+  }
+  if (!st) {
+    // 规则脚本缺失：两侧能拿到全库数就写全库，任一侧拿不到就两侧都退回已加载
+    var allSrv = (mTotal != null && aTotal != null && !APP_FILTER);
+    st = allSrv
+      ? { msg: { value: mTotal, scope: 'library' }, ana: { value: aTotal, scope: 'library' }, mixed: false }
+      : { msg: { value: mLoad, scope: 'loaded' }, ana: { value: aLoad, scope: 'loaded' }, mixed: false };
+  }
+  function part(label, c) {
+    return ('library' === c.scope) ? (label + ' ' + c.value) : ('已加载' + label + ' ' + c.value);
+  }
+  return part('消息', st.msg) + ' · ' + part('分析', st.ana);
+}
 // 顶部同步状态行：时间 + 数据量 / 错误（同时播报给读屏）
 function renderSyncLine() {
   var el = $('sync-line');
@@ -1607,14 +1632,7 @@ function renderSyncLine() {
   if (LOAD_BUSY && LAST_SYNC) txt = '同步中… · 上次同步 ' + fmtClock(LAST_SYNC);
   else if (!LAST_SYNC) txt = '正在同步…';
   else {
-    // 有全库真值时显示真值，否则退回「已加载」口径并标注
-    var mTotal = statNum(['messages', 'total']);
-    var aTotal = statNum(['analyses', 'total']);
-    if (mTotal == null || APP_FILTER) {
-      txt = '已同步 ' + fmtClock(LAST_SYNC) + ' · 已加载消息 ' + MSGS.length + ' · 分析 ' + ANALYSES.length;
-    } else {
-      txt = '已同步 ' + fmtClock(LAST_SYNC) + ' · 消息 ' + mTotal + ' · 分析 ' + aTotal;
-    }
+    txt = '已同步 ' + fmtClock(LAST_SYNC) + ' · ' + syncCountText();
   }
   if (SW_ERR) txt += ' · ⚠️ 离线缓存不可用';
   if (el) el.textContent = txt;
