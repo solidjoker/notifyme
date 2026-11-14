@@ -584,7 +584,7 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
 - **`GET /advisor` 静默只给最新 100 份，控制台角标与列表都不说「还有更早的」（feat/advisor-list-total）**
   - 问题：存档上限 `ADVISOR_MAX_REPORTS`=1000，而 `query_advisor()` 把 `limit` 夹在 100、控制台又固定请求 `advisor?limit=100`。响应只有 `count`，于是「存档 150 份」与「存档正好 100 份」在界面上完全一样：顾问 Tab 只渲染最新 100 张卡、角标恒 ≤100，用户以为更早的报告丢了（实测 3 批 × 50 份 → `count 100` / 新 `r149` / 旧 `r050`，响应里没有 total 与 has_more）。
   - 修法：服务端补 `total = len(reports)`（截断前）与 `has_more = total > count`，损坏分支同样回 `total: 0` / `has_more: false`（前端不会拿到 `undefined`）；控制台新增全局 `ADVISOR_TOTAL`（`res[2].total` 缺省时退回已加载条数），角标与 tab aria 都读它，列表在 `ADVISOR_TOTAL > reports.length` 时先插一条「当前只显示最近 N 份（存档共 M 份），更早的报告不在此列表里」。
-  - 测试：`test_regression.py` +3 条（150 份 → count 100 / total 150 / has_more、首尾 `r149`/`r050`；3 份时 has_more=False；存档损坏时 ok=False 但 total=0）；`test_console_ui.py` +1 条（角标读 `ADVISOR_TOTAL`、旧写法不在、截断说明位于卡片之前）。服务端 666 → 670 条。
+  - 测试：`test_regression.py` +3 条（150 份 → count 100 / total 150 / has_more、首位 `r149` 且最旧的 `r000` 被截掉；3 份时 has_more=False；存档损坏时 ok=False 但 total=0）；`test_console_ui.py` +1 条（角标读 `ADVISOR_TOTAL`、旧写法不在、截断说明位于卡片之前）。服务端 666 → 670 条。
   - 计数：`routes.py` 1084 → 1092 行（`register` @1080 / 映射 @1082-1091）；`console_ui.py` 3566 → 3584（`ADVISOR_TOTAL` @1385、`setBadge` 调用 @1885、`renderAdvisor` @2998、截断说明 @3034、`CONSOLE_MANIFEST` @3400、`CONSOLE_SW` @3446）；`test_regression.py` 1050 → 1096、`test_console_ui.py` 542 → 561。
 
 ## 12. 决策门汇总

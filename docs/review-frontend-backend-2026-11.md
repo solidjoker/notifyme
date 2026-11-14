@@ -1383,7 +1383,7 @@ GET  /advisor?limit=1000              → count 100
 
 **测试.**
 
-- `test_regression.py` +3 条（插在 `test_advisor_sort_falls_back_to_created_at` 之前）：`test_advisor_reports_archive_total_and_truncation`（150 份 → `count 100` / `total 150` / `has_more True` / 首 `r149` 末 `r050`；`limit=200` 仍 `count 100`）、`test_advisor_within_limit_reports_no_more`（3 份 → `total 3` / `has_more False`，别让截断提示常驻）、`test_advisor_corrupted_archive_reports_zero_total`（写坏 JSONL → `ok False` 但 `total 0` / `has_more False`）。
+- `test_regression.py` +3 条（插在 `test_advisor_sort_falls_back_to_created_at` 之前）：`test_advisor_reports_archive_total_and_truncation`（150 份 → `count 100` / `total 150` / `has_more True` / 首位 `r149` 且最旧的 `r000` 被截掉；`limit=200` 仍 `count 100`）、`test_advisor_within_limit_reports_no_more`（3 份 → `total 3` / `has_more False`，别让截断提示常驻）、`test_advisor_corrupted_archive_reports_zero_total`（写坏 JSONL → `ok False` 但 `total 0` / `has_more False`）。
 - `test_console_ui.py` +1 条 `test_advisor_badge_uses_archive_total_and_marks_truncation`：断言 `var ADVISOR_TOTAL = 0;` 在、total 取值表达式在、`setBadge('badge-adv', ADVISOR_TOTAL || ADVISORS.length);` 在、旧写法 `setBadge('badge-adv', ADVISORS.length);` **不在**、tab aria 行在、`if (ADVISOR_TOTAL > reports.length) {` 的 index 小于 `reports.forEach(function (r, i) {`、文案「更早的报告不在此列表里」在。
 
 **验证.**
@@ -1396,6 +1396,8 @@ python -m compileall -q server                         → COMPILE=0
 ```
 
 真实 HTTP 冒烟（`smoke37.py`，werkzeug `make_server` 真 TCP + `urllib`，临时 `DATA_DIR`）：`status 200 count 100 total 150 has_more True`、`newest r149 oldest r050`；`GET /console` 抓到 `var ADVISOR_TOTAL = 0;`、`ADVISOR_TOTAL > reports.length`、`更早的报告不在此列表里`、`setBadge('badge-adv', ADVISOR_TOTA` 四处全 True。
+
+**CI 上撞到的一条夹具坑.** 第一版用例断言「列表末位恰好是 `r050`」，本机通过、CI 报 `AssertionError: assert 'r051' == 'r050'` —— 排序键是 `(_advisor_ts(received_at), _advisor_ts(created_at))`，而三批 50 份写入在快机器上可能落在**同一毫秒**，批次边界那一条的先后由并列兜底决定，会随调度漂移。断言改成「首位 `r149`、长度为 100、无重复、最旧的 `r000` 不在列表里」—— 只钉契约（最新的在前、最旧的被截掉），不钉并列时的具体顺序。
 
 **计数.** `routes.py` 1084 → **1092** 行（非空 1022 → 1030；`register` @1080 / `add_url_rule` 映射 @1082-1091）；`console_ui.py` 3566 → **3584**（非空 3477 → 3495；`ADVISOR_TOTAL` @1385、`setBadge` 调用 @1885、`renderAdvisor` @2998、截断说明 @3034、`CONSOLE_MANIFEST` @3400、`CONSOLE_SW` @3446）；`test_regression.py` 1050 → **1096**（非空 862 → 900）；`test_console_ui.py` 542 → **561**（非空 434 → 451）。服务端用例 666 → **670 条**。
 
