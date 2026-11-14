@@ -2896,8 +2896,27 @@ function renderStats() {
     }
     return Object.keys(obj || {}).map(function (k) { return [k, Number(obj[k] || 0)]; });
   }
-  var srcPairs = pairList(bySrc, 'source');
-  var appPairs = pairList(byApp, 'pkg');
+  // 分布条目要按「展示口径」先合并再渲染：服务端 /stats 的 by_pkg 是按原始列
+  // GROUP BY 出来的，库里 pkg 是 NULL 与空串时各自成一组，直接按标签渲染会得到
+  // 「微信 1 / 微信 1 / 微博 1 / 微信 1」（实测 4 行里 2 行没有包名）。本地估算档
+  // 走 normPkg(m.pkg) 天然归一 —— 两条路径必须同一个口径。
+  function distPairs(obj, keyName, normalize) {
+    var pairs = pairList(obj, keyName);
+    if (CC && CC.mergePairsBy) {
+      try { return CC.mergePairsBy(pairs, normalize); } catch (e) { }
+    }
+    // 规则脚本缺失时就地按同一口径合并（键名来自外部数据，别用普通对象）
+    var map = Object.create(null), order = [];
+    pairs.forEach(function (p) {
+      var k = normalize((p && p[0] != null) ? p[0] : '');
+      if (!(k in map)) { map[k] = 0; order.push(k); }
+      map[k] += Number((p && p[1]) || 0);
+    });
+    return order.map(function (k) { return [k, map[k]]; })
+      .filter(function (p) { return p[1] > 0; });
+  }
+  var srcPairs = distPairs(bySrc, 'source', function (s) { return s ? String(s) : 'unknown'; });
+  var appPairs = distPairs(byApp, 'pkg', normPkg);
   var srcTxt = srcPairs.map(function (p) {
     return (p[0] === 'android-db' ? '数据库' : p[0] === 'android-notification' ? '通知' : p[0]) +
       ' ' + p[1];
