@@ -2925,15 +2925,21 @@ function renderStats() {
         (STATS.analyses.redaction_hits || 0) + ' 处命中</div>' +
         '<div class="ov-sub">上报前已把命中规则的内容替换为占位符，原文不出设备</div></div>'
     });
+    // by_kind 只数未过期行（与上面的活跃 / 失败 / 陈旧同口径）。
+    // 有过期行时必须把「不含 N 条已过期」写在旁边：否则用户看到
+    // 「analysis 3 / sync 2」会以为 5 条都在跑，而同一行只说「活跃 1 · 陈旧 3」
+    // —— 同一屏 5 vs 2 对不上账（真机口径事故）。
     var kindTxt = pairList(STATS.queue.by_kind || [], 'kind').map(function (p) {
       return p[0] + ' ' + p[1];
     }).join(' / ');
+    var staleN = Number(STATS.queue.stale || 0);
+    var kindScope = kindTxt ? (staleN > 0 ? '（不含 ' + staleN + ' 条已过期）' : '') : '';
     out.push({
       key: 'stat-queue',
       html: '<div class="card"><div class="stat-label">排队任务</div>' +
         '<div class="stat-value">活跃 ' + (STATS.queue.active || 0) + ' · 失败 ' +
         (STATS.queue.failed || 0) + ' · 陈旧 ' + (STATS.queue.stale || 0) + '</div>' +
-        '<div class="ov-sub">' + esc(kindTxt || '暂无任务') + ' · ' +
+        '<div class="ov-sub">' + esc(kindTxt || '暂无任务') + esc(kindScope) + ' · ' +
         esc(deviceTallyText(STATS.queue)) + '</div></div>'
     });
   }

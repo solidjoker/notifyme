@@ -12,7 +12,7 @@
 | `util.py` | 纯函数工具层：数值归一、时间戳格式化、文本转义、来源包名映射 |
 | `storage.py` | 存储层：SQLite 连接与建库、JSONL 存档与轮转、顾问存档读写、抽库后台任务 |
 | `routes.py` | 数据面路由：`/weixin`、`/messages`、`/analysis`、`/advisor`、`/queue`、`/admin/extract`，由 `register(app)` 挂载 |
-| `stats_api.py` | 全库聚合 `/stats`：数值列一律走安全取值（脏值归 0，不让单行脏数据把整页打成 500）；消息段（含 `by_pkg` / `by_source`）、分析段（含脱敏证据）、排队段（`devices` 台数 + `devices_active` 在跑台数）；**分析段不接受 `pkg` 过滤**；会话数（`convs` / `todo_convs`）按 `(pkg, conversation)` 计，与 `/messages` 行和控制台会话卡同口径；带 `?pkg=` 时消息段的 `by_pkg` / `by_source` 也一并跟着过滤（同一段内分布之和恒等于 `total`） |
+| `stats_api.py` | 全库聚合 `/stats`：数值列一律走安全取值（脏值归 0，不让单行脏数据把整页打成 500）；消息段（含 `by_pkg` / `by_source`）、分析段（含脱敏证据）、排队段（`devices` 台数 + `devices_active` 在跑台数 + `by_kind` 类型分布，**分布只数未过期行**，所以 `sum(by_kind) == total - stale`）；**分析段不接受 `pkg` 过滤**；会话数（`convs` / `todo_convs`）按 `(pkg, conversation)` 计，与 `/messages` 行和控制台会话卡同口径；带 `?pkg=` 时消息段的 `by_pkg` / `by_source` 也一并跟着过滤（同一段内分布之和恒等于 `total`） |
 | `suggests.py` | 下一步建议 `/suggests/next`：6 条规则按 `priority` 降序取前 3，带 `why` / `how` / `evidence` / `jump`；`?pkg=` 是**真过滤**，只作用于 `todo` / `convs_missing` 两族规则的计数（排队按设备、顾问是全局报告，与来源无关，仍走全库口径） |
 | `console_ui.py` | 内嵌 PWA 控制台前端（HTML/CSS/JS，无外部依赖） |
 | `extract_common.py` | 两个抽取脚本的共享内核：结构化日志、原文 JSONL 存档与轮转、跨进程写锁、五列去重、分批提交、主库结构兜底；配置由 `activate(module)` 注入宿主模块，`_setting()` 每次调用时读取 |
@@ -421,6 +421,12 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 > 概览条「待处理」那格的副标题同理读 `analyses.todo_convs`（有待办的会话数），不是 `analyses.convs`（有分析结果的会话数）：
 > `/stats` 两个键都给，`/suggests/next` 的证据串也写的是「待办 N 条，分布在 M 个会话」；
 > 读 `convs` 时「待办 2 条 · 共 4 个会话」会让用户以为还有 2 条待办没显示出来。
+
+> 同一张统计卡上的类型分布（`queue.by_kind`）也**只数未过期行**，与它左边的「活跃 / 失败 / 陈旧」同口径：
+> 过期行只进 `stale`，不进四状态、也不进类型分布。
+> 曾经先按 kind 计数再判过期，5 行里 3 条早已停跑时，卡片会同时写
+> 「analysis 3 / sync 2」和「活跃 1 · 陈旧 3」—— 同一屏 5 vs 2，用户对不上账。
+> 所以 `sum(by_kind 的 count) == total - stale`；有过期行时前端还会在分布后面补一句「（不含 N 条已过期）」。
 
 ### POST /admin/extract —— 触发安卓数据库提取（需 token）
 

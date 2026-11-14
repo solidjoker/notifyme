@@ -1402,3 +1402,59 @@ python -m compileall -q server                         → COMPILE=0
 **计数.** `routes.py` 1084 → **1092** 行（非空 1022 → 1030；`register` @1080 / `add_url_rule` 映射 @1082-1091）；`console_ui.py` 3566 → **3584**（非空 3477 → 3495；`ADVISOR_TOTAL` @1385、`setBadge` 调用 @1885、`renderAdvisor` @2998、截断说明 @3034、`CONSOLE_MANIFEST` @3400、`CONSOLE_SW` @3446）；`test_regression.py` 1050 → **1096**（非空 862 → 900）；`test_console_ui.py` 542 → **561**（非空 434 → 451）。服务端用例 666 → **670 条**。
 
 **教训.** 接口给「列表」时必须同时给「总数 / 是否截断」—— 上限夹在服务端（`min(limit, 100)`）而调用方无从知晓时，界面会把「被截断」呈现成「就这么多」。判据：只要服务端存在 `min(..., N)` 这类夹取，响应体里就必须有 `total` 与 `has_more`，且前端角标读总数、列表读页长。
+
+
+### E-63｜统计卡的排队类型分布把早停跑的僵尸任务也算进去（`stats_api._queue_block`，feat/stats-by-kind-fresh，2026-11-14）
+
+**问题.** `server/stats_api.py` 的 `_queue_block()` 里，`kinds[kind] = kinds.get(kind, 0) + 1` 写在过期判定**之前**：
+
+```python
+updated_at = app_module._safe_int(row[2], default=0, lo=0)
+kinds[kind] = kinds.get(kind, 0) + 1          # ← 含已过期行
+if (now_ms - updated_at) > storage_module.QUEUE_TTL_MS:
+    out["stale"] += 1
+    continue
+```
+
+而同一段里的 `queued / running / failed / done` 与 `active` 都在 `continue` 之后累加 —— 「过期只计 `stale`」这条口径（`storage.queue_summary()` 从 feat/queue-retention-cleanup 起就是这么写的）在 `by_kind` 上被漏掉了。控制台统计卡把两个数并排显示，于是同一张卡自相矛盾：
+
+```
+排队任务
+活跃 1 · 失败 0 · 陈旧 3
+analysis 3 / sync 2 · 设备 3 台      ← 5 条，与左边的 2 条对不上
+```
+
+**复现.** 造 5 行 `queue_tasks`（`dev-a` 两条现在 running/queued、`dev-b` 一条现在 running、一条 3 小时前 queued、一条 3 小时前 done；`QUEUE_TTL_MS = 30 min`），`GET /stats`：
+
+```
+total 5 · stale 3 · running 1 · queued 1 · failed 0 · done 0 · active 1
+by_kind [{"kind": "analysis", "count": 1}, {"kind": "sync", "count": 1}]   ← 修后
+by_kind [{"kind": "analysis", "count": 3}, {"kind": "sync", "count": 2}]   ← 修前
+```
+
+修前 `sum(by_kind) = 5 = total`，四状态之和却只有 2 —— 差的那 3 条正是已过期行；修后 `sum(by_kind) = 2 = total - stale`，与四状态之和恒等。
+
+**为什么 670 条全绿却没发现.** `server/test_stats_api.py::test_stats_counts_queue_by_state_and_device` 只断言了四状态、`active`、`devices`、`devices_active`、`stale` 与 `by_kind` 的键，四条任务全部新鲜（`stale == 0`），两种写法给出同一份结果。`test_stats_marks_stale_queue_tasks_and_excludes_from_state` 有 1 条过期行，但只断言 `total / stale / running / active / devices / devices_active`，**从没读过 `by_kind`**。也就是说这条口径从来没被任何用例钉过，也就没人发现它和 `queue_summary()` 不一致。
+
+**修法.** 把计数移到过期判定之后（与四状态、`active` 同一段），注释写明理由；模块 docstring 补一句「`by_kind` 只数未过期行，`sum(by_kind.count) == total - stale`」。前端不靠用户自己对账：`console_ui.renderStats()` 在 `stale > 0` 时于分布后面补「（不含 N 条已过期）」，`stale == 0` 时不说话。
+
+**测试.** `server/test_stats_api.py` +2 条：
+- `test_stats_by_kind_counts_fresh_rows_only` —— 3 行（1 新鲜 analysis + 2 条过期）→ `by_kind == [{"kind": "analysis", "count": 1}]`，且 `sum(by_kind.count) == total - stale`。
+- `test_stats_by_kind_survives_text_kind_rows_and_matches_state_sums` —— 4 行干净库 → `sum(by_kind.count) == running + queued + done + failed == 4`，`kinds == {"analysis": 2, "sync": 1, "model": 1}`。
+
+`server/test_console_ui.py` +1 条（`test_stats_queue_card_marks_by_kind_scope`）：断言 `var staleN = Number(STATS.queue.stale || 0);` 与「（不含 … 条已过期）」在、`esc(kindScope)` 被拼进卡片、以及旧的「（未过期）」不在（首版只写「未过期」不说过期条数，仍然要用户自己对账，已改）。
+
+**验证.**
+
+```
+pytest server/test_stats_api.py -q                       → 44 passed
+pytest server/test_console_ui.py server/test_stats_api.py → 82 passed
+pytest server/ -q                                        → 673 passed in 34.71s（基线 670 + 3）
+python -m compileall -q server                           → COMPILE=0
+```
+
+真实 HTTP 冒烟（`probe38b.py`，werkzeug `make_server` 真 TCP + `test_client`，临时 `DATA_DIR`，5 行里 3 条过期）：`BY_KIND [{"count": 1, "kind": "analysis"}, {"count": 1, "kind": "sync"}]`、`FRESH_SUM {"running": 1, "queued": 1, "stale": 3, "total": 5}`、`KIND_SUM 2`。node harness（从 `CONSOLE_HTML` 抽出 `stat-queue` 卡片片段，注入假 `STATS`）两个用例：`stale=3` → `analysis 1 / sync 1（不含 3 条已过期） · 设备 3 台`；`stale=0` → `analysis 1 / sync 1 · 设备 3 台`。
+
+**计数.** `stats_api.py` 220 / 194 → **228 / 201**（`_queue_block` @142 · `query_stats` @193 · `register` @226 · `CONV_KEY_SQL` @44 · `INT_ONLY_TS` @52 · `MAX_TS` @56 · `_messages_block` @59 · `_analysis_block` @107）；`console_ui.py` 3584 / 3495 → **3590 / 3501**（`renderStats` @2860 · `CONSOLE_MANIFEST` @3406 · `CONSOLE_SW` @3452）；`test_stats_api.py` 849 / 722 → **897 / 766**；`test_console_ui.py` 561 / 451 → **574 / 461**；服务端用例 670 → **673 条**。Android 侧计数不变（130 / 137 / 85 / 1369）。
+
+**教训.** 同一段聚合里出现「先累加再过滤」和「先过滤再累加」两种写法时，几乎必然是某个键漏了口径 —— 判据是**分布之和必须能对上同段的标量**（`sum(by_kind) == total - stale`、`sum(by_pkg) == total`）。给聚合段加新键时，用例要断言它和既有标量的恒等关系，而不是只断言「键在、值非空」；只钉键名就等于没钉。

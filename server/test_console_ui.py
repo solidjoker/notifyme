@@ -462,6 +462,19 @@ def test_stats_tab_shows_redaction_and_queue_truth():
     assert "消息总数（全库）" in html, "有真值时标签必须标明是全库口径"
 
 
+def test_stats_queue_card_marks_by_kind_scope():
+    """by_kind 只数未过期行：有过期行时必须把「不含 N 条已过期」写在旁边。
+
+    否则同一张卡上「analysis 3 / sync 2」与「活跃 1 · 陈旧 3」两个数打架 ——
+    用户会以为 5 条都在跑（实测 5 行里 3 条过期）。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "var staleN = Number(STATS.queue.stale || 0);" in html
+    assert "（不含 " in html and " 条已过期）" in html
+    assert "+ esc(kindScope) +" in html, "分布后面必须接上口径后缀"
+    assert "（未过期）" not in html, "口径后缀要说过期条数，不能只说「未过期」"
+
+
 def test_redaction_evidence_is_rendered_and_searchable():
     """redacted / redaction_rules / redaction_hits 要展示出来，也要能被搜到。"""
     html = _ui().CONSOLE_HTML
