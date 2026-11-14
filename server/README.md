@@ -362,9 +362,15 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 
 | 参数 | 说明 |
 | --- | --- |
-| `limit` | 默认 100，上限 1000 |
+| `limit` | 默认 20，**上限 100**（存档上限 `ADVISOR_MAX_REPORTS`=1000 不等于接口一次能给 1000 份） |
 
-返回 `{"ok": true, "count": n, "reports": [...]}`。数据存 `server/data/advisor_reports.jsonl`（追加写的主存储）+ `server/data/advisor_reports.json`（快照）。
+返回 `{"ok": true, "count": n, "total": m, "has_more": bool, "reports": [...]}`，按接收时间倒序（最新在前）。数据存 `server/data/advisor_reports.jsonl`（追加写的主存储）+ `server/data/advisor_reports.json`（快照）。
+
+**`total` / `has_more` 为什么必须有**：存档能存 1000 份，而本接口单次最多给 100 份。只回 `count` 时调用方
+无法区分「存档只有 100 份」与「存档有 400 份、只拿到最新 100 份」—— 控制台顾问 Tab 会静默只渲染 100 张卡、
+角标也停在 100，用户以为更早的 300 份报告丢了。现在 `total` 是存档总条数、`has_more = total > count`，
+控制台角标读 `ADVISOR_TOTAL`，列表上方给出「当前只显示最近 N 份（存档共 M 份）」的说明。
+存档损坏分支同样回 `total: 0` / `has_more: false`，前端不会拿到 `undefined`。
 按 `report_id` 去重：重复上报计入 `duplicated` 不重复写，缺 `report_id` 或字段非法计入 `invalid` 并进 `rejected`（207）。
 
 ### POST /queue —— 上报排队任务快照（需 token）

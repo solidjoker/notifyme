@@ -1379,6 +1379,10 @@ var MSGS = [], ANALYSES = [], ADVISORS = [];
 // 顾问存档读不出来时的说明（GET /advisor 回 200 + ok:false）：只影响顾问 tab，
 // 不能让顾问 tab 显示成「还没有顾问报告」——那是事实错误（文件坏了 ≠ 没报告）。
 var ADVISORS_ERR = '';
+// 顾问存档里的报告总数（GET /advisor 的 total）：接口单次最多给 100 份，
+// 存档上限 1000 份。只按已加载条数显示角标时，有 400 份也只写「100」，
+// 用户会以为更早的报告丢了 —— 角标与截断说明都读这个总数。
+var ADVISOR_TOTAL = 0;
 // App 过滤：'' = 全部；否则只看该包名（四个 tab 共用同一口径）
 var APP_FILTER = '';
 // 全局搜索关键词（跨四个 tab）
@@ -1877,14 +1881,15 @@ function renderBadges() {
   setBadge('badge-conv', filteredMsgs().length);
   setBadge('badge-todo', filteredTodos().length);
   setBadge('badge-stat', filteredAnalyses().length);
-  setBadge('badge-adv', ADVISORS.length);
+  // 角标报存档总数（接口一次最多 100 份）：只数已加载时，400 份也只写 100
+  setBadge('badge-adv', ADVISOR_TOTAL || ADVISORS.length);
   setBadge('badge-queue', queueActiveCount());
   var pairs = [
     ['tab-conv', '会话', filteredMsgs().length, '条消息'],
     ['tab-todo', '待办', filteredTodos().length, '条待办'],
     ['tab-queue', '排队', queueActiveCount(), '个任务'],
     ['tab-stat', '统计', filteredAnalyses().length, '条分析'],
-    ['tab-adv', '顾问', ADVISORS.length, '份报告']
+    ['tab-adv', '顾问', ADVISOR_TOTAL || ADVISORS.length, '份报告']
   ];
   pairs.forEach(function (p) {
     var b = $(p[0]);
@@ -2054,6 +2059,9 @@ async function load(reason) {
       toast('有 ' + ((SKIP_NOTICE.msg || 0) + (SKIP_NOTICE.ana || 0)) + ' 条脏数据被跳过');
     }
     ADVISORS = (res[2] && res[2].reports) || [];
+    // total 缺省（老服务端 / 损坏分支）时退回已加载条数，别把角标打成 0
+    ADVISOR_TOTAL = (res[2] && typeof res[2].total === 'number' && res[2].total > 0)
+      ? res[2].total : ADVISORS.length;
     ADVISORS_ERR = (res[2] && res[2].ok === false)
       ? ((res[2].detail || res[2].error) || '顾问存档不可读') : '';
     QUEUE = (res[3] && res[3].items) || [];
@@ -3018,6 +3026,16 @@ function renderAdvisor() {
       key: 'adv-note-filter',
       html: '<div class="note">顾问报告不携带来源 App 字段，无法按「' +
         esc(pkgLabel(APP_FILTER)) + '」过滤，下面显示的是全部报告。</div>',
+      full: true
+    });
+  }
+  // 接口单次最多 100 份、存档上限 1000 份：列表被截断时必须说明，
+  // 否则「顾问（400）」的角标配 100 张卡，看起来像 300 份报告凭空消失。
+  if (ADVISOR_TOTAL > reports.length) {
+    out.push({
+      key: 'adv-note-more',
+      html: '<div class="note">当前只显示最近 ' + reports.length +
+        ' 份（存档共 ' + ADVISOR_TOTAL + ' 份），更早的报告不在此列表里。</div>',
       full: true
     });
   }

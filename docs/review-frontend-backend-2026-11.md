@@ -1357,3 +1357,48 @@ GET /messages?limit=2&before=..._2     → count 2, skipped 2, next=None
 
 **教训.** 接口返回「与过滤范围绑定、与分页无关」的统计量时，前端**只能覆盖不能累加** —— 判据是「这个数会不会随游标变」。加这类键时，消费点必须配一条「翻两页不翻倍」的用例，否则页数一多就离谱。
 
+### E-62｜`GET /advisor` 静默只给最新 100 份：控制台角标与列表都不说「还有更早的」（`routes.query_advisor` / `console_ui.renderAdvisor`，feat/advisor-list-total，2026-11-14）
+
+**问题.** 顾问存档上限是 `app.py:396` 的 `ADVISOR_MAX_REPORTS = 1000`（另有 `ADVISOR_MAX_BYTES = 8 * 1024 * 1024` @397），而 `routes.query_advisor()` @845 把 `limit` 夹在 100：`limit = min(int(request.args.get("limit", "20")), 100)` @857。控制台 `console_ui.load()` 又固定请求 `advisor?limit=100`。响应体只有 `{"ok": true, "count": n, "reports": [...]}` —— **没有存档总数、没有「还有更多」标记**。
+
+于是「存档正好 100 份」和「存档 400 份、只拿到最新 100 份」在界面上完全一样：顾问 Tab 只渲染 100 张卡，角标 `setBadge('badge-adv', ADVISORS.length)` 恒 ≤100，用户没有任何线索知道更早的报告还在服务器上。
+
+**复现（实测）.** 探针 `probe37d.py` 分 3 批、每批 50 份写入（共 150 份），然后一次 GET：
+
+```text
+POST /advisor × 3（每批 50 份）         → 存档 advisor_reports.jsonl 150 行
+GET  /advisor?limit=100               → count 100   （无 total / 无 has_more）
+                                       最新 r149 / 最旧 r050（截掉的是 r000..r049）
+GET  /advisor?limit=200               → count 100   （上限就是 100）
+GET  /advisor?limit=1000              → count 100
+```
+
+**为什么 666 条全绿却没发现.** 顾问相关用例只验「按 `received_at`/`created_at` 倒序」「`report_id` 去重」「存档损坏返 200 + ok:false」，从来没有「存档条数超过单次上限」的用例 —— 而截断恰恰只在那个区间发生。前端也没有任何断言读 `total`，因为它根本不存在。
+
+**修法（三条）.**
+
+1. `routes.query_advisor()` 在截断**之前**取总数：`total = len(reports)` / `reports = reports[:limit]`，返回体补 `total` 与 `has_more = total > len(reports)`。存档损坏分支同时补 `"total": 0, "has_more": False` —— 前端拿到的永远是数字与布尔，不会 `undefined` 化成 `NaN`。
+2. `console_ui.py` 新增全局 `var ADVISOR_TOTAL = 0;` @1385（紧跟 `ADVISORS_ERR` @1381）；`load()` @2063 写 `ADVISOR_TOTAL = (res[2] && typeof res[2].total === 'number' && res[2].total > 0) ? res[2].total : ADVISORS.length;` —— 老服务端 / 损坏分支没有可用 total 时退回已加载条数，别把角标打成 0。
+3. `renderBadges()` @1880 改成 `setBadge('badge-adv', ADVISOR_TOTAL || ADVISORS.length)` @1885、tab aria 同步 @1892；`renderAdvisor()` @2998 在 `reports.forEach(...)` @3042 **之前**插一条说明 @3034：`if (ADVISOR_TOTAL > reports.length) { ... 当前只显示最近 N 份（存档共 M 份），更早的报告不在此列表里 ... }`。
+
+**测试.**
+
+- `test_regression.py` +3 条（插在 `test_advisor_sort_falls_back_to_created_at` 之前）：`test_advisor_reports_archive_total_and_truncation`（150 份 → `count 100` / `total 150` / `has_more True` / 首位 `r149` 且最旧的 `r000` 被截掉；`limit=200` 仍 `count 100`）、`test_advisor_within_limit_reports_no_more`（3 份 → `total 3` / `has_more False`，别让截断提示常驻）、`test_advisor_corrupted_archive_reports_zero_total`（写坏 JSONL → `ok False` 但 `total 0` / `has_more False`）。
+- `test_console_ui.py` +1 条 `test_advisor_badge_uses_archive_total_and_marks_truncation`：断言 `var ADVISOR_TOTAL = 0;` 在、total 取值表达式在、`setBadge('badge-adv', ADVISOR_TOTAL || ADVISORS.length);` 在、旧写法 `setBadge('badge-adv', ADVISORS.length);` **不在**、tab aria 行在、`if (ADVISOR_TOTAL > reports.length) {` 的 index 小于 `reports.forEach(function (r, i) {`、文案「更早的报告不在此列表里」在。
+
+**验证.**
+
+```text
+pytest server/test_regression.py -q -k advisor         → 14 passed
+pytest server/test_console_ui.py server/test_regression.py -q → 108 passed
+pytest server/ -q                                      → 670 passed in 32.99s（基线 666 + 4）
+python -m compileall -q server                         → COMPILE=0
+```
+
+真实 HTTP 冒烟（`smoke37.py`，werkzeug `make_server` 真 TCP + `urllib`，临时 `DATA_DIR`）：`status 200 count 100 total 150 has_more True`、`newest r149 oldest r050`；`GET /console` 抓到 `var ADVISOR_TOTAL = 0;`、`ADVISOR_TOTAL > reports.length`、`更早的报告不在此列表里`、`setBadge('badge-adv', ADVISOR_TOTA` 四处全 True。
+
+**CI 上撞到的一条夹具坑.** 第一版用例断言「列表末位恰好是 `r050`」，本机通过、CI 报 `AssertionError: assert 'r051' == 'r050'` —— 排序键是 `(_advisor_ts(received_at), _advisor_ts(created_at))`，而三批 50 份写入在快机器上可能落在**同一毫秒**，批次边界那一条的先后由并列兜底决定，会随调度漂移。断言改成「首位 `r149`、长度为 100、无重复、最旧的 `r000` 不在列表里」—— 只钉契约（最新的在前、最旧的被截掉），不钉并列时的具体顺序。
+
+**计数.** `routes.py` 1084 → **1092** 行（非空 1022 → 1030；`register` @1080 / `add_url_rule` 映射 @1082-1091）；`console_ui.py` 3566 → **3584**（非空 3477 → 3495；`ADVISOR_TOTAL` @1385、`setBadge` 调用 @1885、`renderAdvisor` @2998、截断说明 @3034、`CONSOLE_MANIFEST` @3400、`CONSOLE_SW` @3446）；`test_regression.py` 1050 → **1096**（非空 862 → 900）；`test_console_ui.py` 542 → **561**（非空 434 → 451）。服务端用例 666 → **670 条**。
+
+**教训.** 接口给「列表」时必须同时给「总数 / 是否截断」—— 上限夹在服务端（`min(limit, 100)`）而调用方无从知晓时，界面会把「被截断」呈现成「就这么多」。判据：只要服务端存在 `min(..., N)` 这类夹取，响应体里就必须有 `total` 与 `has_more`，且前端角标读总数、列表读页长。

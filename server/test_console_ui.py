@@ -540,3 +540,22 @@ def test_load_more_does_not_double_count_skipped():
     assert "SKIP_NOTICE.msg = Math.max(SKIP_NOTICE.msg || 0, Number(r.skipped || 0));" in html
     assert "SKIP_NOTICE.ana = (SKIP_NOTICE.ana || 0) + (r.skipped || 0);" not in html
     assert "SKIP_NOTICE.msg = (SKIP_NOTICE.msg || 0) + (r.skipped || 0);" not in html
+
+def test_advisor_badge_uses_archive_total_and_marks_truncation():
+    """GET /advisor 单次最多 100 份、存档上限 1000 份：角标必须报存档总数并标注截断。
+
+    只数已加载的 ADVISORS.length 时，存档有 400 份也只写「100」，顾问 Tab 只渲染
+    100 张卡，看起来像更早的 300 份报告丢了；服务端已经把 total 回出来了，前端不能扔。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "var ADVISOR_TOTAL = 0;" in html, "要独立保存存档总数"
+    assert "(res[2] && typeof res[2].total === 'number' && res[2].total > 0)" in html
+    assert "ADVISOR_TOTAL = (res[2] && typeof res[2].total === 'number' && res[2].total > 0)" in html
+    assert "setBadge('badge-adv', ADVISOR_TOTAL || ADVISORS.length);" in html
+    assert "setBadge('badge-adv', ADVISORS.length);" not in html, "角标不能只数已加载"
+    assert "['tab-adv', '顾问', ADVISOR_TOTAL || ADVISORS.length, '份报告']" in html
+    # 截断说明必须出现在报告列表之前（先说明再渲染卡片）
+    i_note = html.index("if (ADVISOR_TOTAL > reports.length) {")
+    i_cards = html.index("reports.forEach(function (r, i) {")
+    assert i_note < i_cards, "截断提示必须在卡片之前"
+    assert "更早的报告不在此列表里" in html

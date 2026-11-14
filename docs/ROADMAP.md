@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（666 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（670 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -579,6 +579,13 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
 
   同一轮后段又揪出第二个缺陷：`loadMore()` 把每页返回的 `skipped` **累加**（`SKIP_NOTICE.msg = (SKIP_NOTICE.msg || 0) + (r.skipped || 0)`），而这个数是「整段过滤范围内」的常量 —— 4 条正常 + 2 条脏、`limit=2` 时两页各报 `skipped 2`，前端显示「4 条被跳过」，3 页就是 6 条。改成 `Math.max` 取最大值；既有那条只断言「字符串存在」的用例断言的正是错误写法，已同步改并新增「翻页不翻倍」用例。
   - 计数：`routes.py` 1039 → 1084 行（`query_messages` @169 / `query_analysis` @568 / `register` @1072 / 映射 @1074-1083）；`console_ui.py` 3559 → 3564（`skipNoticeHtml` @1915、`CONSOLE_MANIFEST` @3380、`CONSOLE_SW` @3426）；`test_stats_api.py` 778 → 849、`test_console_ui.py` 521 → 532。
+
+
+- **`GET /advisor` 静默只给最新 100 份，控制台角标与列表都不说「还有更早的」（feat/advisor-list-total）**
+  - 问题：存档上限 `ADVISOR_MAX_REPORTS`=1000，而 `query_advisor()` 把 `limit` 夹在 100、控制台又固定请求 `advisor?limit=100`。响应只有 `count`，于是「存档 150 份」与「存档正好 100 份」在界面上完全一样：顾问 Tab 只渲染最新 100 张卡、角标恒 ≤100，用户以为更早的报告丢了（实测 3 批 × 50 份 → `count 100` / 新 `r149` / 旧 `r050`，响应里没有 total 与 has_more）。
+  - 修法：服务端补 `total = len(reports)`（截断前）与 `has_more = total > count`，损坏分支同样回 `total: 0` / `has_more: false`（前端不会拿到 `undefined`）；控制台新增全局 `ADVISOR_TOTAL`（`res[2].total` 缺省时退回已加载条数），角标与 tab aria 都读它，列表在 `ADVISOR_TOTAL > reports.length` 时先插一条「当前只显示最近 N 份（存档共 M 份），更早的报告不在此列表里」。
+  - 测试：`test_regression.py` +3 条（150 份 → count 100 / total 150 / has_more、首位 `r149` 且最旧的 `r000` 被截掉；3 份时 has_more=False；存档损坏时 ok=False 但 total=0）；`test_console_ui.py` +1 条（角标读 `ADVISOR_TOTAL`、旧写法不在、截断说明位于卡片之前）。服务端 666 → 670 条。
+  - 计数：`routes.py` 1084 → 1092 行（`register` @1080 / 映射 @1082-1091）；`console_ui.py` 3566 → 3584（`ADVISOR_TOTAL` @1385、`setBadge` 调用 @1885、`renderAdvisor` @2998、截断说明 @3034、`CONSOLE_MANIFEST` @3400、`CONSOLE_SW` @3446）；`test_regression.py` 1050 → 1096、`test_console_ui.py` 542 → 561。
 
 ## 12. 决策门汇总
 
