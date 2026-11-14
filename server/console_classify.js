@@ -311,6 +311,174 @@
     return parts.join(' / ');
   }
 
+  // ---------- S1 主题 / 截止 / 重要度：码值 → 中文（与端上 TopicLabelCore 同口径） ----------
+  // 为什么必须在这里翻：控制台把 s1.topic / s1.due_window 原样拼进 chip，用户看到
+  // 「work_task」「截止 today」；`due_window === 'none'` 时还会渲染成「截止 none」
+  // —— 端上 TopicLabelCore 早就修好了同一份数据，两侧对同一条记录给出两种文案。
+  // 语义照抄 app 的 TopicLabelCore（33 条单测钉着），四条契约：
+  //   ① 归一化双向兼容：英文码值（work_task / none …）与中文桶名（工作任务 / 无明确时间 /
+  //      本周）都归到同一个英文码值；大小写不敏感、去首尾空白。
+  //   ② 未知值原样回显（模型会自由输出，为了「看起来整齐」把它吞掉就是丢失信息）；只有
+  //      空串才回落：topic → 通知公告、due → 无明确时间。
+  //   ③ filtered 是第六种 topic 取值（端上预筛就地结案时写 s1Topic='filtered'），映射到
+  //      「已预筛过滤」，别落进「未知原样」把它显示成英文。
+  //   ④ none / 空串 一律视为「没有截止」（isNoDue）：调用方据此整段不渲染，别再用
+  //      `if (s1.due_window)` 这种字符串真值判断（'none' 是真值）。
+  var TOPIC_LABELS = {
+    work_task: '工作任务',
+    schedule: '日程安排',
+    notice: '通知公告',
+    smalltalk: '闲聊',
+    risk: '风险信号',
+    filtered: '已预筛过滤'
+  };
+  var TOPIC_ALIASES = {
+    '工作任务': 'work_task',
+    '日程安排': 'schedule',
+    '日程': 'schedule',
+    '通知公告': 'notice',
+    '通知': 'notice',
+    '闲聊': 'smalltalk',
+    '风险信号': 'risk',
+    '风险': 'risk',
+    '已预筛过滤': 'filtered',
+    '预筛过滤': 'filtered'
+  };
+  var DUE_LABELS = {
+    none: '无明确时间',
+    today: '今天',
+    tomorrow: '明天',
+    this_week: '本周内',
+    later: '更晚'
+  };
+  var DUE_ALIASES = {
+    '无明确时间': 'none',
+    '无明确': 'none',
+    '没有明确时间': 'none',
+    '今天': 'today',
+    '今日': 'today',
+    '明天': 'tomorrow',
+    '明日': 'tomorrow',
+    '本周内': 'this_week',
+    '本周': 'this_week',
+    '这周': 'this_week',
+    '这周内': 'this_week',
+    '更晚': 'later',
+    '更晚些': 'later',
+    '以后': 'later'
+  };
+
+  // 一张表按「英文码值」查、另一张按「中文桶名」查：大小写不敏感只作用于英文码值，
+  // 中文没有大小写概念，先查码值表能让 Work_Task 这类脏输出也归到 work_task。
+  function _codeOf(raw, table, aliases) {
+    var t = (raw == null) ? '' : String(raw).trim();
+    if (!t) { return ''; }
+    var k = t.toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(table, k)) { return k; }
+    if (Object.prototype.hasOwnProperty.call(aliases, t)) { return aliases[t]; }
+    return t;
+  }
+
+  function normalizeTopic(raw) { return _codeOf(raw, TOPIC_LABELS, TOPIC_ALIASES); }
+
+  function normalizeDue(raw) { return _codeOf(raw, DUE_LABELS, DUE_ALIASES); }
+
+  // 未知值原样回显；空串才回落（留空会让用户以为渲染坏了）。
+  function topicLabel(topic) {
+    var code = normalizeTopic(topic);
+    var lab = _labelOf(TOPIC_LABELS, code);
+    if (lab != null) { return lab; }
+    return code || TOPIC_LABELS.notice;
+  }
+
+  function dueLabel(due) {
+    var code = normalizeDue(due);
+    var lab = _labelOf(DUE_LABELS, code);
+    if (lab != null) { return lab; }
+    return code || DUE_LABELS.none;
+  }
+
+  function isNoDue(due) {
+    var code = normalizeDue(due);
+    return code === '' || code === 'none';
+  }
+
+  // 「截止」该显示哪一份：用户手改的 todoDue → S2 的具体时间 → S1 的桶名。顺序与端上
+  // AnalysisStore.displayDue / TopicLabelCore.displayDueCode 一致，改一处必须同时改另一处
+  // （否则同一条记录在手机与控制台给出两个不同的截止）。
+  function displayDueCode(todoDue, s2DueTime, s1DueWindow) {
+    var a = (todoDue == null) ? '' : String(todoDue).trim();
+    if (a) { return a; }
+    var b = (s2DueTime == null) ? '' : String(s2DueTime).trim();
+    if (b) { return b; }
+    return (s1DueWindow == null) ? '' : String(s1DueWindow).trim();
+  }
+
+  function hasDisplayDue(todoDue, s2DueTime, s1DueWindow) {
+    return !isNoDue(displayDueCode(todoDue, s2DueTime, s1DueWindow));
+  }
+
+  // 展示文案：桶名翻中文，具体时间（明天15:00 / 2026-11-20）与未知自由文本原样。
+  function displayDueLabel(todoDue, s2DueTime, s1DueWindow) {
+    var code = displayDueCode(todoDue, s2DueTime, s1DueWindow);
+    var lab = _labelOf(DUE_LABELS, normalizeDue(code));
+    if (lab != null) { return lab; }
+    return code;
+  }
+
+  // 重要度 chip 用短语（「重要度 高」），分区头仍用 IMPORTANCE_LABELS 的「高重要度（N）」
+  // —— 两处语境不同（chip 自带「重要度」前缀，再套分区标签就成了「重要度 高重要度」）。
+  var IMPORTANCE_CHIPS = { high: '高', mid: '中', low: '低', '': '未标' };
+
+  // 端上两种形态都见过：0-9 数值（S1 题面）与 high/mid/low（接口已归一）。
+  // 认不出返回 ''（与 importanceRank 的「未知与空串同档」一致），UI 据此决定要不要出 chip。
+  // 数值口径与服务端 util._importance_label 同源：>=6 high / >=3 mid / 其余 low，
+  // 小数与负数也按数值走（只认整数会把 2.9 判成「认不出」，与服务端归一结果相反）。
+  function importanceKey(v) {
+    var s = (v == null) ? '' : String(v).trim().toLowerCase();
+    if (!s) { return ''; }
+    if (/^-?\d+(\.\d+)?$/.test(s)) {
+      var n = parseFloat(s);
+      if (!isFinite(n)) { return ''; }
+      return n >= 6 ? 'high' : (n >= 3 ? 'mid' : 'low');
+    }
+    return Object.prototype.hasOwnProperty.call(IMPORTANCE_LABELS, s) ? s : '';
+  }
+
+  function importanceChip(v) {
+    var k = importanceKey(v);
+    if (k) { return IMPORTANCE_CHIPS[k]; }
+    return (v == null) ? '' : String(v).trim();
+  }
+
+  // 搜索面里的码值与中文标签：用户搜「工作任务」「今天」必须命中；搜 'none' 必须不命中
+  // （none 是码值不是可读内容，留着会让「搜 none」命中全部记录 —— 与端上 SearchCore 同口径）。
+  function analysisCodeParts(a) {
+    var out = [];
+    if (!a || typeof a !== 'object') { return out; }
+    var s1 = (a.s1 && typeof a.s1 === 'object') ? a.s1 : null;
+    if (!s1) { return out; }
+    var topicCode = normalizeTopic(s1.topic);
+    if (topicCode) {
+      out.push(topicCode);
+      var tl = topicLabel(topicCode);
+      if (tl && tl !== topicCode) { out.push(tl); }
+    }
+    var s2Due = (a.s2 && typeof a.s2 === 'object') ? a.s2.due_time : '';
+    if (hasDisplayDue(a.todo_due, s2Due, s1.due_window)) {
+      var dueCode = displayDueCode(a.todo_due, s2Due, s1.due_window);
+      out.push(dueCode);
+      var dl = displayDueLabel(a.todo_due, s2Due, s1.due_window);
+      if (dl && dl !== dueCode) { out.push(dl); }
+    }
+    var ik = importanceKey(s1.importance);
+    if (ik) {
+      out.push(ik);
+      if (IMPORTANCE_LABELS[ik] !== ik) { out.push(IMPORTANCE_LABELS[ik]); }
+    }
+    return out;
+  }
+
   // ---------- 文本截断：按码点，不按 UTF-16 单元 ----------
   // 为什么必须按码点：JS 的 String.length / slice 数的是 **UTF-16 code unit**，
   // 而 emoji（U+1F600）与 CJK 扩展 B 起的生僻字各占两个 unit（高代理 + 低代理）。
@@ -826,6 +994,20 @@
     PAIR_LABELERS: PAIR_LABELERS,
     SOURCE_BADGES: SOURCE_BADGES,
     sourceBadge: sourceBadge,
+    TOPIC_LABELS: TOPIC_LABELS,
+    DUE_LABELS: DUE_LABELS,
+    IMPORTANCE_CHIPS: IMPORTANCE_CHIPS,
+    normalizeTopic: normalizeTopic,
+    normalizeDue: normalizeDue,
+    topicLabel: topicLabel,
+    dueLabel: dueLabel,
+    isNoDue: isNoDue,
+    displayDueCode: displayDueCode,
+    hasDisplayDue: hasDisplayDue,
+    displayDueLabel: displayDueLabel,
+    importanceKey: importanceKey,
+    importanceChip: importanceChip,
+    analysisCodeParts: analysisCodeParts,
     queueEmptyScope: queueEmptyScope
   };
 });
