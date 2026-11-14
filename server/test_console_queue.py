@@ -140,10 +140,36 @@ def test_queue_empty_state_distinguishes_page_and_library():
     assert "html: queueEmptyHtml()" in HTML, "renderQueue 没用空态裁决函数"
     assert "'当前页没有' + (name || '') + '任务'" in HTML, "空态没有区分当前页与全库"
     assert "它们不在这最近 500 条里" in HTML, "空态没有解释为什么不在这页"
-    # 搜索 / 设备筛选是「本页里挑」，命中 0 时不能拿全库数安慰
-    assert "if (QUERY.trim() || QUEUE_DEVICE) return emptyStateFor('queue');" in HTML, \
-        "搜索、设备筛选为 0 命中时必须退回通用空态"
+    # 搜索是「本页里挑」，命中 0 时不能拿全库数安慰；设备 / 状态筛选相反 ——
+    # 它们的全库条数在 devices / summary 里，必须能给出「不在这一页」的解释。
+    assert "if (QUERY.trim()) return emptyStateFor('queue');" in HTML, \
+        "搜索 0 命中时必须退回通用空态"
+    assert "CC.queueEmptyScope(QUEUE_DEVICE, QUEUE_STATE" in HTML, \
+        "设备 / 状态筛选的空态没有走规则层判定"
 
+
+
+
+def _queue_empty_body():
+    """取 queueEmptyHtml 的函数体，避开同文件里同名的其它短文案。"""
+    src = HTML
+    start = src.index("function queueEmptyHtml()")
+    end = src.index("function renderQueue()")
+    return src[start:end]
+
+
+def test_queue_empty_state_drives_six_branches_from_scope():
+    """设备 / 状态 / 全库三档 × 拿到没拿到全库口径，必须各有措辞。"""
+    body = _queue_empty_body()
+    assert "scope.scope === 'device'" in body, "设备维度没有单独分支"
+    assert "设备「' + QUEUE_DEVICE + '」已经没有任务了" in body, "查不到设备时没说清是行已清理"
+    assert "这台设备全库共有 " in body and "（各状态合计）" in body, \
+        "设备 + 状态筛选时要说明拿到的是各状态合计"
+    assert "全库没有" in body, "全库确实为 0 时要说「全库没有」"
+    assert "这一页没有" in body, "拿不到全库口径时只能说「这一页没有」"
+    assert "不敢断言手机端已经没有任务" in body, "unknown 档必须承认拿不到口径"
+    assert 'data-action="queue-device" data-device=""' in body, "缺「查看全部设备」按钮"
+    assert 'data-action="queue-filter" data-state=""' in body, "缺「查看全部状态」按钮"
 
 def test_queue_empty_state_registered():
     assert "emptyStateFor('queue')" in HTML, "排队 tab 没有空态"

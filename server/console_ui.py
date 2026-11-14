@@ -3566,18 +3566,64 @@ function queueCard(t) {
     full: true
   };
 }
-// 空态有两种成因，不能混成一句「当前没有排队任务」：
-// 任务超一页时选了「已完成」、而这一页全是排队中 —— 列表为空，chip 却说全库有 20 条。
-// 这种时候要给「当前页没有命中 + 全库有多少」的解释，否则用户以为任务丢了。
+// 空列表有三种成因，不能混成一句「当前没有排队任务」：
+// ① 全库真的没有；② 全库有 N 条，但不在这最近 500 条里（任务超一页时选了「已完成」、
+// 而这一页全是排队中）；③ 拿不到全库口径。②③ 混进①，用户会以为任务丢了。
+// 设备筛选尤其容易误判：设备清单与汇总都是全库聚合，一台安静设备的历史任务会整个
+// 掉出 500 条窗口，chip 还写着「3 活跃」，旧空态却说「手机端没有排队任务」。
+// 判定收在 console_classify.queueEmptyScope（入参是设备 / 状态 / 已加载 / 命中 /
+// devices / summary），这里只挑措辞 —— 与 chip 的计数读同一份 summary。
 function queueEmptyHtml() {
-  // 搜索 / 设备筛选是「这一页里挑」，命中为 0 时不能拿全库数安慰用户，交回通用空态。
-  if (QUERY.trim() || QUEUE_DEVICE) return emptyStateFor('queue');
+  // 搜索是「这一页里挑」，命中 0 时不能拿全库数安慰用户，交回通用空态。
+  if (QUERY.trim()) return emptyStateFor('queue');
+  var scope = null;
+  if (CC && CC.queueEmptyScope) {
+    try {
+      scope = CC.queueEmptyScope(QUEUE_DEVICE, QUEUE_STATE, QUEUE.length,
+        filteredQueues().length, QUEUE_DEVICES, QUEUE_SUMMARY);
+    } catch (e) { scope = null; }
+  }
+  var acts = '';
+  if (QUEUE_DEVICE) acts += '<button type="button" class="btn btn-secondary" data-action="queue-device" data-device="">查看全部设备</button>';
+  if (QUEUE_STATE) acts += '<button type="button" class="btn btn-secondary" data-action="queue-filter" data-state="">查看全部状态</button>';
+  var stTxt = QUEUE_STATE ? (queueStateLabel(QUEUE_STATE) || QUEUE_STATE) : '';
+  if (scope && scope.scope === 'device') {
+    // device_id 原样显示（它是端上派生的 android-xxxxxxxx，包装引号反而不像标识符）
+    if (scope.mode === 'none') {
+      return emptyState('设备「' + QUEUE_DEVICE + '」已经没有任务了',
+        '设备清单里查不到这台设备的任何排队记录：条目已被清理（停报超过 7 天）或端上清空了队列。',
+        '点「查看全部设备」看其它设备，或等端上重新上报队列快照。', acts);
+    }
+    if (scope.mode === 'elsewhere') {
+      return emptyState('这一页没有设备「' + QUEUE_DEVICE + '」的' + (stTxt || '') + '任务',
+        '这台设备全库共有 ' + scope.db + ' 条任务' + (stTxt ? '（各状态合计）' : '') +
+        '，都不在这最近 500 条里。列表跨设备共用一个窗口（按更新时间倒序），排行靠前的任务会把安静设备的历史挤出去。',
+        '点「查看全部设备」看整体队列，或等更早的任务被清理后再看；设备 chip 的「活跃 / 已过期」是全库口径。', acts);
+    }
+    return emptyState('这一页没有设备「' + QUEUE_DEVICE + '」的' + (stTxt || '') + '任务',
+      '拿不到这台设备的全库条数（排队接口这次没返回汇总），列表只覆盖最近 500 条，不敢断言它已经没有任务。',
+      '点「重试」再拉一次，或先点「查看全部设备」看整体队列。', acts);
+  }
+  if (scope && scope.mode === 'none') {
+    var nm = QUEUE_STATE ? ('「' + stTxt + '」') : '';
+    return emptyState('全库没有' + nm + '任务',
+      '汇总与状态 chip 都是 0，手机端确实没有' + (nm || '') + '排队记录。',
+      '在手机端触发一次分析，或等下一轮同步上报队列快照。', acts);
+  }
+  if (!scope || scope.mode === 'unknown') {
+    // 拿不到全库口径时不许替服务端下结论：「没有任务」与「这一页没有」是两件事，
+    // 旧兜底（默认文案「手机端没有排队或运行中的分析任务」）会把后者说成前者。
+    var nm2 = QUEUE_STATE ? ('「' + stTxt + '」') : '';
+    return emptyState('这一页没有' + (nm2 || '') + '任务',
+      '拿不到全库计数（排队接口这次没返回汇总），列表只覆盖最近 500 条，不敢断言手机端已经没有任务。',
+      '点「重试」再拉一次，或换一个状态筛选。', acts);
+  }
   var want = QUEUE_STATE ? queueStateTotal(QUEUE_STATE) : queueStateTotal('total');
   if (want > 0) {
-    var name = QUEUE_STATE ? ('「' + queueStateLabel(QUEUE_STATE) + '」') : '';
+    var name = QUEUE_STATE ? ('「' + stTxt + '」') : '';
     return emptyState('当前页没有' + (name || '') + '任务',
       '全库共有 ' + want + ' 条' + (name || '') + '任务，它们不在这最近 500 条里。',
-      '上方汇总与状态 chip 的计数是全库口径，下方列表最多显示最近 500 条；换一个状态筛选，或等更早的任务被清理后再看。');
+      '上方汇总与状态 chip 的计数是全库口径，下方列表最多显示最近 500 条；换一个状态筛选，或等更早的任务被清理后再看。', acts);
   }
   return emptyStateFor('queue');
 }

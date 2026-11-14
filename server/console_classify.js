@@ -721,6 +721,65 @@
     var a = badgeState(anaLoaded, anaTotal, filtered);
     return { msg: m, ana: a, mixed: m.scope !== a.scope };
   }
+  // 排队 tab 的空列表有三种成因，设备筛选时最容易误判：
+  // 「这台设备这一页里没有」与「这台设备早就没任务了」是两件事，而排队列表只取
+  // 最近 500 条（跨设备共享一个窗口，按 updated_at 倒序）—— 一台安静设备的历史
+  // 任务会整个掉出窗口，此时设备 chip 还写着「3 活跃」，空态却说「手机端没有排队任务」。
+  // 设备（以及每个状态）的全库条数只在 devices 清单与 summary 里（storage.queue_devices
+  // / queue_summary，都没有 limit），所以判定必须读它们，绝不能数已加载的 QUEUE。
+  // scope: "device" 按设备筛 / "state" 只按状态 / "all" 什么都没筛
+  // mode : "loaded"（还有可见条目，调用方不该渲染空态）/ "none"（全库确实没有）
+  //        / "elsewhere"（全库有 db 条，但不在已加载的这几百条里）/ "unknown"（拿不到全库口径）
+  function _deviceEntry(devices, deviceId) {
+    if (Object.prototype.toString.call(devices) !== "[object Array]") return null;
+    var want = String(deviceId == null ? "" : deviceId);
+    for (var i = 0; i < devices.length; i++) {
+      var d = devices[i];
+      if (!d || typeof d !== "object") continue;
+      if (String(d.device_id == null ? "" : d.device_id) === want) return d;
+    }
+    return null;
+  }
+
+  // 入参 design：device / state 是当前的筛选值（空串 = 不筛），loaded / shown 是
+  // 「已加载条数」与「同一套过滤代码筛出的条数」，devices / summary 是 GET /queue
+  // 的全库聚合。summary 缺失说明排队接口这次没回来 —— 那是「不知道」，不是「没有」。
+  // stateKnown=false 表示服务端没给「这台设备的某个状态」的计数，UI 不能把设备总数
+  // 说成「该状态的条数」（设备 × 状态没有任何已知口径，不许现算）。
+  function queueEmptyScope(device, state, loaded, shown, devices, summary) {
+    var dev = String(device == null ? "" : device).trim();
+    var st = String(state == null ? "" : state).trim();
+    var L = _countOf(loaded), S = _countOf(shown);
+    if (S > L) S = L;
+    var scope = dev ? "device" : (st ? "state" : "all");
+    var out = { scope: scope, mode: "unknown", db: null, device: dev, state: st,
+      loaded: L, shown: S, stateKnown: false };
+    if (S > 0) { out.mode = "loaded"; return out; }
+    if (!summary || typeof summary !== "object") return out;
+    if (scope === "device") {
+      if (Object.prototype.toString.call(devices) !== "[object Array]") return out;
+      var d = _deviceEntry(devices, dev);
+      if (!d) {
+        // 设备清单是按 device_id 分组的全库聚合：清单里有别的设备、偏偏没有这台，
+        // 说明它的行已经被清掉了（停报超 7 天，或端上清空了队列）。
+        out.mode = "none";
+        out.db = 0;
+        return out;
+      }
+      out.db = _countOf(d.total);
+      out.stateKnown = !st;
+      out.mode = out.db > 0 ? "elsewhere" : "none";
+      return out;
+    }
+    var key = st || "total";
+    var db = summary[key];
+    if (typeof db !== "number") return out;
+    out.db = _countOf(db);
+    out.stateKnown = true;
+    out.mode = out.db > 0 ? "elsewhere" : "none";
+    return out;
+  }
+
   return {
     VERSION: VERSION,
     QUEUE_STATE_ORDER: QUEUE_STATE_ORDER,
@@ -766,6 +825,7 @@
     pairText: pairText,
     PAIR_LABELERS: PAIR_LABELERS,
     SOURCE_BADGES: SOURCE_BADGES,
-    sourceBadge: sourceBadge
+    sourceBadge: sourceBadge,
+    queueEmptyScope: queueEmptyScope
   };
 });
