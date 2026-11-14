@@ -258,8 +258,8 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   改窗口大小、排序方向或可信度判据前先跑 `ConvWindowCoreTest.kt`（38 条，含 600 条噪声 + 本会话回归）。
 
 - **分析候选的取样口径全在 `CandidateWindowCore`**（internal object，纯函数 + 16 条单测），别在 `AnalysisWorker` 里另写一套：
-  ① **候选集合不是「全局最近 N 条」，而是「每会话留够用的几条」**：下游一个 case 只吃 `AnalysisCase.WINDOW_SIZE = 10` 条（`takeLast`），候选存在的意义只是决定「哪些会话值得开一轮」。用 `readRecent(500).groupBy { convKey }` 会让几个群刷屏时把安静会话整个挤出候选 —— 这是 `readRecent` 同源隐患的第四次复现（前三次是详情页 / `latest`+`knownIsGroup` / 分析列表原文），数据在 `messages.jsonl` 里却永远不被分析。
-  ② **`PER_CONV = 50` 是「10 条窗口 + 范围过滤余量」**：范围是过去的自定义区间时，比区间更新的消息会先占掉保留名额，余量太小会让区间内消息整块消失（测试里留 10 条时区间内 0 条、留 50 条时 30 条）。但它不该涨到尾读窗口量级（`MessageStoreCore.TAIL_LINES = 5000`），否则等于放弃「每会话只留一窗」的内存约束。
+  ① **候选集合不是「全局最近 N 条」，而是「每会话留够用的几条」**：下游一个 case 只吃 `AnalysisCase.WINDOW_SIZE = 10` 条（`takeLast`），候选只决定「哪些会话值得开一轮」。`readRecent(500).groupBy` 会让刷屏会话把安静会话挤出候选 —— `readRecent` 同源隐患第四次复现（前三：详情页 / `latest`+`knownIsGroup` / 分析列表原文）。
+  ② **`PER_CONV = 50` 是「10 条窗口 + 范围过滤余量」**：范围是过去的自定义区间时，更新的消息会先占掉名额，余量太小会让区间内消息整块消失（留 10 条时区间内 0 条、留 50 条时 30 条）。别涨到 `MessageStoreCore.TAIL_LINES = 5000` 量级，那等于放弃「每会话只留一窗」。
   ③ **组内必须按时间升序、且 `timestamp <= 0` 归 0 排最前**：与 `ConvWindowCore.slice` 同口径，未标注日期的消息不能被更晚的真实消息顶掉；超 `perConv` 只保最近若干条，`perConv <= 0` 返空表（调用方传错时保守退化）。
   ④ **`MessageStore.candidateGroups` 必须 `internal`**：它返回 `Map<ConvKey, List<ChatMessage>>` 但被 `CandidateWindowCore` 的参数类型牵连，声明成 public 会报 `public function exposes its internal return type`（与 `readWindow` 同一个坑）。
   ⑤ **分组顺序保首次出现（`LinkedHashMap`）**，后续 `sortedBy { windowEnd }` 是稳定排序 —— 同一份输入必须得到同一轮入选顺序，改排序方式前先想清楚「可复现」这条。
@@ -287,10 +287,10 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ③ **要「逐条列表」→ `FeedWindowCore.sample(MessageStore.feedGroups(context), limit)`**（脱敏预览用 `PREVIEW_LIMIT = 200`）。**别用 `recent()` 那类「全表最近 N 条再排序」**：等于把旧 `readRecent` 又写一遍，600 条噪声下安静会话仍是 0 条（第一版实现被单测当场证伪后改）。`sample` **按会话轮流取**：第 1 轮各取最新、第 2 轮各取次新……组内取时间尾部，最后整体升序；`timestamp <= 0` 归 0 排最前，**并列时先后由取出顺序决定**。
   改这几处口径前先跑 `app/src/test/java/com/notifyme/android/AnalysisWindowCoreTest.kt`（27 条）与 `FeedWindowCoreTest.kt`（27 条），两边都有「旧写法对照实验」。
 
-- **JSONL 文件的「逐行打补丁 + 原子重写」只有一份口径：`JsonlPatchCore`**（internal object，纯函数 + 15 条单测，`app/src/test/java/com/notifyme/android/JsonlPatchCoreTest.kt`）。以前 `AnalysisRejectFile` / `AdvisorRejectFile` 各有一份 ~90 行的同构实现（只差 schema 与 newly 容器），已收敛；现在两者只留 `keyOf` / `parse` / `encode` / `patch` 四个 lambda。
+- **JSONL 文件的「逐行打补丁 + 原子重写」只有一份口径：`JsonlPatchCore`**（internal object，纯函数 + 15 条单测，`app/src/test/java/com/notifyme/android/JsonlPatchCoreTest.kt`）。此前两份 ~90 行同构实现（只差 schema 与 newly 容器）已收敛，两者只留 `keyOf`/`parse`/`encode`/`patch` 四个 lambda。
   ① **`target == null` = 扫全文件**（顾问通道 `reviveExpired` 复活过期隔离走这条），非 null 只碰命中 key 的行；同一 key 出现多行时**每行都打补丁**（与旧实现一致，别改成只改第一行）。
   ② **损坏行一律原位保留，不许「顺手清理」**：解析抛异常 / 解析返回 null / 序列化抛异常（`AnalysisCaseRecord` 缺 `s1` 时 `importance` 是 NaN，`JSONObject.put` 会抛）三种都只保留原行，其它行照常改，整轮不判失败。
-  ③ **只有真的改了才重写**：`updated == record`（data class 结构相等）与「零命中」直接返 false，不碰文件 —— 无谓的 `atomicWrite` 会搅动 mtime，`AnalysisStore` / `AdvisorStore` 的读缓存与 watch 链都会跟着抖。
+  ③ **只有真的改了才重写**：`updated == record` 与「零命中」直接返 false —— 无谓 `atomicWrite` 搅动 mtime，两个 Store 的读缓存与 watch 链跟着抖。
   ④ **`collect()` 只读**（`quarantinedCaseIds` / `quarantinedReportIds` 用它），`LinkedHashSet` 按文件顺序去重 —— 隔离集合的遍历顺序因此可复现，别换成 `HashSet`。
   ⑤ **别把 `PendingRejectCore` 拉进来**：它是丢弃语义（达上限即 dropped），没有 quarantined / revive，`Decision` 只有 `dropped`；合并会逼出恒 false 的 `include` 和无意义参数。三兄弟里只有 Analysis / Advisor 是「隔离 + 复活」同构。
   改补丁语义（比如想改成「损坏行也重写」或「同 key 只改第一条」）前先跑 `JsonlPatchCoreTest.kt`（15 条），它用与业务无关的假记录证明内核与 schema 无关。
@@ -376,5 +376,6 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **顾问 Tab 的来源过滤说明必须跟事实走：`console_classify.advisorPkgScope`**（`test_console_classify.py` 6 条 + `test_console_ui.py` 1 条守着）。① `pkg` 可选（老报告与端上 `toUploadJson` 都不写）；② 四态 `all`/`untagged`/`mixed`/`exact`；③ UI 只挑措辞。
 - **列表「被截断」与「被筛选」必须各有独立标志：`console_classify.advisorListState`**（4 条规则层 + 1 条 UI 守着）。① `truncated = total > loaded`、`filtered = shown < loaded`；② `total` 缺失/0/负数/非小数/小于 loaded 一律回落 loaded；③ 降级路径保留旧口径（只报截断）且要可测。
 - **来源筛选下的空态必须分三成因：`console_classify.appEmptyScope`**（5 条规则层 + 1 条 UI 守着）。① 列表只覆盖已加载页，`mode` 四态 `loaded`/`none`/`elsewhere`/`unknown`，只有 `db === 0` 敢说「没有」；② `db` 与 `shown` 无大小关系（跨页 + 脏行 skip）；③ 键过 `normPkg` 与 `distPairs` 同口径，`null`（拿不到）≠ `0`；④ 只有会话 tab 传 `byPkg`（`/stats` 只有 messages 段有分布），排队直接绕过。
+- **列表只画一部分时，标题与切片必须同源：`console_classify.statsListState`**（3 条规则层 + 1 条 UI 守着）。① `capped`（数据超上限，决定给不给开关）与 `expanded`（用户没点开）两个正交标志；② 上限由 UI 传（`STATS_LIST_CAP=30`），脏值回落 `DEFAULT_STATS_LIST_CAP`；③ `shown` 由函数算、调用方不许传；④ 标题 / note / more 三处读同一 `listState`，展开态只存内存。
 
-- **同一段里的分布与标量必须能对上：`stats_api._queue_block.by_kind`、`console_classify.mergePairsBy`**（`test_stats_api.py` 2 + `test_console_ui.py` 2 + `test_console_classify.py` 5）。① 类型计数必须在「过期 → `stale += 1; continue`」**之后**：写在之前会把停跑僵尸数进去，5 行里 3 条停跑时同屏写「analysis 3 / sync 2」与「活跃 1 · 陈旧 3」；② 契约 `sum(by_kind.count) == total - stale`，有过期行前端补「（不含 N 条已过期）」；③ `/stats.by_pkg` 按原始列 GROUP BY，NULL / 空串各成分组而 `normPkg()` 都折成微信 → 渲染出三个「微信」；展示层先 `mergePairsBy(pairs, normPkg)`（`Object.create(null)` + 丢零次数 + **归并后按次数降序、同次数键名升序重排**，`distPairs` 兜底同口径），**服务端不合并**；④ 加分布字段先问该不该跟同段过期/过滤口径走，配「分布之和 == 标量」用例。
+- **同一段里的分布与标量必须能对上：`stats_api._queue_block.by_kind`、`console_classify.mergePairsBy`**（`test_stats_api.py` 2 + `test_console_ui.py` 2 + `test_console_classify.py` 5）。① 类型计数必须在「过期 → `stale += 1; continue`」**之后**：写在之前会把停跑僵尸数进去，5 行里 3 条停跑时同屏写「analysis 3 / sync 2」与「活跃 1 · 陈旧 3」；② 契约 `sum(by_kind.count) == total - stale`，有过期行前端补「（不含 N 条已过期）」；③ `/stats.by_pkg` 按原始列 GROUP BY，NULL / 空串各成分组而 `normPkg()` 都折成微信 → 渲染出三个「微信」；展示层 `mergePairsBy(pairs, normPkg)` 归并后**按次数降序、同次数键名升序重排**（`distPairs` 兜底同口径），服务端不合并；④ 加分布字段先问该不该跟同段过期/过滤口径走，配「分布之和 == 标量」用例。

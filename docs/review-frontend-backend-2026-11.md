@@ -1941,3 +1941,120 @@ python -m pytest server/ -q                                  → 705 passed in 4
 
 **教训.** 空态文案是「数据边界的翻译」，它的正确性完全取决于背后拿了几个数。凡是列表只覆盖一部分数据（分页、游标、窗口、截断），空态就必须能回答**两个独立的量**：*全库有多少*、*我手里有多少*；只给一个，就只能说「没有」，而「没有」在部分覆盖的视图里几乎总是错的。判据三条：① **空态判定要接受三个入参**（全库 / 已加载 / 可见），不许只吃 `tab` 或只吃一个布尔；② **拿不到全库口径时必须有一档「不知道」**，措辞停在「这一页里没有」，绝不许用「没有」冒充「不知道」；③ **降级路径保留旧文案但要可测**（`CC` 缺失时仍回原文案，用例里钉住这句字符串），否则规则脚本没加载时没人发现说明退化。
 
+## E-70 统计 Tab「最近分析结果」说了 200 条、只画 30 条，中间 170 条没有任何交代（`console_classify.statsListState`，fix/stats-list-truncation，2026-11-14）
+
+**现象.** 统计分析 Tab 的列表头写「最近分析结果（N）」，`N` 是**全部已加载**的分析条数；下面却固定只画前 30 张卡，页面里没有一句「另有 N−30 条未显示」，也没有任何按钮能把这些卡画出来。翻到第三页时该控制台的 `ANALYSES.length` 是 200，标题写「最近分析结果（200）」，可视区域里只有 30 张。
+
+这张卡不只是「统计」：它是全站唯一能看到 S2 摘要、重要度、case_id 的地方（`stat-list-head` 同时是全局搜索按 `s1` / `s2` / `case_id` 命中的入口）。所以「点了加载更多也看不到第 31 条」比数字对不上更糟 —— 用户会以为数据被丢了，或者去翻手机端找那条不存在的分析。
+
+**根因.** 上限本身是刻意的（一屏 200 张卡既卡又没人读，DOM 节点数也翻 6 倍），缺陷在于**上限被写死在渲染循环里，却没进入「说了几个数」的口径**：标题读 `list.length`，循环读常量 `30`，两者之间没有任何一处代码同时知道这两个数。这和 E-68（顾问列表说了存档 400 份、只给 100 份）是同一族问题 —— *凡是「标题里的数字」与「实际画出的行数」由两处独立决定，就一定会漂移*。
+
+同族已有的两个修法可以直接对照：E-68 把判定收进 `console_classify.advisorListState`（`truncated` / `filtered` 两个正交标志），E-65 把分布归并收进 `mergePairsBy`。本轮沿用同一形状：判定进规则层、UI 只挑措辞。
+
+**修法.** 新增 `console_classify.statsListState(loaded, cap, expanded)`：
+
+```js
+var DEFAULT_STATS_LIST_CAP = 30;
+
+function statsListState(loaded, cap, expanded) {
+  var L = _countOf(loaded);
+  var C = _countOf(cap) || DEFAULT_STATS_LIST_CAP;
+  var open = !!expanded;
+  var S = open ? L : (L < C ? L : C);            // 展开后画全部，否则画前 C 条
+  return { loaded: L, shown: S, cap: C, hidden: L - S, capped: L > C, expanded: open };
+}
+```
+
+三个入参的意思是：**已加载多少**（`loaded`，标题读它）、**上限多少**（`cap`，由 UI 传入，规则层不猜布局）、**用户是否点了展开**（`expanded`）。两条关键契约：
+
+- `capped` 与 `expanded` **正交**：`capped` 只看「已加载 vs 上限」，与展开与否无关。展开后 `hidden` 归零、`shown` 等于 `loaded`，但 `capped` 仍为真 —— 否则「收起」按钮会随着展开一起消失，用户回不到前 30 条。
+- `shown` 由函数自己算，**不接受调用方传入**。第一版写成 `(loaded, shown, cap)` 并在里面夹紧「少画了却没给上限就按上限算」，语义立刻含糊（调用方本来就该传 `shown`，那个参数只为夹紧而存在）；改成三参后调用方只可能传错 `cap`（脏值回落默认值），不可能传错 `shown`。
+
+UI 侧（`server/console_ui.py`，`renderStats` 尾部）：
+
+```js
+var STATS_LIST_CAP = 30;
+var STATS_LIST_OPEN = false;          // 不持久化：刷新回到只看前 30 条
+
+function statsListNote(st, q) {
+  if (!st || !st.capped) return '';
+  if (st.expanded) {
+    return '<div class="note">已展开全部 ' + st.loaded + ' 条，点「收起」回到只看前 ' +
+      st.cap + ' 条。</div>';
+  }
+  return '<div class="note">这里只画前 ' + st.cap + ' 条，另有 ' + st.hidden + ' ' +
+    (q ? '条匹配结果' : '条') + '没有画出来。点下面的「显示全部」把它们一并展开。</div>';
+}
+function statsListMore(st) {
+  if (!st || !st.capped) return '';
+  return '<div class="more-wrap"><button type="button" class="btn btn-secondary more-btn"' +
+    ' data-action="stats-more" data-open="' + (st.expanded ? '0' : '1') + '">' +
+    (st.expanded ? '收起，只看前 ' + st.cap + ' 条' : '显示全部 ' + st.loaded + ' 条') +
+    '</button></div>';
+}
+function setStatsListOpen(open) {
+  STATS_LIST_OPEN = !!open;
+  renderData();                        // 局部重绘，同 setQueueState / setQueueDevice
+}
+```
+
+`renderStats` 里标题与切片都读同一个 `listState`：
+
+```js
+var listState = null;
+if (CC && CC.statsListState) {
+  try { listState = CC.statsListState(list.length, STATS_LIST_CAP, STATS_LIST_OPEN); }
+  catch (e) { listState = null; }
+}
+if (!listState) {   // 规则脚本缺失：同一组数就地算，仍然不许静默截断
+  var capN = list.length > STATS_LIST_CAP ? STATS_LIST_CAP : list.length;
+  listState = { loaded: list.length, shown: capN, cap: STATS_LIST_CAP,
+    hidden: list.length - capN, capped: list.length > capN, expanded: STATS_LIST_OPEN };
+}
+out.push({ key: 'stat-list-head',
+  html: '<div class="sec-head">最近分析结果（' + listState.loaded + '）</div>', full: true });
+// 非空时：stat-list-note（说明）→ 卡片 → stat-list-more（展开 / 收起）
+list.slice(0, listState.shown).forEach(function (a) { /* ... */ });
+```
+
+展开态实测输出（`loaded=200 / cap=30`，用真实 `console_classify.js` + `eval` 出来的 UI 函数跑）：
+
+| 场景 | 说明 | 按钮 |
+|---|---|---|
+| 折叠 | 这里只画前 30 条，另有 170 条没有画出来。点下面的「显示全部」把它们一并展开。 | 显示全部 200 条 |
+| 展开 | 已展开全部 200 条，点「收起」回到只看前 30 条。 | 收起，只看前 30 条 |
+| 已加载 12 条 | （无说明） | （无按钮） |
+| 搜索态折叠 | 这里只画前 30 条，另有 170 条**匹配结果**没有画出来。… | 同上 |
+
+搜索命中时措辞从「条」改成「条匹配结果」：这时 `list` 已经被 `analysisSearchText` 过滤过，说「条」会让人以为全库有 170 条待筛。
+
+**几个刻意的取舍.**
+
+- 上限保留 30，不给到「全部」。一屏 200 张卡在手机上要滑十几屏，而且 `patchSections` 每 30 秒重绘一次，节点数 ×6.7 的代价换不到信息。减少的是「静默」，不是「上限」。
+- 展开状态**不持久化**。它是「我这一眼想看全」的临时意图，不是长期偏好；刷新后回到 30 条，避免用户忘了自己展开过、把下一轮的滚动位置也带过去。
+- 「收起」与「显示全部」共用同一个 `more-wrap` / `more-btn` 样式与同一条 `data-action="stats-more"`，靠 `data-open` 区分方向 —— 页面上同时只有一个按钮，不给两个按钮增加选择成本。
+- 规则脚本缺失时**保留上限、但补同一组数的说明**（就地算 `capN` / `hidden` / `capped`）。这是与 E-68 的一个刻意差别：顾问列表的降级路径是「只报截断、不报筛选」，因为它退化成两个数缺一；这里退化后所有数都能就地算出来，所以说明必须完整，不许退回静默。
+- 标题读 `listState.loaded` 而不是 `list.length`。两者在正常路径下相等，但写成一个来源之后，将来改动只需要动 `statsListState` 一处，标题不会再单独漂移。
+
+**测试.** 新增 3 条规则层用例（`server/test_console_classify.py`）+ 1 条 UI 用例（`server/test_console_ui.py`）：
+
+| 用例 | 钉住什么 |
+|---|---|
+| `test_stats_list_state_reports_the_rows_it_hides` | `200 → shown 30 / hidden 170 / capped`；`30 → hidden 0 / capped false`（恰好等于上限不该出现「另有 0 条」）；`0 → 全 0` |
+| `test_stats_list_state_expanded_shows_everything` | `(200, 30, true) → shown 200 / hidden 0 / expanded true`，且 `capped` **仍为真**（收起按钮不能消失）；`(12, 30, true) → capped false` |
+| `test_stats_list_state_defaults_cap_and_tolerates_bad_input` | `DEFAULT_STATS_LIST_CAP == 30`；`cap` 为 `"x"` / `-5` / `0` / `None` 全回落 30；`loaded` 为 `"abc"` / `None` → 全 0 不出 `NaN`；`42.9 → loaded 42` |
+| `test_stats_list_note_explains_the_hidden_rows`（UI） | `statsListNote` / `statsListMore` / `setStatsListOpen` 在；判定走 `CC.statsListState(list.length, STATS_LIST_CAP, STATS_LIST_OPEN)`；说明报「画了多少 + 藏了多少」；展开态有收起措辞；渲染真的按 `list.slice(0, listState.shown)`；`list.slice(0, 30)` 已退场；标题读 `listState.loaded`；`stats-more` 接进 `handleAction`；降级分支 `capped: list.length > capN` 在 |
+
+**验证.**
+
+```
+python -m pytest server/test_console_classify.py -q          → 113 passed in 39.99s
+python -m pytest server/test_console_ui.py -q               → 43 passed in 0.26s
+python -m pytest server/ -q                                 → 709 passed in 56.54s
+```
+
+另做两个直接验证：① 从 `CONSOLE_HTML` 抽出全部内联 `<script>` 段拼成单文件跑 `node --check` → 退出码 0；② 用真实 `console_classify.js` 赋给 `global.CC`，再按花括号配对截出 `statsListNote` / `statsListMore` / `setStatsListOpen` 三个函数 `eval`，喂 `statsListState(200, 30, false|true)` 与 `(12, 30, false)`，得到上表四行输出，`setStatsListOpen(true)` 后 `renderData` 被调用 1 次。
+
+**计数.** `console_classify.js` 622 / 584 → **642 / 602**（`DEFAULT_STATS_LIST_CAP` @595 · `statsListState` @597 · 导出块 @605-641）；`console_ui.py` 3728 / 3637 → **3780 / 3689**（`STATS_LIST_CAP` @1431 · `STATS_LIST_OPEN` @1432 · `statsListNote` @2922 · `statsListMore` @2931 · `setStatsListOpen` @2938 · `renderStats` 接线段 @3068-3095）；`test_console_classify.py` 1485 → **1533**；`test_console_ui.py` 673 → **706**；服务端用例 705 → **709**。
+
+**教训.** 「说了 N 条、只画 M 条」这类文案有两个独立的数，只要它们由两处代码分别决定，就一定会漂移 —— 而且漂移方向永远是「说的比画的多」，因为上限是写死的、N 是长出来的。判据三条：① **标题里的数字必须来自与切片同一个对象**（`listState.loaded` 与 `listState.shown` 同源），不许一处读数组长度、另一处读常量；② **上限要暴露给规则层而不是埋在渲染循环里**，否则「卡了多少条」这件事没有任何地方能被单测断言；③ **「已按上限截断」与「已按搜索筛过」必须是两个标志**（`capped` 与 `expanded` 正交，`hidden` 的措辞再按 `q` 分叉），把两个原因混成一个数就会得出「还有 170 条匹配结果」这种误导。
