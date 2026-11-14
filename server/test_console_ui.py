@@ -594,3 +594,28 @@ def test_stats_dist_merges_pkg_and_source_before_render():
     # 沿用首次出现序会渲染成「微博 2 / 微信 3」。规则层自身由 test_console_classify 守着。
     assert html.count("if (a[1] !== b[1]) return b[1] - a[1];") == 1, \
         "distPairs 兜底分支没有按次数降序排（规则层与兜底必须同口径）"
+
+
+def test_advisor_pkg_filter_note_follows_the_real_scope():
+    """顾问 Tab 的来源过滤说明必须跟事实走，不能无条件说「显示的是全部报告」。
+
+    顾问报告的 pkg 是可选的（老报告没有，端上 toUploadJson 也不写），而
+    renderAdvisor 的 filter 一旦 r.pkg 存在就会按来源筛掉别的报告 —— 旧实现
+    却只要选了来源就写「无法按「X」过滤，下面显示的是全部报告」，说明与自己
+    上方的列表直接矛盾。判定收在规则层 advisorPkgScope，UI 只负责三档措辞。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "function advisorScopeNote()" in html, "缺少来源过滤说明的措辞函数"
+    assert "CC.advisorPkgScope(ADVISORS, APP_FILTER)" in html, "判定没有走规则层"
+    assert "scope.mode === 'untagged'" in html, "缺少「一份都不带字段」档"
+    assert "scope.mode === 'mixed'" in html, "缺少混合档"
+    # 混合档必须交代不带字段的份数，否则用户看到别的来源的报告会以为过滤坏了
+    assert "份报告不带来源字段，仍会显示在下面" in html
+    # 严格档必须报出「该来源 N 份 / 已加载 M 份」，让用户知道列表被筛过
+    assert "下面只显示该来源的" in html and "份报告（已加载" in html
+    assert "份报告里没有来自该来源的" in html, "筛到 0 份要有单独说明"
+    # renderAdvisor 里不能再有「选了来源就无条件写死原文案」的内联块
+    body = html.split("function renderAdvisor()")[1].split("reports.forEach")[0]
+    assert "html: advisorScopeNote()" in body, "renderAdvisor 没有接上措辞函数"
+    assert "html: '<div class=\"note\">顾问报告不携带来源 App 字段" not in body, \
+        "renderAdvisor 仍在无条件渲染旧文案"

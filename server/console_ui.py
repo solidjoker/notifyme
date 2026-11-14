@@ -3026,6 +3026,43 @@ var ADV_TYPE_META = {
   other:     { ico: '💡', label: '其它建议' }
 };
 
+// 顾问报告的「来源过滤」说明必须跟着事实走：顾问报告里的 pkg 是**可选的**
+// （storage._normalize_advisor_report 只在端上带了才落库，老报告没有；端上
+// AdvisorStore.toUploadJson 当前也不写 pkg），所以选了来源之后有三种真实情形：
+//   ① 一份都不带 pkg → 确实无法过滤，列表就是全部报告（原文案是这一档）；
+//   ② 全都带 pkg     → 列表严格等于该来源，说明应写「已按 X 过滤」；
+//   ③ 混合           → 带 pkg 的按来源筛掉了，不带的仍在列表里，必须交代份数。
+// 以前只要选了来源就无条件写「无法按…过滤，下面显示的是全部报告」，而带 pkg 的
+// 报告其实已经被筛掉了 —— 说明与自己上方的列表直接矛盾。判定收在
+// console_classify.advisorPkgScope（node 可单测），这里只负责措辞。
+function advisorScopeNote() {
+  var scope = null;
+  if (CC && CC.advisorPkgScope) {
+    try { scope = CC.advisorPkgScope(ADVISORS, APP_FILTER); } catch (e) { scope = null; }
+  }
+  var who = esc(pkgLabel(APP_FILTER));
+  // 规则脚本不可用：退回旧文案（保守措辞，不声称已过滤）
+  if (!scope) {
+    return '<div class="note">顾问报告不携带来源 App 字段，无法按「' + who +
+      '」过滤，下面显示的是全部报告。</div>';
+  }
+  if (scope.mode === 'untagged') {
+    return '<div class="note">顾问报告不带来源 App 字段，无法按「' + who +
+      '」过滤，下面显示的是全部报告。</div>';
+  }
+  if (scope.mode === 'mixed') {
+    return '<div class="note">已按「' + who + '」过滤掉 ' + scope.hidden +
+      ' 份其它来源的报告；另有 ' + scope.untagged +
+      ' 份报告不带来源字段，仍会显示在下面 — 这一项会随端上补齐上报字段而减少。</div>';
+  }
+  if (!scope.shown) {
+    return '<div class="note">已按「' + who +
+      '」过滤，已加载的 ' + scope.total + ' 份报告里没有来自该来源的。</div>';
+  }
+  return '<div class="note">已按「' + who + '」过滤，下面只显示该来源的 ' + scope.shown +
+    ' 份报告（已加载 ' + scope.total + ' 份）。</div>';
+}
+
 function renderAdvisor() {
   var q = QUERY.trim().toLowerCase();
   var reports = ADVISORS.filter(function (r) {
@@ -3053,12 +3090,7 @@ function renderAdvisor() {
     return out;
   }
   if (APP_FILTER) {
-    out.push({
-      key: 'adv-note-filter',
-      html: '<div class="note">顾问报告不携带来源 App 字段，无法按「' +
-        esc(pkgLabel(APP_FILTER)) + '」过滤，下面显示的是全部报告。</div>',
-      full: true
-    });
+    out.push({ key: 'adv-note-filter', html: advisorScopeNote(), full: true });
   }
   // 接口单次最多 100 份、存档上限 1000 份：列表被截断时必须说明，
   // 否则「顾问（400）」的角标配 100 张卡，看起来像 300 份报告凭空消失。

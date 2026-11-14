@@ -1320,3 +1320,60 @@ def test_merge_pairs_tolerates_bad_input(call):
     got = call("mergePkgPairs", [["com.a"], [None, None], ["com.a", "3"]])
     assert got == [["com.a", 3]], f"缺列 / 非数字次数归并不对：{got!r}"
 
+
+
+def test_advisor_pkg_scope_all_when_no_filter(call):
+    """未选来源时不该渲染任何说明：shown == total、hidden == 0。"""
+    reports = [{"id": "r1", "pkg": PKG_WX}, {"id": "r2"}, {"id": "r3", "pkg": "com.sina.weibo"}]
+    got = call("advisorPkgScope", reports, "")
+    assert got == {"mode": "all", "pkg": "", "total": 3, "shown": 3, "hidden": 0, "untagged": 0}, (
+        f"未筛选口径不对：{got!r}"
+    )
+
+
+def test_advisor_pkg_scope_untagged_when_no_report_has_pkg(call):
+    """一份都不带 pkg 时才是真的「无法过滤，列表就是全部报告」。"""
+    reports = [{"id": "r1"}, {"id": "r2", "pkg": None}, {"id": "r3", "pkg": "   "}]
+    got = call("advisorPkgScope", reports, PKG_WX)
+    assert got["mode"] == "untagged", f"全部不带 pkg 应判 untagged：{got!r}"
+    assert got["total"] == 3 and got["shown"] == 3, f"不带 pkg 的报告必须全部仍显示：{got!r}"
+    assert got["hidden"] == 0 and got["untagged"] == 3, f"计数不对：{got!r}"
+
+
+def test_advisor_pkg_scope_exact_when_every_report_tagged(call):
+    """每份都带 pkg 时列表严格等于该来源：说明必须写「已按 X 过滤」。"""
+    reports = [{"id": "r1", "pkg": PKG_WX}, {"id": "r2", "pkg": "com.sina.weibo"}]
+    got = call("advisorPkgScope", reports, "com.sina.weibo")
+    assert got["mode"] == "exact", f"全部带 pkg 应判 exact：{got!r}"
+    assert got["total"] == 2 and got["shown"] == 1 and got["hidden"] == 1, f"计数不对：{got!r}"
+    assert got["untagged"] == 0, f"exact 档 untagged 应为 0：{got!r}"
+
+
+def test_advisor_pkg_scope_mixed_keeps_untagged_visible(call):
+    """混合档：带 pkg 的按来源筛，不带的仍显示 —— 说明必须交代「另有 K 份」。"""
+    reports = [
+        {"id": "r1", "pkg": PKG_WX},
+        {"id": "r2", "pkg": "com.sina.weibo"},
+        {"id": "r3"},
+        {"id": "r4", "pkg": "  "},
+    ]
+    got = call("advisorPkgScope", reports, PKG_WX)
+    assert got["mode"] == "mixed", f"混合档判定不对：{got!r}"
+    assert got["total"] == 4 and got["shown"] == 3 and got["hidden"] == 1, f"计数不对：{got!r}"
+    assert got["untagged"] == 2, f"不带 pkg 的份数不对：{got!r}"
+
+
+def test_advisor_pkg_scope_hides_everything(call):
+    """筛到 0 份也是合法结果：mode 仍是 exact，hidden == total（别退回 untagged）。"""
+    reports = [{"id": "r1", "pkg": PKG_WX}, {"id": "r2", "pkg": PKG_WX}]
+    got = call("advisorPkgScope", reports, "com.sina.weibo")
+    assert got["mode"] == "exact", f"全被筛掉仍属 exact：{got!r}"
+    assert got["shown"] == 0 and got["hidden"] == 2, f"全隐藏计数不对：{got!r}"
+
+
+def test_advisor_pkg_scope_tolerates_bad_input(call):
+    """空数组 / None / 非对象条目都要能算，不许抛。"""
+    assert call("advisorPkgScope", [], PKG_WX)["mode"] == "untagged", "空列表按 untagged 处理"
+    assert call("advisorPkgScope", None, PKG_WX)["total"] == 0, "None 报告列表应按空列表处理"
+    got = call("advisorPkgScope", [None, 3, {"id": "r1", "pkg": PKG_WX}], PKG_WX)
+    assert got["total"] == 1 and got["shown"] == 1, f"非对象条目应被跳过：{got!r}"
