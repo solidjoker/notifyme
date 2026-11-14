@@ -3063,6 +3063,27 @@ function advisorScopeNote() {
     ' 份报告（已加载 ' + scope.total + ' 份）。</div>';
 }
 
+// 列表「被截断」与「被筛选」是两件事，必须分开报：`reports` 是已按来源 + 搜索
+// 过滤后的**可见集**，拿它跟存档总数比会在筛选时谎报截断 —— 存档 400 份、本页
+// 显示 100 份、筛到 5 份，旧写法写「当前只显示最近 5 份（存档共 400 份），更早的
+// 报告不在此列表里」，像 395 份凭空消失，其实只是不匹配筛选。判定收在
+// console_classify.advisorListState（两个标志正交：truncated 看「存档 > 已加载」，
+// filtered 看「已加载 > 可见」），这里只负责措辞。
+function advisorListNote(st) {
+  if (!st) return '';
+  var parts = [];
+  if (st.truncated) {
+    parts.push('当前只显示最近 ' + st.loaded + ' 份（存档共 ' + st.total +
+      ' 份），更早的报告不在此列表里');
+  }
+  if (st.filtered && st.loaded) {
+    parts.push('这 ' + st.loaded + ' 份里有 ' + (st.loaded - st.shown) +
+      ' 份不匹配当前的筛选或搜索');
+  }
+  if (!parts.length) return '';
+  return '<div class="note">' + parts.join('；') + '。</div>';
+}
+
 function renderAdvisor() {
   var q = QUERY.trim().toLowerCase();
   var reports = ADVISORS.filter(function (r) {
@@ -3094,14 +3115,24 @@ function renderAdvisor() {
   }
   // 接口单次最多 100 份、存档上限 1000 份：列表被截断时必须说明，
   // 否则「顾问（400）」的角标配 100 张卡，看起来像 300 份报告凭空消失。
-  if (ADVISOR_TOTAL > reports.length) {
-    out.push({
-      key: 'adv-note-more',
-      html: '<div class="note">当前只显示最近 ' + reports.length +
-        ' 份（存档共 ' + ADVISOR_TOTAL + ' 份），更早的报告不在此列表里。</div>',
-      full: true
-    });
+  // 但 reports 是**可见集**（已按来源 + 搜索过滤），拿它跟存档总数比会在筛选时
+  // 谎报截断 —— 两个判定正交：truncated 看「存档 > 已加载」，filtered 看
+  // 「已加载 > 可见」。判定收在 console_classify.advisorListState，这里只挑措辞；
+  // 规则脚本缺失时退回旧口径（只报截断），避免整块说明凭空消失。
+  var listState = null;
+  if (CC && CC.advisorListState) {
+    try {
+      listState = CC.advisorListState(ADVISORS.length, ADVISOR_TOTAL, reports.length);
+    } catch (e) { listState = null; }
   }
+  if (!listState && ADVISOR_TOTAL > reports.length) {
+    listState = {
+      loaded: reports.length, total: ADVISOR_TOTAL, shown: reports.length,
+      truncated: true, filtered: false
+    };
+  }
+  var listNote = advisorListNote(listState);
+  if (listNote) out.push({ key: 'adv-note-more', html: listNote, full: true });
   reports.forEach(function (r, i) {
     var html = '';
     // 建议按 type 分组：类型优先序固定（watchlist → threshold → prompt → other，

@@ -1737,4 +1737,89 @@ pytest server/ -q                        → 694 passed in 43.13s
 
 **教训.** 「可选字段 + 有就筛、没有就留」这种过滤天然是多态的，它的说明不能是一句静态文案：判定必须返回「哪些是被筛掉的、哪些是因为缺字段而放过的」这组数字，措辞才可能对得上。判据两句：① **凡是「部分数据满足条件」的过滤，说明里必须同时给出「筛掉了多少」与「因为字段缺失而放过多少」**；② 文案的分支键是**数据实况**（`mode` + `shown`），不是**用户操作**（`if (APP_FILTER)`）—— 按操作分支就必然只覆盖一种实况。
 
+### E-68｜顾问列表的「截断」说明把筛选也算进去：存档 400 份 / 筛到 5 份时谎报「只显示最近 5 份」（`console_classify.advisorListState`，fix/advisor-list-truncation，2026-11-14）
+
+**现象.** 存档里有 400 份顾问报告、接口单次只回最新 100 份，控制台在 ☰ 里选「微博」（或输入搜索词）后只剩 4 张卡，列表上方写「当前只显示最近 4 份（存档共 400 份），更早的报告不在此列表里」。清掉筛选、恢复 100 张卡，同一句话变成「最近 100 份」—— 两个数字都跟着筛选变，用户读到的是「395 份报告被截掉了」，点遍所有来源也找不回来。
+
+**根因.** 「存档比已加载多」（truncated）和「已加载的里面被筛掉若干」（filtered）是两个正交事实，旧实现只用一个比较式同时表达，而且右边用的是**过滤后的可见条数**：
+
+```
+server/console_ui.py renderAdvisor（改前）
+  var reports = ADVISORS.filter(function (r) {          // ← 已按 APP_FILTER + 搜索过滤
+    if (APP_FILTER && r.pkg && normPkg(r.pkg) !== APP_FILTER) return false;
+    if (!q) return true;
+    return advisorSearchText(r).indexOf(q) >= 0;
+  });
+  ...
+  if (ADVISOR_TOTAL > reports.length) {                 // 400 > 4 → 真
+    out.push({ key: 'adv-note-more',
+      html: '<div class="note">当前只显示最近 ' + reports.length +
+        ' 份（存档共 ' + ADVISOR_TOTAL + ' 份），更早的报告不在此列表里。</div>' });
+  }
+```
+
+`reports.length` 在无筛选时等于已加载条数（100），有筛选时等于命中数（4），于是同一句文案在两件事之间来回跳。存档 400 / 已加载 100 时真正被截掉的只有 300 份，与用户看到的「4 份」无关 —— 数字、判断、措辞三样都错了。反过来也错：存档 40 份全部加载、筛到 2 份时 `40 > 2` 成立，会在一份都没被截的情况下报「更早的报告不在此列表里」。
+
+| 存档 | 已加载 | 可见 | 真实状态 | 旧文案 | 应写 |
+|---|---|---|---|---|---|
+| 400 | 100 | 100 | 被截断，无筛选 | 「只显示最近 100 份（存档共 400 份）」 | 正确 |
+| 400 | 100 | 4 | 被截断 + 被筛选 | 「只显示最近 4 份（存档共 400 份）」 | 两句都要：「只显示最近 100 份（存档共 400 份）」＋「这 100 份里有 96 份不匹配筛选」 |
+| 40 | 40 | 2 | 只有筛选 | 「只显示最近 2 份（存档共 40 份）」 | 只说「这 40 份里有 38 份不匹配筛选」 |
+| 40 | 40 | 40 | 都没有 | 不出文案 | 正确 |
+
+**修法.** 判定搬进规则脚本成为纯函数，措辞留在 UI。`server/console_classify.js` 新增 `advisorListState(loaded, total, shown)` @529：
+
+```js
+function advisorListState(loaded, total, shown) {
+  var n = function (v) { var x = Number(v); return (isFinite(x) && x > 0) ? Math.floor(x) : 0; };
+  var L = n(loaded), T = n(total), S = n(shown);
+  if (!T || T < L) T = L;   // total 缺失 / 老服务端 / 脏值 → 当「没有更多」
+  if (S > L) S = L;         // 可见数不可能超过已加载
+  return { loaded: L, total: T, shown: S, truncated: T > L, filtered: S < L };
+}
+```
+
+三条保守约定：① `total` 不可信时（`null` / `0` / 负数 / 非数字 / 小于已加载）一律按「已加载就是全部」处理 —— 老服务端没这个键，写成「存档共 0 份」比不写更糟；② `shown` 超过 `loaded` 时夹回去，脏值不出负数；③ `truncated` / `filtered` 互不影响，`loaded == 0` 时两个都 false（没东西可截、也没东西可筛）。
+
+`server/console_ui.py` 新增 `advisorListNote(st)` @3072 只负责拼措辞，`renderAdvisor` 里旧的内联块换成取数 + 渲染（`var listState = null;` @3122）：
+
+```
+  var listState = null;
+  if (CC && CC.advisorListState) {
+    try {
+      listState = CC.advisorListState(ADVISORS.length, ADVISOR_TOTAL, reports.length);
+    } catch (e) { listState = null; }
+  }
+  if (!listState && ADVISOR_TOTAL > reports.length) {   // 规则脚本缺失 → 退回旧口径
+    listState = { loaded: reports.length, total: ADVISOR_TOTAL, shown: reports.length,
+                  truncated: true, filtered: false };
+  }
+  var listNote = advisorListNote(listState);
+  if (listNote) out.push({ key: 'adv-note-more', html: listNote, full: true });
+```
+
+降级路径刻意只报截断、不报筛选：拿不到规则脚本时 `reports.length` 仍不可靠，与其猜一个「筛掉了 N 份」不如保留原来那句 —— 但**必须**保留，否则整块说明凭空消失（第 2 条用例守着这一点）。
+
+**测试.** 新增 4 条规则层用例（`server/test_console_classify.py`）+ 1 条 UI 用例 + 改 1 条既有用例：
+
+| 用例 | 钉住什么 |
+|---|---|
+| `test_advisor_list_state_keeps_truncation_and_filtering_apart` | (100, 400, 5) → `truncated` 与 `filtered` 同时为真；三档数字原样透出 |
+| `test_advisor_list_state_not_truncated_when_all_loaded` | (40, 40, 40) 两个都假；(40, 40, 2) 只 `filtered` |
+| `test_advisor_list_state_falls_back_when_total_missing` | `total` ∈ {None, 0, -3, "abc", {}} → 回落已加载条数且不报截断；`total < loaded` 同 |
+| `test_advisor_list_state_clamps_and_tolerates_bad_input` | `shown > loaded` 夹紧；小数取整；负数 / None 全 0 |
+| `test_advisor_list_note_separates_truncation_from_filtering`（UI） | `advisorListNote` 在、两个标志分开判、`!st` 时不出文案、筛选句在、旧的 `reports.length` 内联块已不在 `renderAdvisor` 里 |
+| `test_advisor_badge_uses_archive_total_and_marks_truncation`（改） | 锚点从 `if (ADVISOR_TOTAL > reports.length) {` 改为 `var listNote = advisorListNote(listState);`；新增两条断言：取数必须走 `CC.advisorListState(ADVISORS.length, ADVISOR_TOTAL, reports.length)`、降级分支 `if (!listState && ADVISOR_TOTAL > reports.length) {` 仍在 |
+
+**验证.**
+
+```
+python -m pytest server/test_console_classify.py server/test_console_ui.py -q → 146 passed in 41.34s
+python -m pytest server/ -q                                              → 699 passed in 47.08s
+```
+
+**计数.** `console_classify.js` 554 / 520 → **570 / 535**（`advisorListState` @529 · 导出块 @537-570）；`console_ui.py` 3647 / 3557 → **3678 / 3587**（`advisorListNote` @3072 · `renderAdvisor` @3087 · 取数 @3122）；`test_console_classify.py` 1379 → **1423**；`test_console_ui.py` 621 → **645**；服务端用例 694 → **699**。
+
+**教训.** 凡是「列表被缩短」的说明，都必须先说清**缩短的原因**是哪一种：数据缺失、接口截断、还是用户筛选。三者混在一个比较式里，数字就会跟着用户操作走，而用户操作恰恰不改变数据量 —— 这类缺陷在「有筛选」的功能里必然出现，不是文案问题而是判定缺一个维度。判据两句：① **「被截掉」与「被筛掉」必须各自有独立标志**，且都从「总量 / 已加载 / 可见」三个数算，不许把可见数当已加载数用；② **降级路径要保留旧行为但必须可测**（旧分支退场时用例跟着改锚点，别整条删掉，否则规则脚本缺失时没人发现说明消失了）。
+
 

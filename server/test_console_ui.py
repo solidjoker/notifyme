@@ -568,10 +568,34 @@ def test_advisor_badge_uses_archive_total_and_marks_truncation():
     assert "setBadge('badge-adv', ADVISORS.length);" not in html, "角标不能只数已加载"
     assert "['tab-adv', '顾问', ADVISOR_TOTAL || ADVISORS.length, '份报告']" in html
     # 截断说明必须出现在报告列表之前（先说明再渲染卡片）
-    i_note = html.index("if (ADVISOR_TOTAL > reports.length) {")
+    i_note = html.index("var listNote = advisorListNote(listState);")
     i_cards = html.index("reports.forEach(function (r, i) {")
     assert i_note < i_cards, "截断提示必须在卡片之前"
     assert "更早的报告不在此列表里" in html
+    assert "CC.advisorListState(ADVISORS.length, ADVISOR_TOTAL, reports.length)" in html, \
+        "截断判定必须交给规则层，别拿可见集跟存档总数比"
+    assert "if (!listState && ADVISOR_TOTAL > reports.length) {" in html, \
+        "规则脚本缺失时仍要退回旧口径（只报截断）"
+
+
+def test_advisor_list_note_separates_truncation_from_filtering():
+    """「存档比已加载多」和「筛掉了若干份」是两件事，说明必须分开报。
+
+    存档 400 份、本页 100 份、按来源/搜索筛到 5 份时，旧写法拿可见集（5）跟存档总数
+    （400）比，渲染成「当前只显示最近 5 份（存档共 400 份）」—— 像 395 份凭空消失，
+    其实只是不匹配筛选。判定收在 console_classify.advisorListState（truncated /
+    filtered 两个正交标志），前端 advisorListNote 只负责措辞。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "function advisorListNote(st)" in html, "缺少列表说明 helper"
+    body = html.split("function advisorListNote(st)")[1].split("function renderAdvisor()")[0]
+    assert "st.truncated" in body and "st.filtered" in body, "两个标志必须分开判"
+    assert "if (!st) return '';" in body, "没有判定结果时不要凭空写说明"
+    assert "份不匹配当前的筛选或搜索" in body, "筛选缩水必须单独交代"
+    # 旧内联块（拿 reports.length 当已加载条数）必须整体退场
+    i_render = html.index("function renderAdvisor()")
+    render_body = html[i_render:i_render + 3000]
+    assert "html: '<div class=\"note\">当前只显示最近 ' + reports.length" not in render_body
 
 
 def test_stats_dist_merges_pkg_and_source_before_render():

@@ -386,6 +386,16 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 `console_ui.advisorScopeNote()` 只负责按四态挑措辞，判定不写进 `renderAdvisor`；规则脚本缺失时 `try/catch` 兜 `null`，
 沿用旧文案。旧实现只要选了来源就无条件写「无法按「X」过滤」，下面是清一色的该来源报告 —— 说明与事实相反。
 
+**「列表被截断」与「列表被筛选」是两件事，说明必须分开报**：`total > count` 是接口截断，`count > 可见条数` 是筛选/搜索造成的合法缩短。
+控制台顾问 Tab 的判定由 `console_classify.advisorListState(loaded, total, shown)` 负责（纯函数、UMD、node 可测），返回
+`{loaded, total, shown, truncated, filtered}`：`truncated = total > loaded`、`filtered = shown < loaded`，两个标志正交。
+三条保守约定：① `total` 缺失 / 为 0 / 负数 / 非数字 / 小于已加载时一律回落 `total = loaded`（老服务端没有这个键，写「存档共 0 份」比不写更糟）；
+② `shown > loaded` 时夹回 `loaded`；③ `loaded == 0` 时两个标志都假。
+`console_ui.advisorListNote()` 只按两个标志拼措辞：截断说「当前只显示最近 N 份（存档共 M 份），更早的报告不在此列表里」，
+筛选说「这 N 份里有 K 份不匹配当前的筛选或搜索」，两件同时成立就两句都给。规则脚本缺失时退回旧口径 —— **只报截断**。
+旧实现拿**过滤后的可见条数**跟存档总数比（`ADVISOR_TOTAL > reports.length`），存档 400 份、本页 100 份、筛到 4 份时写
+「当前只显示最近 4 份（存档共 400 份）」，用户以为 395 份报告被截掉了；反过来存档 40 份全加载、筛到 2 份时又在一份没截的情况下谎报「更早的报告不在此列表里」。
+
 ### POST /queue —— 上报排队任务快照（需 token）
 
 请求体 `{"device_id": "android-1f2a3b4c", "tasks": [...]}`，按 `(device_id, task_id)` 整份覆盖

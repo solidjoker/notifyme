@@ -519,6 +519,21 @@
     return { mode: mode, pkg: want, total: total, shown: shown, hidden: hidden, untagged: untagged };
   }
 
+  // 顾问列表的截断判定必须用「已加载条数」（ADVISORS.length），不能用过滤后的
+  // 可见条数：来源筛选 / 搜索会合法地把列表变短，那不是截断。用可见条数比较时，
+  // 存档 400 份、本页 100 份、筛选后剩 5 份，控制台会写「当前只显示最近 5 份
+  // （存档共 400 份），更早的报告不在此列表里」—— 用户以为 395 份被截掉了，
+  // 其实它们只是不匹配当前筛选。两个判定正交：
+  //   truncated=true 存档比已加载多（页面确实少了一段列表）
+  //   filtered=true  已加载的里面还有被筛选挡掉的（与截断无关）
+  function advisorListState(loaded, total, shown) {
+    var n = function (v) { var x = Number(v); return (isFinite(x) && x > 0) ? Math.floor(x) : 0; };
+    var L = n(loaded), T = n(total), S = n(shown);
+    if (!T || T < L) T = L;   // total 缺失 / 老服务端 / 脏值 → 当「没有更多」
+    if (S > L) S = L;         // 可见数不可能超过已加载
+    return { loaded: L, total: T, shown: S, truncated: T > L, filtered: S < L };
+  }
+
   return {
     VERSION: VERSION,
     QUEUE_STATE_ORDER: QUEUE_STATE_ORDER,
@@ -549,6 +564,7 @@
     groupMessages: groupMessages,
     groupQueueTasksByDevice: groupQueueTasksByDevice,
     queueDeviceSummary: queueDeviceSummary,
-    advisorPkgScope: advisorPkgScope
+    advisorPkgScope: advisorPkgScope,
+    advisorListState: advisorListState
   };
 });
