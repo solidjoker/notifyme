@@ -1907,7 +1907,11 @@ async function fetchAnaPage(before, signal) {
   var r = await api(url, { signal: signal });
   return { items: r.analyses || [], next: r.next_before || '', skipped: Number(r.skipped || 0) };
 }
-// 脏数据提示条：跳过的坏行不进列表，但必须告诉用户「不是没有更多，是被跳过」
+// 脏数据提示条：跳过的坏行不进列表，但必须告诉用户「不是没有更多，是被跳过」。
+// 口径是「服务端 skipped」：SQL 侧 typeof 守卫挡掉的脏行（数值列不是数字，
+// 排不进时间序、还会毒化 next_before）+ Python 侧映射失败的行。这两类都
+// 真实存在库里（/stats 的 total 照算），所以列表条数会少于库存 —— 不解释
+// 用户只会以为分页漏数据。
 function skipNoticeHtml() {
   var n = (SKIP_NOTICE.msg || 0) + (SKIP_NOTICE.ana || 0);
   if (!n) return '';
@@ -1915,7 +1919,8 @@ function skipNoticeHtml() {
   if (SKIP_NOTICE.msg) parts.push('消息 ' + SKIP_NOTICE.msg + ' 条');
   if (SKIP_NOTICE.ana) parts.push('分析 ' + SKIP_NOTICE.ana + ' 条');
   return '<div class="card skip-note" role="status">⚠️ 有 ' + esc(parts.join(' / ')) +
-    ' 因格式损坏被跳过（服务端 skipped 计数），列表条数少于实际库存属正常。</div>';
+    ' 因格式损坏被跳过（服务端 skipped 计数：时间列不是数字或无法映射），' +
+    '列表条数少于实际库存属正常。</div>';
 }
 // 排队任务（端上 WorkManager 队列 + 待同步消息队列）
 async function fetchQueue(signal) {

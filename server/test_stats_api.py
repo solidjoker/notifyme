@@ -776,3 +776,74 @@ def test_analysis_pagination_skips_text_received_at_row(api):
     ids = [one["case_id"] for one in second.get_json()["analyses"]]
     assert ids and "dirty-case" not in ids, ids
 
+
+def test_messages_reports_skipped_dirty_rows_without_filters(api):
+    """无过滤条件时也要报 skipped：控制台首屏就是 messages?limit=200。
+
+    修前 /messages 只返回 messages/next_before，而 /stats 的 total 把脏行照算
+    —— 库存 3、列表 2、没有任何解释。
+    """
+    now = _now_ms()
+    _insert_messages([
+        ("a", "hi", now - 1000, "conv1", "微信", "com.tencent.mm"),
+        ("b", "yo", now - 500, "conv1", "微信", "com.tencent.mm"),
+    ])
+    _insert_text_ts_message("abc")
+    resp = api.get("/messages?limit=10")
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    body = resp.get_json()
+    assert body["count"] == 2, body
+    assert body["skipped"] == 1, body
+    # 与 /stats 的库存口径对照：3 = 2 可见 + 1 跳过
+    assert body["count"] + body["skipped"] == api.get("/stats").get_json()["messages"]["total"]
+
+
+def test_messages_skipped_respects_filters(api):
+    """skipped 是「当前过滤范围内」的脏行数，不是全库脏行数。"""
+    now = _now_ms()
+    _insert_messages([
+        ("a", "hi", now - 1000, "conv1", "微信", "com.tencent.mm"),
+    ])
+    _insert_text_ts_message("abc", conv="conv1")
+    _insert_text_ts_message("abd", conv="conv2")
+    plain = api.get("/messages?limit=10").get_json()
+    assert plain["skipped"] == 2, plain
+    one = api.get("/messages?limit=10&conversation=conv1").get_json()
+    assert one["count"] == 1 and one["skipped"] == 1, one
+    other = api.get("/messages?limit=10&conversation=conv2").get_json()
+    assert other["count"] == 0 and other["skipped"] == 1, other
+    clean = api.get("/messages?limit=10&pkg=com.ss.android.lark").get_json()
+    assert clean["count"] == 0 and clean["skipped"] == 0, clean
+
+
+def test_analysis_reports_skipped_dirty_rows(api):
+    """analyses 侧的 skipped 修前恒 0：typeof 守卫把脏行挡在 SQL 外，
+    Python 侧的 except 分支永远命中不了。"""
+    now = _now_ms()
+    _insert_analyses([
+        ("c1", "conv1", 0, "com.tencent.mm", 0, 0),
+        ("c2", "conv1", 0, "com.tencent.mm", 0, 0),
+    ])
+    _exec(
+        "INSERT INTO analyses"
+        " (case_id, conversation, window_end, message_count, need_action,"
+        "  importance, escalated, s1, s2, analyzed_at, protocol, received_at,"
+        "  pkg, redacted, redaction_hits, todo_text, todo_due)"
+        " VALUES (?, ?, ?, 1, 0, ?, 0, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+        ("dirty-case", "脏会话", now, "high", "{}", "{}", "2026-11-14 10:00:00",
+         "v2", "boom", "com.tencent.mm", "{}", "", 0))
+    resp = api.get("/analysis?limit=10")
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    body = resp.get_json()
+    assert body["count"] == 2, body
+    assert body["skipped"] == 1, body
+    assert body["count"] + body["skipped"] == (
+        api.get("/stats").get_json()["analyses"]["total"])
+
+
+def test_analysis_skipped_zero_when_clean(api):
+    """干净库不能因为新增的 COUNT 就报出非 0 的 skipped。"""
+    _insert_analyses([("c1", "conv1", 1, "com.tencent.mm", 1, 0)])
+    body = api.get("/analysis?limit=10").get_json()
+    assert body["count"] == 1 and body["skipped"] == 0, body
+

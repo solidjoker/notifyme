@@ -485,6 +485,17 @@ def test_skipped_rows_are_surfaced_instead_of_silently_dropped():
     assert "SKIP_NOTICE.msg = (SKIP_NOTICE.msg || 0) + (r.skipped || 0);" in html
 
 
+def test_skip_notice_explains_numeric_column_cause():
+    """skipped 的两种成因都要说清：不是只有「坏 JSON」。
+
+    服务端 skipped 的两条来源是「数值列不是数字（typeof 守卫挡掉）」与
+    「映射失败」；只写「格式损坏」会让用户以为库里存的是坏 JSON。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "服务端 skipped 计数：时间列不是数字或无法映射" in html
+    assert "列表条数少于实际库存属正常" in html
+
+
 def test_next_step_suggestions_render_with_jump_actions():
     """建议要能一键跳过去处理，且必须走 #data 上的事件委托。"""
     html = _ui().CONSOLE_HTML
