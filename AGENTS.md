@@ -274,12 +274,12 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   改前跑 `app/src/test/java/com/notifyme/android/AnalysisWindowCoreTest.kt`（23 条，含 600 条噪声 + 本会话 3 条）。
 
 - **首页信息流的取样口径全在 `FeedWindowCore`**（internal object，纯函数 + 22 条单测），别在 `MainActivity.buildFeed` 里另写一套：
-  ① **首页取样不是「全局最近 500 条」**：旧写法 `readRecent(500).groupBy { convKey }` 会让几个群刷满窗口后安静会话一条都不出现，首页「最近待办」的可见集（`todoVisibleKeys`）随之看不到它 —— 这是 `readRecent` 同源隐患的**第五处**（前四处见上三条契约）。取会话集合 / 首页列表 / 悬浮面板窗口键 / 控制台折叠作用域 / 关注名单键 / 分析范围会话多选器，一律走 `MessageStore.feedGroups(context)`。
-  ② **名额按会话数自适应，别写死一个 perConv**：`perConvFor(convCount)` 把 `TOTAL_BUDGET = 6000` 摊薄，再夹进 `[MIN_PER_CONV = 20, PER_CONV = 200]`。`20 = 2 × AnalysisCase.WINDOW_SIZE`，保证会话再多每会话仍能凑出一个完整分析窗口；`200` 是「按天折叠后够翻几天」的上限。`convCount <= 0` / `totalBudget <= 0` / `maxPerConv <= 0` 返回 0（保守退化，不抛异常）。
-  ③ **会话间按「该会话最近一条」倒序、组内升序**（与旧实现同口径）：`timestamp <= 0` 归 0 排最前，超 `keep` 只保最近若干条。会话间排序用 `sortedByDescending`（稳定排序），并列时保持首次出现顺序 —— 同一份输入必须得到同一个首页顺序。
-  ④ **条数是下限时必须写成 `N+ 条`**：`Bucket.truncated` 分两档判定 —— 行窗口**读到文件头**（`Result.complete`）时 `size > keep`，**没读到文件头**时 `size >= keep`（刚好顶到名额也可能还有更早的没读进来）。首页会话头据此走 `R.string.msg_count_at_least`，不要拿窗口内条数冒充本会话总数。
-  ⑤ **`MessageStore.feedGroups` 必须 `internal`**（返回 `internal` 的 `FeedWindowCore.Result`）；`requested = REQUEST_LINES = 20000` 比 `TAIL_LINES = 5000` 大是刻意的 —— 安静会话在文件靠前位置，窗口太浅照样读不到。
-  改名额公式、排序方向或截断判据前先跑 `app/src/test/java/com/notifyme/android/FeedWindowCoreTest.kt`（22 条，含「600 条噪声 + 本会话仍在首页」与旧写法对照实验）。
+  ① 首页取样不是「全局最近 500 条」（`readRecent(500).groupBy`），是 `MessageStore.feedGroups(context)` —— 同源隐患第五处，前四处见上三条。
+  ② `perConvFor(convCount)` 把 `TOTAL_BUDGET = 6000` 摊薄再夹进 `[20, PER_CONV = 200]`；`20 = 2 × AnalysisCase.WINDOW_SIZE`，既保证每会话凑得出一窗、又限制按天折叠后的翻页深度。
+  ③ 会话间按「该会话最近一条」倒序、组内升序，`timestamp <= 0` 归 0 排最前，并列保首次出现序（同一输入必须同一首页顺序）。
+  ④ `Bucket.truncated` 两档：读到文件头时 `size > keep`、没读到文件头时 `size >= keep` —— 条数是下限时界面必须写 `N+ 条`（`R.string.msg_count_at_least`）。
+  ⑤ `MessageStore.feedGroups` 必须 `internal`；`REQUEST_LINES = 20000` 比 `TAIL_LINES = 5000` 大是刻意的（安静会话在文件靠前位置）。
+  改名额/排序/截断前先跑 `FeedWindowCoreTest.kt`（22 条，含 600 条噪声与旧写法对照）。
 
 - **分析记录 / 消息侧的「近 N 条」取数只有三种口径，别再新写 `readRecent(N)`**（第七批同源隐患，2026-11-13 收口）：
   ① **要「某个时间区间内的全部记录」→ `AnalysisStore.readSince(context, cutoffMs)`**（内部走 `AnalysisWindowCore.since` + `ADVISOR_LINES = 20000` 行窗口）。顾问复盘就是这一档：旧写法 `AnalysisStore.readRecent(ctx, 500).filter { analyzedAt >= since }` 在 7 天内 case 超 500 条、或活跃会话占满尾部时，安静会话的 case 进不了报告，`AdvisorDigestCore.nameMapFor()` 随之返回空表、姓名原样出设备。`ADVISOR_LINES` 比 `TAIL_LINES = 5000` 更宽是刻意的，别合并成一个常量。
@@ -372,3 +372,8 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **`/messages` 与 `/analysis` 必须回报被脏值守卫挡掉的行数：`skipped`**（`routes.query_messages` / `query_analysis`）。① 只数 Python 侧 `except` 会**恒 0**（脏行早在 `typeof` 守卫被挡出结果集），必须发独立 `SELECT COUNT(*) WHERE NOT (guard) [AND 过滤段]`。② **无过滤也照算**（控制台首屏就是这条路）。③ 口径 = 当前过滤范围内、不含游标段，`count + skipped == /stats` 库存。④ 前端只能覆盖不能累加：每页报同一个常量，`loadMore` 用 `Math.max`。
 - **列表接口夹了上限就必须回「总数 / 是否截断」**（`routes.query_advisor`：`min(limit, 100)` 而存档上限 `ADVISOR_MAX_REPORTS`=1000）。① 响应体补 `total`（截断前条数）与 `has_more = total > count`，损坏分支也回 `0 / false`，别让前端拿到 `undefined`。② 前端角标读 `ADVISOR_TOTAL`（缺省退回已加载条数），列表在总数大于页长时先插「只显示最近 N 份（存档共 M 份）」。③ 只用 `count` 时「存档正好 100 份」与「400 份只给 100 份」在界面上完全一样。④ 截断用例别断言「列表末位是哪一条」：三批写入可落在同一毫秒，并列顺序随调度漂移（本机 `r050`、CI `r051`），只钉「首位最新 + 长度 + 最旧的被截掉」。
+
+- **同一段里的分布与标量必须能对上：`stats_api._queue_block` 的 `by_kind`**（`test_stats_api.py` 2 条 + `test_console_ui.py` 1 条守着）。
+  ① 类型计数必须放在「过期 → `stale += 1; continue`」**之后**：写在之前会数进早停跑的僵尸任务，5 行里 3 条停跑时统计卡同屏写「analysis 3 / sync 2」与「活跃 1 · 陈旧 3」（5 vs 2）。
+  ② 契约是 `sum(by_kind.count) == total - stale`；有过期行时前端 `renderStats` 补「（不含 N 条已过期）」，别只写「（未过期）」让用户自己对账。
+  ③ 加分布类字段先问「它该不该跟着同段的过期 / 过滤口径走」，并配一条「分布之和 == 标量」的用例；只断言键名的用例两种写法都绿。

@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（670 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（673 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -586,6 +586,12 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 修法：服务端补 `total = len(reports)`（截断前）与 `has_more = total > count`，损坏分支同样回 `total: 0` / `has_more: false`（前端不会拿到 `undefined`）；控制台新增全局 `ADVISOR_TOTAL`（`res[2].total` 缺省时退回已加载条数），角标与 tab aria 都读它，列表在 `ADVISOR_TOTAL > reports.length` 时先插一条「当前只显示最近 N 份（存档共 M 份），更早的报告不在此列表里」。
   - 测试：`test_regression.py` +3 条（150 份 → count 100 / total 150 / has_more、首位 `r149` 且最旧的 `r000` 被截掉；3 份时 has_more=False；存档损坏时 ok=False 但 total=0）；`test_console_ui.py` +1 条（角标读 `ADVISOR_TOTAL`、旧写法不在、截断说明位于卡片之前）。服务端 666 → 670 条。
   - 计数：`routes.py` 1084 → 1092 行（`register` @1080 / 映射 @1082-1091）；`console_ui.py` 3566 → 3584（`ADVISOR_TOTAL` @1385、`setBadge` 调用 @1885、`renderAdvisor` @2998、截断说明 @3034、`CONSOLE_MANIFEST` @3400、`CONSOLE_SW` @3446）；`test_regression.py` 1050 → 1096、`test_console_ui.py` 542 → 561。
+
+- **统计卡的排队类型分布把早停跑的僵尸任务也算进去（feat/stats-by-kind-fresh）**
+  - 问题：`stats_api._queue_block()` 先 `kinds[kind] += 1` 再判过期，于是 `by_kind` 含已过期行，而同一张卡上的 `active / failed / stale` 与四状态计数都「过期只计 stale」。实测 5 行任务（2 条在跑 + 3 条 3 小时前停跑）→ `/stats.queue.by_kind` 给「analysis 3 / sync 2」，同屏却写「活跃 1 · 陈旧 3」：5 vs 2，用户会以为 3 个分析任务都在跑。`queue_summary()` 早就没有这个键，冲突只在这一段。
+  - 修法：把 `kinds[kind] = kinds.get(kind, 0) + 1` 移到过期判定**之后**，与四状态同口径（`sum(by_kind.count) == total - stale`）；控制台统计卡在 `stale > 0` 时于分布后补一句「（不含 N 条已过期）」，不靠用户自己去对两个数。
+  - 测试：`test_stats_api.py` +2 条（3 行含 2 条过期 → `by_kind == [{analysis:1}]` 且 `sum(by_kind) == total - stale`；干净库 4 行 → `sum(by_kind) == 四状态之和 == 4`）；`test_console_ui.py` +1 条（`var staleN = Number(STATS.queue.stale || 0);` 与新文案在、旧的「（未过期）」不在）。服务端 670 → 673 条。
+  - 计数：`stats_api.py` 220 / 194 → **228 / 201**（`_queue_block` @142 · `query_stats` @193 · `register` @226 · `CONV_KEY_SQL` @44 · `INT_ONLY_TS` @52 · `MAX_TS` @56）；`console_ui.py` 3584 / 3495 → **3590 / 3501**（`renderStats` @2860 · `CONSOLE_MANIFEST` @3406 · `CONSOLE_SW` @3452）；`test_stats_api.py` 849 → 897、`test_console_ui.py` 561 → 574。
 
 ## 12. 决策门汇总
 
