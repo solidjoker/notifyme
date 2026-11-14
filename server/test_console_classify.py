@@ -1421,3 +1421,65 @@ def test_advisor_list_state_clamps_and_tolerates_bad_input(call):
     assert got["truncated"] is False and got["filtered"] is False, f"{got!r}"
     got = call("advisorListState", None, None, None)
     assert got["loaded"] == 0 and got["total"] == 0 and got["shown"] == 0, f"{got!r}"
+
+def test_pkg_count_merges_null_and_blank_into_weixin(call):
+    """来源分布取某个 App 的全库条数：NULL / 空串必须归到微信，和统计卡同一口径。
+
+    库里 pkg 为 NULL 与空串时各自成一组，normPkg 把两者都归成 com.tencent.mm；
+    如果这里按原始键直接比，会得出「微信全库 5 条」而统计卡写「微信 8 条」，
+    同一屏两个数同时成立。
+    """
+    by_pkg = [
+        {"pkg": "com.tencent.mm", "count": 5},
+        {"pkg": None, "count": 2},
+        {"pkg": "", "count": 1},
+        {"pkg": "com.sina.weibo", "count": 3},
+    ]
+    assert call("pkgCount", by_pkg, "com.tencent.mm") == 8
+    assert call("pkgCount", by_pkg, "com.sina.weibo") == 3
+    # 分布拿到了、全库确实没有：必须回 0，不能回 null（调用方靠它区分「没有」与「不知道」）
+    assert call("pkgCount", by_pkg, "com.alibaba.android.rimet") == 0
+
+
+def test_pkg_count_accepts_map_shape(call):
+    """前端本地估算的 byApp 是 {包名: 次数}，同一个函数要吃两种形状。"""
+    assert call("pkgCount", {"com.tencent.mm": 2, "": 1}, "com.tencent.mm") == 3
+    assert call("pkgCount", {"com.sina.weibo": 4}, "com.tencent.mm") == 0
+
+
+def test_pkg_count_returns_none_when_unavailable(call):
+    """拿不到分布时回 null（不是 0）：0 会让空态断言「全库确实没有」。"""
+    for bad in (None, "abc", 42):
+        assert call("pkgCount", bad, "com.tencent.mm") is None, f"{bad!r}"
+
+
+def test_app_empty_scope_separates_missing_from_not_loaded(call):
+    """空列表的四种成因必须分开：没有 / 在更早的页 / 不知道 / 不该渲染空态。"""
+    by_pkg = [{"pkg": "com.sina.weibo", "count": 3}]
+    # 全库确实没有这个来源
+    got = call("appEmptyScope", "com.alibaba.android.rimet", 200, 0, by_pkg)
+    assert got["mode"] == "none" and got["db"] == 0, f"{got!r}"
+    # 全库有 3 条，但一条都不在已加载的 200 条里
+    got = call("appEmptyScope", "com.sina.weibo", 200, 0, by_pkg)
+    assert got["mode"] == "elsewhere" and got["db"] == 3, f"{got!r}"
+    # 拿不到分布：不许替服务端断言「没有」
+    got = call("appEmptyScope", "com.sina.weibo", 200, 0, None)
+    assert got["mode"] == "unknown" and got["db"] is None, f"{got!r}"
+    # 还有可见条目：调用方不该渲染空态
+    got = call("appEmptyScope", "com.sina.weibo", 200, 4, by_pkg)
+    assert got["mode"] == "loaded" and got["shown"] == 4, f"{got!r}"
+    # 没有来源筛选：APP_FILTER 为空时不能落到「这个来源没有」
+    got = call("appEmptyScope", "", 0, 0, by_pkg)
+    assert got["mode"] == "loaded" and got["pkg"] == "", f"{got!r}"
+
+
+def test_app_empty_scope_clamps_and_tolerates_bad_input(call):
+    """shown 超过 loaded 要夹回；脏值不许出 NaN（NaN 比较恒 false 会把计数静默吞掉）。"""
+    got = call("appEmptyScope", "com.sina.weibo", 10, 99, {"com.sina.weibo": 2})
+    assert got["loaded"] == 10 and got["shown"] == 10, f"{got!r}"
+    assert got["mode"] == "loaded", f"夹紧后仍算有可见条目：{got!r}"
+    got = call("appEmptyScope", "com.sina.weibo", "x", -3, {"com.sina.weibo": "2"})
+    assert got["loaded"] == 0 and got["shown"] == 0, f"{got!r}"
+    assert got["db"] == 2 and got["mode"] == "elsewhere", f"{got!r}"
+    got = call("appEmptyScope", "com.tencent.mm", 200, 0, [{"pkg": "com.tencent.mm", "count": 0}])
+    assert got["db"] == 0 and got["mode"] == "none", f"计数 0 就是没有：{got!r}"

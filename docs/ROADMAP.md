@@ -622,6 +622,11 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 修法：判定搬进规则脚本 `console_classify.js` 的 `advisorListState(loaded, total, shown)`（纯函数，UMD，node 可测），返回 `{loaded, total, shown, truncated, filtered}`；三条保守约定 —— `total` 缺失 / 0 / 负数 / 非数字 / 小于已加载一律回落 `loaded`，`shown > loaded` 夹回，`loaded == 0` 两标志全假。`console_ui.py` 新增 `advisorListNote(st)` 只拼措辞（截断句 + 筛选句，可叠加），`renderAdvisor` 的旧内联块换成取数 + 渲染；规则脚本缺失时退回旧口径（只报截断），降级分支保留且可测。
   - 测试：`test_console_classify.py` +4 条（截断/筛选正交、全加载不出截断、`total` 缺失五档回落、脏值夹紧与小数取整）、`test_console_ui.py` +1 条（`advisorListNote` 在、两标志分开判、旧的 `reports.length` 内联块已退场）+ 改 1 条既有截断用例的锚点并补两条断言（取数走 `CC.advisorListState`、降级分支仍在）。
   - 计数：`console_classify.js` 554 / 520 → **570 / 535**（`advisorListState` @529 · 导出块 @537-570）；`console_ui.py` 3647 / 3557 → **3678 / 3587**（`advisorListNote` @3072 · `renderAdvisor` @3087 · 取数 @3122）；`test_console_classify.py` 1379 → **1423**；`test_console_ui.py` 621 → **645**；服务端用例 694 → **699**。
+- **来源筛选下的空态把三种成因混成一句（fix/app-filter-empty-scope）**
+  - 问题：`emptyStateFor(tab)` 在 `APP_FILTER` 生效时一律输出「该来源下暂无数据 / 当前只看「X」，这个来源下暂时没有可展示的内容」。四个列表都只渲染已加载的那几页（`PAGE_LIMIT = 200`），筛选是在已加载页上做的客户端过滤 —— 于是「全库这个来源真没有」「全库有 N 条但都在更早的页里」「拿不到全库分布」三件事共用一句话；微博全库 300 条时选「微博」也会看到「暂时没有可展示的内容」。
+  - 修法：判定搬进 `console_classify.js` 的 `pkgCount(byPkg, pkg)` + `appEmptyScope(pkg, loaded, shown, byPkg)`（纯函数，UMD，node 可测），`mode` 四态 `loaded` / `none` / `elsewhere` / `unknown`；四条保守约定 —— 只信 `db === 0`（`db` 与 `shown` 无大小关系）、键过 `normPkg` 与统计卡同口径、`null`（拿不到）≠ `0`（确实没有）、只有会话 Tab 传 `byPkg`（`/stats` 只有 messages 段有按来源分布，拿消息条数当分析条数是造假）。`console_ui.appScopeCounts(tab)` 让「已加载 / 已筛出」与列表构造走同一段过滤代码；排队 Tab 直接绕过（条目无 `pkg`，`APP_FILTER` 对它不生效）。规则脚本缺失时退回原文案。
+  - 测试：`test_console_classify.py` +5 条（NULL/空串归微信、map 形状、拿不到返 `null`、四态分离、脏值夹紧）、`test_console_ui.py` +1 条（`appScopeCounts` 在、判定走 `CC.appEmptyScope`、三档 `mode` 都在、`elsewhere` 报全库条数、`unknown` 不许断言全库、`tab !== 'queue'` 守卫在、原文案仍在）；另做 `node --check`（抽 `<script>` 段）+ 最小 DOM 桩六种输入实跑。
+  - 计数：`console_classify.js` 570 / 535 → **622 / 584**（`_countOf` @539 · `pkgCount` @551 · `appEmptyScope` @578 · 导出块 @587-621）；`console_ui.py` 3678 / 3587 → **3728 / 3637**（`appScopeCounts` @2370 · `emptyStateFor` @2382）；服务端用例 699 → **705**。
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：

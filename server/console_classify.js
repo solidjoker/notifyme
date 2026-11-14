@@ -534,6 +534,56 @@
     return { loaded: L, total: T, shown: S, truncated: T > L, filtered: S < L };
   }
 
+  // 次数取值：脏输入（字符串 / 负数 / NaN / 小数）一律向下取整并夹到 >=0，
+  // 别把 NaN 带进展示层（NaN 参与比较恒 false，会让「全库有 3 条」静默变成「没有」）。
+  function _countOf(v) {
+    var x = Number(v);
+    return (isFinite(x) && x > 0) ? Math.floor(x) : 0;
+  }
+
+  // 从分布里取某个来源的全库条数。入参可能两种形状：
+  //   [{pkg, count}]（服务端 /stats 的形状）或 {包名: 次数}（前端本地估算的形状）
+  // 键名一律过 normPkg 再比：库里 pkg 为 NULL 与空串时各自成一组，
+  // 归一后都算微信 —— 与统计卡 distPairs 的归并口径必须同一个，
+  // 否则「微信全库 0 条」和「微信全库 3 条」会在同一屏里同时成立。
+  // 返回 null = 拿不到分布（接口缺失 / 形状不认识 / 传入 null），调用方据此退回保守文案；
+  // 返回 0 = 分布拿到了，全库确实没有这个来源。
+  function pkgCount(byPkg, pkg) {
+    if (byPkg == null) return null;
+    var isArr = Object.prototype.toString.call(byPkg) === "[object Array]";
+    if (!isArr && typeof byPkg !== "object") return null;
+    var want = normPkg(pkg), total = 0;
+    if (isArr) {
+      byPkg.forEach(function (x) {
+        if (!x || typeof x !== "object") return;
+        if (normPkg(x.pkg) === want) total += _countOf(x.count);
+      });
+    } else {
+      Object.keys(byPkg).forEach(function (k) {
+        if (normPkg(k) === want) total += _countOf(byPkg[k]);
+      });
+    }
+    return total;
+  }
+
+  // 「列表是空的」在来源筛选下有四种完全不同的成因，共用一句「该来源下暂无数据」
+  // 会让用户以为这个 App 从来没来过消息：
+  //   mode="loaded"     还有可见条目（调用方不该渲染空态）
+  //   mode="none"       全库计数为 0 —— 这个来源确实一条都没有
+  //   mode="elsewhere"  全库有 db 条，但都不在已加载的这几页里（更早的页 / 被脏行守卫跳过）
+  //   mode="unknown"    拿不到全库分布（离线 / 老服务端 / 统计接口失败），不敢断言
+  // loaded=已加载条数、shown=按来源筛出的条数、db=全库该来源条数（null=未知）。
+  // shown 被夹到 <= loaded；db 与 shown 没有大小关系（跨页、skip 掉的脏行）——
+  // 所以判定只能信「db === 0」，不能拿 db < shown 推任何东西。
+  function appEmptyScope(pkg, loaded, shown, byPkg) {
+    var L = _countOf(loaded), S = _countOf(shown);
+    if (!pkg) return { pkg: "", loaded: L, shown: L, db: null, mode: "loaded" };
+    if (S > L) S = L;
+    var db = pkgCount(byPkg, pkg);
+    var mode = (S > 0) ? "loaded" : (db === null ? "unknown" : (db > 0 ? "elsewhere" : "none"));
+    return { pkg: normPkg(pkg), loaded: L, shown: S, db: db, mode: mode };
+  }
+
   return {
     VERSION: VERSION,
     QUEUE_STATE_ORDER: QUEUE_STATE_ORDER,
@@ -565,6 +615,8 @@
     groupQueueTasksByDevice: groupQueueTasksByDevice,
     queueDeviceSummary: queueDeviceSummary,
     advisorPkgScope: advisorPkgScope,
-    advisorListState: advisorListState
+    advisorListState: advisorListState,
+    pkgCount: pkgCount,
+    appEmptyScope: appEmptyScope
   };
 });

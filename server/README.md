@@ -396,6 +396,27 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 旧实现拿**过滤后的可见条数**跟存档总数比（`ADVISOR_TOTAL > reports.length`），存档 400 份、本页 100 份、筛到 4 份时写
 「当前只显示最近 4 份（存档共 400 份）」，用户以为 395 份报告被截掉了；反过来存档 40 份全加载、筛到 2 份时又在一份没截的情况下谎报「更早的报告不在此列表里」。
 
+**来源筛选下的空态必须分开三种成因**：会话 / 待办 / 统计 / 顾问四个列表都只渲染已经拉下来的那几页（`PAGE_LIMIT = 200`），
+按来源筛选是在**已加载页**上做的客户端过滤 —— 过滤后为空时，「全库这个来源一条都没有」「全库有 N 条但都不在这几页里」
+「拿不到全库分布」三件事的结论完全不同，不能都说成「该来源下暂无数据」。判定收进 `console_classify.appEmptyScope(pkg, loaded, shown, byPkg)`
+（纯函数、UMD、node 可测），返回 `{pkg, loaded, shown, db, mode}`，`mode` 四态：
+
+- `loaded` —— 还有可见条目，调用方不该渲染空态；
+- `none` —— 全库计数 `db === 0`，这个来源真的没有；
+- `elsewhere` —— 全库有 `db` 条，但都不在已加载的这几页里（更早的页没拉）；
+- `unknown` —— `byPkg` 拿不到（首屏 `/stats` 未回 / 老服务端无该键 / 非会话 tab），措辞只能停在「这一页里没有」。
+
+四条保守约定：① `db` 与 `shown` **没有大小关系**（跨页、脏行被 `typeof` 守卫跳过），判定只信 `db === 0`，写成 `db < shown` 会在
+「全库 5 条 / 本页 3 条」时误判成「还有更多没加载」；② `pkgCount` 的键一律过 `normPkg` 再比（库里 `pkg` 为 `NULL` 与空串各成一组，
+归成 `com.tencent.mm`，与统计卡 `distPairs` 同口径，否则同一屏「微信 5 条」与「微信 8 条」同时成立）；
+③ `pkgCount` 返回 `null` 是「拿不到」、`0` 是「拿到了确实是 0」，两者不许混用；
+④ 只有会话 Tab 传 `byPkg` —— `/stats` 只有 `messages` 段给按来源分布，`analyses` 段刻意不接受 `pkg`，
+拿消息条数当分析条数是造假，待办 / 统计 / 顾问一律落 `unknown`。排队 Tab 直接绕过整个分支：排队条目没有 `pkg` 字段，`APP_FILTER` 对它不生效。
+
+`console_ui.appScopeCounts(tab)` 提供「已加载 / 已筛出」两个数，且与各自列表构造**走同一段过滤代码**（`filteredMsgs` / `filteredTodos` /
+`filteredAnalyses` / 与 `renderAdvisor` 同形的 `ADVISORS.filter`）——两个数各写一遍必然在改过滤条件时分叉，分叉的后果是空态开始报错数。
+规则脚本缺失时 `try/catch` 兜 `null`，退回旧文案「该来源下暂无数据」；该降级路径有用例钉住字符串。
+
 ### POST /queue —— 上报排队任务快照（需 token）
 
 请求体 `{"device_id": "android-1f2a3b4c", "tasks": [...]}`，按 `(device_id, task_id)` 整份覆盖
