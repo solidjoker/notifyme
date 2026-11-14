@@ -1623,3 +1623,95 @@ def test_sync_counters_respect_client_side_filtering(call):
     assert got["msg"] == {"value": 5, "scope": "loaded"}, f"{got!r}"
     assert got["ana"] == {"value": 3, "scope": "loaded"}, f"{got!r}"
     assert got["mixed"] is False, f"{got!r}"
+
+
+# --------------------------------------------------------------------------
+# 展示文案：码值 → 中文（SOURCE_LABELS / queueKindLabel / pairText / sourceBadge）
+# --------------------------------------------------------------------------
+
+
+def test_source_label_covers_every_source_the_server_can_write(call):
+    """来源码值 → 中文：旧前端只翻两档，a11y-extract / pc-db / eval 全是英文码直出。"""
+    assert call("sourceLabel", "android-notification") == "通知"
+    assert call("sourceLabel", "android-db") == "从数据库导入"
+    assert call("sourceLabel", "pc-db") == "从电脑数据库导入"
+    assert call("sourceLabel", "a11y-extract") == "无障碍直读"
+    assert call("sourceLabel", "eval") == "评测数据"
+
+
+def test_source_label_folds_blank_to_unknown_but_keeps_strangers(call):
+    """空 / null 归「未知来源」（与 mergeSourcePairs 同口径）；认不出的原码原样回显。"""
+    assert call("sourceLabel", None) == "未知来源"
+    assert call("sourceLabel", "") == "未知来源"
+    assert call("sourceLabel", "   ") == "未知来源"
+    assert call("sourceLabel", "unknown") == "未知来源"
+    # 新来源端上先上、控制台后上：不许吞成「未知」，否则用户看不到真实来源
+    assert call("sourceLabel", "future-source") == "future-source"
+
+
+def test_queue_labels_return_null_for_unknown_codes(call):
+    """排队维度的标签函数认不出返 null：兜底措辞由 UI 决定，规则层不替它写「其它」。"""
+    assert call("queueKindLabel", "analysis") == "分析"
+    assert call("queueKindLabel", "sync") == "同步"
+    assert call("queueKindLabel", "model") == "模型"
+    assert call("queueKindLabel", "other") == "其它"
+    assert call("queueKindLabel", "weird") is None
+    assert call("queueKindLabel", None) is None
+    assert call("queueKindLabel", "") is None
+    assert call("queueStateLabel", "done") == "已完成"
+    assert call("queueStateLabel", "running") == "运行中"
+    assert call("queueStateLabel", "weird") is None
+    assert call("queueStateLabel", None) is None
+
+
+def test_queue_labels_do_not_hit_object_prototype(call):
+    """码值来自 SQL 的 GROUP BY，可能撞到 Object.prototype 的键名（constructor 等）。"""
+    for key in ("constructor", "toString", "__proto__", "hasOwnProperty"):
+        assert call("queueKindLabel", key) is None, key
+        assert call("queueStateLabel", key) is None, key
+        assert call("sourceLabel", key) == key, key
+
+
+def test_pair_text_labels_codes_and_drops_zero_counts(call):
+    """分布文案：码值先翻中文再拼，0 / 负数 / 非数字一律不出现（与 mergePairsBy 同口径）。"""
+    pairs = [["analysis", 3], ["sync", 2], ["model", 0], ["other", -1], ["weird", 2], [None, 1]]
+    got = call("pairText", pairs, "kind")
+    # 认不出的 kind 与 null 键都写「未知」，不把 null 拼成字符串
+    assert got == "分析 3 / 同步 2 / 未知 2 / 未知 1", got
+
+
+def test_pair_text_accepts_labeler_by_name_only(call):
+    """标签函数按名字传（JSON 边界传不了函数）：认不出的名字一律当「不翻译」，不抛。"""
+    pairs = [["android-notification", 5], ["a11y-extract", 1]]
+    assert call("pairText", pairs, "source") == "通知 5 / 无障碍直读 1"
+    assert call("pairText", pairs, "analytic") == "android-notification 5 / a11y-extract 1"
+    assert call("pairText", pairs, None) == "android-notification 5 / a11y-extract 1"
+    assert call("pairText", pairs, "constructor") == "android-notification 5 / a11y-extract 1"
+
+
+def test_pair_text_handles_empty_and_dirty_input(call):
+    """没有分布时给空串（UI 才好写 `srcTxt || '—'`），脏行不抛。"""
+    assert call("pairText", [], "kind") == ""
+    assert call("pairText", None, "kind") == ""
+    assert call("pairText", [], None) == ""
+    got = call("pairText", [["android-db", "4"], ["x", "abc"]], "source")
+    assert got == "从数据库导入 4", got
+
+
+def test_pair_text_source_distribution_reads_as_chinese(call):
+    """统计卡的来源分布：旧写法 a11y-extract / '' / unknown 三段全露英文码（含空串）。"""
+    pairs = [["android-notification", 5], ["", 2], ["a11y-extract", 1], ["future", 1]]
+    got = call("pairText", pairs, "source")
+    assert got == "通知 5 / 未知来源 2 / 无障碍直读 1 / future 1", got
+
+
+def test_source_badge_marks_non_notification_channels(call):
+    """消息行的来源徽标：旧写法只认 android-db，a11y-extract 的消息没有任何标记。"""
+    assert call("sourceBadge", "android-db") == {"text": "库", "cls": "b-db"}
+    assert call("sourceBadge", "pc-db") == {"text": "库", "cls": "b-db"}
+    assert call("sourceBadge", "a11y-extract") == {"text": "读", "cls": "b-nt"}
+    # 默认通道不挂徽标：绝大多数消息都是它，挂上等于噪声
+    assert call("sourceBadge", "android-notification") is None
+    assert call("sourceBadge", None) is None
+    assert call("sourceBadge", "") is None
+    assert call("sourceBadge", "weird") is None

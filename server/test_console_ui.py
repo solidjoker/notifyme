@@ -744,3 +744,45 @@ def test_sync_line_reports_each_counter_with_its_own_scope():
         "旧句直接拼 aTotal，缺失时渲染成「分析 null」"
     assert "txt = '已同步 ' + fmtClock(LAST_SYNC) + ' · ' + syncCountText();" in html, \
         "状态行没有接线"
+
+
+def test_distribution_text_and_source_badge_come_from_the_rule_layer():
+    """统计卡与消息行的来源 / 类型文案只有一份口径（规则层）。
+
+    旧写法三处泄漏原码：① kindTxt 把 GROUP BY 的原码拼成「analysis 3 / sync 2」，
+    同一屏的排队 Tab 卡片却写「分析」；② srcTxt 只翻 android-db /
+    android-notification 两档，a11y-extract / pc-db / eval / unknown 全英文；
+    ③ msgHtml 硬判 android-db，无障碍直读的消息没有任何来源徽标（CSS 的
+    .badge.b-nt 定义了却从没被用过）。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "function sourceBadgeHtml(source)" in html, "缺少来源徽标 helper"
+    assert "CC.sourceBadge(source)" in html, "来源徽标没有走规则层"
+    assert "(m.source === 'android-db' ? " not in html, \
+        "消息行还在硬判 android-db"
+    assert "sourceBadgeHtml(m.source)" in html, "消息行没有接来源徽标"
+    # 降级：规则脚本缺失时旧口径至少要保住「库」徽标，不能整块消失
+    assert "if (!sb && source === 'android-db')" in html, "规则脚本缺失时没有降级"
+    # 分布文案走 pairText（标签按名字传：JSON 边界传不了函数）
+    assert "CC.pairText(srcPairs, 'source')" in html, "来源分布没有走规则层"
+    assert "CC.pairText(kindPairs, 'kind')" in html, "类型分布没有走规则层"
+    # 旧写法是「拿到 by_kind 就直接拼原码」，现在只允许出现在降级分支里
+    assert "var kindTxt = pairList(STATS.queue.by_kind || [], 'kind').map(" not in html, \
+        "类型分布还在无条件拼原码（降级分支之外）"
+    # 两处都必须保留降级分支：规则脚本加载失败时界面不能空白
+    assert "if (!srcTxt) {" in html, "来源分布缺降级"
+    assert "if (!kindTxt && kindPairs.length) {" in html, "类型分布缺降级"
+
+
+def test_queue_kind_and_state_labels_are_not_duplicated_in_the_ui():
+    """排队标签的唯一权威在规则层：UI 里第二份 QUEUE_KIND_META 会跟它分叉。
+
+    QUEUE_STATE_META 只为样式类名（q-running / q-done）保留，文案必须转发规则层。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "var QUEUE_KIND_META" not in html, "UI 里又抄了一份类型标签表"
+    assert "CC.queueKindLabel" in html, "类型标签没有转发规则层"
+    assert "CC.queueStateLabel" in html, "状态标签没有转发规则层"
+    # 降级分支仍在（规则脚本缺失时排队卡不能渲染成空白 chip）
+    assert "return m ? m.label : '排队中';" in html, "状态标签缺降级"
+    assert "return cc || '其它';" in html, "类型标签缺降级"

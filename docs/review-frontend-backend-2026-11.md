@@ -2268,3 +2268,133 @@ node --check <抽取的内联脚本>                                  # 退出�
 **计数.** `server/console_classify.js` 662 行 / 621 非空 → **676 / 635**（`syncCounters` @632 · 导出块 @637-675）；`server/console_ui.py` 3812 / 3721 → **3830 / 3739**（`syncCountText` @1599 · `renderSyncLine` @1621）；`server/test_console_classify.py` 1580 / 1297 → **1625 / 1334**；`server/test_console_ui.py` 724 / 594 → **746 / 614**；服务端用例 714 → **719**。
 
 **教训.** 一个句子里出现两个同量纲的数字时，它们必须各自带口径 —— 给整句定一个布尔，等于假设两个来源永远同时可得。这与 E-71 的角标、`statsListState` 的标题/切片、`advisorListState` 的截断/筛选是同一条：**聚合数字的「拿不到」是一个独立状态，必须能被单独标记，否则退化会伪装成真值。**
+## E-73 统计 Tab 的分布文案直出原码：同一屏「分析」与「analysis」并存，无障碍直读的消息没有任何来源标记（`console_classify.sourceLabel` / `sourceBadge` / `pairText`，fix/dist-labels，2026-11-14）
+
+**现象.** 一屏之内三处泄漏原码，而且它们指向的是同一批码值：
+
+1. **统计 Tab 的排队卡**写「活跃 1 · 失败 0 · 陈旧 3 / analysis 1 · 同步…」—— 实际渲染是 `analysis 3 / sync 2`（`by_kind` 的 GROUP BY 原码直接拼中文标签）。同一屏切到排队 Tab，卡片上是 `分析` / `同步` 的中文 chip。同一份 `kind`，两个 Tab 两种语言：
+
+```js
+// server/console_ui.py（改前）—— kindTxt 只拼原码
+var kindTxt = pairList(STATS.queue.by_kind || [], 'kind').map(function (p) {
+  return p[0] + ' ' + p[1];
+}).join(' / ');
+// 排队 Tab 的卡片（同一个文件）—— 走中文表
+html += '<div class="q-head"><span class="chip">' + esc(queueKindLabel(t.kind)) + '</span>' +
+```
+
+2. **统计 Tab 的来源分布**只翻两档，其余原码直出：`android-db` → 数据库、`android-notification` → 通知，而 `a11y-extract`（无障碍直读）、`pc-db`（从电脑数据库导入）、`eval`（评测数据）、`unknown`（空值归并后的桶）全是英文码。`pairText` 收口前的原文：
+
+```js
+var srcTxt = srcPairs.map(function (p) {
+  return (p[0] === 'android-db' ? '数据库' : p[0] === 'android-notification' ? '通知' : p[0]) +
+    ' ' + p[1];
+}).join(' / ');
+```
+
+3. **消息行的来源徽标**只认一个值，其它来源静默无标记：
+
+```js
+function msgHtml(m) {
+  var badges = ... + (m.source === 'android-db' ? '<span class="badge b-db">库</span>' : '');
+}
+```
+
+`a11y-extract` 的消息（无障碍直读，`event_time` 还是估算值）整行没有任何来源标记，用户无法分辨「这条是通知抓的」还是「这条是从别处读出来的」；而 CSS 里 `--badge-nt: #0f766e` 与 `.badge.b-nt` 早就定义了，一直没人用。
+
+**根因.** 码值 → 中文的映射被抄成了三份、还缺一份：规则层 `console_classify.QUEUE_KIND_LABELS` 有完整四档，`console_ui` 又抄了一份 `QUEUE_KIND_META`（内容一致但迟早分叉），而**统计卡压根没接任何一份**；来源（source）的映射则根本没有单一事实源 —— 前端在两个三元表达式里内联了两档，服务端 `routes.py` 的缺省值、`android_db_extract.py` / `pc_db_extract.py` / `A11yExtractService.kt` 的写入值却各有五个。
+
+**修法.** 映射与拼接都搬进 `server/console_classify.js`（纯函数，UMD，node 可测），UI 只拼 DOM：
+
+```js
+var SOURCE_LABELS = {
+  'android-notification': '通知',
+  'android-db': '从数据库导入',
+  'pc-db': '从电脑数据库导入',
+  'a11y-extract': '无障碍直读',
+  eval: '评测数据',
+  unknown: '未知来源'
+};
+
+function sourceLabel(source) {
+  var k = (source == null) ? '' : String(source).trim();
+  if (!k) { return SOURCE_LABELS.unknown; }
+  return Object.prototype.hasOwnProperty.call(SOURCE_LABELS, k) ? SOURCE_LABELS[k] : k;
+}
+
+var SOURCE_BADGES = {
+  'android-db': { text: '库', cls: 'b-db' },
+  'pc-db': { text: '库', cls: 'b-db' },
+  'a11y-extract': { text: '读', cls: 'b-nt' }
+};
+
+function pairText(pairs, labeler) {   // labeler 可传函数，也可传 'source' / 'kind' / 'state'
+  var fn = _labelerOf(labeler);
+  var parts = [];
+  for (var i = 0; i < pairs.length; i++) {
+    var n = Number(pairs[i][1]);
+    if (!(isFinite(n) && n > 0)) { continue; }      // 0 / 负数 / 非数字一律不出现
+    var label = fn ? fn(pairs[i][0]) : pairs[i][0];
+    if (label == null || label === '') { label = '未知'; }
+    parts.push(label + ' ' + Math.floor(n));
+  }
+  return parts.join(' / ');
+}
+```
+
+三条契约：
+
+- **认不出的原码原样回显**（`sourceLabel('future-source') === 'future-source'`）—— 端上先上新来源、控制台后上时，不许把它吞成「未知」，那等于抹掉用户的证据；只有**空值**才归 `unknown`。
+- **排队标签函数认不出返 `null`**，兜底措辞由 UI 决定（排队卡写「其它」、统计卡写「未知」），规则层不替界面决定文案。
+- **`pairText` 的标签函数可以按名字传**：控制台内联脚本与 node 单测都走 JSON 边界，函数过不了 `JSON.stringify`。`PAIR_LABELERS = {source, kind, state}` 在函数里解析，认不出的名字一律当「不翻译」（拼原码）而不抛。
+
+**修后实况（最小桩实测 + node 直跑）**：
+
+| 输入 | 输出 |
+|---|---|
+| `kind` = `[[analysis,3],[sync,2]]` | `分析 3 / 同步 2` |
+| `source` = `[[android-notification,5],['',2],[a11y-extract,1],[pc-db,1]]` | `通知 5 / 未知来源 2 / 无障碍直读 1 / 从电脑数据库导入 1` |
+| `kind` = `[[analysis,3],[sync,2],[model,0],[other,-1],[weird,2],[null,1]]` | `分析 3 / 同步 2 / 未知 2 / 未知 1`（0 与负数被丢） |
+| `msgHtml({source:'android-notification'})` | `李四 · 11-12 18:10`（默认通道不挂徽标） |
+| `msgHtml({source:'android-db'})` | `<span class="badge b-db">库</span>李四 · 11-12 18:10` |
+| `msgHtml({source:'a11y-extract'})` | `<span class="badge b-nt">读</span>李四 · 11-12 18:10` |
+| `msgHtml({pkg:'com.sina.weibo', source:'a11y-extract'})` | `<span class="badge b-app">微博</span><span class="badge b-nt">读</span>李四 · 11-12 18:10` |
+| 规则脚本缺失 + `android-db` | 仍出「库」徽标（降级） |
+| 规则脚本缺失 + `a11y-extract` | 无徽标（降级，与旧口径一致） |
+
+**刻意取舍.**
+
+1. **文案放规则层而不是资源表**：控制台是零构建的单文件 PWA，没有 strings.xml 那一层；放进 `console_classify.js` 才能被 node 单测直接锁住（Python 复刻必然漂移）。
+2. **`android-db` 与 `pc-db` 共用「库」徽标但文案分开**（`从数据库导入` / `从电脑数据库导入`）：徽标是给扫一眼用的，文案是给需要分辨「哪台机器的库」的人用的 —— 两者服务不同场景，不强行统一。
+3. **默认通道 `android-notification` 不挂徽标**：它占绝大多数，挂上就是噪声；这也让「没有徽标 = 通知抓的」成为一个可读的默认。
+4. **`console_ui` 里第二份 `QUEUE_KIND_META` 直接删掉**，`QUEUE_STATE_META` 保留 —— 后者只为 `q-running` / `q-done` 这些样式类名服务，文案已转发规则层。
+5. **两处都保留降级分支且都写进用例**：规则脚本 404 / 版本不匹配时，统计卡退回旧映射、消息行至少保住「库」徽标，界面不会整块空白。
+
+**测试.** `server/test_console_classify.py`（+9 条）：
+
+| 用例 | 锁住的语义 |
+|---|---|
+| `test_source_label_covers_every_source_the_server_can_write` | 五个真实写入值都有中文 |
+| `test_source_label_folds_blank_to_unknown_but_keeps_strangers` | 空 / null / 纯空白 → 「未知来源」；认不出的原码原样回显 |
+| `test_queue_labels_return_null_for_unknown_codes` | 未知码 / null / 空串返 `null`，兜底由 UI 定 |
+| `test_queue_labels_do_not_hit_object_prototype` | `constructor` / `toString` / `__proto__` / `hasOwnProperty` 不被当成标签 |
+| `test_pair_text_labels_codes_and_drops_zero_counts` | 码值先翻中文，0 / 负数不出现，null 键写「未知」 |
+| `test_pair_text_accepts_labeler_by_name_only` | 按名字传标签（JSON 边界），认不出的名字当「不翻译」 |
+| `test_pair_text_handles_empty_and_dirty_input` | 空分布给空串；`"4"` 能算；`"abc"` 被丢 |
+| `test_pair_text_source_distribution_reads_as_chinese` | 五段真实分布全中文 |
+| `test_source_badge_marks_non_notification_channels` | 三个挂徽标来源 + 四个不挂 |
+
+`server/test_console_ui.py`（+2 条）：断言 `sourceBadgeHtml` 在且走 `CC.sourceBadge`、旧的 `(m.source === 'android-db' ? ` 已退场、`CC.pairText(srcPairs, 'source')` 与 `CC.pairText(kindPairs, 'kind')` 都在、旧的 `var kindTxt = pairList(STATS.queue.by_kind || [], 'kind').map(` 已退场、两条降级分支都在；以及 `var QUEUE_KIND_META` 已从 UI 消失、`CC.queueKindLabel` / `CC.queueStateLabel` 已接线、两条降级 `return` 仍在。
+
+**验证.**
+
+```powershell
+python -m pytest server/test_console_classify.py -q                        # 130 passed
+python -m pytest server/test_console_ui.py server/test_console_queue.py -q  # 78 passed
+python -m pytest server/ -q                                                # 730 passed
+node --check <抽取的四段内联脚本>                                           # 退出码 0
+```
+
+**计数.** `server/console_classify.js` 676 行 / 635 非空 → **771 / 720**（`SOURCE_LABELS` @236 · `sourceLabel` @245 · `SOURCE_BADGES` @256 · `sourceBadge` @262 · `_labelOf` @267 · `queueKindLabel` @272 · `queueStateLabel` @276 · `PAIR_LABELERS` @286 · `pairText` @298 · 导出块 @724-769）；`server/console_ui.py` 3830 / 3739 → **3865 / 3773**（`sourceBadgeHtml` @2771 · `msgHtml` @2781 · `srcTxt` @3074 · `kindPairs` @3113 · `queueStateLabel` @3392 · `queueKindLabel` @3401）；`server/test_console_classify.py` 1625 / 1334 → **1717 / 1406**；`server/test_console_ui.py` 746 / 614 → **787 / 650**；服务端用例 719 → **730**。
+
+**教训.** 枚举值的展示文案必须有一个「认不出怎么办」的明确答案，而且这个答案要跟着数据走：**认不出就原样回显**（保住证据），**只有空值才归一**（那是真的没有）。这与 E-70/E-71/E-72 是同一族的反面 —— 那些是「拿不到的数冒充真数」，这一条是「拿得到的码冒充看不见」：三种语言（中文文案 / 英文码值 / `null` 字符串）在一屏里共存时，用户读到的不是数据，而是三个系统的接缝。
