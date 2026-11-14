@@ -605,6 +605,12 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 测试：`test_merge_pkg_pairs_keeps_first_seen_order` 改写为 **`test_merge_pkg_pairs_sorts_by_count_desc`**（微博 2 / 微信 3 反例 + 同次数升序 `[["b",2],["a",2]] → [["a",2],["b",2]]` + 三档混合 微信5/微博3/其它1）；`test_merge_source_pairs_folds_blank_into_unknown` 期望改为 `[["unknown",4],["android-notification",2]]`；`test_console_ui.py` 追加断言兜底分支含 `if (a[1] !== b[1]) return b[1] - a[1];` 恰 1 次。服务端仍 **679 条**（改写不新增）。
   - 计数：`console_ui.py` 3609 / 3520 → **3615 / 3526**（`distPairs` @2905 · `srcPairs` @2924 · `appPairs` @2925 · `CONSOLE_MANIFEST` @3431 · `CONSOLE_SW` @3477 · `liveDeviceCount` @3163 · `deviceTallyText` @3172 · `queueStateTotal` @3201 · `queueEmptyHtml` @3322 · `renderAdvisor` @3029）；`console_classify.js` 463 / 433 → **471 / 441**（`mergePairsBy` @110 · `mergePkgPairs` @129 · `mergeSourcePairs` @134）；`test_console_classify.py` 1212 → **1221**、`test_console_ui.py` 592 → **596**。
 
+- **排队条目的长度上限按 UTF-16 unit 截断（fix/queue-clip-codepoints）**
+  - 问题：`console_classify.normalizeQueueTasks` 用 `title.length > 256` + `slice` 判/截，JS 的 `length` 数 UTF-16 code unit，而端上 `QueueStateCore`（`TextClipCore.clip`）与服务端 `storage._normalize_queue_task`（Python `len()`）都数码点 —— 三层同一个 256 是三个意思。两个方向都错：`"a"*255 + "😀"`（257 unit / 256 码点）被截到 256 unit，末位留下孤立高代理 `0xD83D`，浏览器渲染成 `�`；端上合法的 `"😀"*256`（512 unit）被再砍成 128 个 emoji。全 ASCII 样本下三层完全等价，所以旧用例全绿。
+  - 修法：`console_classify.js` 新增 `codePointLength(s)` / `clipCodePoints(s, maxCodePoints)`（手写 `charCodeAt` 判代理对，不引 `Intl.Segmenter`，node / 浏览器 / webview 通用；不超限返回同一个串、上限 <=0 返空、不追加省略号），`normalizeQueueTasks` 的 `task_id` 128 / `title` 256 / `detail` 512 三处改走它们，导出块补出。上限值一个都没动，只统一单位。
+  - 测试：`test_console_classify.py` +8 条（`"a"*255+😀` 原样穿过且无孤代理、`"😀"*256` 逐字节不变、`"😀"*300`→256 码点、detail 600→512 码点、ASCII 1..256 不变、`task_id` 128 保留 / 129 丢弃、`clipCodePoints` 契约、`codePointLength` 与 Python `len()` 逐样本对齐）。服务端 679 → **687 条**。
+  - 计数：`console_classify.js` 471 / 441 → **524 / 491**（`codePointLength` @242 · `clipCodePoints` @255 · `normalizeQueueTasks` @275）；`test_console_classify.py` 1212 / 997 → **1322 / 1087**。`console_ui.py` 3615 / 3526 与 Android 侧不变（130 / 137 / 85 / 1369）。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：

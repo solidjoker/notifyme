@@ -383,6 +383,13 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 
 存储：表 `queue_tasks` 保留 7 天，`updated_at` 超 30 分钟未更新的条目读时算 `stale`（不回报写）。清理有两处：**上报时顺带清**（`upsert_queue_tasks` 里的 `DELETE`），以及 **读取前顺带清**（`_ensure_db_ready` → `cleanup_queue_tasks`，按 `QUEUE_CLEANUP_INTERVAL_MS` 一小时一次节流）。只留上报那一处是不够的：所有设备停报（换机 / 卸载 / 关掉排队上报）之后过期行永远不会被清，`devices` 会一直挂着早已离线的设备。
 
+
+**条目长度按 Unicode 码点算，不是按 UTF-16 unit**：`console_classify.normalizeQueueTasks` 用 `codePointLength` / `clipCodePoints`
+（手写 `charCodeAt` 判代理对）守 `title` 256 / `detail` 512 / `task_id` 128 三个上限，与端上 `QueueStateCore`（`TextClipCore.clip`）
+和服务端 `storage._normalize_queue_task`（Python `len()`）对齐。改之前这里走 `String.prototype.length` + `slice`，
+**257 个 unit 的输入（255 个 ASCII + 1 个 emoji）会留下孤立高代理 `0xD83D`**，浏览器把它渲染成 `�`；
+反过来，端上合法的「256 个 emoji 标题」（512 unit）在这里会被再砍一半、只剩 128 个 emoji。
+三处上限必须同时改：`server/console_classify.js`、`server/storage.py`、`app/.../QueueStateCore.kt`。
 ### GET /queue —— 查询排队任务（需 token）
 
 | 参数 | 说明 |

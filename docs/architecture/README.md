@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **130 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 137 个，`app/src/test` 85 个 / 1369 条），服务端已拆成 **8+1 模块**（`app.py` 627 / `util.py` 384 / `storage.py` 821 / `routes.py` 1030 / `console_ui.py` 3526 / `stats_api.py` 201 / `suggests.py` 301 / `extract_common.py` 474 + `console_classify.js` 471），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **130 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 137 个，`app/src/test` 85 个 / 1369 条），服务端已拆成 **8+1 模块**（`app.py` 627 / `util.py` 384 / `storage.py` 821 / `routes.py` 1030 / `console_ui.py` 3526 / `stats_api.py` 201 / `suggests.py` 301 / `extract_common.py` 474 + `console_classify.js` 524），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -250,7 +250,8 @@ prefs queue_state               QueueStateCollector.kt  排队上报的 device_s
 | `server/stats_api.py` | 228 | 全库聚合 `/stats`（消息 / 分析 / 排队三段）；**会话数按 `(pkg, conversation)` 计**（`CONV_KEY_SQL`，与前端 `ckOf()` 同口径）；排队段同时给 `devices`（台数）与 `devices_active`（其中在跑的台数）；**`by_kind` 只数未过期行**（与四个状态同口径，`sum(by_kind) == total - stale`） | `query_stats` @193 · `_messages_block` @59 · `_analysis_block` @107 · `_queue_block` @142 · `register` @226 · `CONV_KEY_SQL` @44 · `INT_ONLY_TS` @52 · `MAX_TS` @56 |
 | `server/suggests.py` | 344 | 下一步建议 `/suggests/next`（规则优先级队列；`pkg` 只作用于「待办 / 未分析会话」两族规则，排队按设备、顾问是全局报告）；`_advisor_state()` 返三元组，损坏时份数是 `None` 不是 0，产出 priority 85 的「顾问存档损坏」 | `query_suggests_next` @209 · `_advisor_state` @38 · `_queue_state` @74 · `_todo_counts` @104 · `_convs_without_analysis` @128 · `_pick` @197 · `register` @341 |
 | `server/extract_common.py` | 554 | 两个抽取脚本的共享内核：结构化日志 / 原文 JSONL 存档与轮转 / 跨进程写锁 / 五列去重 / 分批提交 / 主库结构兜底 | `activate` @83 · `_setting` @97 · `_log_event` @119 · `_archive_path` @139 · `_JsonlArchiver` @182 · `_FileLock` @251 · `_Dedup` @359 · `_BatchWriter` @419 · `_ensure_main_schema` @516 · `_cursor_int` @532 |
-> 行数为当前源码的**文件总行数**（wc -l 口径）；若只计非空行，依次为 app.py 627 / util.py 384 / storage.py 821 / routes.py 1030 / console_ui.py 3526 / stats_api.py 201 / suggests.py 301 / console_classify.js 441 / extract_common.py **474** / android_db_extract.py **709** / pc_db_extract.py **595**。
+| `server/console_classify.js` | 524 | 归类规则单一事实源（UMD：浏览器 `window.ConsoleClassify` / node `module.exports`，无 DOM）；**排队条目的长度上限按 Unicode 码点算**（`codePointLength` / `clipCodePoints`，`title` 256 / `detail` 512 / `task_id` 128，与端上 `QueueStateCore` + 服务端 `storage._normalize_queue_task` 三处同口径）；分布归并 `mergePairsBy` 归并后按次数降序重排 | `normPkg` @37 · `pkgLabel` @41 · `groupByPkg` @89 · `mergePairsBy` @110 · `mergePkgPairs` @129 · `mergeSourcePairs` @134 · `codePointLength` @242 · `clipCodePoints` @255 · `normalizeQueueTasks` @275 · `queueSummary` @329 · `queueDeviceSummary` @483 |
+> 行数为当前源码的**文件总行数**（wc -l 口径）；若只计非空行，依次为 app.py 627 / util.py 384 / storage.py 821 / routes.py 1030 / console_ui.py 3526 / stats_api.py 201 / suggests.py 301 / console_classify.js 491 / extract_common.py **474** / android_db_extract.py **709** / pc_db_extract.py **595**。
 
 ![服务端架构图](diagrams/07-server-architecture.png)
 

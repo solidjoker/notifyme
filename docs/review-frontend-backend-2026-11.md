@@ -1555,3 +1555,101 @@ pytest server/ -q                                                       → 679 
 **计数.** `console_ui.py` 3609 / 3520 → **3615 / 3526**（`distPairs` @2905 · `srcPairs` @2924 · `appPairs` @2925 · `kindTxt` @2957 仍是 `pairList`（kind 无脏值，刻意不合并）· `CONSOLE_MANIFEST` @3431 · `CONSOLE_SW` @3477 · `liveDeviceCount` @3163 · `deviceTallyText` @3172 · `queueStateTotal` @3201 · `queueEmptyHtml` @3322 · `renderAdvisor` @3029）；`console_classify.js` 463 / 433 → **471 / 441**（`mergePairsBy` @110 · `mergePkgPairs` @129 · `mergeSourcePairs` @134）。
 
 **教训.** 「合并同类项」这个操作**天然破坏输入顺序**——只要分组键的取值会变（这里是把 NULL / 空串折成微信），输出的顺序就不再是输入的顺序，任何「输入有序所以输出有序」的注释都是假前提。判据：**凡是聚合函数，输出顺序必须由它自己排，不能继承输入的顺序**；配的用例也必须包含「合并后次数反超」的样本，全用等值样本等于只测了一半。
+### E-66｜排队条目的长度上限按 UTF-16 unit 截断：会切出孤立代理，也会把端上合法的 emoji 标题砍半（`console_classify.normalizeQueueTasks`，fix/queue-clip-codepoints，2026-11-14）
+
+**现象.** 控制台「排队」Tab 的任务标题尾字变成 `�`；同时端上报上来的 256 emoji 长标题在控制台上只剩一半长度。两个现象互斥 —— 一个多截了、一个少截了 —— 所以不是「上限写错」，而是**三处上限用的长度单位不一样**。
+
+**根因.** 同一个 256 / 512 / 128 的上限在三层各用一种"长度"：
+
+```
+端上   app/src/main/java/com/notifyme/android/QueueStateCore.kt:103-112
+       TextClipCore.clip(base, MAX_TITLE_LEN = 256)      // 按 Unicode 码点（offsetByCodePoints）
+       TextClipCore.clip(t.detail, MAX_DETAIL_LEN = 512)
+服务端 server/storage.py:549-613 _normalize_queue_task
+       len(title) > QUEUE_TITLE_MAX_LEN (256)            # Python len() = 码点
+       len(detail) > QUEUE_DETAIL_MAX_LEN (512)          # 常量在 storage.py:532-533
+控制台 server/console_classify.js normalizeQueueTasks（改前 @241 / @243）
+       if (title.length > 256) title = title.slice(0, 256)   // JS = UTF-16 code unit
+       if (detail.length > 512) detail = detail.slice(0, 512)
+```
+
+JS 的 `String.prototype.length` 数的是 UTF-16 code unit：emoji（U+1F600）占 2 个 unit。于是**同一个字符串，端上说"合规"、控制台说"超限"**：
+
+```
+node -e 'const C=require("./server/console_classify.js"); ...'
+改前： title = "a"*255 + "😀"      → 257 unit / 256 码点
+       normalizeQueueTasks 截到 256 unit → 末位 0xD83D（孤立高代理），loneHigh = true
+       浏览器渲染该条目 → "...aaa�"
+改前： title = "😀"*256              → 512 unit / 256 码点（端上合法，正常入库）
+       normalizeQueueTasks 再截到 256 unit → 只剩 128 个 emoji
+```
+
+`0xD83D` 单个高代理不是合法 UTF-16，`JSON.stringify` 之后进响应体是 `\ud83d`，浏览器 `textContent` 渲染成 U+FFFD（`�`）。前端每轮 `/queue` 轮询都会重画，所以这条脏标题会**一直**在那儿，而服务端 `queue_tasks` 表里存的是干净的（端上截断是对的）—— 是展示层每次读都重新截一遍。
+
+**修法.** `server/console_classify.js` 新增两个按码点工作的函数（不引 `Intl.Segmenter`，手写 `charCodeAt` 判代理对，node 22 / 浏览器 / `webview` 全兼容），`normalizeQueueTasks` 改走它们：
+
+```js
+function codePointLength(s) {
+  var n = 0;
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+      var d = s.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) i++;      // 成对代理 = 1 个码点
+    }
+    n++;
+  }
+  return n;
+}
+
+function clipCodePoints(s, maxCodePoints) {
+  if (maxCodePoints <= 0) return "";
+  if (s.length <= maxCodePoints) return s;    // 快路径：unit 数不超就必然不超码点数
+  var n = 0;
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+      var d = s.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) i++;
+    }
+    n++;
+    if (n === maxCodePoints) return s.slice(0, i + 1);   // 不追加省略号
+  }
+  return s;
+}
+```
+
+接线三处（`normalizeQueueTasks` @275）：`if (!id || codePointLength(id) > 128) continue;`、`title = clipCodePoints(title, 256)`、`detail = clipCodePoints(detail, 512)`；空标题仍先回落 `未命名任务` 再截。导出块补 `codePointLength` / `clipCodePoints`。
+
+长度单位统一后**三层语义一致**，上限值一个都没动 —— 端上 256 emoji 的标题现在原样穿过控制台，257 unit 的畸形串也不会再被切出孤立代理。
+
+**测试.** `test_console_classify.py` +8 条（基线 679 → **687**）：
+
+| 用例 | 钉住什么 |
+|---|---|
+| `test_normalize_queue_tasks_truncates_by_code_point` | `"a"*255 + "😀"` 原样穿过（257 unit / 256 码点）且 `_has_lone_surrogate` 为假 |
+| `test_normalize_queue_tasks_keeps_256_emoji_title` | `"😀"*256` 逐字节不变（改前被砍成 128 个） |
+| `test_normalize_queue_tasks_truncates_over_limit_emoji` | `"😀"*300` → 恰 256 个 emoji（512 unit） |
+| `test_normalize_queue_tasks_detail_truncates_by_code_point` | `"😀"*600` → 恰 512 个 emoji（1024 unit） |
+| `test_normalize_queue_tasks_ascii_truncation_unchanged` | ASCII 1..256 全部原样，257 以上仍截到 256（老行为不出回归） |
+| `test_task_id_limit_counts_code_points` | `"😀"*128` 保留、`"😀"*129` 整条丢弃（`continue` 语义不变） |
+| `test_clip_code_points_contract` | 不超限返同一个串、上限 0 / 负数返空、`"a" + "😀"*3` 截到 2 码点 |
+| `test_code_point_length_matches_python_len` | 8 个样本的 `codePointLength` 与 Python `len()` 逐个相等 |
+
+最后一条是这轮的关键：**它不是"测自己"，是把 JS 口径钉到服务端口径上**（Python `len()` 数码点）。只测「不切代理对」会漏掉"两个实现都错但错得一致"的情况。
+
+**验证.**
+
+```
+node -e '... normalizeQueueTasks({tasks:[{task_id:"t",title:"a".repeat(255)+"😀",...}]})'
+  → title 长度 257 unit / 256 码点，末位 0xDE00，loneHigh = false
+node -e '... normalizeQueueTasks({tasks:[{task_id:"t",title:"😀".repeat(300)}]})'
+  → 恰 256 个 emoji（512 unit）
+pytest server/test_console_classify.py -q  → 95 passed in 31.16s
+pytest server/ -q                          → 687 passed in 39.92s
+```
+
+**计数.** `console_classify.js` 471 / 441 → **524 / 491**（`codePointLength` @242 · `clipCodePoints` @255 · `normalizeQueueTasks` @275 · `queueSummary` @329 · `groupQueueTasks` @343 · `sortMessageGroups` @358 · `groupMessages` @378 · `groupQueueTasksByDevice` @456 · `queueDeviceSummary` @483 · 导出块 @493-522）；`test_console_classify.py` 1212 / 997 → **1322 / 1087**；服务端用例 679 → **687 条**。`console_ui.py` 3615 / 3526 与 Android 侧计数不变（130 / 137 / 85 / 1369）。
+
+**教训.** 「长度上限」这个约束必须连**单位**一起规定，只写数字等于没写：同一份 `256` 在 Kotlin（`offsetByCodePoints`）、Python（`len()`）、JS（`.length`）是三种不同的东西，而三者恰好在**纯 ASCII 输入上完全等价** —— 所以用例全用 `"a"*300` 时，三层都"对"。判据可以写成一句：**跨语言共享的数值约束，必须配一组"三种单位会分叉"的样本**（emoji / 组合字符 / 泰米尔文），否则测的只是 ASCII 这个特例。同族缺陷在 Android 侧已经修过（`TextClipCore`，`take(n)` → `offsetByCodePoints`），这轮是把同一个 bug 从 Kotlin 抄到 JS 的那一半补上。
+
