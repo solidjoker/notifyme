@@ -449,6 +449,11 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 三条约定：① **认不出的原码原样回显，空值才折 `unknown`（「未知来源」）** —— 服务端将来加一条采集通道，控制台不会先渲染成空白；② **映射表查键必须走 `Object.prototype.hasOwnProperty.call`**，`source = "constructor"` / `"__proto__"` 这类脏值不许命中原型链；③ **`pairText` 丢掉 `count <= 0` 的项并按传入顺序拼接**，零次数不该占位。
 UI 侧只保留降级：`console_ui.sourceBadgeHtml()` 在规则脚本缺失时仍给 `android-db` 打「库」，其余通道打空（宁可不标也不标错）。新增一条采集通道时改 `SOURCE_LABELS` 一处即可，`server/test_console_classify.py` 的 `test_source_label_covers_every_source_the_server_can_write` 会钉住全集。
 
+**排队 Tab 的空态同样必须分开三种成因，设备维度还要再分一层**：设备 chip 上写着「3 台 · 2 活跃」，点开某台设备却看到「手机端没有排队或运行中的分析任务」—— 旧 `queueEmptyHtml()` 只判 `QUERY.trim() || QUEUE_DEVICE` 就退回通用空态，把三种成因混成一句：
+① 全库真没有这个状态 / 这台设备的任务；② 全库有 N 条，但列表只覆盖最近 500 条（跨设备共用一个窗口、按 `updated_at` 倒序，安静设备的历史会被活跃设备挤出去）；③ 这次 `/queue` 没返回汇总，压根拿不到全库口径。
+判定收进 `console_classify.queueEmptyScope(device, state, loaded, shown, devices, summary)`，返回 `{device, state, scope, loaded, shown, db, stateKnown, mode}`：`scope` 是 `device` / `state` / `all`，`mode` 是 `loaded` / `none` / `elsewhere` / `unknown`（与 `appEmptyScope` 同名同义）。
+四条保守约定：① **设备维度读 `devices[].total`（全库分组聚合、无 LIMIT），状态维度读 `summary[state]`**，两者都不能用 `QUEUE.length` 顶替；② **设备查不到 ≠ 没任务** —— `devices` 里没有这台设备说明行已被保留期清理（停报超 7 天），措辞要写「设备『…』已经没有任务了」而不是「这一页没有」；③ **「设备 × 状态」没有已知口径**（`queue_summary(device_id, state)` 只单独接受其一），此时 `stateKnown = false`，UI 只能说「全库共有 N 条任务（各状态合计）」，不许拿设备总数冒充该状态的条数；④ **拿不到 `summary` / `devices` 时回 `unknown`**，措辞写「拿不到全库计数…不敢断言」，绝不替服务端下「已经没有任务」的结论。
+UI 侧只挑措辞：`console_ui.queueEmptyHtml()` 在 `scope.scope === 'device'` 下给三档（已清理 / 在更早的页 / 拿不到口径），其余给「全库没有」「这一页没有」「当前页没有 + 全库共 N 条」，并按当前筛选给出「查看全部设备」「查看全部状态」按钮。**搜索仍是「本页里挑」**（`if (QUERY.trim()) return emptyStateFor('queue')`），因为搜索命中的是已加载行、全库条数救不了它。
 ### POST /queue —— 上报排队任务快照（需 token）
 
 请求体 `{"device_id": "android-1f2a3b4c", "tasks": [...]}`，按 `(device_id, task_id)` 整份覆盖

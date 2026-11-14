@@ -321,19 +321,16 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   刻意例外别顺手改：`"%02x".format(it)` 的 hex、`AnalysisCase` 已钉 `Locale.US` / `Locale.CHINESE` 的题面、`S1Eval` 的 `Locale.US` ISO 时间。对照单测钉 `Locale` 时**时区也要一起钉**（`SimpleDateFormat` 取系统时区，CI runner 是 UTC、本机 +08 —— 本轮 CI 就是这条先红）。改前跑 `LocaleTextCoreTest`（含 ar-EG / de-DE 回归）。
 
 - **静态检查基线：`docs/scripts/static_check.py` + `.editorconfig`**（ktlint 1.8.0）。只开 5 条（import-ordering / no-unused-imports / final-newline / no-consecutive-blank-lines / string-template），加规则须同步 `.editorconfig` 与 `ENABLED_RULES`；glob 带 `!third_party/**`；CI `--report`、local_check 第 7 步 `--strict`、清账 `--fix`；lint 基线靠 lint-summary 断言；`local_check.ps1` 必须 UTF-8+BOM。
-- **S2 摘要可用性只有一把尺子：`S2Usability`**（internal object，349 行 + 34 条）。① 可用 = 六项判据全过（`delivered`/`no_placeholder`/`summary`/`due`/`action`/`tasks`），措辞不进判据；② `due` 判「与 S1 同桶」+`PAST_TOLERANCE_MS=60s` 下限，桶复用 `TopicLabelCore.DUE_*`；③ 兜底摘要只有 `fallbackSummary(kase)`；④ 报告文件名必须纯 ASCII（Windows 中文名 latin-1 乱码）；⑤ 只断言跑通不断言答对。
+- **S2 摘要可用性只有一把尺子：`S2Usability`**（internal object，349 行 + 34 条）。① 可用 = 六项判据全过（`delivered`/`no_placeholder`/`summary`/`due`/`action`/`tasks`），措辞不进判据；② `due` 判「与 S1 同桶」+`PAST_TOLERANCE_MS=60s` 下限，桶复用 `TopicLabelCore.DUE_*`；③ 兜底摘要只有 `fallbackSummary(kase)`；④ 报告文件名纯 ASCII；⑤ 只断言跑通不断言答对。
 
 
 - **采集诊断页的累计统计只有一份口径：`AllTimeStatsCore`**（internal object + 16 条）。① 累计不是 `readRecent(N)`（窗口一满就静默偏小），是 `scanAll`（`SCAN_LINES=50000`）；② 被截断要能报 `capped(totalLines, scannedLines)`；③ object 层 `allTimeStats` 必须 `internal`，`scanAll` 必须写在 Core 内。
 
 - **文本截断只有一份口径：`TextClipCore`**（internal object + 20 条）。`take(n)` 数 **UTF-16 unit**，emoji 被切成孤立代理、UTF-8 落成 `?`。① `clip`/`clipWithEllipsis` 走 `offsetByCodePoints`，未超限返同一实例、省略号不占预算；② ASCII 逐字节不变；③ 不切断代理对，不保证字素簇；④ 32 处已收口，hex 与列表 `take(n)` 刻意不套；⑤ 服务端同口径 `clipCodePoints` 守排队 title 256 / detail 512 / task_id 128，改上限要同时改 `QueueStateCore` / `storage._normalize_queue_task`。
 
-- **SharedPreferences 的 JSON 读写只有一份口径：`PrefsJsonCore`**（internal object + 29 条单测）。五处 Store（`WatchlistStore` / `AppSourceStore` / `ConvTagStore` / `ConvAnalysisScheduleStore` / `AnalysisScopeCore.decodeConvIds`）此前各抄一份 `try { JSONArray(raw) } catch { }`。
-① **读永不抛**且返回独立拷贝；② **只做形状裁剪不做领域过滤**（`ConvTag.fromCode` 留 Store 层）；③ 元素走 `optString`；④ **写不排序**（`sort = true` 才排）；⑤ 与 JSONL 无关。`strings` 默认只丢空串，纯空白要 `trim = true` 才丢。改前跑 `PrefsJsonCoreTest.kt`。
+- **SharedPreferences 的 JSON 读写只有一份口径：`PrefsJsonCore`**（internal object + 29 条单测）。五处 Store 此前各抄一份 `try { JSONArray(raw) } catch { }`。① **读永不抛**且返回独立拷贝；② **只做形状裁剪不做领域过滤**（`ConvTag.fromCode` 留 Store 层）；③ 元素走 `optString`；④ **写不排序**（`sort = true` 才排）；⑤ 与 JSONL 无关。`strings` 默认只丢空串，纯空白要 `trim = true`。改前跑 `PrefsJsonCoreTest.kt`。
 
-- **模型通道请求体与状态行着色各只有一份口径**：`ChatRequestCore`（61 行 / 16 条）+ `StatusTintCore`（31/16），改前先跑这两个测试类。
-① 三处 `postChatCompletions` 只留 `url(endpoint(url)).post(payload(model,sys,user).toRequestBody(JSON_MEDIA_TYPE))`：端点归一（trim→去尾斜杠→补 `/chat/completions`，不猜 `/v1`）、`MAX_TOKENS=4096`、键序全在 Core；HTTP / `Authorization` / 异常类型留各通道。
-② 状态行只走 `StatusTintCore.colorRes`：失败/鉴权先判、`已中断…完成` 判绿别改、只回资源 id。③ `AdvisorWorker.parseReport` 的 JSON 提取必须委托 `AnalysisParsing.extractJsonPayload`。
+- **模型通道请求体与状态行着色各一份口径**：`ChatRequestCore`（61 行/16 条）+ `StatusTintCore`（31/16）。① 三处 `postChatCompletions` 只留 `url(endpoint(url)).post(payload(model,sys,user).toRequestBody(JSON_MEDIA_TYPE))`：端点归一（trim→去尾斜杠→补 `/chat/completions`，不猜 `/v1`）、`MAX_TOKENS=4096`、键序全在 Core；HTTP / 鉴权 / 异常留各通道。② 状态行只走 `StatusTintCore.colorRes`：失败/鉴权先判、`已中断…完成` 判绿别改、只回资源 id。③ `AdvisorWorker.parseReport` 必须委托 `AnalysisParsing.extractJsonPayload`。
 - **Intent extras→会话键、运行时权限各一份口径**：`ConvExtrasCore`（43 行/18 条）+`PermissionGateCore`（78/15）。① 包名空白回落微信且**不 trim**，会话名空白=无会话返 **null**（`ConvKey("", pkg)` 永匹配不到消息）。② `needsPostNotifications` 同时看 sdkInt 与结果；`allGranted` 空结果 false。③ 权限名用 `PERM_POST_NOTIFICATIONS` 字面量（写 `Manifest.permission.POST_NOTIFICATIONS` 报 `InlinedApi`，lint 漂到 4 条）。
 - **服务端地址与鉴权头各一份口径：`SyncEndpointCore`**（73 行 / 18 条）。① `base()` 顺序是契约：trim → 去尾斜杠 → 剥尾部 `/weixin`（先剥斜杠才剥得掉 `http://h/weixin/`）；② 只拼接，不猜 `/v1`（`ChatRequestCore`），不补 `/chat/completions`；③ `authorized()` 用 `isNotBlank` 且返回同一 builder（可链式、不成双头）；`SyncConfig` setter 会 trim，纯空白令牌不可达。
 
@@ -358,7 +355,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 ③ 加参数别只改回显：既有 `test_suggests_echoes_pkg` 只断言回显，621 条全绿照样漏了这个缺陷 —— 新过滤逻辑必须补「带/不带 pkg 结果不同」的用例。
 - **数值列的脏行守卫：`server/stats_api.INT_ONLY_TS` / `MAX_TS`**（`test_stats_api.py` 4 条 + `test_queue.py` 2 条守着）。SQLite 列有 INTEGER 亲和但**能存字符串**，单行脏值就让整页 500 / 游标毒化。① 过滤用 `typeof(timestamp) IN (`'integer','real'`)` 作**常驻条件**，聚合用 `MAX(CASE WHEN typeof(...) THEN x END)`；② **别换 CAST**（`EXPLAIN` 实测 typeof 仍走索引，CAST 退化全表 `SCAN`）；③ 出参走 `_safe_int(...)`。
 - **排队过期行的清理与设备维度过期口径：`storage.cleanup_queue_tasks` / `queue_devices`**（`test_queue.py` 6 条）。① 清理不能只挂上报路径（设备全停报后僵尸行永挂 devices），读取路径 `_ensure_db_ready` 也要调 `_maybe_cleanup_queue` 按 `QUEUE_CLEANUP_INTERVAL_MS`（1h）节流；② 设备 chip 的 `active` 只算未过 TTL 的 queued+running，另加第 4 键 `stale`；③ 用例 fixture 必须复位 `app_module._queue_cleanup_at`。
-- **排队 Tab 的状态 chip / 空态与汇总同源**（`console_ui.queueStateTotal` / `queueEmptyHtml`）。① chip 计数走 `queueStateTotal(st)`（优先 `QUEUE_SUMMARY[st]`）——数当前页会让 600 排队 + 20 已完成显示「已完成 0」；② 列表空但全库有命中时报「当前页没有…/全库共 N 条…」，搜索/设备筛选命中 0 退回通用空态；③ 先加「chip 与 summary 一致」用例。
+- **排队 Tab 的状态 chip 与汇总同源**（`console_ui.queueStateTotal`；空态另见 `queueEmptyScope` 契约）。① chip 计数走 `queueStateTotal(st)`（优先 `QUEUE_SUMMARY[st]`）——数当前页会让 600 排队 + 20 已完成显示「已完成 0」；② 先加「chip 与 summary 一致」用例。
 - **顾问存档损坏不能冒充「没有报告」**（`suggests._advisor_state` 返三元组 + `ADVISORS_ERR`；`test_stats_api.py` 3 条守着）。
 ① 损坏时份数必须给 `None`（`return None, 0, True`），给 `0` 会让 priority 50 的「还没有顾问报告 / 顾问存档 0 份」规则命中 —— 真实状态是存档坏、历史报告还在盘上；
 ② 建议侧改出 priority 85 的「顾问存档损坏，报告读不出来」，夹在 80（待办）与 100（失败排队）之间；
@@ -375,12 +372,13 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **顾问 Tab 的来源过滤说明必须跟事实走：`console_classify.advisorPkgScope`**（`test_console_classify.py` 6 条 + `test_console_ui.py` 1 条守着）。① `pkg` 可选（老报告与端上 `toUploadJson` 都不写）；② 四态 `all`/`untagged`/`mixed`/`exact`；③ UI 只挑措辞。
 - **列表「被截断」与「被筛选」必须各有独立标志：`console_classify.advisorListState`**（4 条规则层 + 1 条 UI 守着）。① `truncated = total > loaded`、`filtered = shown < loaded`；② `total` 缺失/0/负数/非小数/小于 loaded 一律回落 loaded；③ 降级路径保留旧口径（只报截断）且要可测。
-- **来源筛选下的空态必须分三成因：`console_classify.appEmptyScope`**（5 条规则层 + 1 条 UI）。① 列表只覆盖已加载页，`mode` 四态 `loaded`/`none`/`elsewhere`/`unknown`，只有 `db === 0` 敢说「没有」；② `db` 与 `shown` 无大小关系（跨页 + 脏行 skip）；③ 键过 `normPkg` 与 `distPairs` 同口径，`null` ≠ `0`；④ 只有会话 tab 传 `byPkg`，排队直接绕过。
-- **列表只画一部分时，标题与切片必须同源：`console_classify.statsListState`**（3 条规则层 + 1 条 UI 守着）。① `capped`（数据超上限，决定给不给开关）与 `expanded`（用户没点开）两个正交标志；② 上限由 UI 传（`STATS_LIST_CAP=30`），脏值回落 `DEFAULT_STATS_LIST_CAP`；③ `shown` 由函数算、调用方不许传；④ 标题 / note / more 三处读同一 `listState`，展开态只存内存。
+- **排队 Tab 的空态必须分三成因：`console_classify.queueEmptyScope`**（7 条规则层 + 1 条 UI）。① `scope` 三档 `device`/`state`/`all`，`mode` 四态 `loaded`/`none`/`elsewhere`/`unknown`；② 设备维度读 `devices[].total`、状态维度读 `summary[state]`，都不许拿 `QUEUE.length` 顶替；③ 设备不在清单里 = 行已被保留期清理，写「已经没有任务了」而不是「这一页没有」；④ 「设备 × 状态」无已知口径 → `stateKnown=false`，只说「各状态合计」；⑤ 拿不到汇总回 `unknown`，措辞写「不敢断言」，搜索仍是「本页里挑」直退通用空态。
+- **来源筛选下的空态必须分三成因：`console_classify.appEmptyScope`**（5 条规则层 + 1 条 UI）。① `mode` 四态 `loaded`/`none`/`elsewhere`/`unknown`，只有 `db === 0` 敢说「没有」；② `db` 与 `shown` 无大小关系（跨页 + 脏行 skip），`null` ≠ `0`；③ 键过 `normPkg` 与 `distPairs` 同口径；④ 只有会话 tab 传 `byPkg`。
+- **列表只画一部分时，标题与切片必须同源：`console_classify.statsListState`**（3 条规则层 + 1 条 UI）。① `capped` 与 `expanded` 两个正交标志；② 上限由 UI 传（`STATS_LIST_CAP=30`），脏值回落 `DEFAULT_STATS_LIST_CAP`；③ `shown` 由函数算、调用方不许传；④ 标题 / note / more 读同一 `listState`。
 
 - **角标这类聚合数字默认口径是全库：`console_classify.badgeState`**（4 条规则层 + 1 条 UI 守着）。① `{value, scope}` 两态 `library`/`loaded`；② `total` 缺失/负数/非小数一律回落本页，`null`（拿不到）≠ `0`；③ 用户已筛选（`APP_FILTER` 或搜索）时不报全库；④ 读屏在 `scope` 为 `loaded` 时补「（本页）」；排队与顾问不套。
 
-- **一个句子里的两个计数必须各带口径：`console_classify.syncCounters`**（4 条规则层 + 1 条 UI 守着）。① 逐侧复用 `badgeState` 定档，返 `{msg, ana, mixed}`，别用「一侧拿不到就整句退化」；② `null`（拿不到）≠ `0`（真的是 0）；③ `filtered` 一票否决两侧；④ UI 只给退化的那侧加「已加载」前缀，规则脚本缺失时退回「两侧都能拿才整句全库」。
+- **一个句子里的两个计数必须各带口径：`console_classify.syncCounters`**（4 条规则层 + 1 条 UI）。① 逐侧复用 `badgeState` 定档，返 `{msg, ana, mixed}`；② `null`（拿不到）≠ `0`（真的是 0）；③ `filtered` 一票否决两侧；④ UI 只给退化的那侧加「已加载」前缀。
 
 - **枚举的文案映射只在规则层：`console_classify.SOURCE_LABELS` / `sourceLabel` / `sourceBadge` / `queueKindLabel` / `queueStateLabel` / `pairText`**（9 条规则层 + 2 条 UI 守着）。① 认不出原码原样回显，只有空值折 `unknown`；② 查表走 `Object.prototype.hasOwnProperty.call`，`constructor` / `__proto__` 不许命中原型链；③ `queueKindLabel` / `queueStateLabel` 未知返 `null` 让 UI 定兜底；④ 新增采集通道只改 `SOURCE_LABELS` 一处（用例钉全集），`console_ui` 只留 `android-db` → 「库」降级。
 

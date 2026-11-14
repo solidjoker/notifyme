@@ -1715,3 +1715,78 @@ def test_source_badge_marks_non_notification_channels(call):
     assert call("sourceBadge", None) is None
     assert call("sourceBadge", "") is None
     assert call("sourceBadge", "weird") is None
+
+
+def test_queue_empty_scope_keeps_loaded_page_when_rows_visible(call):
+    """还有可见条目时调用方不该渲染空态：mode 必须是 loaded，别顺手报「全库有 N 条」。"""
+    scope = call("queueEmptyScope", "", "", 500, 500, [{"device_id": "android-a", "total": 9, "active": 2, "stale": 1}, {"device_id": "android-b", "total": 3, "active": 0, "stale": 3}], {"queued": 1, "running": 1, "failed": 0, "done": 1, "stale": 6, "total": 9})
+    assert scope["mode"] == "loaded", scope
+    assert scope["scope"] == "all", scope
+    # 全库分布拿到了但没用来下结论：有可见行就不存在「空」的问题
+    assert scope["db"] is None, scope
+
+
+def test_queue_empty_scope_separates_page_from_library(call):
+    """什么都没筛、这一页 0 条但全库有 9 条 —— 是「不在 500 条窗口里」，不是「没有任务」。"""
+    scope = call("queueEmptyScope", "", "", 500, 0, [{"device_id": "android-a", "total": 9, "active": 2, "stale": 1}, {"device_id": "android-b", "total": 3, "active": 0, "stale": 3}], {"queued": 1, "running": 1, "failed": 0, "done": 1, "stale": 6, "total": 9})
+    assert scope["mode"] == "elsewhere", scope
+    assert scope["db"] == 9, scope
+    assert scope["stateKnown"] is True, scope
+
+
+def test_queue_empty_scope_state_filter_uses_summary_count(call):
+    """按状态筛：只有 summary 的四状态计数是全库口径（chip 与空态必须同源）。"""
+    none = call("queueEmptyScope", "", "failed", 500, 0, [{"device_id": "android-a", "total": 9, "active": 2, "stale": 1}, {"device_id": "android-b", "total": 3, "active": 0, "stale": 3}], {"queued": 1, "running": 1, "failed": 0, "done": 1, "stale": 6, "total": 9})
+    assert none["mode"] == "none", none
+    assert none["db"] == 0, none
+    # failed=0 是「分布拿到了、真的是 0」，与「拿不到分布」是两件事
+    assert none["stateKnown"] is True, none
+    some = call("queueEmptyScope", "", "queued", 500, 0, [{"device_id": "android-a", "total": 9, "active": 2, "stale": 1}, {"device_id": "android-b", "total": 3, "active": 0, "stale": 3}], {"queued": 1, "running": 1, "failed": 0, "done": 1, "stale": 6, "total": 9})
+    assert some["mode"] == "elsewhere", some
+    assert some["db"] == 1, some
+
+
+def test_queue_empty_scope_device_filter_reads_device_inventory(call):
+    """设备筛选：这台设备的全库条数只在 devices 清单里，不能数已加载的列表。"""
+    scope = call("queueEmptyScope", "android-b", "", 500, 0, [{"device_id": "android-a", "total": 9, "active": 2, "stale": 1}, {"device_id": "android-b", "total": 3, "active": 0, "stale": 3}], {"queued": 1, "running": 1, "failed": 0, "done": 1, "stale": 6, "total": 9})
+    assert scope["scope"] == "device", scope
+    assert scope["mode"] == "elsewhere", scope
+    # android-b 的 total 是 3（安静设备），不是 summary.total 的 9 —— 拿全局数会报错设备
+    assert scope["db"] == 3, scope
+    assert scope["device"] == "android-b", scope
+    # 设备 × 状态没有任何已知口径：不许拿设备总数冒充「该状态的条数」
+    both = call("queueEmptyScope", "android-a", "queued", 500, 0, [{"device_id": "android-a", "total": 9, "active": 2, "stale": 1}, {"device_id": "android-b", "total": 3, "active": 0, "stale": 3}], {"queued": 1, "running": 1, "failed": 0, "done": 1, "stale": 6, "total": 9})
+    assert both["stateKnown"] is False, both
+    assert both["db"] == 9, both
+
+
+def test_queue_empty_scope_device_gone_from_inventory_is_none(call):
+    """设备清单是按 device_id 分组的全库聚合：清单里没有它 = 行已清理，敢说「没有」。"""
+    scope = call("queueEmptyScope", "android-gone", "", 500, 0, [{"device_id": "android-a", "total": 9, "active": 2, "stale": 1}, {"device_id": "android-b", "total": 3, "active": 0, "stale": 3}], {"queued": 1, "running": 1, "failed": 0, "done": 1, "stale": 6, "total": 9})
+    assert scope["mode"] == "none", scope
+    assert scope["db"] == 0, scope
+
+
+def test_queue_empty_scope_says_unknown_when_aggregate_missing(call):
+    """排队接口没回来（summary / devices 缺失）时是「不知道」，不是「没有」——别把空态说成 0。"""
+    no_sum = call("queueEmptyScope", "android-a", "", 500, 0, [{"device_id": "android-a", "total": 9, "active": 2, "stale": 1}, {"device_id": "android-b", "total": 3, "active": 0, "stale": 3}], None)
+    assert no_sum["mode"] == "unknown", no_sum
+    assert no_sum["db"] is None, no_sum
+    no_dev = call("queueEmptyScope", "android-a", "", 500, 0, None, {"queued": 1, "running": 1, "failed": 0, "done": 1, "stale": 6, "total": 9})
+    assert no_dev["mode"] == "unknown", no_dev
+    no_state = call("queueEmptyScope", "", "queued", 500, 0, [{"device_id": "android-a", "total": 9, "active": 2, "stale": 1}, {"device_id": "android-b", "total": 3, "active": 0, "stale": 3}], {"total": 9})
+    assert no_state["mode"] == "unknown", no_state
+
+
+def test_queue_empty_scope_clamps_and_tolerates_bad_input(call):
+    """脏输入不抛：shown 超过 loaded 夹回去，非数字按 0，筛选值两侧空白剥掉。"""
+    scope = call("queueEmptyScope", "  android-a  ", " queued ", 10, 12, [{"device_id": "android-a", "total": 9, "active": 2, "stale": 1}, {"device_id": "android-b", "total": 3, "active": 0, "stale": 3}], {"queued": 1, "running": 1, "failed": 0, "done": 1, "stale": 6, "total": 9})
+    assert scope["shown"] == 10, scope
+    assert scope["loaded"] == 10, scope
+    assert scope["device"] == "android-a", scope
+    assert scope["state"] == "queued", scope
+    dirty = call("queueEmptyScope", "android-a", "", "x", -3, [{"device_id": "android-a", "total": 9, "active": 2, "stale": 1}, {"device_id": "android-b", "total": 3, "active": 0, "stale": 3}], {"total": "zzz"})
+    assert dirty["loaded"] == 0 and dirty["shown"] == 0, dirty
+    # 设备清单里查得到就按清单算，summary 的脏值不影响设备维度
+    assert dirty["db"] == 9, dirty
+    assert call("queueEmptyScope", None, None, None, None, None, None)["mode"] == "unknown"

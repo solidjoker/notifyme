@@ -2398,3 +2398,132 @@ node --check <抽取的四段内联脚本>                                      
 **计数.** `server/console_classify.js` 676 行 / 635 非空 → **771 / 720**（`SOURCE_LABELS` @236 · `sourceLabel` @245 · `SOURCE_BADGES` @256 · `sourceBadge` @262 · `_labelOf` @267 · `queueKindLabel` @272 · `queueStateLabel` @276 · `PAIR_LABELERS` @286 · `pairText` @298 · 导出块 @724-769）；`server/console_ui.py` 3830 / 3739 → **3865 / 3773**（`sourceBadgeHtml` @2771 · `msgHtml` @2781 · `srcTxt` @3074 · `kindPairs` @3113 · `queueStateLabel` @3392 · `queueKindLabel` @3401）；`server/test_console_classify.py` 1625 / 1334 → **1717 / 1406**；`server/test_console_ui.py` 746 / 614 → **787 / 650**；服务端用例 719 → **730**。
 
 **教训.** 枚举值的展示文案必须有一个「认不出怎么办」的明确答案，而且这个答案要跟着数据走：**认不出就原样回显**（保住证据），**只有空值才归一**（那是真的没有）。这与 E-70/E-71/E-72 是同一族的反面 —— 那些是「拿不到的数冒充真数」，这一条是「拿得到的码冒充看不见」：三种语言（中文文案 / 英文码值 / `null` 字符串）在一屏里共存时，用户读到的不是数据，而是三个系统的接缝。
+
+### E-74 · 排队 Tab 的空态把三种成因混成一句：设备 chip 写着「2 活跃」，列表却说「手机端没有排队任务」（`console_classify.queueEmptyScope`，fix/queue-empty-scope，2026-11-14）
+
+**现象.** 控制台排队 Tab 的设备 chip 上写着「android-3f9c12ab · 2 活跃」，点开这台设备、列表恰好为空（它的任务都在更早的页里），空态给的是：
+
+```js
+if (QUERY.trim() || QUEUE_DEVICE) return emptyStateFor('queue');
+// → 默认文案
+emptyState('当前没有排队任务', '手机端没有排队或运行中的分析任务。', '换一个状态，或等端上跑一轮分析。', acts)
+```
+
+三种完全不同的情况被说成同一句：
+
+① **全库真没有** —— 汇总卡与状态 chip 也都是 0，这时候说「没有」是对的；
+② **全库有 N 条、但不在这一页** —— 列表跨设备共用一个 500 条窗口、按 `updated_at` 倒序，活跃设备的任务会把安静设备的历史整块挤出去（设备维度根本没有「每设备一页」这回事）；
+③ **拿不到全库口径** —— 这次 `/queue` 的 `summary` / `devices` 缺失（例如接口 500 后前端保留了旧列表但汇总为 null）。
+
+用户读到的是「这个 App 从来没有排队过」，而实际上他刚刚在那台设备上触发了三次分析。同一屏的设备 chip（全库口径：`devices[].total`）与空态（无口径）自相矛盾。
+
+**根因.**
+
+① **判定入参只有「有没有搜索 / 有没有设备筛选」两个布尔**，没有「全库有多少条」这一维 —— 于是「这一页没有」与「全库没有」在代码上就是同一个分支。
+
+② **全库口径一直是有的，只是空态没读**：`GET /queue` 的响应里 `devices[].total` 来自 `storage.queue_devices()`（按 `device_id` 分组、无 `LIMIT`），`summary[state]` / `summary.total` 来自 `storage.queue_summary()`（同样无 `LIMIT`，过期行只计 `stale`）。两者都是 `routes.query_queue` 挂上去的，前端 `QUEUE_DEVICES` / `QUEUE_SUMMARY` 早就取到了。
+
+③ **「设备 × 状态」这两个维度没有任何已知口径**：`queue_summary(device_id, state)` 每次都只接受其中一个，服务端从来不返回「这台设备的失败任务有几条」。旧代码直接不区分，正好掩盖了这个空洞 —— 一旦开始读真数，就必须显式承认它。
+
+**修法.** 判定收进规则层（`server/console_classify.js`，纯函数 / UMD / node 可测）：
+
+```js
+function _deviceEntry(devices, deviceId) {
+  if (!Array.isArray(devices)) return null;
+  var want = String(deviceId);
+  for (var i = 0; i < devices.length; i++) {
+    var d = devices[i];
+    if (d && String(d.device_id) === want) return d;
+  }
+  return null;
+}
+
+function queueEmptyScope(device, state, loaded, shown, devices, summary) {
+  var dev = String(device == null ? '' : device).trim();
+  var st = String(state == null ? '' : state).trim();
+  var L = _countOf(loaded);
+  var S = _countOf(shown);
+  if (S > L) S = L;
+  var scope = dev ? 'device' : (st ? 'state' : 'all');
+  // 列表里有可见行时调用方不该渲染空态；这里仍回 loaded，让调用方自己判断。
+  if (S > 0) return { device: dev, state: st, scope: scope, loaded: L, shown: S, db: null, stateKnown: true, mode: 'loaded' };
+  var sm = (summary && typeof summary === 'object') ? summary : null;
+  if (!sm) return { device: dev, state: st, scope: scope, loaded: L, shown: S, db: null, stateKnown: false, mode: 'unknown' };
+  if (scope === 'device') {
+    var d = _deviceEntry(devices, dev);
+    // devices 是全库分组聚合：查不到 = 行已被保留期清理（停报超 7 天），不是「这一页没有」。
+    if (!d) return { device: dev, state: st, scope: scope, loaded: L, shown: S, db: 0, stateKnown: !st, mode: 'none' };
+    var dt = _countOf(d.total);
+    return { device: dev, state: st, scope: scope, loaded: L, shown: S, db: dt, stateKnown: !st, mode: dt > 0 ? 'elsewhere' : 'none' };
+  }
+  var key = st || 'total';
+  if (typeof sm[key] !== 'number') return { device: dev, state: st, scope: scope, loaded: L, shown: S, db: null, stateKnown: false, mode: 'unknown' };
+  var db = _countOf(sm[key]);
+  return { device: dev, state: st, scope: scope, loaded: L, shown: S, db: db, stateKnown: true, mode: db > 0 ? 'elsewhere' : 'none' };
+}
+```
+
+UI 侧（`server/console_ui.py` 的 `queueEmptyHtml()`）只挑措辞：
+
+```js
+if (QUERY.trim()) return emptyStateFor('queue');   // 搜索是「本页里挑」，全库数救不了它
+var scope = CC.queueEmptyScope(QUEUE_DEVICE, QUEUE_STATE, QUEUE.length,
+  filteredQueues().length, QUEUE_DEVICES, QUEUE_SUMMARY);
+// device + none       → 设备「X」已经没有任务了（设备清单里查不到：停报超过 7 天或被清空）
+// device + elsewhere  → 这一页没有设备「X」的任务（全库 N 条，列表共用 500 条窗口）
+// device + unknown    → 这一页没有设备「X」的任务（拿不到全库条数，不敢断言）
+// none                → 全库没有「失败」任务（汇总与状态 chip 都是 0）
+// unknown             → 这一页没有任务（拿不到全库计数，不敢断言手机端已经没有任务）
+// elsewhere(兜底)     → 当前页没有任务（全库共有 N 条，都不在这最近 500 条里）
+```
+
+实测六档文案（最小 DOM 桩：两设备 `android-a` total 9 / `android-b` total 3，`summary` = queued 1 / running 1 / failed 0 / done 1 / stale 6 / total 9）：
+
+| 输入 | 标题 | 说明 |
+| --- | --- | --- |
+| 无筛选，列表 0 条 | 当前页没有任务 | 全库共有 9 条任务，它们不在这最近 500 条里。 |
+| 设备 `android-b` | 这一页没有设备「android-b」的任务 | 这台设备全库共有 **3** 条任务（不是全库 9 条） |
+| 设备 `android-gone`（不在清单） | 设备「android-gone」已经没有任务了 | 设备清单里查不到这台设备的任何排队记录（停报超过 7 天） |
+| 设备 `android-a` + 状态 `done` | 这一页没有设备「android-a」的已完成任务 | 这台设备全库共有 9 条任务（**各状态合计**） |
+| 状态 `failed` | 全库没有「失败」任务 | 汇总与状态 chip 都是 0 |
+| `summary = null` | 这一页没有设备「android-a」的任务 | 拿不到…全库条数…**不敢断言**它已经没有任务 |
+| 有搜索词 | （通用空态） | 搜索是「本页里挑」 |
+
+**刻意取舍.**
+
+① **设备维度宁可报「已清理」也不报「这一页没有」**：`devices` 是无 `LIMIT` 的分组聚合，如果某个 `device_id` 不在里面，只有两种可能 —— 行被保留期清理了，或端上清了队列。两种都不该让用户去翻更早的页。
+
+② **`stateKnown = false` 是一个新的入参维**：设备维度 + 状态筛选时，唯一能拿到的是设备总数，UI 必须在文案里写「（各状态合计）」。宁可承认「这是合计」，也不拿它冒充「这台设备的失败任务有 0 条」—— 后者会让用户以为失败的任务已经被处理掉了。
+
+③ **`summary` 缺失回 `unknown` 而不是 `none`**：`summary` 为 null 时 `summary.total` 也不存在，把 `undefined` 当 0 就会渲染成「全库没有任务」，与「接口这次没回汇总」完全不同。这与 E-70/E-71/E-72 的 `null ≠ 0` 是同一条。
+
+④ **搜索分支保留原样**：搜索命中的是**已加载行**，用户输入的关键词本来就没法在全库上匹配（`filteredQueues()` 在客户端做 `includes`）。这时候报「全库共有 N 条」反而像在说「你要找的东西在别的页，去翻吧」，而实际上翻到也没有 —— 因为全库那 N 条可能没一条匹配关键词。
+
+⑤ **规则脚本缺失时退回旧通用空态**：`CC` 为 null 时 `scope = null`，代码走到最后的 `emptyStateFor('queue')`。措辞会退步，但不会崩、也不会显示 `undefined`。
+
+**测试.**
+
+| 用例 | 断言 |
+| --- | --- |
+| `test_queue_empty_scope_keeps_loaded_page_when_rows_visible` | `loaded 500 / shown 500` → `mode=loaded`、`scope=all`、`db is None` |
+| `test_queue_empty_scope_separates_page_from_library` | `loaded 500 / shown 0` → `elsewhere`、`db=9`、`stateKnown=True` |
+| `test_queue_empty_scope_state_filter_uses_summary_count` | `failed` → `none`/`db=0`；`queued` → `elsewhere`/`db=1` |
+| `test_queue_empty_scope_device_filter_reads_device_inventory` | `android-b` → `db=**3**`（不是全库 9）；`android-a` + `queued` → `stateKnown=False` + `db=9` |
+| `test_queue_empty_scope_device_gone_from_inventory_is_none` | `android-gone` → `none` / `db=0` |
+| `test_queue_empty_scope_says_unknown_when_aggregate_missing` | `summary=None` / `devices=None` / `summary` 只有 `total` → 全部 `unknown` |
+| `test_queue_empty_scope_clamps_and_tolerates_bad_input` | `shown 12 > loaded 10` 夹到 10；`loaded='x'` / `shown=-3` → 0；设备与状态两侧空白剥掉；全 `None` → `unknown` |
+| `test_queue_empty_state_drives_six_branches_from_scope` | UI：`CC.queueEmptyScope(QUEUE_DEVICE, QUEUE_STATE` 在；六档措辞在；两个动作按钮在；搜索分支仍是 `if (QUERY.trim())` |
+
+**验证.**
+
+```powershell
+python -m pytest server/test_console_classify.py -q     # 137 passed
+python -m pytest server/test_console_queue.py -q        # 32 passed
+python -m pytest server/ -q                             # 738 passed
+```
+
+另外把 `CONSOLE_HTML` 的 4 段内联 `<script>` 抽出来拼成单文件跑 `node --check`（退出码 0），再用最小 DOM 桩把 `queueEmptyHtml` 单独跑八种输入（就是用上面那张表核对文案）。
+
+**计数.** `server/console_classify.js` 771 / 720 → **831 / 778**（`_deviceEntry` @733 · `queueEmptyScope` @749 · 导出块 @784-830）；`server/console_ui.py` 3865 / 3773 → **3911 / 3819**（`queueEmptyHtml` @3576 · `renderQueue` @3630 · `CONSOLE_MANIFEST` @3727 · `CONSOLE_SW` @3773）；`server/test_console_classify.py` 1717 / 1406 → **1792 / 1467**；`server/test_console_queue.py` 251 → **274**；服务端用例 730 → **738**。
+
+**教训.** 空态是唯一「列表里什么都没有」时用户能读到的信息，它必须能回答**「为什么没有」** —— 而「为什么」的候选数量由数据源决定，不是由分支代码的想象力决定。这一轮真正的问题不是文案写得含糊，是**判定函数只收到了两个布尔**：一旦入参里没有「全库有多少条」这一维，无论文案怎么写都只能含糊。规则：**写空态之前先数清有几个全库口径可用，再给每个口径配一个「拿不到」的档；拿不到的档必须写「不敢断言」，不许写成 0**。同时注意「组合维度没有已知口径」这件事本身要显式表达（这里是 `stateKnown`），否则最容易发生的就是拿一个维度的小计冒充另一个维度的明细。
