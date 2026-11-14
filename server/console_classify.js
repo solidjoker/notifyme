@@ -584,6 +584,24 @@
     return { pkg: normPkg(pkg), loaded: L, shown: S, db: db, mode: mode };
   }
 
+  // 统计 tab 的「最近分析结果」只画前若干条，标题里的数字却是全部已加载条数。
+  // 翻过几页之后，「最近分析结果（200）」下面只有 30 张卡，中间 170 条凭空消失，
+  // 页面里也没有任何一句解释 —— 与顾问列表的截断是同一类问题（说了总数、只画了
+  // 一部分）。显示上限本身是刻意的（一屏 200 张卡既卡又没人读），所以不改上限，
+  // 改成「说清楚少了几条 + 给一个能真把它们画出来的开关」：
+  //   capped=true    已加载条数超过上限（与展开与否无关，用来决定是否给开关）
+  //   expanded=true  用户点了「显示全部」，此时 hidden=0、shown=loaded
+  // 上限由 UI 传入（规则层不猜前端布局），脏值 / 0 / 负数回落到 DEFAULT_STATS_LIST_CAP。
+  var DEFAULT_STATS_LIST_CAP = 30;
+
+  function statsListState(loaded, cap, expanded) {
+    var L = _countOf(loaded);
+    var C = _countOf(cap) || DEFAULT_STATS_LIST_CAP;
+    var open = !!expanded;
+    var S = open ? L : (L < C ? L : C);            // 展开后画全部，否则画前 C 条
+    return { loaded: L, shown: S, cap: C, hidden: L - S, capped: L > C, expanded: open };
+  }
+
   return {
     VERSION: VERSION,
     QUEUE_STATE_ORDER: QUEUE_STATE_ORDER,
@@ -617,6 +635,8 @@
     advisorPkgScope: advisorPkgScope,
     advisorListState: advisorListState,
     pkgCount: pkgCount,
-    appEmptyScope: appEmptyScope
+    appEmptyScope: appEmptyScope,
+    DEFAULT_STATS_LIST_CAP: DEFAULT_STATS_LIST_CAP,
+    statsListState: statsListState
   };
 });
