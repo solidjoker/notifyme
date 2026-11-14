@@ -643,3 +643,31 @@ def test_advisor_pkg_filter_note_follows_the_real_scope():
     assert "html: advisorScopeNote()" in body, "renderAdvisor 没有接上措辞函数"
     assert "html: '<div class=\"note\">顾问报告不携带来源 App 字段" not in body, \
         "renderAdvisor 仍在无条件渲染旧文案"
+
+
+def test_app_filter_empty_state_separates_three_causes():
+    """来源筛选下的空态必须区分「全库没有」「都在更早的页」「拿不到全库口径」。
+
+    旧写法只要 APP_FILTER 生效就输出「该来源下暂无数据 / 这个来源下暂时没有可展示的
+    内容」，而四个 tab 的列表都只覆盖已加载的最近几页 —— 一个全库有 300 条来自微博
+    的控制台，选了「微博」照样显示「暂时没有可展示的内容」，用户会以为这个 App 从来
+    没来过消息。判定收在规则层 appEmptyScope（console_classify.js），UI 只挑措辞。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "function appScopeCounts(tab)" in html, "缺少已加载 / 已筛出的计数入口"
+    # 判定必须走规则层，且来源分布取的是 /stats 的 by_pkg（/stats 一律不带 pkg）
+    assert "CC.appEmptyScope(APP_FILTER, cnt.loaded, cnt.shown, byPkg)" in html, \
+        "空态判定没有走规则层"
+    assert "var byPkg = (tab === 'conv' && STATS) ? STATS.messages.by_pkg : null;" in html, \
+        "by_pkg 只能用于会话 tab：analyses 段没有按来源的分布"
+    assert "scope.mode === 'none'" in html, "缺少「全库确实没有」档"
+    assert "scope.mode === 'elsewhere'" in html, "缺少「在更早的页」档"
+    assert "scope.mode === 'unknown'" in html, "缺少「拿不到全库口径」档"
+    # 「在更早的页」必须给出条数与未加载的解释，否则「有 N 条但列表是空的」看着像 bug
+    assert "条来自「" in html and "都不在已加载的" in html
+    # 「拿不到口径」不许替服务端下结论
+    assert "更早的内容还没加载" in html, "未知档不能断言全库没有"
+    # 排队任务不带来源 App 字段，APP_FILTER 对它不生效，不能拿它解释「这个来源」
+    assert "if (APP_FILTER && tab !== 'queue') {" in html, "排队空态被来源筛选劫持了"
+    # 规则脚本缺失时仍要退回原文案（不能凭空断成某一档）
+    assert "该来源下暂无数据" in html, "规则层缺失时缺少保守回退"

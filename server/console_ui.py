@@ -2365,6 +2365,20 @@ function skeletonHtml(n) {
   }
   return h + '</div>';
 }
+// 「这个来源一条都没有」与「这一页里没有」是两件事，判定要两个数；
+// 而这两个数必须与各自列表构造走同一段过滤代码，否则迟早分叉。
+function appScopeCounts(tab) {
+  if (tab === 'conv') return { loaded: MSGS.length, shown: filteredMsgs().length };
+  if (tab === 'adv') {
+    var adv = ADVISORS.filter(function (r) {
+      return !(APP_FILTER && r.pkg && normPkg(r.pkg) !== APP_FILTER);
+    });
+    return { loaded: ADVISORS.length, shown: adv.length };
+  }
+  if (tab === 'todo') return { loaded: ANALYSES.length, shown: filteredTodos().length };
+  if (tab === 'stat') return { loaded: ANALYSES.length, shown: filteredAnalyses().length };
+  return { loaded: 0, shown: 0 };
+}
 function emptyStateFor(tab) {
   var q = QUERY.trim();
   var acts = '';
@@ -2375,9 +2389,45 @@ function emptyStateFor(tab) {
       '当前搜索「' + q + '」没有匹配的内容。',
       '换个关键词，或点「清除搜索」回到完整列表。', acts);
   }
-  if (APP_FILTER) {
+  // 排队任务不带来源 App 字段，APP_FILTER 对它不生效：不能让排队空态去解释「这个来源」，
+  // 那会把「全库没任务」说成「这个 App 没任务」。
+  if (APP_FILTER && tab !== 'queue') {
+    // 空列表有三种完全不同的成因，共用一句「该来源下暂无数据」会让用户以为
+    // 这个 App 从来没来过消息：① 全库这个来源真没有 ② 全库有 N 条但都不在已加载的页里
+    // ③ 拿不到全库分布。判定收在 console_classify.appEmptyScope，这里只挑措辞。
+    var scope = null;
+    if (CC && CC.appEmptyScope) {
+      try {
+        var cnt = appScopeCounts(tab);
+        // by_pkg 是**消息**的来源分布：只有会话 tab 能用它断言全库条数。
+        // 待办 / 分析结果来自 analyses 段，/stats 不给按来源的分布（刻意：那一块回答
+        // 「整库分析了多少」），拿消息条数当分析条数会凭空造出一个假数字。
+        var byPkg = (tab === 'conv' && STATS) ? STATS.messages.by_pkg : null;
+        scope = CC.appEmptyScope(APP_FILTER, cnt.loaded, cnt.shown, byPkg);
+      } catch (e) { scope = null; }
+    }
+    var who = pkgLabel(APP_FILTER);
+    var what = { conv: '消息', todo: '待办', stat: '分析结果', adv: '顾问报告' }[tab] || '内容';
+    if (scope && scope.mode === 'none') {
+      return emptyState('「' + who + '」还没有' + what,
+        '全库统计里这个来源还没有任何' + what + '。',
+        '换一个来源，或点「查看全部 App」切回全部来源。', acts);
+    }
+    if (scope && scope.mode === 'elsewhere') {
+      return emptyState('当前页没有来自「' + who + '」的' + what,
+        '全库共有 ' + scope.db + ' 条来自「' + who + '」的' + what +
+        '，都不在已加载的 ' + scope.loaded + ' 条里（更早的页）。',
+        '先点「查看全部 App」把全部来源拉下来，再点列表底部的「加载更多」把更早的页翻出来。', acts);
+    }
+    if (scope && scope.mode === 'unknown') {
+      // 拿不到全库口径时不许替服务端下结论：列表本就只覆盖最近几页，
+      // 说法必须停在「这一页里没有 + 更早的页还没加载」。
+      return emptyState('这一页里没有来自「' + who + '」的' + what,
+        '已加载的 ' + scope.loaded + ' 条里没有这个来源；列表只覆盖最近几页，更早的内容还没加载。',
+        '点列表底部的「加载更多」把更早的页翻出来，或点「查看全部 App」切回全部来源。', acts);
+    }
     return emptyState('该来源下暂无数据',
-      '当前只看「' + pkgLabel(APP_FILTER) + '」，这个来源下暂时没有可展示的内容。',
+      '当前只看「' + who + '」，这个来源下暂时没有可展示的内容。',
       '点「查看全部 App」切回全部来源，或在过滤条上换一个来源。', acts);
   }
   var defaults = {
