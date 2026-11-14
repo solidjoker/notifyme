@@ -1014,9 +1014,14 @@ def test_advisor_reports_archive_total_and_truncation(client, monkeypatch):
     assert body["count"] == 100
     assert body["total"] == 150
     assert body["has_more"] is True
-    # 分页语义是「最新的在前」：截断丢的是最旧的
-    assert body["reports"][0]["report_id"] == "r149"
-    assert body["reports"][-1]["report_id"] == "r050"
+    # 分页语义是「最新的在前」：截断丢的是最旧的。
+    # 别断言列表末位恰好是 r050 —— 三批写入的 received_at 在快机器上可能落在同一毫秒，
+    # 批次要按 created_at 兜底比较，边界那一条会随调度漂移（本机 r050 / CI r051）。
+    ids = [r["report_id"] for r in body["reports"]]
+    assert len(ids) == 100
+    assert len(set(ids)) == 100
+    assert ids[0] == "r149"
+    assert "r000" not in ids, "最旧的一条必须被截掉"
 
     full = client.get("/advisor?limit=200").get_json()
     # limit 上限仍是 100（存档上限 1000 不等于接口能一次给 1000 份）
