@@ -2179,3 +2179,92 @@ python -m pytest server/ -q                                  → 714 passed in 6
 **计数.** `console_classify.js` 642 / 602 → **662 / 621**（`badgeState` @611 · 导出块 @619-661）；`console_ui.py` 3780 / 3689 → **3812 / 3721**（`badgeCount` @1890 · `renderBadges` @1909）；`test_console_classify.py` 1533 → **1580**；`test_console_ui.py` 706 → **724**；服务端用例 709 → **714**。
 
 **教训.** 同一个界面上出现两个「同类数字」时，它们必须共享同一个口径来源 —— 否则用户看到的不是「两个数」，而是「一个数是错的」。判据三条：① **角标 / 徽标这类聚合数字，默认口径是全库**，只有明确的「我在看某一份切片」时才降级，且降级要有显式状态（`scope`）而不是悄悄变小；② **「拿不到」与「没有」必须能分开**（`null` ≠ `0`），凡是把 `null` 折成 0 的地方，最终都会渲染成一句自信的假话；③ **筛选态与数据态是两个正交维度**（`filtered` × `total === null`），把它们压进一个三元表达式就会漏掉「筛选 + 拿不到」这一格。
+
+## E-72 顶部同步状态行把两个计数套成一档口径：一侧退化整句仍装全库，`analyses.total` 缺失时直接渲染「分析 null」（`console_classify.syncCounters`，fix/sync-line-scope，2026-11-14）
+
+**现象.** 状态行写「已同步 16:32 · 消息 40 · 分析 40」，这两个数字分别来自 `/stats` 的 `messages.total` 与 `analyses.total`，但旧实现只判**其中一个**就决定了**整行**的口径：
+
+```js
+var mTotal = statNum('messages', 'total');
+var aTotal = statNum('analyses', 'total');
+if (mTotal == null || APP_FILTER) {
+  txt = '已同步 ' + fmtClock(LAST_SYNC) + ' · 已加载消息 ' + MSGS.length + ' · 分析 ' + ANALYSES.length;
+} else {
+  txt = '已同步 ' + fmtClock(LAST_SYNC) + ' · 消息 ' + mTotal + ' · 分析 ' + aTotal;
+}
+```
+
+三个后果，优先级从高到低：
+
+1. **同一句里混写两种口径**：`messages.total` 在、`analyses.total` 不在（老服务端 / analyses 段被裁剪 / 冷启动只回了 messages 段）时，走 `else` 分支，得到「消息 40 · 分析 3」—— 「消息」是全库、「分析」是已加载，两个标签看起来一模一样。实测真机上直接出现过「**已加载消息 5 · 分析 40**」这种反向混写（`aTotal` 在、`mTotal` 不在）。
+2. **`null` 被拼进字符串**：`aTotal == null` 时 `' · 分析 ' + aTotal` 得到「分析 null」，`String(null)` 在模板拼接里不会抛，于是状态行直接渲染出 `已同步 16:32 · 消息 40 · 分析 null`。
+3. **筛选态看不出退化**：`APP_FILTER` 时整句退回已加载，但两条标签名不变（不写「已加载」），用户以为筛选后看到的 40 条就是库里全部来自该来源的 40 条。
+
+**根因.** 状态行是两个独立的计数，却只用一个布尔（`mTotal == null || APP_FILTER`）给整句定档。这与角标（E-71）、概览条、顾问列表、统计列表截断是同一族缺陷：**全库真值只覆盖了一段路径，另一段静默退化成估算并且不标注**。只要「拿不到」与「真的是 0」在布尔判断里不可区分，退化就无法被发现。
+
+**修法.** 判定搬进 `server/console_classify.js` 的 `syncCounters(msgLoaded, anaLoaded, msgTotal, anaTotal, filtered)`，复用 `badgeState` 的语义**逐侧定档**，返回 `{msg, ana, mixed}`：
+
+```js
+function syncCounters(msgLoaded, anaLoaded, msgTotal, anaTotal, filtered) {
+  var m = badgeState(msgLoaded, msgTotal, filtered);
+  var a = badgeState(anaLoaded, anaTotal, filtered);
+  return { msg: m, ana: a, mixed: m.scope !== a.scope };
+}
+```
+
+`mixed` 不是渲染用的，是给界面留一个「两侧不同档」的信号（当前 UI 直接按 `scope` 逐侧加前缀，将来若要整句加一行小注就有了依据）。UI 侧新增 `console_ui.syncCountText()`：
+
+```js
+function part(label, c) {
+  return ('library' === c.scope) ? (label + ' ' + c.value) : ('已加载' + label + ' ' + c.value);
+}
+return part('消息', st.msg) + ' · ' + part('分析', st.ana);
+```
+
+`renderSyncLine()` 里那两段分支整体退场，只剩 `txt = '已同步 ' + fmtClock(LAST_SYNC) + ' · ' + syncCountText();`。
+
+**修后实况（最小桩实测，七档输入）**：
+
+| 输入（msgTotal / anaTotal / filtered） | 渲染结果 |
+|---|---|
+| 40 / 40 / 否 | `消息 40 · 分析 40` |
+| 缺 / 缺 | `已加载消息 5 · 已加载分析 3` |
+| 40 / 缺 | `消息 40 · 已加载分析 3` |
+| 缺 / 40 | `已加载消息 5 · 分析 40` |
+| 40 / 40 / 是（来源筛选） | `已加载消息 5 · 已加载分析 3` |
+| 0 / 0 / 否 | `消息 0 · 分析 0` |
+| 40 / `"abc"` | `消息 40 · 已加载分析 3` |
+
+**刻意取舍.**
+
+1. **两侧各自定档，不取「任一侧退化就整句退化」的最小公倍数** —— 后者会把「消息 40」这个真值也藏起来，用户拿不到能拿到的那半个事实；混口径的害处来自「不说」，不来自「一个全库一个已加载」，只要每侧都标出来就是自洽的。
+2. **没退化的一侧不加前缀**：`消息 40 · 已加载分析 3` 读起来是「消息全库 40、分析已加载 3」；若两侧都加前缀（`全库消息 40 · 已加载分析 3`）会让人以为整句都在打标语，反而是噪音。
+3. **`0` 仍是全库**：`badgeState` 把 `0` 当有效值（`0` 是「真的没有」），与「`null` 拿不到」严格分开 —— 状态行报「消息 0」是有意义的（库真的是空的）。
+4. **`filtered` 一票否决两侧**：来源筛选只作用于已加载页，此时报全库数会让状态行与本页列表量级差一个数量级。
+5. **规则脚本缺失时退回「两侧都能拿到才报全库」**：降级路径宁可少报（两侧都写已加载），也不允许混口径，且这条降级本身可测。
+
+**测试.** `server/test_console_classify.py`（+4 条）：
+
+| 用例 | 锁住的语义 |
+|---|---|
+| `test_sync_counters_report_library_when_both_sides_have_totals` | 两侧全库时 `mixed=false` |
+| `test_sync_counters_fall_back_per_side_not_as_a_whole` | 一侧退化时另一侧仍报全库、`mixed=true`；两侧都缺时整句已加载且 `mixed=false` |
+| `test_sync_counters_never_render_null_or_zero_for_missing_totals` | `"abc"` / `-1` 回落已加载；`0` 仍报全库 |
+| `test_sync_counters_respect_client_side_filtering` | 筛选态两侧一起退化 |
+
+`server/test_console_ui.py`（+1 条）：断言 `syncCountText` / `CC.syncCounters(...)` / 两个 `statNum` 各读各段 / `'已加载' + label` 前缀存在 / 旧的整句 `' · 已加载消息 ' + MSGS.length` 与 `' · 消息 ' + mTotal + ' · 分析 ' + aTotal` 都已退场 / 状态行已接线。
+
+**验证.**
+
+```powershell
+python -m pytest server/test_console_classify.py -q            # 121 passed
+python -m pytest server/test_console_ui.py server/test_console_queue.py -q   # 76 passed
+python -m pytest server/ -q                                   # 719 passed
+node --check <抽取的内联脚本>                                  # 退出码 0
+```
+
+另外用最小桩（先 `require` 真的 `console_classify.js`，再按花括号配对截取 `syncCountText` 后 `eval`）跑了上表七档输入，输出与「修后实况」一致。
+
+**计数.** `server/console_classify.js` 662 行 / 621 非空 → **676 / 635**（`syncCounters` @632 · 导出块 @637-675）；`server/console_ui.py` 3812 / 3721 → **3830 / 3739**（`syncCountText` @1599 · `renderSyncLine` @1621）；`server/test_console_classify.py` 1580 / 1297 → **1625 / 1334**；`server/test_console_ui.py` 724 / 594 → **746 / 614**；服务端用例 714 → **719**。
+
+**教训.** 一个句子里出现两个同量纲的数字时，它们必须各自带口径 —— 给整句定一个布尔，等于假设两个来源永远同时可得。这与 E-71 的角标、`statsListState` 的标题/切片、`advisorListState` 的截断/筛选是同一条：**聚合数字的「拿不到」是一个独立状态，必须能被单独标记，否则退化会伪装成真值。**

@@ -13,7 +13,7 @@ notifyme = 微信通知本地智能分析助手（本地优先，通知原文留
 | 目录 | 内容 |
 |---|---|
 | `app/` | Android 客户端（Kotlin；传统 View + RecyclerView，**无 Compose**；JSON 用 `org.json`，**无 Gson/Moshi**） |
-| `server/` | 可选自托管 Flask 服务端（跨设备查看 / 历史回填 / PWA 控制台 / 排队任务看板）；8 个模块：`app.py`（壳 + 鉴权 + 控制台路由）、`util.py`（纯函数）、`storage.py`（SQLite / JSONL / 顾问存档 / 排队表）、`routes.py`（数据面路由）、`stats_api.py`（`/stats` 聚合）、`suggests.py`（建议）、`extract_common.py`（两条提取腿共享内核）、`console_ui.py`（PWA 前端常量，5 Tab，aura 设计语言）+ `console_classify.js`（归类规则，UMD 可 node 测） |
+| `server/` | 可选自托管 Flask 服务端（跨设备查看 / 历史回填 / PWA 控制台 / 排队看板）；8 模块：`app.py`（壳 + 鉴权）、`util.py`、`storage.py`（SQLite / JSONL / 排队表）、`routes.py`、`stats_api.py`（`/stats`）、`suggests.py`、`extract_common.py`、`console_ui.py`（PWA 5 Tab）+ `console_classify.js`（UMD 可 node 测） |
 | `docs/` | `BUILD.md`（构建）、`ROADMAP.md`（里程碑）、`architecture/`（9 张架构图） |
 | `third_party/llama.cpp` | M4 端侧推理依赖，CI 里 clone v0.5.0，**不入库** |
 
@@ -186,7 +186,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **改 `docs/architecture/diagrams/*.mmd` 必须重渲并回写尺寸表**：`mmdc -i X.mmd -o X.svg`，PNG 给 `-w <viewBox 宽 + 20> -H <viewBox 高 + 60>`；**脑图 06 的 viewBox 起点不是 `0 0`**，单独用 `-w 3200 -H 1600`（否则渲染出 14×7 废图）；**`-h` 是 help 不是高度**。渲完用 `[System.Drawing.Image]::FromFile` 量像素回写 `docs/architecture/README.md` 索引表。
 - **控制台归类规则只在 `server/console_classify.js`**（UMD：浏览器挂 `window.ConsoleClassify`、node 走 `module.exports`，无 DOM），别写进 `console_ui.py` 的 HTML。`app.py` 注入 `/*__CONSOLE_CLASSIFY_JS__*/`。改规则跑 `server/test_console_classify.py`（subprocess 调真 node）；`REQUIRE_NODE=1` 时 node 缺失要 **fail 不是 skip**；前端降级 `var CC = window.ConsoleClassify || null`。
 - **本机起浏览器调试实例的两个坑**：Windows WinINET 代理指向 `127.0.0.1:18888`（该端口 CONNECT 隧道已挂，Edge 报 `ERR_TUNNEL_CONNECTION_FAILED`），必须显式带 `--proxy-server=http://127.0.0.1:7890`；默认 user-data-dir 不允许 `--remote-debugging-port`（Chrome/Edge 136+ 策略），要把 User Data 拷到独立目录再带 `--remote-debugging-port=9223` 启动。访问仓库设置 / token 页还会撞 **sudo mode**，要过一次 2FA。
-- **排队通道 `/queue` 是 best-effort**：端上 `SyncWorker.pushQueue` 只认 2xx，失败既不重试也不阻塞消息同步（`doWork` 的 msgResult 不变）；服务端 `queue_tasks` 表按 `(device_id, task_id)` 主键整份覆盖，保留 7 天，`stale` = `updated_at` 超 30 分钟未更新。端侧 `task_id` 含原始会话名（与「分析通道原样上报 conversation」口径一致，服务端不哈希存储）——**别在控制台或文档里当隐私漏洞写，但确实存在**。
+- **排队通道 `/queue` 是 best-effort**：端上 `SyncWorker.pushQueue` 只认 2xx，失败不重试也不阻塞消息同步；服务端 `queue_tasks` 按 `(device_id, task_id)` 整份覆盖、保留 7 天，`stale` = `updated_at` 超 30 分钟。端侧 `task_id` 含原始会话名（与分析通道同口径）。
 - **控制台有 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）**：改 `console_ui.py` 的 HTML/CSS/JS 后自检三件事：① 内联脚本 `node --check`；② `pytest server/test_console_queue.py server/test_console_ui.py -q`；③ 浏览器实跑看 `errs: []`。**`patchSections` 只追加 `.pane-sec`、不清理临时节点** —— 骨架屏残留就是这么来的。桌面 `.tabbar` 必须 `position:sticky`。
 - **端侧排队上报的 device_id 不能碰硬件标识**：`QueueStateCollector` 用 SharedPreferences("queue_state", "device_seed") 里的随机种子做 FNV-1a 派生（`android-` + 8 位 hex），**不要改用 ANDROID_ID / IMEI / 序列号**。
 - **控制台统计口径＝服务端全库真值，不是前端已加载页**：控制台概览条与统计 Tab 的数据来自 `GET /stats`（server/stats_api.py 聚合全库），
@@ -340,7 +340,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **两条提取腿的共享内核只有一份口径：`server/extract_common.py`**（`android_db_extract.py` 1260→813 行、`pc_db_extract.py` 1122→673）。① 六个 env 常量必须继续在两侧脚本里定义（monkeypatch 要目标），common 内走 `_setting(name)`；
 ② `_setting` 判 `None` 不判真值（`COMMIT_INTERVAL = 0` 合法）；③ `activate(module)` 登记 `_HOST`，**import 尾部 + 每个入口函数开头都要再调**（只登记一次时后导入的 pde 顶掉 ade，表现 `commits=1` 且锁写进真实 `server/data/`）；
 ④ `_archive_path` / `_lock_path` 用 `_setting("MAIN_DB")` 调用时解析。改前跑 `test_extract_common.py` + `test_extract.py` + `test_extract_cursor.py`。
-- **游标分页只有一份解析口径：`server/util._parse_cursor`**（`query_messages`/`query_analysis` 都走它，`EXPECTED_OWNER` 守着归属）。① **两段都校验**：毫秒在 `MIN_TS_MS..MAX_TS_MS`、rowid 在 `0..MAX_ROWID` —— 只补毫秒段时超 int64 的 rowid 抛 `OverflowError` 整页 500，负 rowid 更阴（恒空页，当成翻到底）。② 空值/纯空白返 `(None, None)`。③ `_` 多于两段直接 400。④ 只给毫秒时 rowid 取 `MAX_ROWID` 兼容老客户端。
+- **游标分页只有一份解析口径：`server/util._parse_cursor`**（`query_messages`/`query_analysis` 共用，`EXPECTED_OWNER` 守归属）。① **两段都校验**：毫秒在 `MIN_TS_MS..MAX_TS_MS`、rowid 在 `0..MAX_ROWID` —— 只校验毫秒段时超 int64 的 rowid 抛 `OverflowError` 整页 500，负 rowid 恒空页。② 空值/纯空白返 `(None, None)`。③ `_` 多于两段 400。④ 只给毫秒时 rowid 取 `MAX_ROWID`。
 - **提示词 / 报告里的绝对时间文本只有一份口径：`PromptTimeCore`**（internal object + 22 条，`PromptTimeCoreTest.kt`）。`DateKeyCore`/`DueTimeCore`/`LocaleTextCore` 之后同族第四代，差别是它输出**给模型看**。
 ① **只走 `DateTimeFormatter` + `Instant.atZone(zone)`**：`SimpleDateFormat` 历法随**默认 Locale** 走，钉 `Locale.US`/`CHINESE` 只钉语言（安全来自映射表，是巧合）；th-TH 下 `Calendar.set(2026,9,25)` 是公历 **1483**。
 ② `zone` 可注入且单测必须钉。③ 「同年省略年份」用 `ZonedDateTime.year` 数值比较。④ 文案逐字保持。改前跑三个测试类 + `-Duser.language=th -Duser.country=TH` 全量。
@@ -356,7 +356,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 ① 只作用于 `_todo_counts` / `_convs_without_analysis` 两族规则；**排队按设备、顾问是全局报告**，`_queue_state` / `_advisor_state` 必须保持全库口径。
 ② 前端 `fetchSuggests` 拼 `?pkg=`，`setAppFilter` / `clearAppFilter` 后要 `refreshSuggests()`；拉失败就清空 `SUGGESTS`，别拿上一份别的来源的数字冒充。
 ③ 加参数别只改回显：既有 `test_suggests_echoes_pkg` 只断言回显，621 条全绿照样漏了这个缺陷 —— 新过滤逻辑必须补「带/不带 pkg 结果不同」的用例。
-- **数值列的脏行守卫：`server/stats_api.INT_ONLY_TS` / `MAX_TS`**（`test_stats_api.py` 4 条 + `test_queue.py` 2 条守着）。SQLite 列有 INTEGER 亲和但**能存字符串**，单行脏值就让整页 500 / 游标毒化。① 过滤用 `typeof(timestamp) IN (`'integer','real'`)` 作**常驻条件**，聚合用 `MAX(CASE WHEN typeof(...) THEN x END)`；② **别换 CAST**：`EXPLAIN` 实测 typeof 仍走索引，CAST 退化成全表 SCAN；③ 出参数字走 `_safe_int(...)`。
+- **数值列的脏行守卫：`server/stats_api.INT_ONLY_TS` / `MAX_TS`**（`test_stats_api.py` 4 条 + `test_queue.py` 2 条守着）。SQLite 列有 INTEGER 亲和但**能存字符串**，单行脏值就让整页 500 / 游标毒化。① 过滤用 `typeof(timestamp) IN (`'integer','real'`)` 作**常驻条件**，聚合用 `MAX(CASE WHEN typeof(...) THEN x END)`；② **别换 CAST**（`EXPLAIN` 实测 typeof 仍走索引，CAST 退化全表 `SCAN`）；③ 出参走 `_safe_int(...)`。
 - **排队过期行的清理与设备维度过期口径：`storage.cleanup_queue_tasks` / `queue_devices`**（`test_queue.py` 6 条）。① 清理不能只挂上报路径（设备全停报后僵尸行永挂 devices），读取路径 `_ensure_db_ready` 也要调 `_maybe_cleanup_queue` 按 `QUEUE_CLEANUP_INTERVAL_MS`（1h）节流；② 设备 chip 的 `active` 只算未过 TTL 的 queued+running，另加第 4 键 `stale`；③ 用例 fixture 必须复位 `app_module._queue_cleanup_at`。
 - **排队 Tab 的状态 chip / 空态与汇总同源**（`console_ui.queueStateTotal` / `queueEmptyHtml`）。① chip 计数走 `queueStateTotal(st)`（优先 `QUEUE_SUMMARY[st]`）——数当前页会让 600 排队 + 20 已完成显示「已完成 0」；② 列表空但全库有命中时报「当前页没有…/全库共 N 条…」，搜索/设备筛选命中 0 退回通用空态；③ 先加「chip 与 summary 一致」用例。
 - **顾问存档损坏不能冒充「没有报告」**（`suggests._advisor_state` 返三元组 + `ADVISORS_ERR`；`test_stats_api.py` 3 条守着）。
@@ -380,4 +380,6 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **角标这类聚合数字默认口径是全库：`console_classify.badgeState`**（4 条规则层 + 1 条 UI 守着）。① `{value, scope}` 两态 `library`/`loaded`；② `total` 缺失/负数/非小数一律回落本页，`null`（拿不到）≠ `0`；③ 用户已筛选（`APP_FILTER` 或搜索）时不报全库；④ 读屏在 `scope` 为 `loaded` 时补「（本页）」；排队与顾问不套。
 
-- **同一段里的分布与标量必须能对上：`stats_api._queue_block.by_kind`、`console_classify.mergePairsBy`**（`test_stats_api.py` 2 + `test_console_ui.py` 2 + `test_console_classify.py` 5）。① 类型计数必须在「过期 → `stale += 1; continue`」**之后**（写在之前会把停跑僵尸数进去）；② 契约 `sum(by_kind.count) == total - stale`；③ `by_pkg` 的 NULL / 空串各成分组而 `normPkg()` 都折成微信 → 展示层 `mergePairsBy` 归并后**按次数降序、同次数键名升序重排**（`distPairs` 同口径），服务端不合并；④ 加分布字段先问该不该跟同段过期口径走。
+- **一个句子里的两个计数必须各带口径：`console_classify.syncCounters`**（4 条规则层 + 1 条 UI 守着）。① 逐侧复用 `badgeState` 定档，返 `{msg, ana, mixed}`，别用「一侧拿不到就整句退化」；② `null`（拿不到）≠ `0`（真的是 0）；③ `filtered` 一票否决两侧；④ UI 只给退化的那侧加「已加载」前缀，规则脚本缺失时退回「两侧都能拿才整句全库」。
+
+- **同一段里的分布与标量必须能对上：`stats_api._queue_block.by_kind`、`console_classify.mergePairsBy`**（9 条用例）。① 类型计数必须在「过期 → `continue`」**之后**；② 契约 `sum(by_kind.count) == total - stale`；③ `by_pkg` 的 NULL / 空串各成分组而 `normPkg()` 都折成微信 → 展示层 `mergePairsBy` 归并后**按次数降序、同次数键名升序重排**（`distPairs` 同口径），服务端不合并；④ 加分布字段先问该不该跟同段过期口径走。

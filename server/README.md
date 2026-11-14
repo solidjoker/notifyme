@@ -435,6 +435,13 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 排队与顾问两个角标**不套这条规则**：排队本来就是全库口径（`queueActiveCount()` 读 `QUEUE_SUMMARY`，不是数当前页），顾问读存档总数 `ADVISOR_TOTAL`；套上反而会引入「筛选时退回本页」的错误行为（顾问的筛选是服务端真过滤，排队条目不带 pkg）。
 规则脚本缺失时 `badgeCount(kind)` 里 `try/catch` 兜底返 `{ value: loaded, scope: 'loaded' }`，退回旧口径但语义自洽（读屏会标「（本页）」）。
 
+**顶部同步状态行的两个计数各带口径，不许整句套一档**：状态行写「已同步 16:32 · 消息 40 · 分析 40」，两个数字分别来自 /stats 的 `messages.total` 与 `analyses.total`。
+旧写法只判 `messages.total` 就决定整行口径 —— 后果有三种：① 一侧拿到全库、另一侧拿不到时，整句仍装成全库口径（真机上出现「已加载消息 5 · 分析 40」这种同一句里两种口径的写法，用户无从判断哪个数是哪一档）；
+② `analyses.total` 缺失时直接字符串拼接，渲染出「分析 null」；③ 来源筛选时两侧一起退化，但「消息」「分析」两个标签名不变，看不出是已加载口径。
+判定收进 `console_classify.syncCounters(msgLoaded, anaLoaded, msgTotal, anaTotal, filtered)`，复用 `badgeState` 的语义逐侧定档，返回 `{msg, ana, mixed}`（`msg` / `ana` 各是 `{value, scope}`，`mixed` 表示两侧口径不同）。
+三条约定：① `null`（拿不到）≠ `0`（真的是 0），与角标同一口径；② `filtered` 为真时两侧一起退回已加载，全库数不能代表筛选后的列表；③ 界面只在 `scope === 'loaded'` 的那一侧加「已加载」前缀（`消息 40 · 已加载分析 3`），没退化的一侧不加前缀 —— 两侧都加会让人以为整句都是估算。
+规则脚本缺失时 `syncCountText()` 兜底：两侧都能拿到全库数才整句报全库，否则两侧一起退回已加载（宁可少报，也不混口径）。
+
 ### POST /queue —— 上报排队任务快照（需 token）
 
 请求体 `{"device_id": "android-1f2a3b4c", "tasks": [...]}`，按 `(device_id, task_id)` 整份覆盖

@@ -640,6 +640,12 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 测试：`test_console_classify.py` +4 条（优先全库 / 筛选态回落 / `total` 缺失回落且不折 0 / 脏值夹紧）、`test_console_ui.py` +1 条（`badgeCount` 在、判定走 `CC.badgeState`、`filtered` 口径在、`messages.total` 与 `analyses.todo` 都在、旧 `setBadge('badge-todo', filteredTodos().length)` 已退场、`（本页）` 在）。实测七组输入见评审文档 E-71。
   - 计数：`console_classify.js` 642 / 602 → **662 / 621**（`badgeState` @611 · 导出块 @619-661）；`console_ui.py` 3780 / 3689 → **3812 / 3721**（`badgeCount` @1890 · `renderBadges` @1909）；服务端用例 709 → **714**。
 
+- **顶部同步状态行把两个计数套成一档口径：一侧退化整句仍装全库，`analyses.total` 缺失时直接渲染「分析 null」（fix/sync-line-scope）**
+  - 问题：`renderSyncLine()` 只看 `messages.total` 就决定整行口径 —— 拿得到且没有来源筛选就写「消息 40 · 分析 40」，否则整句退回「已加载消息 5 · 分析 3」。三个后果：① 只有一侧能拿到全库数时，整句仍装成全库口径（真机出现过「已加载消息 5 · 分析 40」这种同一句里两种口径的写法）；② `analyses.total` 缺失时直接字符串拼接，状态行渲染出「分析 null」；③ 来源筛选时两侧一起退化，但「消息」「分析」两个标签名不变，看不出这是已加载口径。与角标、概览条同族：全库真值只覆盖了一段路径，另一段静默混写。
+  - 修法：判定搬进 `console_classify.js` 的 `syncCounters(msgLoaded, anaLoaded, msgTotal, anaTotal, filtered)`（纯函数，UMD，node 可测），复用 `badgeState` 的「拿不到不许折 0」语义逐侧定档，返回 `{msg, ana, mixed}`。三条约定 —— ① `null`（拿不到）≠ `0`（真的是 0）；② `filtered` 为真时两侧一起退回已加载（全库数代表不了筛选后的列表）；③ 界面只在 `scope === 'loaded'` 的那一侧加「已加载」前缀，没退化的一侧不加，否则整句看起来像估算。UI 侧新增 `console_ui.syncCountText()`，规则脚本缺失时两侧都能拿到全库数才整句报全库，否则两侧一起退回已加载。
+  - 测试：`test_console_classify.py` +4 条（两侧全库 / 逐侧退化且 `mixed` 为真 / `analyses.total` 缺失或脏值回落已加载且 0 仍是全库 / 筛选态两侧一起退化）、`test_console_ui.py` +1 条（`syncCountText` 在、走 `CC.syncCounters`、两个计数各读各的总数、旧的整句双分支已退场、状态行已接线）；另做 `node --check` + 最小桩实测七档文案（两侧全库 / 两侧缺失 / 只缺 analysis / 只缺 messages / 筛选 / 全 0 / 脏值）。
+  - 计数：`console_classify.js` 662 / 621 → **676 / 635**（`syncCounters` @632 · 导出块 @637-675）；`console_ui.py` 3812 / 3721 → **3830 / 3739**（`syncCountText` @1599 · `renderSyncLine` @1621）；服务端用例 714 → **719**。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：
