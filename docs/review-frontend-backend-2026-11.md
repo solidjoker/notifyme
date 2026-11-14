@@ -1287,3 +1287,57 @@ GET /suggests/next → [{"priority":80,"title":"待办 2 条，分布在 2 个�
 
 **计数.** `server/console_ui.py` 3555 → **3559** 行（非空 3466 → 3470）、`CONSOLE_MANIFEST` @3371 → **@3375**、`CONSOLE_SW` @3417 → **@3421**；`server/test_console_ui.py` 488 → **521** 行（非空 389 → 417）。服务端用例 659 → **660**。
 
+### E-61｜`/messages` 与 `/analysis` 从不告诉调用方「有多少行被脏值守卫挡掉了」（`routes.query_messages` / `routes.query_analysis`，feat/skip-count，2026-11-14）
+
+**问题.** 上一轮给两条查询加了 `typeof(timestamp) IN ('integer','real')` 常驻守卫，把脏数值行挡在 SQL 之外 —— 脏行不再毒化游标，但**也没人知道它们存在**。实测：库里 2 条正常消息 + 1 条 `timestamp = "boom"` 时，`GET /messages` 只返回 2 条、响应键里没有 `skipped`，而 `GET /stats` 的 `messages.total` 是 **3**。「库存 3、列表 2」的差额没有任何解释。
+
+控制台侧更早就有消费点：`SKIP_NOTICE`（`console_ui.py` @1427）、`fetchMsgPage` 里的 `skipped: Number(r.skipped || 0)`（@1902）、`skipNoticeHtml()` 横幅（@1915，文案「有 N 条因格式损坏被跳过（服务端 skipped 计数）」）。**服务端从来没给过这个键，横幅永远渲染不出来**。
+
+`/analysis` 是同一族的更阴版本：它**确实**返回 `skipped`，但那个数只统计 Python 侧构造异常（`except Exception: skipped += 1`）。守卫把脏行挡在 SQL 结果集外，那条 `except` 永远命不中 → `skipped` 恒 0。660 条全绿也没发现，因为既有脏行用例（`test_stats_survives_text_timestamp_dirty_row` / `test_messages_pagination_skips_text_timestamp_row` / `test_stats_survives_text_received_at_dirty_row` / `test_analysis_pagination_skips_text_received_at_row`）只断言「脏行不出现、游标不被毒化」，**没人断言差额被报出来**。
+
+**修法.** 两条查询各加一次同构的计数查询，返回键统一叫 `skipped`。三条口径是契约：
+
+1. **在「整段过滤范围」内算、不含游标段**：在追加游标条件之前先快照 `n_filters = len(conditions)` / `filter_params = list(params)`，计数 SQL 用 `conditions[1:n_filters]`（第 0 条恒是 guard）。游标是页边界不是过滤条件 —— 翻页时 `skipped` 必须不变，否则用户每翻一页看到一个不同的「损坏条数」。
+2. **无过滤条件时也照算**：第一版只在 `n_filters > 1` 时才发这条 COUNT，实测 `GET /messages?limit=10` 仍返回 `skipped 0` —— 而控制台首屏就是 `messages?limit=200`（无任何过滤），这恰恰是最需要解释的场景。库里脏行极少，多一条 `COUNT(*) ... WHERE NOT (typeof(...))` 的代价相对整页序列化可以忽略。
+3. **`/analysis` 的 `skipped` 是两条来源之和**：SQL 侧守卫挡掉的行数 + Python 侧构造失败的行数（后者留作兜底，别让异常行悄悄消失）。
+
+```python
+# routes.py query_messages（/analysis 同构，表名与列名不同）
+n_filters = len(conditions)          # 游标追加之前快照
+filter_params = list(params)
+...
+skipped = 0
+skip_where = "NOT (" + guard + ")"
+if n_filters > 1:
+    skip_where += " AND " + " AND ".join(conditions[1:n_filters])
+skip_sql = "SELECT COUNT(*) FROM messages WHERE " + skip_where
+conn = app_module._connect()
+```
+
+控制台的横幅文案同步补成因：原来说「因格式损坏被跳过」，而实际有两种 —— 数值列不是数字（时序不可比、会毒化游标）与映射失败。改成「服务端 skipped 计数：时间列不是数字或无法映射」。
+
+**测试.** `test_stats_api.py` +4 条：
+
+- `test_messages_reports_skipped_dirty_rows_without_filters`：无过滤下 `count == 2`、`skipped == 1`，且 `count + skipped == /stats.total`（这一条正是第一版实现会红的地方）；
+- `test_messages_skipped_respects_filters`：`skipped` 跟随 `conversation` / `pkg` 过滤（`conv1` 1/1、`conv2` 0/1、别的 pkg 0/0）；
+- `test_analysis_reports_skipped_dirty_rows`：脏 `received_at` 计入，`count + skipped == /stats.analyses.total`；
+- `test_analysis_skipped_zero_when_clean`：干净库恒 0，不因新增 COUNT 而误报。
+
+加 `test_console_ui.py` +1 条（横幅文案含「时间列不是数字或无法映射」）。
+
+实测：`pytest server/test_stats_api.py -q` → **42 passed**；`pytest server/test_console_ui.py server/test_console_queue.py -q` → **66 passed**；全量 `pytest server/ -q` → **665 passed in 30.87s**（基线 660 + 5）；`python -m compileall -q server` → 退出码 0。
+
+**验证.** 造数探针（临时 `DATA_DIR` + `WEIXIN_TOKEN=t` + `create_app().test_client()`）三组对照：
+
+```text
+4 行消息（2 正常 + 2 脏，分属群A/群B）：
+  GET /messages?limit=10                    → count 2, skipped 2
+  GET /messages?limit=10&conversation=群A    → count 2, skipped 1
+  GET /stats                                → messages.total 4   （2 + 2 恒等）
+3 条分析（2 正常 + 1 脏 received_at）：
+  GET /analysis?limit=10                    → count 2, skipped 1
+  GET /stats                                → analyses.total 3   （2 + 1 恒等）
+```
+
+**计数.** `server/routes.py` 1039 → **1084** 行（非空 979 → 1022），`query_messages` @169、`query_analysis` @568、`receive_analysis` @342、`receive_advisor` @756、`query_advisor` @845、`admin_extract` @889、`admin_extract_status` @934、`receive_queue` @948、`query_queue` @1021、`register` @1072、`add_url_rule` 映射 @1074-1083；`server/console_ui.py` 3559 → **3564**（非空 3470 → 3475，`skipNoticeHtml` @1915、`CONSOLE_MANIFEST` @3380、`CONSOLE_SW` @3426）；`server/test_stats_api.py` 778 → **849**；`server/test_console_ui.py` 521 → **532**。服务端用例 660 → **665**。
+
