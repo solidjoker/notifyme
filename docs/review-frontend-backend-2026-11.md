@@ -2527,3 +2527,187 @@ python -m pytest server/ -q                             # 738 passed
 **计数.** `server/console_classify.js` 771 / 720 → **831 / 778**（`_deviceEntry` @733 · `queueEmptyScope` @749 · 导出块 @784-830）；`server/console_ui.py` 3865 / 3773 → **3911 / 3819**（`queueEmptyHtml` @3576 · `renderQueue` @3630 · `CONSOLE_MANIFEST` @3727 · `CONSOLE_SW` @3773）；`server/test_console_classify.py` 1717 / 1406 → **1792 / 1467**；`server/test_console_queue.py` 251 → **274**；服务端用例 730 → **738**。
 
 **教训.** 空态是唯一「列表里什么都没有」时用户能读到的信息，它必须能回答**「为什么没有」** —— 而「为什么」的候选数量由数据源决定，不是由分支代码的想象力决定。这一轮真正的问题不是文案写得含糊，是**判定函数只收到了两个布尔**：一旦入参里没有「全库有多少条」这一维，无论文案怎么写都只能含糊。规则：**写空态之前先数清有几个全库口径可用，再给每个口径配一个「拿不到」的档；拿不到的档必须写「不敢断言」，不许写成 0**。同时注意「组合维度没有已知口径」这件事本身要显式表达（这里是 `stateKnown`），否则最容易发生的就是拿一个维度的小计冒充另一个维度的明细。
+
+---
+
+## E-75 S1 的 topic / due_window / 重要度 是码值，控制台直接拼原码：同一条记录在手机上是「工作任务 / 今天 / 高」，在控制台是「work_task / today / high」，`due_window = none` 还渲染成「截止 none」（`console_classify.topicLabel` / `dueLabel`，fix/s1-code-labels，2026-11-14）
+
+**现象.**
+
+改前 `server/console_ui.py` 的 `renderAnalysisBlock(a)` 直接把 S1 的码值拼进 chip：
+
+```js
+    if (s1.due_window) {
+      chips += '<span class="chip">截止 ' + esc(s1.due_window) + '</span>';
+    }
+    if (s1.topic) chips += '<span class="chip">' + esc(s1.topic) + '</span>';
+    // 重要度：接口已归一成档位码，但 chip 直接贴档位码
+    chips += '<span class="chip' + (...) + '">重要度 ' + esc(importanceOf(a)) + '</span>';
+    // S2 的截止还单独占一行
+    if (s2.due_time) html += '<div class="row"><span class="label">截止时间</span> ' + esc(s2.due_time) + '</div>';
+```
+
+于是待办卡 / 会话卡（两者共用 `renderAnalysisBlock`）与统计卡渲染出来是：
+
+| 位置 | 改前显示 | 端上同一份数据显示 |
+| --- | --- | --- |
+| 截止 chip | `截止 today` / `截止 none` | `截止：今天`（`none` 整段不显示） |
+| 主题 chip | `work_task` | `主题：工作任务` |
+| 重要度 chip | `重要度 high` | `重要度 7.0` |
+| S2 段 | `截止时间 明天15:00`（另起一行） | 无（与截止 chip 同源） |
+| 搜索 | 搜 `work_task` 命中，搜「工作任务」**命中不了** | 码值与中文都命中 |
+
+端上早就修好了：`app/src/main/java/com/notifyme/android/TopicLabelCore.kt`（internal object + 33 条单测）是唯一真源，`ConversationActivity.kt:636` / `:642` 与 `AnalysisListActivity.kt:242-257` 都走它；`SearchCore.kt:52-65` 明确把「码值 + 中文标签」一起收进搜索面，并注明「none 是码值不是可读内容，留着会让用户搜 none 命中全部记录」。
+
+佐证：改前 `server/` 全目录 grep `topicLabel|dueLabel|TOPIC_LABELS|DUE_LABELS` **零命中**；既有用例（`test_console_ui.py` / `test_console_queue.py` / `test_console_classify.py`）对 `renderAnalysisBlock|analysisSearchText|impLabel|importanceOf|ana-meta` 也**零命中** —— 这条链路从来没被钉住过。
+
+**根因.**
+
+① **码值当成内容用**：`topic` / `due_window` 是枚举码（`work_task` / `today` / `none`），端上有一份归一，控制台这条链路（`routes.receive_analysis` 存 raw jsonl → `query_analysis` 用 `_safe_json` 原样带回 `s1` → `console_ui` 直接拼）从头到尾没人翻。
+
+② **`if (s1.due_window)` 是「字符串非空」判定**：码值 `"none"` 非空，于是「没有明确时间」被渲染成一条「截止 none」的内容 —— 这是把「码值」当「内容」用的典型后果。
+
+③ **重要度在接口层已归一，但归一的是「档位码」不是「展示文案」**：`server/util.py` 的 `_importance_label` 把 0-9 数值与 `high/mid/low` 统一成档位码（接口出参 `importance` 就是它），控制台把档位码直接当文案贴，于是「重要度 high」。
+
+④ **搜索面只拼 JSON 原文**：`analysisSearchText` 里 `parts.push(JSON.stringify(a.s1))` 让码值可搜，中文标签永远不在搜索面里 —— 用户在手机上搜「今天」，在控制台搜不到。
+
+**修法.** 规则层一份口径，UI 只挑措辞。
+
+规则层（`server/console_classify.js`，与端上 `TopicLabelCore` 同口径）：
+
+```js
+  var TOPIC_LABELS = { work_task: '工作任务', schedule: '日程安排', notice: '通知公告',
+                       smalltalk: '闲聊', risk: '风险信号', filtered: '已预筛过滤' };
+  var DUE_LABELS = { none: '无明确时间', today: '今天', tomorrow: '明天',
+                     this_week: '本周内', later: '更晚' };
+
+  // 码值 / 中文桶名 双向归一；认不出的原样回显
+  function _codeOf(raw, table, aliases) {
+    var s = (raw == null) ? '' : String(raw).trim();
+    if (!s) { return ''; }
+    if (Object.prototype.hasOwnProperty.call(table, s.toLowerCase())) { return s.toLowerCase(); }
+    if (Object.prototype.hasOwnProperty.call(aliases, s)) { return aliases[s]; }
+    return s;
+  }
+  function topicLabel(raw) {
+    var code = normalizeTopic(raw);
+    if (!code) { return '通知公告'; }
+    return _labelOf(TOPIC_LABELS, code) != null ? _labelOf(TOPIC_LABELS, code) : code;
+  }
+  function isNoDue(due) {
+    var code = normalizeDue(due);
+    return !code || code === 'none';
+  }
+  // 该显示哪一份截止：手填的 todo_due 最权威，其次 s2 自由文本，最后 s1 桶
+  function displayDueCode(todoDue, s2DueTime, s1DueWindow) {
+    var t = (todoDue == null) ? '' : String(todoDue).trim();
+    if (t) { return t; }
+    var s2 = (s2DueTime == null) ? '' : String(s2DueTime).trim();
+    if (s2) { return s2; }
+    return (s1DueWindow == null) ? '' : String(s1DueWindow).trim();
+  }
+  function hasDisplayDue(todoDue, s2DueTime, s1DueWindow) {
+    return !isNoDue(displayDueCode(todoDue, s2DueTime, s1DueWindow));
+  }
+  // 重要度：数值 0-9 与档位码都吃，小数与负数也按数值走（与服务端 _importance_label 同源）
+  function importanceKey(v) {
+    var s = (v == null) ? '' : String(v).trim().toLowerCase();
+    if (!s) { return ''; }
+    if (/^-?\d+(\.\d+)?$/.test(s)) {
+      var n = parseFloat(s);
+      if (!isFinite(n)) { return ''; }
+      return n >= 6 ? 'high' : (n >= 3 ? 'mid' : 'low');
+    }
+    return Object.prototype.hasOwnProperty.call(IMPORTANCE_LABELS, s) ? s : '';
+  }
+  // 搜索面：码值与中文标签都收，none 排除
+  function analysisCodeParts(a) {
+    var out = [];
+    var s1 = (a && a.s1 && typeof a.s1 === 'object') ? a.s1 : null;
+    if (!s1) { return out; }
+    var topicCode = normalizeTopic(s1.topic);
+    if (topicCode) {
+      out.push(topicCode);
+      var tl = topicLabel(topicCode);
+      if (tl && tl !== topicCode) { out.push(tl); }
+    }
+    var s2Due = (a.s2 && typeof a.s2 === 'object') ? a.s2.due_time : '';
+    if (hasDisplayDue(a.todo_due, s2Due, s1.due_window)) {
+      var dueCode = displayDueCode(a.todo_due, s2Due, s1.due_window);
+      out.push(dueCode);
+      var dl = displayDueLabel(a.todo_due, s2Due, s1.due_window);
+      if (dl && dl !== dueCode) { out.push(dl); }
+    }
+    return out;
+  }
+```
+
+UI 侧（`server/console_ui.py`）只做三件事：翻译、判空、拼 chip。
+
+```js
+function displayDueText(a) {
+  var s2Due = (a.s2 && typeof a.s2 === 'object') ? a.s2.due_time : '';
+  var s1Due = (a.s1 && typeof a.s1 === 'object') ? a.s1.due_window : '';
+  if (CC && CC.hasDisplayDue && CC.displayDueLabel) {
+    try {
+      if (!CC.hasDisplayDue(a.todo_due, s2Due, s1Due)) { return ''; }
+      return String(CC.displayDueLabel(a.todo_due, s2Due, s1Due) || '');
+    } catch (e) { }
+  }
+  // 降级：按 todo_due -> s2 -> s1 的优先序取第一个非空，none 与空串不出
+  var code = String(a.todo_due == null ? '' : a.todo_due).trim() ||
+    String(s2Due == null ? '' : s2Due).trim() ||
+    String(s1Due == null ? '' : s1Due).trim();
+  if (!code || code.toLowerCase() === 'none') { return ''; }
+  return code;
+}
+
+// renderAnalysisBlock 内部
+var dueText = displayDueText(a);
+if (dueText) chips += '<span class="chip">截止 ' + esc(dueText) + '</span>';
+var topicText = topicChipText(s1.topic);
+if (topicText) chips += '<span class="chip">主题 ' + esc(topicText) + '</span>';
+```
+
+**刻意取舍.**
+
+① **未知码值原样回显，只有空值才回落**：认不出的 `topic` 显示 `urgent_xyz` 而不是编一个中文 —— 编出来的中文会与端上不一致，而且用户无法回溯它对应哪个码。空串才回落「通知公告」/「无明确时间」（与端上 `topicLabel` / `dueLabel` 同口径）。
+
+② **`none` 整段不渲染，而不是渲染成「截止 无明确时间」**：没有明确时间不是一条「截止」信息，显示出来只会让人以为卡片漏了东西。判定交给规则层 `hasDisplayDue`，UI 不自己判 `none`。
+
+③ **「截止」的优先序固定为 `todo_due → s2.due_time → s1.due_window`**：与端上 `TopicLabelCore.displayDueCode` / `AnalysisStore.displayDue` 同序。手填的截止最权威（那是人确认过的），S2 的自由文本次之，S1 的桶最后。
+
+④ **删掉 S2 段里单独的「截止时间」行**：它与截止 chip 是同一个信息，同一张卡把同一个时间写两遍，而且旧写法把桶名 `today` 原样贴在正文里（chip 已经是翻好的中文）。
+
+⑤ **重要度 chip 用「高 / 中 / 低」短语，分区头仍用「高重要度（N）」**：chip 自带「重要度」前缀，再套分区标签会变成「重要度 高重要度」；分区头要的是排序语义，必须保留完整档位名。
+
+⑥ **数值重要度的口径与服务端 `util._importance_label` 对齐（含小数与负数）**：第一版只认 `/^[0-9]+$/`，`2.9` 被判成「认不出」→ chip 回显 `2.9`，而服务端同一份值归一成 `low` —— 两端对同一条记录给出不同档位。本轮按 `_importance_label` 的 `float()` 口径放宽成正则 `^-?\d+(\.\d+)?$`。
+
+⑦ **搜索面同时收码值与中文，但排除 `none`**：搜「工作任务」与搜「work_task」都命中同一条；`none` 排除，否则搜 `none` 命中全部记录（端上 `SearchCore` 同样排除）。
+
+**测试.**
+
+| 用例 | 断言 |
+| --- | --- |
+| `test_topic_label_translates_codes_and_keeps_unknown_raw` | 六档码值翻中文；大小写与空白不影响；中文桶名反向归一；`urgent_xyz` 原样；空值回落「通知公告」 |
+| `test_due_label_translates_codes_but_keeps_free_text` | 五档 due 翻中文；「本周」→ 本周内；自由文本 `明天15:00` 原样；`isNoDue` 对 `none` / 空串为真 |
+| `test_display_due_prefers_todo_then_s2_then_s1` | 优先序三条；`hasDisplayDue` 对 `none` 为假；桶名翻中文、自由文本原样 |
+| `test_importance_chip_keeps_numbers_short_and_drops_junk` | 数值分档（含 `2.9` → low、`-1` → low、`7.5` → high）；文本只认四档；`urgent` 原样回显 |
+| `test_analysis_code_parts_lift_codes_and_labels_into_search` | 码值 + 中文同时进搜索面；`none` 不进；s2 自由文本进；无 s1 返 `[]` |
+| `test_s1_code_labels_come_from_the_rule_layer` | 三个 helper 在；三个 `CC.*` 在；旧写法 `esc(s1.due_window)` / `esc(s1.topic)` / 「截止时间」都不在；主题 chip 有前缀 |
+| `test_s1_due_none_is_not_rendered_at_all` | 截止 chip 走 `displayDueText` 且判空；降级路径排除 `none` 与空值 |
+| `test_analysis_search_covers_both_codes_and_chinese_labels` | 搜索面接 `CC.analysisCodeParts`；规则层 `analysisCodeParts` 用 `hasDisplayDue` 排除 `none` |
+
+**验证.**
+
+```powershell
+python -m pytest server/test_console_classify.py -q          # 142 passed
+python -m pytest server/test_console_ui.py server/test_console_queue.py -q   # 82 passed
+python -m pytest server/ -q                                # 746 passed
+```
+
+另外把 `CONSOLE_HTML` 的 4 段内联 `<script>` 抽出来拼成单文件跑 `node --check`（退出码 0），再用 node 直跑规则层核对十二组输入的翻译结果（`work_task`/`Work_Task`/`工作任务` → 工作任务，`日程` → 日程安排，`urgent_xyz` → 原样，空 → 通知公告；`none` → 无明确时间，`本周` → 本周内，`明天15:00` → 原样）。
+
+**计数.** `server/console_classify.js` 831 / 778 → **1013 / 946**（`TOPIC_LABELS` @327 · `DUE_LABELS` @347 · `_codeOf` @373 · `normalizeTopic` @382 · `topicLabel` @387 · `dueLabel` @394 · `isNoDue` @401 · `displayDueCode` @409 · `hasDisplayDue` @417 · `displayDueLabel` @422 · `IMPORTANCE_CHIPS` @431 · `importanceKey` @437 · `importanceChip` @448 · `analysisCodeParts` @456 · 导出块 @951-1012）；`server/console_ui.py` 3911 / 3819 → **3968 / 3875**（`impChipText` @2893 · `topicChipText` @2902 · `displayDueText` @2911 · `renderAnalysisBlock` @2928 · `analysisSearchText` @1744 · `todoSection` @2971 · `renderStats` @3062）；`server/test_console_classify.py` 1792 / 1467 → **1905 / 1569**；`server/test_console_ui.py` 787 / 650 → **839 / 693**；服务端用例 738 → **746**。
+
+**教训.** 「码值」与「内容」是两回事，展示层拿到任何字段都要先问一句：**这是给人看的，还是给机器用的**？本案的三个症状（`截止 today`、`截止 none`、`重要度 high`）全部来自同一个动作 —— 把码值直接当文案拼进 HTML。判据很具体：**只要一个字段有枚举表，就必须有一个「该不该显示 / 显示成什么」的判定函数**，而这个判定不许写在 UI 里（否则每处 UI 各判一次，必然漂移）。跨端还有一条：**端上已经归一过的枚举，控制台不该「再写一份」，只能转发同一份口径** —— 本案漂移了至少一个版本，靠的是端上 33 条单测与控制台零条单测的落差。

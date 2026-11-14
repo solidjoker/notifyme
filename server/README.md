@@ -454,6 +454,18 @@ UI 侧只保留降级：`console_ui.sourceBadgeHtml()` 在规则脚本缺失时�
 判定收进 `console_classify.queueEmptyScope(device, state, loaded, shown, devices, summary)`，返回 `{device, state, scope, loaded, shown, db, stateKnown, mode}`：`scope` 是 `device` / `state` / `all`，`mode` 是 `loaded` / `none` / `elsewhere` / `unknown`（与 `appEmptyScope` 同名同义）。
 四条保守约定：① **设备维度读 `devices[].total`（全库分组聚合、无 LIMIT），状态维度读 `summary[state]`**，两者都不能用 `QUEUE.length` 顶替；② **设备查不到 ≠ 没任务** —— `devices` 里没有这台设备说明行已被保留期清理（停报超 7 天），措辞要写「设备『…』已经没有任务了」而不是「这一页没有」；③ **「设备 × 状态」没有已知口径**（`queue_summary(device_id, state)` 只单独接受其一），此时 `stateKnown = false`，UI 只能说「全库共有 N 条任务（各状态合计）」，不许拿设备总数冒充该状态的条数；④ **拿不到 `summary` / `devices` 时回 `unknown`**，措辞写「拿不到全库计数…不敢断言」，绝不替服务端下「已经没有任务」的结论。
 UI 侧只挑措辞：`console_ui.queueEmptyHtml()` 在 `scope.scope === 'device'` 下给三档（已清理 / 在更早的页 / 拿不到口径），其余给「全库没有」「这一页没有」「当前页没有 + 全库共 N 条」，并按当前筛选给出「查看全部设备」「查看全部状态」按钮。**搜索仍是「本页里挑」**（`if (QUERY.trim()) return emptyStateFor('queue')`），因为搜索命中的是已加载行、全库条数救不了它。
+**S1 的 topic / due_window / 重要度 是码值，展示文案只有规则层一份**：控制台的待办卡 / 会话卡 / 统计卡曾把 S1 的枚举码直接拼进 HTML ——
+待办卡显示「截止 today」「work_task」，`due_window = "none"` 时连「截止 none」都渲染出来，重要度 chip 贴的是接口归一后的档位码（`重要度 high`）。
+端上早就修好了：`TopicLabelCore`（internal object + 33 条单测）是唯一真源，`ConversationActivity` / `AnalysisListActivity` / `SearchCore` 都走它。
+
+规则层（`server/console_classify.js`）新增一段「S1 主题 / 截止 / 重要度：码值 → 中文」：`TOPIC_LABELS` / `TOPIC_ALIASES` / `DUE_LABELS` / `DUE_ALIASES` 四张表 + `normalizeTopic()` / `normalizeDue()`（码值与中文桶名双向归一）+ `topicLabel()` / `dueLabel()` + `isNoDue()` + `displayDueCode()` / `hasDisplayDue()` / `displayDueLabel()` + `IMPORTANCE_CHIPS` / `importanceKey()` / `importanceChip()` + `analysisCodeParts()`（搜索面用）。
+五条约定：① **认不出的原码原样回显，只有空值才回落**（「通知公告」/「无明确时间」）—— 编一个中文会与端上不一致，用户也没法回溯它对应哪个码；
+② **`none` 整段不渲染**（`hasDisplayDue` 为假），不是渲染成「截止 无明确时间」；③ **「截止」的优先序固定 `todo_due → s2.due_time → s1.due_window`**（与端上 `displayDueCode` / `AnalysisStore.displayDue` 同序，手填的截止最权威）；
+④ **数值重要度的口径与服务端 `util._importance_label` 同源**（`>=6 high` / `>=3 mid` / 其余 `low`，小数与负数也按数值走）—— 只认整数会把 `2.9` 判成「认不出」，与接口归一结果相反；
+⑤ **搜索面同时收码值与中文标签，但排除 `none`**（否则搜 `none` 命中全部记录，与端上 `SearchCore` 同口径）。
+
+UI 侧只挑措辞：`console_ui.impChipText()` / `topicChipText()` / `displayDueText()` 三个 helper 走规则层（缺失时降级为「原码原样 + none 不出」），
+`renderAnalysisBlock()` 的截止 chip 与主题 chip 都由它们产出，S2 段里单独的「截止时间」行删掉（与截止 chip 重复，且会把桶名原样贴在正文里）。
 ### POST /queue —— 上报排队任务快照（需 token）
 
 请求体 `{"device_id": "android-1f2a3b4c", "tasks": [...]}`，按 `(device_id, task_id)` 整份覆盖
