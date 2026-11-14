@@ -1000,6 +1000,52 @@ def test_advisor_sort_survives_string_received_at(client):
     assert set(ids) == {"old-int", "dirty-str", "missing", "text-clock"}
 
 
+def test_advisor_reports_archive_total_and_truncation(client, monkeypatch):
+    """GET /advisor 必须回存档总数与 has_more：单次最多 100 份，存档上限 1000。
+
+    只回 count 时控制台无法区分「只有 100 份」和「有 150 份、只拿到最新 100 份」，
+    顾问 Tab 会静默只显示最新 100 份，看起来像更早的报告丢了。
+    """
+    monkeypatch.setattr(app_module, "ADVISOR_MAX_REPORTS", 1000)
+    for i in range(150):
+        client.post("/advisor", json=[{"report_id": "r%03d" % i,
+                                      "created_at": "2026-11-10 10:00:00"}])
+    body = client.get("/advisor?limit=100").get_json()
+    assert body["count"] == 100
+    assert body["total"] == 150
+    assert body["has_more"] is True
+    # 分页语义是「最新的在前」：截断丢的是最旧的
+    assert body["reports"][0]["report_id"] == "r149"
+    assert body["reports"][-1]["report_id"] == "r050"
+
+    full = client.get("/advisor?limit=200").get_json()
+    # limit 上限仍是 100（存档上限 1000 不等于接口能一次给 1000 份）
+    assert full["count"] == 100
+    assert full["total"] == 150
+    assert full["has_more"] is True
+
+
+def test_advisor_within_limit_reports_no_more(client):
+    """存档只有 3 份时 has_more 必须是 False（别让控制台常驻截断提示）。"""
+    for i in range(3):
+        client.post("/advisor", json=[{"report_id": "r%d" % i,
+                                      "created_at": "2026-11-10 10:00:00"}])
+    body = client.get("/advisor").get_json()
+    assert body["count"] == 3
+    assert body["total"] == 3
+    assert body["has_more"] is False
+
+
+def test_advisor_corrupted_archive_reports_zero_total(client):
+    """存档损坏时 total/has_more 也要给（0/False），前端不能拿到 undefined。"""
+    with open(_advisor_jsonl_path(), "w", encoding="utf-8") as f:
+        f.write("{broken")
+    body = client.get("/advisor").get_json()
+    assert body["ok"] is False
+    assert body["total"] == 0
+    assert body["has_more"] is False
+
+
 def test_advisor_sort_falls_back_to_created_at(client):
     """received_at 缺失时退到 created_at 排序，不能全打平（等于没排）。"""
     _write_advisor_jsonl_raw([

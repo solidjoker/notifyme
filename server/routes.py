@@ -870,6 +870,8 @@ def query_advisor():
         return jsonify({
             "ok": False,
             "count": 0,
+            "total": 0,
+            "has_more": False,
             "reports": [],
             "error": "advisor archive is corrupted",
             "detail": str(e),
@@ -883,8 +885,14 @@ def query_advisor():
                        app_module._advisor_ts(r.get("created_at"))),
         reverse=True)
 
+    # 存档条数上限是 ADVISOR_MAX_REPORTS（1000），而本接口单次最多给 100 份：
+    # 只回 count 时控制台无法区分「只有 100 份」和「有 400 份、只拿到最新 100 份」，
+    # 顾问 Tab 会静默只显示最新 100 份、角标也停在 100，看起来像更早的报告丢了。
+    # 这里把存档总数与「还有更多」一并回给前端，由控制台显式标注截断。
+    total = len(reports)
     reports = reports[:limit]
-    return jsonify({"ok": True, "count": len(reports), "reports": reports})
+    return jsonify({"ok": True, "count": len(reports), "total": total,
+                    "has_more": total > len(reports), "reports": reports})
 
 def admin_extract():
     """
