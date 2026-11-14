@@ -616,6 +616,12 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 修法：判定搬到 `console_classify.js` 的 `advisorPkgScope(reports, pkg)`（纯函数，UMD，node 可测），返回 `{mode, total, tagged, untagged, shown, hidden}` 四态：`all`（无筛选）/ `untagged`（一份都不带字段）/ `mixed`（另有 K 份不带字段仍显示）/ `exact`（全都带字段，过滤是真过滤）；`console_ui.advisorScopeNote()` 只负责按四态挑措辞（含「已加载的 M 份里没有来自该来源的」这条零命中分支），`renderAdvisor` 里原来 8 行无条件 short 块压成一行 `if (APP_FILTER) push({key:"adv-note-filter", html: advisorScopeNote()})`；规则脚本缺失时 `try/catch` 兜底 `null`，沿用旧文案。
   - 测试：`test_console_classify.py` +6 条（无筛选 / 全不带字段 / 全都带字段 / 混合保留未标注 / 过滤到零 / 坏输入），`test_console_ui.py` +1 条（`advisorScopeNote` 在、`CC.advisorPkgScope(ADVISORS, APP_FILTER)` 在、四档分支文案各自在、旧无条件 short 块不在）。服务端 687 → **694 条**。
   - 计数：`console_classify.js` 524 / 491 → **554 / 520**（`advisorPkgScope` @504 · 导出 @552）；`console_ui.py` 3615 / 3526 → **3647 / 3557**（`advisorScopeNote` @3038 · `renderAdvisor` @3066 · `CONSOLE_MANIFEST` @3463 · `CONSOLE_SW` @3509 · `liveDeviceCount` @3195 · `deviceTallyText` @3204 · `queueStateTotal` @3233 · `queueEmptyHtml` @3354）；`test_console_classify.py` 1322 / 1087 → **1379 / 1132**；`test_console_ui.py` 596 / 480 → **621 / 502**。
+
+- **顾问列表的截断说明把筛选也算进去（fix/advisor-list-truncation）**
+  - 问题：`renderAdvisor` 的截断说明 `if (ADVISOR_TOTAL > reports.length)` 右边是**过滤后的可见条数**（`reports` 已按来源 + 搜索过滤）。存档 400 份、接口回最新 100 份、筛到 4 份时写「当前只显示最近 4 份（存档共 400 份）」，用户以为 395 份报告被截掉；反过来存档 40 份全加载、筛到 2 份时又在一份没截的情况下谎报「更早的报告不在此列表里」。两个事实本应正交：**truncated**（存档 > 已加载）与 **filtered**（已加载 > 可见）。
+  - 修法：判定搬进规则脚本 `console_classify.js` 的 `advisorListState(loaded, total, shown)`（纯函数，UMD，node 可测），返回 `{loaded, total, shown, truncated, filtered}`；三条保守约定 —— `total` 缺失 / 0 / 负数 / 非数字 / 小于已加载一律回落 `loaded`，`shown > loaded` 夹回，`loaded == 0` 两标志全假。`console_ui.py` 新增 `advisorListNote(st)` 只拼措辞（截断句 + 筛选句，可叠加），`renderAdvisor` 的旧内联块换成取数 + 渲染；规则脚本缺失时退回旧口径（只报截断），降级分支保留且可测。
+  - 测试：`test_console_classify.py` +4 条（截断/筛选正交、全加载不出截断、`total` 缺失五档回落、脏值夹紧与小数取整）、`test_console_ui.py` +1 条（`advisorListNote` 在、两标志分开判、旧的 `reports.length` 内联块已退场）+ 改 1 条既有截断用例的锚点并补两条断言（取数走 `CC.advisorListState`、降级分支仍在）。
+  - 计数：`console_classify.js` 554 / 520 → **570 / 535**（`advisorListState` @529 · 导出块 @537-570）；`console_ui.py` 3647 / 3557 → **3678 / 3587**（`advisorListNote` @3072 · `renderAdvisor` @3087 · 取数 @3122）；`test_console_classify.py` 1379 → **1423**；`test_console_ui.py` 621 → **645**；服务端用例 694 → **699**。
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：
