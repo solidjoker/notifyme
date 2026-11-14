@@ -481,8 +481,8 @@ def test_skipped_rows_are_surfaced_instead_of_silently_dropped():
     assert "function skipNoticeHtml()" in html
     assert "function skipSections()" in html
     assert "因格式损坏被跳过" in html
-    assert "SKIP_NOTICE.ana = (SKIP_NOTICE.ana || 0) + (r.skipped || 0);" in html
-    assert "SKIP_NOTICE.msg = (SKIP_NOTICE.msg || 0) + (r.skipped || 0);" in html
+    assert "SKIP_NOTICE.ana = Math.max(SKIP_NOTICE.ana || 0, Number(r.skipped || 0));" in html
+    assert "SKIP_NOTICE.msg = Math.max(SKIP_NOTICE.msg || 0, Number(r.skipped || 0));" in html
 
 
 def test_skip_notice_explains_numeric_column_cause():
@@ -530,3 +530,13 @@ def test_advisor_tab_surfaces_archive_corruption_instead_of_empty_state():
     assert "advisor_archive: { ico: '🧯', title: '顾问存档损坏'" in html
 
 
+def test_load_more_does_not_double_count_skipped():
+    """skipped 是「整段过滤范围内」的常量，翻页会原样再报一次。
+
+    累加会把 2 条脏行在 3 页里说成 6 条；多页必须取最大值。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "SKIP_NOTICE.ana = Math.max(SKIP_NOTICE.ana || 0, Number(r.skipped || 0));" in html
+    assert "SKIP_NOTICE.msg = Math.max(SKIP_NOTICE.msg || 0, Number(r.skipped || 0));" in html
+    assert "SKIP_NOTICE.ana = (SKIP_NOTICE.ana || 0) + (r.skipped || 0);" not in html
+    assert "SKIP_NOTICE.msg = (SKIP_NOTICE.msg || 0) + (r.skipped || 0);" not in html
