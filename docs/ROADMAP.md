@@ -611,6 +611,11 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 测试：`test_console_classify.py` +8 条（`"a"*255+😀` 原样穿过且无孤代理、`"😀"*256` 逐字节不变、`"😀"*300`→256 码点、detail 600→512 码点、ASCII 1..256 不变、`task_id` 128 保留 / 129 丢弃、`clipCodePoints` 契约、`codePointLength` 与 Python `len()` 逐样本对齐）。服务端 679 → **687 条**。
   - 计数：`console_classify.js` 471 / 441 → **524 / 491**（`codePointLength` @242 · `clipCodePoints` @255 · `normalizeQueueTasks` @275）；`test_console_classify.py` 1212 / 997 → **1322 / 1087**。`console_ui.py` 3615 / 3526 与 Android 侧不变（130 / 137 / 85 / 1369）。
 
+- **顾问 Tab 的来源过滤说明与事实不符（fix/advisor-pkg-scope-note）**
+  - 问题：`renderAdvisor` 只要 `APP_FILTER` 非空就无条件写「顾问报告不携带来源 App 字段，无法按「X」过滤」—— 这句话只在一份报告都没带 `pkg` 时成立。而 `renderAdvisor` 的过滤本身是「有 `pkg` 才判、没有就整体保留」（`if (APP_FILTER && r.pkg && normPkg(r.pkg) !== APP_FILTER) return false`）：一旦存档里出现带字段的行（端上 `AdvisorStore.toUploadJson` 当前**不写** `pkg`，但服务端 schema 允许、手工回填 / 后续端上补齐都会产生），列表就只剩该来源，说明还写着「无法过滤」，文案与自己下方的列表直接矛盾。旧文案把三种情况（全不携带 / 混合 / 全都携带）写成一句话。
+  - 修法：判定搬到 `console_classify.js` 的 `advisorPkgScope(reports, pkg)`（纯函数，UMD，node 可测），返回 `{mode, total, tagged, untagged, shown, hidden}` 四态：`all`（无筛选）/ `untagged`（一份都不带字段）/ `mixed`（另有 K 份不带字段仍显示）/ `exact`（全都带字段，过滤是真过滤）；`console_ui.advisorScopeNote()` 只负责按四态挑措辞（含「已加载的 M 份里没有来自该来源的」这条零命中分支），`renderAdvisor` 里原来 8 行无条件 short 块压成一行 `if (APP_FILTER) push({key:"adv-note-filter", html: advisorScopeNote()})`；规则脚本缺失时 `try/catch` 兜底 `null`，沿用旧文案。
+  - 测试：`test_console_classify.py` +6 条（无筛选 / 全不带字段 / 全都带字段 / 混合保留未标注 / 过滤到零 / 坏输入），`test_console_ui.py` +1 条（`advisorScopeNote` 在、`CC.advisorPkgScope(ADVISORS, APP_FILTER)` 在、四档分支文案各自在、旧无条件 short 块不在）。服务端 687 → **694 条**。
+  - 计数：`console_classify.js` 524 / 491 → **554 / 520**（`advisorPkgScope` @504 · 导出 @552）；`console_ui.py` 3615 / 3526 → **3647 / 3557**（`advisorScopeNote` @3038 · `renderAdvisor` @3066 · `CONSOLE_MANIFEST` @3463 · `CONSOLE_SW` @3509 · `liveDeviceCount` @3195 · `deviceTallyText` @3204 · `queueStateTotal` @3233 · `queueEmptyHtml` @3354）；`test_console_classify.py` 1322 / 1087 → **1379 / 1132**；`test_console_ui.py` 596 / 480 → **621 / 502**。
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：

@@ -48,7 +48,7 @@ Remove-Item -Recurse -Force app\build\test-results\testOpenDebugUnitTest -ErrorA
 ```
 
 **必须先删 test-results 再加 `--no-build-cache`**：否则 Gradle 判 UP-TO-DATE，评测根本不执行（改 properties 不算 task input，cleanTest 是 no-op）。
-**评测必须留着时间预算**（`S1EvalBudgetCore`）：properties 里 `CALL_TIMEOUT_MS`（默认 90000）与 `TOTAL_BUDGET_MS`（默认 900000 = 15min）到期即停止发起新调用，剩余样本写进报告「预算耗尽未测试」而不是让构建无限等。2026-11-12 就因端点「TCP 通、chat 不回」+ 旧实现的 readTimeout=180s × 40 次调用，把整轮 `testOpenDebugUnitTest` 挂死 40 分钟，只能 jstack 定位。**跑评测前先确认端点真能出 chat 响应**（本机 176B 模型冷启动单条可达 85s）。
+**评测必须留着时间预算**（`S1EvalBudgetCore`）：properties 的 `CALL_TIMEOUT_MS`（默认 90000）与 `TOTAL_BUDGET_MS`（默认 900000 = 15min）到期即停发新调用，剩余样本写入报告「预算耗尽未测试」，别让构建无限等。2026-11-12 端点「TCP 通、chat 不回」+ 旧 readTimeout=180s × 40 次调用把 `testOpenDebugUnitTest` 挂死 40 分钟。**跑评测前先确认端点能出 chat 响应**（本机 176B 模型冷启动单条可达 85s）。
 
 ### 一条命令自检（开 PR 前跑这个）
 
@@ -229,7 +229,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **topic / due_window 的码值→中文映射只有一份口径：`TopicLabelCore`**（internal object，纯函数 + 33 条单测）。以前四处各写一套、空值策略三套，已全部删除。四条契约：
   ① **归一与显示分开**：`normalizeTopic` / `normalizeDue` 只做码值↔中文档名的双向归一（返回英文码值），`topicRes` / `dueRes` 只回资源 id，`topicLabel` / `dueLabel` / `anyLabel` 才做 `getString` —— 因为单测是纯 JVM（无资源），Core 里不能出现中文字面量。
   ② **未知值原样显示，空值才回落**：`topicRes` / `dueRes` 对未知值返回 null（`topicLabel` 原样回显）；只有**空串**才回落 `topic_notice` / `due_none`。预筛结案写的 `s1Topic = "filtered"` 是第六种取值，单独映射为 `topic_filtered`=「已预筛过滤」；别把它归进 notice 桶。
-  ③ **「该显示哪一份截止」的优先序只在 `displayDueCode`**：todoDue → s2DueTime → s1DueWindow（与 `AnalysisStore.displayDue()` 同序，改一处必须同时改另一处）；`hasDisplayDue` 把 `none` / 空串归为「不显示」。**别再写 `dueText != "none"` 这种拿码值比中文串的判定** —— 永远不相等，之前首页未编辑过的待办卡就渲染成「· 截止：none」；待办编辑框回填走 `editDueLabel`（只看 todoDue，不回落 s2/s1，否则保存就把分析结果变成硬覆盖）。
+  ③ **「该显示哪一份截止」的优先序只在 `displayDueCode`**：todoDue → s2DueTime → s1DueWindow（与 `AnalysisStore.displayDue()` 同序，改一处必须同时改另一处）；`hasDisplayDue` 把 `none` / 空串归为「不显示」。**别再写 `dueText != "none"` 这种码值比中文串的判定**（永不相等，首页待办卡曾渲染「· 截止：none」）；编辑框回填走 `editDueLabel`（只看 todoDue，否则保存即硬覆盖分析结果）。
   ④ **提醒链的入参保持原始码值**：`runTodoReminderChain` 用 `displayDueCode`、`AnalysisWorker` 用 `s2DueTime.ifEmpty { s1DueWindow }`，别把 `dueLabel` 的中文结果喂给 `CalendarHelper.parseDueTime` ——「今天」会被解析成今天 09:00，下午分析时事件落进过去、日历永不触发；原始码值落进「解析不出 → baseTime + 1h」是既有分支。
   改码值集合、回落策略或「截止」优先序前先跑 `app/src/test/java/com/notifyme/android/TopicLabelCoreTest.kt`（33 条）。
 - **提醒列表的分组 / 排序 / 筛选口径全在 `ReminderListCore`**（internal object，纯函数 + 36 条单测），别在 `ReminderListActivity` 或 Adapter 里另写一套：
@@ -282,7 +282,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   改名额/排序/截断前先跑 `FeedWindowCoreTest.kt`（22 条，含 600 条噪声与旧写法对照）。
 
 - **分析记录 / 消息侧的「近 N 条」取数只有三种口径，别再新写 `readRecent(N)`**（第七批同源隐患，2026-11-13 收口）：
-  ① **要「某个时间区间内的全部记录」→ `AnalysisStore.readSince(context, cutoffMs)`**（内部走 `AnalysisWindowCore.since` + `ADVISOR_LINES = 20000` 行窗口）。顾问复盘就是这一档：旧写法 `AnalysisStore.readRecent(ctx, 500).filter { analyzedAt >= since }` 在 7 天内 case 超 500 条、或活跃会话占满尾部时，安静会话的 case 进不了报告，`AdvisorDigestCore.nameMapFor()` 随之返回空表、姓名原样出设备。`ADVISOR_LINES` 比 `TAIL_LINES = 5000` 更宽是刻意的，别合并成一个常量。
+  ① **要「某个时间区间内的全部记录」→ `AnalysisStore.readSince(context, cutoffMs)`**（内部走 `AnalysisWindowCore.since` + `ADVISOR_LINES = 20000` 行窗口）。顾问复盘就是这一档：旧写法 `AnalysisStore.readRecent(ctx, 500).filter { analyzedAt >= since }` 在 7 天内 case 超 500 条、或活跃会话占满尾部时，安静会话的 case 进不了报告，`AdvisorDigestCore.nameMapFor()` 随之返回空表、姓名原样出设备。`ADVISOR_LINES` 比 `TAIL_LINES = 5000` 宽是刻意的，别合并。
   ② **要「全库聚合 / 每会话一条」→ `AnalysisStore.readGrouped` / `latestByConvKey`；要「会话候选集」→ `MessageStore.feedGroups(context).keys()`**。设置页统计（会话数 / 待办会话数）与隐私页白名单候选都属于这一档：旧 `readRecent(500)` / `readRecent(1000)` 数出来的是窗口内命中数，超窗口就是错数、也漏掉安静会话。
   ③ **要「逐条列表」→ `FeedWindowCore.sample(MessageStore.feedGroups(context), limit)`**（脱敏预览用 `PREVIEW_LIMIT = 200`）。**别用 `recent()` 那类「全表最近 N 条再排序」**：等于把旧 `readRecent` 又写一遍，600 条噪声下安静会话仍是 0 条（第一版实现被单测当场证伪后改）。`sample` **按会话轮流取**：第 1 轮各取最新、第 2 轮各取次新……组内取时间尾部，最后整体升序；`timestamp <= 0` 归 0 排最前，**并列时先后由取出顺序决定**。
   改这几处口径前先跑 `app/src/test/java/com/notifyme/android/AnalysisWindowCoreTest.kt`（27 条）与 `FeedWindowCoreTest.kt`（27 条），两边都有「旧写法对照实验」。
@@ -326,7 +326,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **采集诊断页的累计统计只有一份口径：`AllTimeStatsCore`**（internal object + 16 条）。① 累计不是 `readRecent(N)`（窗口一满就静默偏小），是 `scanAll`（`SCAN_LINES=50000`）；② 被截断要能报 `capped(totalLines, scannedLines)`；③ object 层 `allTimeStats` 必须 `internal`，`scanAll` 必须写在 Core 内。
 
-- **文本截断只有一份口径：`TextClipCore`**（internal object + 20 条单测）。`take(n)` 数 **UTF-16 code unit**，emoji 会被切成孤立代理、UTF-8 落成 `?`。① `clip` / `clipWithEllipsis` 走 `offsetByCodePoints`，未超限返回同一实例、省略号追加不占预算；② ASCII 输出逐字节不变；③ 只保证不切断代理对，不保证不切断字素簇；④ 32 处站点已收口，hex 与列表 `take(n)` 刻意不套；⑤ 服务端 `console_classify.codePointLength`/`clipCodePoints` 按码点守排队 title 256 / detail 512 / task_id 128（曾用 `.length`，`'a'*255+😀` 留孤立代理），改上限要同时改 `QueueStateCore` / `storage._normalize_queue_task`。
+- **文本截断只有一份口径：`TextClipCore`**（internal object + 20 条）。`take(n)` 数 **UTF-16 unit**，emoji 被切成孤立代理、UTF-8 落成 `?`。① `clip`/`clipWithEllipsis` 走 `offsetByCodePoints`，未超限返同一实例、省略号不占预算；② ASCII 逐字节不变；③ 不切断代理对，不保证字素簇；④ 32 处已收口，hex 与列表 `take(n)` 刻意不套；⑤ 服务端同口径 `console_classify.codePointLength`/`clipCodePoints` 守排队 title 256 / detail 512 / task_id 128（曾用 `.length` 留孤立代理），改上限要同时改 `QueueStateCore` / `storage._normalize_queue_task`。
 
 - **SharedPreferences 的 JSON 读写只有一份口径：`PrefsJsonCore`**（internal object + 29 条单测）。五处 Store（`WatchlistStore` / `AppSourceStore` / `ConvTagStore` / `ConvAnalysisScheduleStore` / `AnalysisScopeCore.decodeConvIds`）此前各抄一份 `try { JSONArray(raw) } catch { }`。
 ① **读永不抛**且返回独立拷贝；② **只做形状裁剪不做领域过滤**（`ConvTag.fromCode` 留 Store 层）；③ 元素走 `optString`；④ **写不排序**（`sort = true` 才排）；⑤ 与 JSONL 无关。`strings` 默认只丢空串，纯空白要 `trim = true` 才丢。改前跑 `PrefsJsonCoreTest.kt`。
@@ -359,7 +359,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **数值列的脏行守卫：`server/stats_api.INT_ONLY_TS` / `MAX_TS`**（`test_stats_api.py` 4 条 + `test_queue.py` 2 条守着）。SQLite 列有 INTEGER 亲和但**能存字符串**，单行脏值就让整页 500 / 游标毒化。① 过滤用 `typeof(timestamp) IN (`'integer','real'`)` 作**常驻条件**，聚合用 `MAX(CASE WHEN typeof(...) THEN x END)`；② **别换 CAST**：`EXPLAIN` 实测 typeof 仍走索引，CAST 退化成全表 SCAN；③ 出参数字走 `_safe_int(...)`。
 - **排队过期行的清理与设备维度过期口径：`storage.cleanup_queue_tasks` / `queue_devices`**（`test_queue.py` 6 条守着）。① 清理不能只挂上报路径：设备全停报后僵尸行永远挂在 devices 上；读取路径 `_ensure_db_ready` 也要调 `_maybe_cleanup_queue`，按 `QUEUE_CLEANUP_INTERVAL_MS`（1h）节流。② 设备 chip 的 `active` 只算未过 TTL 的 queued+running，另加第 4 键 `stale`。③ 用例 fixture 必须复位 `app_module._queue_cleanup_at`。
 - **排队 Tab 的状态 chip / 空态与汇总同源**（`console_ui.queueStateTotal` / `queueEmptyHtml`）。① chip 计数必须走 `queueStateTotal(st)`（优先 `QUEUE_SUMMARY[st]`，降级才数 `QUEUE`）—— 数当前页会让 600 排队 + 20 已完成显示「已完成 0」；② 列表空但全库有命中时报「当前页没有…/全库共有 N 条…」，搜索 / 设备筛选命中 0 退回通用空态；③ 先加「chip 与 summary 一致」用例。
-- **顾问存档损坏不能冒充「没有报告」**（`suggests._advisor_state` 返三元组 + 控制台 `ADVISORS_ERR`；`test_stats_api.py` 3 条 + `test_console_ui.py` 1 条守着）。
+- **顾问存档损坏不能冒充「没有报告」**（`suggests._advisor_state` 返三元组 + `ADVISORS_ERR`；`test_stats_api.py` 3 条守着）。
 ① 损坏时份数必须给 `None`（`return None, 0, True`），给 `0` 会让 priority 50 的「还没有顾问报告 / 顾问存档 0 份」规则命中 —— 真实状态是存档坏、历史报告还在盘上；
 ② 建议侧改出 priority 85 的「顾问存档损坏，报告读不出来」，夹在 80（待办）与 100（失败排队）之间；
 ③ 控制台按 `res[2].ok === false` 置 `ADVISORS_ERR`，错误分支必须排在 `if (!reports.length)` **之前**，否则落进通用空态把用户引去等端上跑复盘。
@@ -370,7 +370,9 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **概览条「待处理」的会话数读 `todo_convs` 不是 `convs`**（`console_ui.renderOverview`，`test_console_ui.py` 1 条守着）。① `/stats` 给了两个会话数：`convs`=有分析结果的、`todo_convs`=其中有待办的；那格数字是待办条数，副标题必须配 `todo_convs`，否则与 `/suggests/next` 的「分布在 N 个会话」同屏打架。② 加键要接消费点（`todo_convs` 存在好几轮，前端从没读过）。③ 断言写「新键在 + 旧键不在」。
 
-- **`/messages` 与 `/analysis` 必须回报被脏值守卫挡掉的行数：`skipped`**（`routes.query_messages` / `query_analysis`）。① 只数 Python 侧 `except` 会**恒 0**（脏行早在 `typeof` 守卫被挡出结果集），必须发独立 `SELECT COUNT(*) WHERE NOT (guard) [AND 过滤段]`。② **无过滤也照算**（控制台首屏就是这条路）。③ 口径 = 当前过滤范围内、不含游标段，`count + skipped == /stats` 库存。④ 前端只能覆盖不能累加：每页报同一个常量，`loadMore` 用 `Math.max`。
-- **列表接口夹了上限就必须回「总数 / 是否截断」**（`routes.query_advisor`：`min(limit, 100)` 而存档上限 `ADVISOR_MAX_REPORTS`=1000）。① 响应体补 `total`（截断前条数）与 `has_more = total > count`，损坏分支也回 `0 / false`，别让前端拿到 `undefined`。② 前端角标读 `ADVISOR_TOTAL`（缺省退回已加载条数），总数大于页长时先插「只显示最近 N 份（存档共 M 份）」。③ 截断用例别断言末位是哪一条：三批写入可落同一毫秒，只钉「首位最新 + 长度 + 最旧被截掉」。
+- **`/messages` 与 `/analysis` 必须回报被脏值守卫挡掉的行数：`skipped`**（`routes.query_messages` / `query_analysis`）。① 只数 Python 侧 `except` 恒 0（脏行早在 `typeof` 守卫被挡），必须发独立 `SELECT COUNT(*) WHERE NOT (guard) [AND 过滤段]`；② **无过滤也照算**；③ 口径 = 过滤范围内、不含游标段，`count + skipped == /stats` 库存。④ 前端只能覆盖不能累加（`loadMore` 用 `Math.max`）。
+- **列表接口夹了上限就必须回「总数 / 是否截断」**（`routes.query_advisor`：`min(limit, 100)`，存档上限 `ADVISOR_MAX_REPORTS`=1000）。① 响应体补 `total`（截断前条数）与 `has_more = total > count`，损坏分支也回 `0 / false`；② 角标读 `ADVISOR_TOTAL`（缺省退回已加载条数），总数大于页长时先插「只显示最近 N 份（存档共 M 份）」；③ 截断用例别钉末位（三批可落同一毫秒），只钉首位最新 + 长度 + 最旧被截掉。
 
-- **同一段里的分布与标量必须能对上：`stats_api._queue_block` 的 `by_kind`、`console_classify.mergePairsBy`**（`test_stats_api.py` 2 条 + `test_console_ui.py` 2 条 + `test_console_classify.py` 5 条守着）。① 类型计数必须放在「过期 → `stale += 1; continue`」**之后**：写在之前会数进早停跑的僵尸任务，5 行里 3 条停跑时同屏写「analysis 3 / sync 2」与「活跃 1 · 陈旧 3」。② 契约 `sum(by_kind.count) == total - stale`，有过期行前端补「（不含 N 条已过期）」，别只写「（未过期）」。③ `/stats` 的 `by_pkg` 按原始列 GROUP BY，pkg 为 NULL / 空串时各成分组，而 `normPkg()` 把两者都折成微信 → 渲染出三个「微信」；展示层必须先 `mergePairsBy(pairs, normPkg)`（`Object.create(null)` 计数 + 丢零次数 + **归并后必须按次数降序、同次数键名升序重排**：保首次出现序会渲染成「微博 2 / 微信 3」，`distPairs` 兜底同口径），**服务端不合并**（分组之和恒等于 `total`）。④ 加分布类字段先问它该不该跟同段的过期 / 过滤口径走，并配「分布之和 == 标量」用例（只断言键名的用例两种写法都绿）。
+- **顾问 Tab 的来源过滤说明必须跟事实走：`console_classify.advisorPkgScope`**（`test_console_classify.py` 6 条 + `test_console_ui.py` 1 条守着）。① 顾问报告 `pkg` 是**可选**的（老报告没有，端上 `AdvisorStore.toUploadJson` 也不写）；② 四态 `all`/`untagged`（一份都不带才叫「无法过滤」）/`mixed`（交代另有 K 份不带字段）/`exact`；③ UI 只负责措辞，判定别写进 `renderAdvisor`。
+
+- **同一段里的分布与标量必须能对上：`stats_api._queue_block.by_kind`、`console_classify.mergePairsBy`**（`test_stats_api.py` 2 + `test_console_ui.py` 2 + `test_console_classify.py` 5 条守着）。① 类型计数必须在「过期 → `stale += 1; continue`」**之后**：写在之前会把早停跑的僵尸数进去，5 行里 3 条停跑时同屏写「analysis 3 / sync 2」与「活跃 1 · 陈旧 3」；② 契约 `sum(by_kind.count) == total - stale`，有过期行前端补「（不含 N 条已过期）」；③ `/stats.by_pkg` 按原始列 GROUP BY，NULL / 空串各成分组而 `normPkg()` 都折成微信 → 渲染出三个「微信」；展示层必须先 `mergePairsBy(pairs, normPkg)`（`Object.create(null)` 计数 + 丢零次数 + **归并后按次数降序、同次数键名升序重排**，`distPairs` 兜底同口径），**服务端不合并**（分组之和恒等于 `total`）；④ 加分布字段先问该不该跟同段过期 / 过滤口径走，并配「分布之和 == 标量」用例（只断言键名两种写法都绿）。

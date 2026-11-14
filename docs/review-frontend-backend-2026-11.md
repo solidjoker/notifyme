@@ -1652,4 +1652,89 @@ pytest server/ -q                          → 687 passed in 39.92s
 **计数.** `console_classify.js` 471 / 441 → **524 / 491**（`codePointLength` @242 · `clipCodePoints` @255 · `normalizeQueueTasks` @275 · `queueSummary` @329 · `groupQueueTasks` @343 · `sortMessageGroups` @358 · `groupMessages` @378 · `groupQueueTasksByDevice` @456 · `queueDeviceSummary` @483 · 导出块 @493-522）；`test_console_classify.py` 1212 / 997 → **1322 / 1087**；服务端用例 679 → **687 条**。`console_ui.py` 3615 / 3526 与 Android 侧计数不变（130 / 137 / 85 / 1369）。
 
 **教训.** 「长度上限」这个约束必须连**单位**一起规定，只写数字等于没写：同一份 `256` 在 Kotlin（`offsetByCodePoints`）、Python（`len()`）、JS（`.length`）是三种不同的东西，而三者恰好在**纯 ASCII 输入上完全等价** —— 所以用例全用 `"a"*300` 时，三层都"对"。判据可以写成一句：**跨语言共享的数值约束，必须配一组"三种单位会分叉"的样本**（emoji / 组合字符 / 泰米尔文），否则测的只是 ASCII 这个特例。同族缺陷在 Android 侧已经修过（`TextClipCore`，`take(n)` → `offsetByCodePoints`），这轮是把同一个 bug 从 Kotlin 抄到 JS 的那一半补上。
+### E-67｜顾问 Tab 的来源过滤说明与事实相反：一份报告都不带 `pkg` 才算「无法过滤」（`console_classify.advisorPkgScope`，fix/advisor-pkg-scope-note，2026-11-14）
+
+**现象.** 控制台在 ☰ 里选了来源 App（比如「微博」）再进「顾问」Tab，列表里清一色是微博的报告，上方说明却写「顾问报告不携带来源 App 字段，无法按「微博」过滤，下面显示的是全部报告」。选了「微信」时同样写这一句，列表同样只剩微信 —— 说明与它下面的列表互相打脸。
+
+**根因.** 说明文案与实际过滤逻辑是两套独立实现，而且文案的前提只覆盖了三种情况里的一种：
+
+```
+server/console_ui.py renderAdvisor（改前）
+  var reports = ADVISORS.filter(function (r) {
+    if (APP_FILTER && r.pkg && normPkg(r.pkg) !== APP_FILTER) return false;   // 有 pkg 才判，没有就保留
+    ...
+  });
+  if (APP_FILTER) {
+    out.push({ key: 'adv-note-filter', full: true,
+               html: '<div class="note">顾问报告不携带来源 App 字段，无法按「' + who +
+                     '」过滤，下面显示的是全部报告。</div>' });      // 无条件写，唯一文案
+  }
+```
+
+`pkg` 在顾问报告里是**可选**字段：端上 `AdvisorStore.toUploadJson` 当前不写它（`app/src/main/java/com/notifyme/android/AdvisorStore.kt:78-88` 只放 `report_id` / `created_at` / `period_days` / `case_count` / `summary` / `suggestions` / `model_used`），但服务端 `storage._normalize_advisor_report` 允许它存在，手工回填、后续端上补齐、或别的客户端上报都会产生带字段的行。于是真实情况有四档，而旧实现只有一句文案：
+
+| 存档实况 | 过滤行为 | 旧文案 | 应写 |
+|---|---|---|---|
+| 一份都不带 `pkg` | 全部保留 | 「无法过滤」 | 正确 |
+| 带字段的都在该来源 + 还有不带的 | 留下该来源 + 不带字段的 | 「无法过滤」 | 要说清「已过滤掉 N 份，另有 K 份不带字段仍显示」 |
+| 全都带字段且都在该来源 | 留下该来源全部 | 「无法过滤」 | 「下面只显示该来源的 N 份」 |
+| 全都带字段但该来源一份都没有 | 空列表 | 「无法过滤」+ 空态 | 「已加载的 M 份里没有来自该来源的」 |
+
+第 4 档最难看：文案说「显示的是全部报告」，下面却是空态横幅 —— 用户会以为报告丢了。
+
+**修法.** 判定搬到纯函数，文案只负责措辞。`server/console_classify.js` 新增 `advisorPkgScope(reports, pkg)` @504：
+
+```js
+function advisorPkgScope(reports, pkg) {
+  var list = Array.isArray(reports) ? reports : [];
+  var want = normPkg(pkg);
+  var total = list.length, tagged = 0, untagged = 0, shown = 0;
+  if (!pkg) {                                  // 没选来源 → all，前端不出说明
+    return { mode: "all", total: total, tagged: 0, untagged: total, shown: total, hidden: 0 };
+  }
+  for (var i = 0; i < list.length; i++) {
+    var r = list[i] || {};
+    var has = r.pkg !== undefined && r.pkg !== null && String(r.pkg).length > 0;
+    if (!has) { untagged++; shown++; continue; }   // 没有字段的行一律保留（与列表过滤同口径）
+    tagged++;
+    if (normPkg(r.pkg) === want) shown++;          // 命中就显示
+  }
+  var hidden = tagged - (shown - untagged);
+  var mode = tagged === 0 ? "untagged" : (untagged > 0 ? "mixed" : "exact");
+  return { mode: mode, total: total, tagged: tagged, untagged: untagged, shown: shown, hidden: hidden };
+}
+```
+
+`console_ui.py` 新增 `advisorScopeNote()` @3038（前面 9 行注释记下四档来源），`renderAdvisor()` @3066 里原来 8 行的无条件 short 块压成一行：`if (APP_FILTER) { out.push({ key: "adv-note-filter", html: advisorScopeNote(), full: true }); }`。五条分支：规则脚本缺失 → 沿用旧文案（保守，不声称已过滤）；`untagged` → 旧文案；`mixed` → 「已按「X」过滤掉 N 份其它来源的报告；另有 K 份报告不带来源字段，仍会显示在下面 — 这一项会随端上补齐上报字段而减少」；`exact` 且 `shown == 0` → 「已加载的 M 份报告里没有来自该来源的」；其余 → 「下面只显示该来源的 N 份报告（已加载 M 份）」。
+
+**测试.** `test_console_classify.py` +6 条（基线 687 → **694**）、`test_console_ui.py` +1 条：
+
+| 用例 | 钉住什么 |
+|---|---|
+| `test_advisor_pkg_scope_all_when_no_filter` | 未选来源 → `mode == "all"`、`shown == total`、`hidden == 0` |
+| `test_advisor_pkg_scope_untagged_when_no_report_has_pkg` | 全不带字段 → `untagged`、`tagged == 0`、`shown == total` |
+| `test_advisor_pkg_scope_exact_when_every_report_tagged` | 全带字段且同来源 → `exact`、`hidden == 0` |
+| `test_advisor_pkg_scope_mixed_keeps_untagged_visible` | 微信 1 + 微博 2 + 不带 1 → `mixed`、`shown == 3`（微信 1 + 微博 2）、`hidden == 0` + 另一样本 `shown == 2` / `hidden == 2` |
+| `test_advisor_pkg_scope_hides_everything` | 全带字段且都不是该来源 → `exact`、`shown == 0`（前端据此出「没有来自该来源的」） |
+| `test_advisor_pkg_scope_tolerates_bad_input` | 非数组 / 元素为 null / `pkg` 为 `""` 都不抛 |
+| `test_advisor_pkg_filter_note_follows_the_real_scope`（UI） | `advisorScopeNote` 在、取数走 `CC.advisorPkgScope(ADVISORS, APP_FILTER)`、四档文案各自在、`renderAdvisor` 里旧的无条件 `adv-note-filter` 文案不在 |
+
+第 5 条是关键：**`shown == 0` 必须与 `mode` 正交**（`exact` + 0 与 `all` 都可能 `shown == 0`），否则「筛到零」会被写进「无法过滤」那一档 —— 正是旧实现的错法。
+
+**验证.**
+
+```
+node -e advisorPkgScope([{pkg:com.tencent.mm},{pkg:com.sina.weibo},{pkg:com.sina.weibo},{}], com.sina.weibo)
+  → {mode: mixed, total: 4, tagged: 3, untagged: 1, shown: 3, hidden: 0}
+node -e advisorPkgScope([{pkg:com.sina.weibo}], com.tencent.mm)
+  → {mode: exact, total: 1, tagged: 1, untagged: 0, shown: 0, hidden: 1}
+pytest server/test_console_classify.py -q → 101 passed in 31.94s
+pytest server/test_console_ui.py -q      → 40 passed in 0.14s
+pytest server/ -q                        → 694 passed in 43.13s
+```
+
+**计数.** `console_classify.js` 524 / 491 → **554 / 520**（`advisorPkgScope` @504 · 导出块 @523-553）；`console_ui.py` 3615 / 3526 → **3647 / 3557**（`advisorScopeNote` @3038 · `renderAdvisor` @3066 · `CONSOLE_MANIFEST` @3463 · `CONSOLE_SW` @3509 · `liveDeviceCount` @3195 · `deviceTallyText` @3204 · `queueStateTotal` @3233 · `queueEmptyHtml` @3354）；`test_console_classify.py` 1322 / 1087 → **1379 / 1132**；`test_console_ui.py` 596 / 480 → **621 / 502**。服务端基线 687 → **694**。
+
+**教训.** 「可选字段 + 有就筛、没有就留」这种过滤天然是多态的，它的说明不能是一句静态文案：判定必须返回「哪些是被筛掉的、哪些是因为缺字段而放过的」这组数字，措辞才可能对得上。判据两句：① **凡是「部分数据满足条件」的过滤，说明里必须同时给出「筛掉了多少」与「因为字段缺失而放过多少」**；② 文案的分支键是**数据实况**（`mode` + `shown`），不是**用户操作**（`if (APP_FILTER)`）—— 按操作分支就必然只覆盖一种实况。
+
 
