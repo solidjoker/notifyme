@@ -1377,3 +1377,47 @@ def test_advisor_pkg_scope_tolerates_bad_input(call):
     assert call("advisorPkgScope", None, PKG_WX)["total"] == 0, "None 报告列表应按空列表处理"
     got = call("advisorPkgScope", [None, 3, {"id": "r1", "pkg": PKG_WX}], PKG_WX)
     assert got["total"] == 1 and got["shown"] == 1, f"非对象条目应被跳过：{got!r}"
+
+def test_advisor_list_state_keeps_truncation_and_filtering_apart(call):
+    """存档 400 / 已加载 100 / 筛到 5：是「筛选」，不是「截断」。
+
+    renderAdvisor 的 reports 是已按来源 + 搜索过滤的可见集，旧写法拿它跟存档总数比，
+    会把「筛掉 95 份」说成「只显示最近 5 份（存档共 400 份）」，用户以为丢了 395 份。
+    """
+    got = call("advisorListState", 100, 400, 5)
+    assert got["loaded"] == 100 and got["total"] == 400 and got["shown"] == 5, f"{got!r}"
+    assert got["truncated"] is True, f"存档 400 > 已加载 100 必须报截断：{got!r}"
+    assert got["filtered"] is True, f"可见 5 < 已加载 100 必须报筛选：{got!r}"
+
+
+def test_advisor_list_state_not_truncated_when_all_loaded(call):
+    """存档 40 份全加载、没筛选：两个标志都不亮，前端不出说明。"""
+    got = call("advisorListState", 40, 40, 40)
+    assert got["truncated"] is False and got["filtered"] is False, f"{got!r}"
+    got = call("advisorListState", 40, 40, 2)
+    assert got["truncated"] is False, "存档已全加载，筛掉的不算截断"
+    assert got["filtered"] is True, f"可见 2 < 已加载 40 必须报筛选：{got!r}"
+
+
+def test_advisor_list_state_falls_back_when_total_missing(call):
+    """老服务端 / 坏响应没有 total：不许把已加载当成存档总数以外的数。"""
+    for bad in (None, 0, -3, "abc", {}):
+        got = call("advisorListState", 100, bad, 100)
+        assert got["total"] == 100, f"total 缺失应回落已加载条数：{bad!r} -> {got!r}"
+        assert got["truncated"] is False, f"total 缺失时不许谎报截断：{bad!r} -> {got!r}"
+    got = call("advisorListState", 100, 40, 100)
+    assert got["total"] == 100, f"total 小于已加载按已加载算：{got!r}"
+    assert got["truncated"] is False, f"{got!r}"
+
+
+def test_advisor_list_state_clamps_and_tolerates_bad_input(call):
+    """脏值不许出负数 / 小数 / NaN，shown 超过 loaded 要夹回去。"""
+    got = call("advisorListState", 100, 400, 250)
+    assert got["shown"] == 100 and got["filtered"] is False, f"shown 应夹到 loaded：{got!r}"
+    got = call("advisorListState", 12.9, 30.2, 12.9)
+    assert got["loaded"] == 12 and got["total"] == 30 and got["shown"] == 12, f"{got!r}"
+    got = call("advisorListState", -5, -5, -5)
+    assert got["loaded"] == 0 and got["total"] == 0 and got["shown"] == 0, f"负数按 0：{got!r}"
+    assert got["truncated"] is False and got["filtered"] is False, f"{got!r}"
+    got = call("advisorListState", None, None, None)
+    assert got["loaded"] == 0 and got["total"] == 0 and got["shown"] == 0, f"{got!r}"
