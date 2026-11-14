@@ -704,3 +704,21 @@ def test_stats_list_note_explains_the_hidden_rows():
     # 规则脚本缺失时退回旧口径（画前 N 条 + 同一组数说明），不许静默截断
     assert "statsListState(list.length, STATS_LIST_CAP, STATS_LIST_OPEN)" in html
     assert "capped: list.length > capN" in html, "缺少规则层缺失时的降级判定"
+
+
+def test_tab_badges_prefer_library_total_over_loaded_page():
+    """角标不能一律数已加载页：待办 tab 写「15」而概览条写「40」时两个数打架。"""
+    html = _ui().CONSOLE_HTML
+    assert "function badgeCount(kind)" in html, "缺少角标口径 helper"
+    assert "CC.badgeState(loaded, total, filtered)" in html, \
+        "角标没有走规则层判定"
+    assert "var filtered = !!(APP_FILTER || QUERY.trim());" in html, \
+        "客户端筛选时本该退回本页计数"
+    assert "total = statNum(['messages', 'total']);" in html, \
+        "会话角标没有读 /stats 全库总数"
+    assert "total = statNum(['analyses', 'todo']);" in html, \
+        "待办角标没有读 /stats 的全库待办数"
+    assert "setBadge('badge-todo', filteredTodos().length);" not in html, \
+        "角标还在数已加载页"
+    # 读屏文案必须带口径，否则「99+」既可能是全库也可能是本页
+    assert "（本页）" in html, "aria-label 没有区分本页 / 全库口径"
