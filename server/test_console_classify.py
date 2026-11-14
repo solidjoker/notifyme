@@ -1064,7 +1064,8 @@ def test_exports_keep_old_api_and_add_new(call_msg):
         "queueSummary",
         "groupQueueTasks",
     ]
-    new_api = ["groupMessages", "groupQueueTasksByDevice", "queueDeviceSummary"]
+    new_api = ["groupMessages", "groupQueueTasksByDevice", "queueDeviceSummary",
+               "mergePkgPairs", "mergeSourcePairs"]
     for name in old_api + new_api:
         assert name in keys, f"导出里应保留 {name}，实际 {keys}"
 
@@ -1162,4 +1163,50 @@ def test_queue_device_summary_empty(call):
     s = call("queueDeviceSummary", [])
     assert s == {"devices": 0, "active": 0, "total": 0}, "空列表的汇总应全 0，实际 %r" % (s,)
 
+
+
+
+# --------------------------------------------------------------------------
+# 分布条目归一（by_pkg / by_source 的展示口径）
+# --------------------------------------------------------------------------
+
+
+def test_merge_pkg_pairs_folds_null_and_empty_into_wechat(call):
+    """服务端 by_pkg 按原始列分组：NULL 与空串各自成组，展示前必须按微信归并。
+
+    缺陷现场：库里 4 行（微信 / 微博 / NULL / 空串）时，直接按标签渲染会得到
+    「微信 1 / 微信 1 / 微博 1 / 微信 1」—— 同一张卡上三个「微信」。
+    """
+    pairs = [[None, 1], ["", 1], ["com.sina.weibo", 1], [PKG_WX, 1]]
+    got = call("mergePkgPairs", pairs)
+    assert got == [[PKG_WX, 3], ["com.sina.weibo", 1]], f"归并结果不对：{got!r}"
+
+
+def test_merge_pkg_pairs_keeps_first_seen_order(call):
+    """顺序沿用首次出现序（服务端已按次数降序，归并后仍是次数降序）。"""
+    pairs = [["com.a", 3], [None, 1], ["com.b", 2], ["", 4]]
+    got = call("mergePkgPairs", pairs)
+    assert got == [["com.a", 3], [PKG_WX, 5], ["com.b", 2]], f"顺序不对：{got!r}"
+
+
+def test_merge_pkg_pairs_survives_prototype_keys(call):
+    """包名撞 Object.prototype（__proto__ / constructor）时正常归并，不抛异常。"""
+    pairs = [["__proto__", 1], ["constructor", 2], ["__proto__", 3]]
+    got = call("mergePkgPairs", pairs)
+    assert got == [["__proto__", 4], ["constructor", 2]], f"原型键归并不对：{got!r}"
+
+
+def test_merge_source_pairs_folds_blank_into_unknown(call):
+    """来源通道空值归成 unknown，与前端本地估算档的 m.source || 'unknown' 一致。"""
+    pairs = [["android-notification", 2], [None, 1], ["", 3]]
+    got = call("mergeSourcePairs", pairs)
+    assert got == [["android-notification", 2], ["unknown", 4]], f"来源归并不对：{got!r}"
+
+
+def test_merge_pairs_tolerates_bad_input(call):
+    """空数组 / 缺列 / 次数不是数字都要能算，不许抛。"""
+    assert call("mergePkgPairs", []) == [], "空数组应返回 []"
+    assert call("mergePkgPairs", None) == [], "None 应返回 []"
+    got = call("mergePkgPairs", [["com.a"], [None, None], ["com.a", "3"]])
+    assert got == [["com.a", 3]], f"缺列 / 非数字次数归并不对：{got!r}"
 

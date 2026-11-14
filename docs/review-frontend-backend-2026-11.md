@@ -1458,3 +1458,54 @@ python -m compileall -q server                           → COMPILE=0
 **计数.** `stats_api.py` 220 / 194 → **228 / 201**（`_queue_block` @142 · `query_stats` @193 · `register` @226 · `CONV_KEY_SQL` @44 · `INT_ONLY_TS` @52 · `MAX_TS` @56 · `_messages_block` @59 · `_analysis_block` @107）；`console_ui.py` 3584 / 3495 → **3590 / 3501**（`renderStats` @2860 · `CONSOLE_MANIFEST` @3406 · `CONSOLE_SW` @3452）；`test_stats_api.py` 849 / 722 → **897 / 766**；`test_console_ui.py` 561 / 451 → **574 / 461**；服务端用例 670 → **673 条**。Android 侧计数不变（130 / 137 / 85 / 1369）。
 
 **教训.** 同一段聚合里出现「先累加再过滤」和「先过滤再累加」两种写法时，几乎必然是某个键漏了口径 —— 判据是**分布之和必须能对上同段的标量**（`sum(by_kind) == total - stale`、`sum(by_pkg) == total`）。给聚合段加新键时，用例要断言它和既有标量的恒等关系，而不是只断言「键在、值非空」；只钉键名就等于没钉。
+
+
+### E-64｜`/stats` 的 `by_pkg` 经 `normPkg()` 归一后在统计卡上渲染出三个「微信」（`console_classify.mergePairsBy` / `console_ui.distPairs`，feat/stats-dist-merge，2026-11-14）
+
+**问题.** 统计 Tab 的来源分布卡把 `GET /stats` 的 `messages.by_pkg` 原样渲染：`server/stats_api.py:59` 的 `_messages_block()` 发 `SELECT pkg, COUNT(*) FROM messages GROUP BY pkg`，库里 `pkg` 为 `NULL` / 空串的行各自单独成组；而前端 `server/console_classify.js:37` 的 `normPkg(p) { return p ? String(p) : PKG_WX; }` 把两者都归成 `com.tencent.mm`，`pkgLabel()` 再翻成「微信」。于是四个分组渲染成「微信 1 / 微信 1 / 微博 1 / 微信 1」—— 同一张卡片上三个「微信」，用户以为有三条互相独立的来源。
+
+**复现.**
+
+```
+4 行 messages：pkg=com.tencent.mm / com.sina.weibo / NULL / 空串，source 全是 android-notification
+GET /stats → TOTAL 4 · CONVS 3 · BY_SRC [{"count":4,"source":"android-notification"}]
+BY_PKG [{"count":1,"pkg":null},{"count":1,"pkg":""},{"count":1,"pkg":"com.sina.weibo"},{"count":1,"pkg":"com.tencent.mm"}]
+SUM_SRC 4 · SUM_PKG 4        ← 服务端分布之和是对的
+前端渲染后的 appTxt → 微信 1 / 微信 1 / 微博 1 / 微信 1
+```
+
+服务端侧不是缺陷：分布之和恒等于 `total`（`by_pkg` 与 `by_source` 都带同一个 `where`），`?pkg=` 也一并跟随过滤（E-53 已收口）。问题只在**展示层的键归一**：`normPkg()` 把「没有包名」折进微信，却没人把折出来的重复条目合并。
+
+正常上报路径不可能产生脏 `pkg`：`server/routes.py:63-69` 的 `receive_weixin()` 先把 `pkg` 归一（非字符串 / 空白 → `app_module.DEFAULT_PKG`），INSERT 时还 `pkg.strip()`；`receive_analysis()` 同款。`storage.py:91-95` 的 M2 迁移补列也是 `NOT NULL DEFAULT com.tencent.mm`。所以这四个分组只可能来自**直写 SQLite 的脏数据**或**M2 之前的老库**—— 而这两种库在自托管场景里都不罕见（用户手抄过 `sqlite3`、或者从别处导入历史备份）。
+
+**为什么 673 条全绿却没发现.** 服务端的 4 条分布用例只断言「分组之和 == total」与「带 `?pkg=` 时分布跟着过滤」；前端的 `test_stats_api_is_wired_into_the_console_data_layer` 之类只断言 `STATS.messages.by_pkg` 这个**键被读过**。没有任何用例同时喂「脏 pkg + 前端的标签函数」—— 归并这个口径从来没被钉过。
+
+**修法.** 归并放在展示层，不动服务端分组（分布之和必须继续等于 `total`，归并后之和也仍等于 `total`）：
+
+1. `server/console_classify.js` 新增 `mergePairsBy(pairs, normalize)`：`Object.create(null)` 累加（防 `__proto__` / `constructor` 原型键）、`order` 数组保首次出现序、`raw = (p && p[0] != null) ? p[0] : ""`、末尾 `.filter(p => p[1] > 0)` 丢掉归并后次数为 0 的分组（`[null, null]` 这类缺列脏数据归成微信但次数 0，留着就是「微信 0」）。两个薄包装：`mergePkgPairs(pairs)` 用 `normPkg`，`mergeSourcePairs(pairs)` 把空白折成 `"unknown"`。三者都进导出面。
+2. `server/console_ui.py` 新增 `distPairs(obj, keyName, normalize)`（`renderStats` 前、`pairList` 之后）：先走 `pairList()` 归一数组/对象两种形状，再优先调 `CC.mergePairsBy(pairs, normalize)`（`try/catch` 兜住旧规则脚本），规则脚本缺失时就地按同口径合并并 `filter` 零次数。`srcPairs` / `appPairs` 改调它，`srcTxt` / `appTxt` 的拼接不动。
+
+**测试.** `server/test_console_classify.py` +5 条：
+- `test_merge_pkg_pairs_folds_null_and_empty_into_wechat` —— `[[null,1],["",1],["com.sina.weibo",1],[PKG_WX,1]]` → `[[PKG_WX,3],["com.sina.weibo",1]]`。
+- `test_merge_pkg_pairs_keeps_first_seen_order` —— `[["com.a",3],[null,1],["com.b",2],["",4]]` → `[["com.a",3],[PKG_WX,5],["com.b",2]]`（NULL 先于空串出现，但它俩同键，位置取首次）。
+- `test_merge_pkg_pairs_survives_prototype_keys` —— `__proto__` / `constructor` 作为 pkg 时不污染计数。
+- `test_merge_source_pairs_folds_blank_into_unknown` —— `[[null,2],["",4],["android-notification",2]]` → `[["android-notification",2],["unknown",4]]`。
+- `test_merge_pairs_tolerates_bad_input` —— `[]` / `null` → `[]`；`[[null,null],["com.a",3]]` → `[["com.a",3]]`。
+
+`test_exports_keep_old_api_and_add_new` 的 `new_api` 追加 `"mergePkgPairs"`, `"mergeSourcePairs"`。`server/test_console_ui.py` +1 条 `test_stats_dist_merges_pkg_and_source_before_render`：断言 `function distPairs(obj, keyName, normalize)` 在、`CC.mergePairsBy(pairs, normalize)` 在、新调用 `var appPairs = distPairs(byApp, 'pkg', normPkg);` 与 `return s ? String(s) : 'unknown';` 在，且旧写法 `var appPairs = pairList(byApp, 'pkg');` / `var srcPairs = pairList(bySrc, 'source');` 都不在。
+
+首跑两条红都是**测试自己的期望写错**：① 把 `PKG_WX` 本来就在列表里的那条算漏，期望 2 实得 3；② `[null, null]` 归成微信后次数 0，实现少了 `.filter(p => p[1] > 0)` —— 双边补上后转绿。
+
+**验证.**
+
+```
+pytest server/test_console_classify.py server/test_console_ui.py server/test_console_queue.py -q → 156 passed in 23.60s
+pytest server/ -q                                                                 → 679 passed in 34.44s（基线 673 + 6）
+python -m compileall -q server                                                     → COMPILE_EXIT=0
+```
+
+node harness（抽 `CONSOLE_HTML` 到 `c39.html`、`new Function` 注入 `pairList` / `pkgLabel` / `normPkg` + `require(server/console_classify.js)`）：同一份 `by_pkg` 修前渲染 `微信 1 / 微信 1 / 微博 1 / 微信 1`，修后 `微信 3 / 微博 1`。
+
+**计数.** `console_ui.py` 3590 / 3501 → **3609 / 3520**（`distPairs` @2903 · `stat-app` @2966 · `stat-src` @2971 · `CONSOLE_MANIFEST` @3425 · `CONSOLE_SW` @3471 · `liveDeviceCount` @3157 · `deviceTallyText` @3166 · `queueStateTotal` @3195 · `queueEmptyHtml` @3316 · `renderAdvisor` @3023）；`console_classify.js` 434 / 407 → **463 / 433**（`mergePairsBy` @108 · `mergePkgPairs` @121 · `mergeSourcePairs` @126）；`test_console_classify.py` 1165 / 953 → **1212 / 997**；`test_console_ui.py` 574 / 461 → **592 / 476**；服务端用例 673 → **679 条**。Android 侧计数不变（130 / 137 / 85 / 1369）。
+
+**教训.** 「同一个键在展示层有归一函数」时，任何**按该键分组的分布**都必须过归一后再合并 —— 服务端按原始列分组是对的（不同真值必须能分开），但渲染层的归一必然产生重名条目。判据可以写成一句：**归一函数覆盖到的取值域，必须与分布分组粒度一致，否则先 `merge` 再渲染**。这个缺陷在 673 条全绿下活了很久，因为两侧用例各自只钉了自己那一半：「服务端分组之和恒等」与「前端读过这个键」。

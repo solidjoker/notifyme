@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（673 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（679 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -592,6 +592,12 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 修法：把 `kinds[kind] = kinds.get(kind, 0) + 1` 移到过期判定**之后**，与四状态同口径（`sum(by_kind.count) == total - stale`）；控制台统计卡在 `stale > 0` 时于分布后补一句「（不含 N 条已过期）」，不靠用户自己去对两个数。
   - 测试：`test_stats_api.py` +2 条（3 行含 2 条过期 → `by_kind == [{analysis:1}]` 且 `sum(by_kind) == total - stale`；干净库 4 行 → `sum(by_kind) == 四状态之和 == 4`）；`test_console_ui.py` +1 条（`var staleN = Number(STATS.queue.stale || 0);` 与新文案在、旧的「（未过期）」不在）。服务端 670 → 673 条。
   - 计数：`stats_api.py` 220 / 194 → **228 / 201**（`_queue_block` @142 · `query_stats` @193 · `register` @226 · `CONV_KEY_SQL` @44 · `INT_ONLY_TS` @52 · `MAX_TS` @56）；`console_ui.py` 3584 / 3495 → **3590 / 3501**（`renderStats` @2860 · `CONSOLE_MANIFEST` @3406 · `CONSOLE_SW` @3452）；`test_stats_api.py` 849 → 897、`test_console_ui.py` 561 → 574。
+
+- **`/stats` 的分布经标签归并后出现重复「微信」（feat/stats-dist-merge）**
+  - 问题：`stats_api._messages_block` 的 `by_pkg` 按原始列 `GROUP BY`，库里 `pkg` 为 `NULL` / 空串时各成一个分组；前端 `pkgLabel()` 走 `normPkg()`（`console_classify.js`）把两者都归成 `com.tencent.mm`，于是同一张统计卡渲染出「微信 1 / 微信 1 / 微博 1 / 微信 1」。实测 4 行（微信 / 微博 / NULL / 空串）→ `by_pkg` 四个分组、三个「微信」。正常上报路径不可能产生脏 `pkg`（`receive_weixin` 归一 + `strip()`），只来自直写 SQLite 或极老库。
+  - 修法：展示层归并，不合并服务端分组 —— `console_classify.js` 新增 `mergePairsBy(pairs, normalize)`（`Object.create(null)` 计数 + 首次出现序 + 归并后次数为 0 的分组丢弃）与 `mergePkgPairs` / `mergeSourcePairs` 两个薄包装；`console_ui` 新增 `distPairs(obj, keyName, normalize)`，`srcPairs` / `appPairs` 都改走它，规则脚本缺失时就地按同口径合并。
+  - 测试：`test_console_classify.py` +5 条（合并 NULL/空串→微信、首次出现序、`__proto__` / `constructor` 原型键、空白 source→unknown、坏输入）、`test_console_ui.py` +1 条（`distPairs` 在、`CC.mergePairsBy` 在、旧的 `pairList(byApp, 'pkg')` 不在）。服务端 673 → 679 条。
+  - 计数：`console_ui.py` 3590 / 3501 → **3609 / 3520**（`distPairs` @2903 · `stat-app` @2966 · `stat-src` @2971 · `CONSOLE_MANIFEST` @3425 · `CONSOLE_SW` @3471 · `liveDeviceCount` @3157 · `deviceTallyText` @3166 · `queueStateTotal` @3195 · `queueEmptyHtml` @3316 · `renderAdvisor` @3023）；`console_classify.js` 434 / 407 → **463 / 433**（`mergePairsBy` @108 · `mergePkgPairs` @121 · `mergeSourcePairs` @126）；`test_console_classify.py` 1165 → 1212、`test_console_ui.py` 574 → 592。
 
 ## 12. 决策门汇总
 

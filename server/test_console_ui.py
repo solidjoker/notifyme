@@ -572,3 +572,21 @@ def test_advisor_badge_uses_archive_total_and_marks_truncation():
     i_cards = html.index("reports.forEach(function (r, i) {")
     assert i_note < i_cards, "截断提示必须在卡片之前"
     assert "更早的报告不在此列表里" in html
+
+
+def test_stats_dist_merges_pkg_and_source_before_render():
+    """应用 / 来源分布要先按展示口径归并再渲染。
+
+    服务端 /stats 的 by_pkg 是按原始列 GROUP BY 的，库里 pkg 是 NULL 与空串时各自
+    成一组，直接按标签渲染会写出「微信 1 / 微信 1 / 微博 1 / 微信 1」；本地估算档
+    走 normPkg(m.pkg) 天然归一 —— 两条路径必须同一口径（规则层 mergePairsBy）。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "function distPairs(obj, keyName, normalize)" in html, "缺少分布归一 helper"
+    assert "CC.mergePairsBy(pairs, normalize)" in html, "分布归一没有走规则层"
+    assert "var appPairs = distPairs(byApp, 'pkg', normPkg);" in html, \
+        "应用分布没有按 normPkg 归并"
+    assert "return s ? String(s) : 'unknown';" in html, "来源空值没有归成 unknown"
+    # 旧写法（直接 pairList 后按标签渲染）必须已经消失
+    assert "var appPairs = pairList(byApp, 'pkg');" not in html, "应用分布仍在按原始列渲染"
+    assert "var srcPairs = pairList(bySrc, 'source');" not in html, "来源分布仍在按原始列渲染"

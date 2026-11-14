@@ -100,6 +100,33 @@
     return order.map(function (k) { return map[k]; });
   }
 
+  // 分布数组归一：[["<键>", 次数], ...]
+  // 服务端 /stats 的 by_pkg / by_source 是按原始列 GROUP BY 出来的，NULL 与
+  // 空串各自成组；前端先按标签渲染就会得到「微信 1 / 微信 1 / 微博 1 / 微信 1」
+  // （实测：库里 4 行里有 1 行 pkg NULL、1 行空串）。归一必须在展示前做，
+  // 顺序沿用首次出现序（服务端已按次数降序，合并后仍是次数降序）。
+  function mergePairsBy(pairs, normalize) {
+    var map = Object.create(null), order = [];  // 键名来自外部数据，别用 {}
+    (pairs || []).forEach(function (p) {
+      var raw = (p && p[0] != null) ? p[0] : '';
+      var k = normalize(raw);
+      if (!(k in map)) { map[k] = 0; order.push(k); }
+      map[k] += Number((p && p[1]) || 0);
+    });
+    // 次数为 0 的分组不渲染（服务端不会给出 count=0，这里只防脏输入）
+    return order.map(function (k) { return [k, map[k]]; }).filter(function (p) { return p[1] > 0; });
+  }
+
+  // 来源 App 分布：老数据没有 pkg（NULL / 空串）一律按微信算，与 normPkg 同口径
+  function mergePkgPairs(pairs) {
+    return mergePairsBy(pairs, normPkg);
+  }
+
+  // 来源通道分布：空值归成 'unknown'，与前端本地估算档的 'm.source || \'unknown\'' 一致
+  function mergeSourcePairs(pairs) {
+    return mergePairsBy(pairs, function (s) { return s ? String(s) : 'unknown'; });
+  }
+
   // 重要度档位：high=0 mid=1 low=2 其它=3（未标重要度与未知值同档，排最后）
   function importanceRank(v) {
     var i = IMPORTANCE_ORDER.indexOf(String(v == null ? '' : v));
@@ -420,6 +447,8 @@
     senderKey: senderKey,
     groupBySender: groupBySender,
     groupByPkg: groupByPkg,
+    mergePkgPairs: mergePkgPairs,
+    mergeSourcePairs: mergeSourcePairs,
     importanceRank: importanceRank,
     sortTodos: sortTodos,
     groupTodosByImportance: groupTodosByImportance,
