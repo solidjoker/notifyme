@@ -427,6 +427,14 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 展开状态 `STATS_LIST_OPEN` 只存内存、不落盘：刷新页面回到折叠态是安全选择（一次展开 200 张卡的渲染代价不该被持久化成默认）。
 规则脚本缺失时 `try/catch` 兜 `null`，`renderStats` 就地算同样的六个键，退化成「只画前 30 条 + 说明」，绝不再回到「标题说 200、画 30 张」的旧口径。
 
+**角标这类聚合数字默认口径是全库，只有明确的「我在看某一份切片」才降级**：底部 tab 的三个列表角标（会话 / 待办 / 统计）原本一律数 `filteredMsgs().length` / `filteredTodos().length` / `filteredAnalyses().length` ——
+这些函数的语义是「客户端筛选**已加载页**」，而角标的语义是「这个入口里有多少东西」，两者只在「一页装得下全部」时才相等。控制台一页 `PAGE_LIMIT = 200`，库里待办超过一页时同一屏会同时出现「待办 15」（tab 角标）与「待处理 40」（概览条，读 `/stats`），
+两个数都写着「待办」，用户只能二选一相信。判定收进 `console_classify.badgeState(loaded, total, filtered)`，返回 `{value, scope}`：`scope` 只有 `library` / `loaded` 两态。
+三条约定：① **`total` 缺失 / 负数 / `NaN` / 非数字一律回落 `loaded`，不许折成 0** —— 折成 0 会把「接口没给数」渲染成「全库一条都没有」，比原口径更误导（`Number("abc")` 是 `NaN`，而 `NaN >= 0` 恒 false，只判 `>= 0` 挡不住）；
+② **筛选态（`APP_FILTER` 或搜索词非空）不报全库**，哪怕全库数就在手上 —— 客户端筛选只作用于已加载页，报全库会让角标在「筛到 0 条」时仍显示大数字；③ **`scope` 要进位读屏文案**（`（本页）`），界面上角标只有一个数字，视障用户拿不到「数字大小暗示口径」这个视觉线索。
+排队与顾问两个角标**不套这条规则**：排队本来就是全库口径（`queueActiveCount()` 读 `QUEUE_SUMMARY`，不是数当前页），顾问读存档总数 `ADVISOR_TOTAL`；套上反而会引入「筛选时退回本页」的错误行为（顾问的筛选是服务端真过滤，排队条目不带 pkg）。
+规则脚本缺失时 `badgeCount(kind)` 里 `try/catch` 兜底返 `{ value: loaded, scope: 'loaded' }`，退回旧口径但语义自洽（读屏会标「（本页）」）。
+
 ### POST /queue —— 上报排队任务快照（需 token）
 
 请求体 `{"device_id": "android-1f2a3b4c", "tasks": [...]}`，按 `(device_id, task_id)` 整份覆盖

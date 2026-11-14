@@ -2058,3 +2058,124 @@ python -m pytest server/ -q                                 → 709 passed in 56
 **计数.** `console_classify.js` 622 / 584 → **642 / 602**（`DEFAULT_STATS_LIST_CAP` @595 · `statsListState` @597 · 导出块 @605-641）；`console_ui.py` 3728 / 3637 → **3780 / 3689**（`STATS_LIST_CAP` @1431 · `STATS_LIST_OPEN` @1432 · `statsListNote` @2922 · `statsListMore` @2931 · `setStatsListOpen` @2938 · `renderStats` 接线段 @3068-3095）；`test_console_classify.py` 1485 → **1533**；`test_console_ui.py` 673 → **706**；服务端用例 705 → **709**。
 
 **教训.** 「说了 N 条、只画 M 条」这类文案有两个独立的数，只要它们由两处代码分别决定，就一定会漂移 —— 而且漂移方向永远是「说的比画的多」，因为上限是写死的、N 是长出来的。判据三条：① **标题里的数字必须来自与切片同一个对象**（`listState.loaded` 与 `listState.shown` 同源），不许一处读数组长度、另一处读常量；② **上限要暴露给规则层而不是埋在渲染循环里**，否则「卡了多少条」这件事没有任何地方能被单测断言；③ **「已按上限截断」与「已按搜索筛过」必须是两个标志**（`capped` 与 `expanded` 正交，`hidden` 的措辞再按 `q` 分叉），把两个原因混成一个数就会得出「还有 170 条匹配结果」这种误导。
+
+
+## E-71 Tab 角标一律数「已加载页」：待办写 15、同一屏的概览条写 40，两个数打架（`console_classify.badgeState`，fix/tab-badge-scope，2026-11-14）
+
+**现象.** 底部 tab 的三个列表角标（会话 / 待办 / 统计）读的是**已加载页**里的命中数：
+
+```js
+setBadge('badge-conv', filteredMsgs().length);
+setBadge('badge-todo', filteredTodos().length);
+setBadge('badge-stat', filteredAnalyses().length);
+// 角标报存档总数（接口一次最多 100 份）：只数已加载时，400 份也只写 100
+setBadge('badge-adv', ADVISOR_TOTAL || ADVISORS.length);
+```
+
+而同一屏顶部概览条（`renderOverview()`）读 `/stats` 的全库真值。控制台一次只加载一页（`PAGE_LIMIT = 200`），所以翻到第二页、或者库里待办超过一页时，**同一块屏幕上同时出现「待办 15」（tab 角标）与「待处理 40（分布在 22 个会话）」（概览条）**。两个数都写着「待办」，谁也没说明口径 —— 用户只能二选一相信，而通常他会相信更小的那个，然后以为三分之二的待办丢了。
+
+顾问 Tab 的角标早就是全库口径（`ADVISOR_TOTAL || ADVISORS.length`，注释还专门写了为什么），说明这是同一族的已知问题，只是当时只修了一处。
+
+**根因.** 三个角标把「要显示的数」与「我手上有什么」混成了一个表达式：`filteredMsgs()` 之类的函数语义是*客户端筛选已加载页*，它天然回答的是「本页有多少条命中」，而角标的语义是「这个入口里有多少东西」。两者只在「一页就装得下全部」时才相等。
+
+第二个根因是**筛选状态与数据口径是两件事**，原代码把它们压成一个数：用户切了来源 App 或输入了搜索词时，客户端筛选只作用于已加载页（`filteredMsgs()` 里 `normPkg(m.pkg) === APP_FILTER`），此时全库的数字**不代表列表内容** —— 报 40 会让角标指着「有 40 条」，点进去却是空的；不筛选时才该报全库。
+
+**修法.** 判定收进规则层 `server/console_classify.js` 的 `badgeState(loaded, total, filtered)`：
+
+```js
+  function badgeState(loaded, total, filtered) {
+    var L = _countOf(loaded);
+    // 全库数只接受「认得出的非负整数」：null / 负数 / NaN / 非数字一律当「拿不到」，
+    // 不能折成 0 —— 那会把「接口没给数」渲染成「全库一条都没有」。
+    var T = null;
+    if (total != null) {
+      var x = Number(total);
+      if (isFinite(x) && x >= 0) { T = Math.floor(x); }
+    }
+    if (filtered || T === null) { return { value: L, scope: 'loaded' }; }
+    return { value: T, scope: 'library' };
+  }
+```
+
+UI 侧新增 `badgeCount(kind)`（`server/console_ui.py`，只取数不判定）：
+
+```js
+function badgeCount(kind) {
+  var filtered = !!(APP_FILTER || QUERY.trim());
+  var loaded, total = null;
+  if (kind === 'conv') {
+    loaded = filteredMsgs().length;
+    total = statNum(['messages', 'total']);
+  } else if (kind === 'todo') {
+    loaded = filteredTodos().length;
+    total = statNum(['analyses', 'todo']);
+  } else {
+    loaded = filteredAnalyses().length;
+    total = statNum(['analyses', 'total']);
+  }
+  if (CC && CC.badgeState) {
+    try { return CC.badgeState(loaded, total, filtered); } catch (e) { }
+  }
+  // 规则脚本缺失：退回旧口径（数已加载页），至少不比空白差
+  return { value: loaded, scope: 'loaded' };
+}
+```
+
+`renderBadges()` 改成三处都取对象、`setBadge` 取 `.value`；读屏文案跟着口径走：
+
+```js
+  pairs.forEach(function (p) {
+    var b = $(p[0]);
+    if (!b) return;
+    var v = p[2];
+    var num = (v && typeof v === 'object') ? v.value : v;
+    var sc = (v && typeof v === 'object' && v.scope === 'loaded' && (p[0] === 'tab-conv' || p[0] === 'tab-todo' || p[0] === 'tab-stat')) ? '（本页）' : '';
+    b.setAttribute('aria-label', p[1] + '，' + num + ' ' + p[3] + sc);
+  });
+```
+
+排队与顾问两个角标不动：排队本来就是全库口径（`queueActiveCount()` 读 `QUEUE_SUMMARY`），顾问读存档总数 —— 它们是这条规则的既有样板。
+
+**实测**（node 直跑真实 `console_classify.js`，探针脚本（仓库外临时目录））：
+
+| loaded | total | filtered | 输出 | 含义 |
+|---|---|---|---|---|
+| 15 | `null` | false | `{15, loaded}` | 拿不到 `/stats` → 报本页 |
+| 15 | 40 | false | `{40, library}` | 正常态 → 报全库 |
+| 15 | 40 | true | `{15, loaded}` | 正在筛选 → 报本页 |
+| 0 | 0 | false | `{0, library}` | 全库真没有（不是「拿不到」） |
+| `"12"` | `"40"` | false | `{40, library}` | 字符串数字可用 |
+| `"x"` | `"abc"` | false | `{0, loaded}` | 脏值 → 两个都退成本页 |
+| 5 | -3 | false | `{5, loaded}` | 负数总数当拿不到 |
+
+**几个刻意的取舍.**
+
+- **`total` 缺失必须是 `loaded`，不是 `0`。** 这是整条规则最容易写错的地方：`statNum()` 在 `/stats` 失败时返回 `null`，一旦折成 0 就变成「全库一条都没有」，比原来的「报本页」更误导。`null` 与 `0` 的区别在这里是语义核心，所以 `badgeState` 里专门挡了 `total != null` 与 `isFinite(x) && x >= 0` 两道。
+- **负数 / `NaN` / 非数字一律当拿不到。** `Number("abc")` 是 `NaN`，而 `NaN >= 0` 恒 false —— 如果只判 `>= 0` 就会把它折成 0（同上一条的坑）。
+- **筛选态不报全库，哪怕全库数就在手上。** 客户端筛选只作用于已加载页，报全库会让角标在「筛到 0 条」时仍显示大数字。宁可给个偏小的真值（本页命中），也不给个看着大却点不进去的数。
+- **`scope` 是给读屏用的，不是给视觉用的。** 界面上不区分（角标就一个数字），但 `aria-label` 会播报「待办，15 条待办（本页）」—— 视障用户拿不到「数字大小暗示口径」这个视觉线索，必须显式说出来。
+- **顾问 / 排队角标不套这条规则。** 它们本来就是全库口径，套上反而会引入「筛选时退回本页」的错误行为（顾问的筛选是服务端真过滤，排队条目不带 pkg）。
+
+**测试.** 新增 4 条规则层用例（`server/test_console_classify.py`）+ 1 条 UI 用例（`server/test_console_ui.py`）：
+
+| 用例 | 钉住什么 |
+|---|---|
+| `test_badge_state_prefers_library_total` | `(15,40,false) → 40/library`；`(0,0,false) → 0/library`（全库 0 也是真值，不能退成本页） |
+| `test_badge_state_falls_back_when_client_side_filtering` | `(15,40,true) → 15/loaded`；`(0,40,true) → 0/loaded`（筛到 0 时报 40 会让角标指着点不进去的入口） |
+| `test_badge_state_falls_back_when_total_missing` | `total` 为 `None` / `"abc"` / `-3` / `"3.5.1"` 全回落本页；`loaded=12` 原样 |
+| `test_badge_state_clamps_dirty_loaded` | `("7","40") → 40/library`；`(-2,None) → 0/loaded`；`(12.9,40.7) → 40/library` |
+| `test_tab_badges_prefer_library_total_over_loaded_page`（UI） | `badgeCount` 在；判定走 `CC.badgeState(loaded, total, filtered)`；`var filtered = !!(APP_FILTER \|\| QUERY.trim());` 在；`total = statNum(['messages','total'])` / `['analyses','todo']` 在；旧的 `setBadge('badge-todo', filteredTodos().length);` **已退场**；`（本页）` 在 |
+
+**验证.**
+
+```
+python -m pytest server/test_console_classify.py -q          → 117 passed in 42.33s
+python -m pytest server/test_console_ui.py server/test_console_queue.py -q → 75 passed in 0.20s
+python -m pytest server/ -q                                  → 714 passed in 60.62s
+```
+
+另做了两个直接验证：① 从 `CONSOLE_HTML` 抽出全部内联 `<script>` 段拼成单文件跑 `node --check` → 退出码 0；② 用真实 `console_classify.js` 喂上表七组输入，输出与预期逐字一致。
+
+**计数.** `console_classify.js` 642 / 602 → **662 / 621**（`badgeState` @611 · 导出块 @619-661）；`console_ui.py` 3780 / 3689 → **3812 / 3721**（`badgeCount` @1890 · `renderBadges` @1909）；`test_console_classify.py` 1533 → **1580**；`test_console_ui.py` 706 → **724**；服务端用例 709 → **714**。
+
+**教训.** 同一个界面上出现两个「同类数字」时，它们必须共享同一个口径来源 —— 否则用户看到的不是「两个数」，而是「一个数是错的」。判据三条：① **角标 / 徽标这类聚合数字，默认口径是全库**，只有明确的「我在看某一份切片」时才降级，且降级要有显式状态（`scope`）而不是悄悄变小；② **「拿不到」与「没有」必须能分开**（`null` ≠ `0`），凡是把 `null` 折成 0 的地方，最终都会渲染成一句自信的假话；③ **筛选态与数据态是两个正交维度**（`filtered` × `total === null`），把它们压进一个三元表达式就会漏掉「筛选 + 拿不到」这一格。

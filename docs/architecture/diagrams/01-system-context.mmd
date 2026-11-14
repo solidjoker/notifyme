@@ -23,7 +23,7 @@ flowchart TB
 
     subgraph HOST["💻 PC 本机 · Windows"]
         direction TB
-        FLASK["Flask 服务端 · 8+1 模块 · 0.0.0.0:8000<br/>app.py 壳/鉴权/控制台路由/落地页 742 行<br/>util.py 纯函数 432 · storage.py 存储 885<br/>routes.py 数据面路由 1092 · console_ui.py 前端常量 3780<br/>stats_api.py 聚合 228 · suggests.py 建议 344<br/>extract_common.py 抽取共享内核 554 · console_classify.js 归类规则 642"]:::srv
+        FLASK["Flask 服务端 · 8+1 模块 · 0.0.0.0:8000<br/>app.py 壳/鉴权/控制台路由/落地页 742 行<br/>util.py 纯函数 432 · storage.py 存储 885<br/>routes.py 数据面路由 1092 · console_ui.py 前端常量 3812<br/>stats_api.py 聚合 228 · suggests.py 建议 344<br/>extract_common.py 抽取共享内核 554 · console_classify.js 归类规则 662"]:::srv
         ADBEX["android_db_extract.py · 813 行<br/>EnMicroMsg.db 解密直读"]:::srv
         PCEX["pc_db_extract.py · 673 行<br/>PC 微信 4.x 库直读"]:::srv
         DB[("messages.db · messages.jsonl<br/>analyses 表 · advisor_reports.json<br/>android_db/ · pc_db/")]:::store
