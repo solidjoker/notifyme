@@ -1425,6 +1425,11 @@ var QUEUE_DEVICES = [];  // 设备清单（GET /queue 响应里的 devices 字�
 // 接口不可用时保持 null，调用方退回本地估算并标注。
 var STATS = null;
 var STATS_ERR = '';
+// 统计 tab「最近分析结果」的显示上限与展开状态：上限是刻意的（一屏 200 张卡既卡
+// 又没人读），但标题里的数字是全部已加载条数 —— 所以必须说清少了几条，并给一个
+// 真能把它们画出来的开关。展开状态不持久化（刷新后回到只看前 30 条）。
+var STATS_LIST_CAP = 30;
+var STATS_LIST_OPEN = false;
 // 下一步建议（GET /suggests/next）：表驱动规则给出的最多 3 条可执行动作。
 var SUGGESTS = [];
 // 分页接口跳过的脏数据条数（messages / analysis 各自累计），非 0 时给一行提示。
@@ -2471,6 +2476,7 @@ function handleAction(action, btn) {
   if (action === 'toggle') { toggleNodeByKey(key); return; }
   if (action === 'copy') { copyConvNameByKey(key); return; }
   if (action === 'more') { loadMore(btn.getAttribute('data-kind') || 'msg'); return; }
+  if (action === 'stats-more') { setStatsListOpen(btn.getAttribute('data-open') === '1'); return; }
   if (action === 'retry') { retryLoad(); return; }
   if (action === 'clear-search') { clearSearch(); return; }
   if (action === 'clear-app') { clearAppFilter(); return; }
@@ -2907,6 +2913,32 @@ function renderTodos() {
 }
 
 // ---------- 统计 tab ----------
+// 「最近分析结果」有显示上限，但标题里的数字是全部已加载条数：翻过几页后写
+// 「最近分析结果（200）」而下面只有 30 张卡，中间 170 条凭空消失且没有一句解释 ——
+// 与顾问列表的截断是同一类问题（说了总数、只画了一部分）。上限保留（一屏 200 张
+// 卡既卡又没人读），改成把少了几条说清楚 + 给一个能真把它们画出来的开关。
+// 判定收在 console_classify.statsListState（loaded / cap / expanded 三个入参），
+// 这里只负责措辞。
+function statsListNote(st, q) {
+  if (!st || !st.capped) return '';
+  if (st.expanded) {
+    return '<div class="note">已展开全部 ' + st.loaded + ' 条，点「收起」回到只看前 ' +
+      st.cap + ' 条。</div>';
+  }
+  return '<div class="note">这里只画前 ' + st.cap + ' 条，另有 ' + st.hidden + ' ' +
+    (q ? '条匹配结果' : '条') + '没有画出来。点下面的「显示全部」把它们一并展开。</div>';
+}
+function statsListMore(st) {
+  if (!st || !st.capped) return '';
+  return '<div class="more-wrap"><button type="button" class="btn btn-secondary more-btn"' +
+    ' data-action="stats-more" data-open="' + (st.expanded ? '0' : '1') + '">' +
+    (st.expanded ? '收起，只看前 ' + st.cap + ' 条' : '显示全部 ' + st.loaded + ' 条') +
+    '</button></div>';
+}
+function setStatsListOpen(open) {
+  STATS_LIST_OPEN = !!open;
+  renderData();
+}
 function renderStats() {
   var q = QUERY.trim().toLowerCase();
   var msgs = filteredMsgs();
@@ -3033,15 +3065,33 @@ function renderStats() {
     if (!q) return true;
     return analysisSearchText(a).indexOf(q) >= 0;
   });
+  var listState = null;
+  if (CC && CC.statsListState) {
+    try {
+      listState = CC.statsListState(list.length, STATS_LIST_CAP, STATS_LIST_OPEN);
+    } catch (e) { listState = null; }
+  }
+  if (!listState) {
+    // 规则脚本缺失：退回旧口径（只画前 STATS_LIST_CAP 条），但标题仍写全量条数，
+    // 说明与开关都由 statsListNote / statsListMore 按同一组数算出来 —— 不允许
+    // 「标题说 200、下面画 30、一句话都没有」这种静默截断。
+    var capN = list.length > STATS_LIST_CAP ? STATS_LIST_CAP : list.length;
+    listState = {
+      loaded: list.length, shown: capN, cap: STATS_LIST_CAP,
+      hidden: list.length - capN, capped: list.length > capN, expanded: STATS_LIST_OPEN
+    };
+  }
   out.push({
     key: 'stat-list-head',
-    html: '<div class="sec-head">最近分析结果（' + list.length + '）</div>',
+    html: '<div class="sec-head">最近分析结果（' + listState.loaded + '）</div>',
     full: true
   });
   if (!list.length) {
     out.push({ key: 'stat-empty', html: emptyStateFor('stat'), full: true });
   } else {
-    list.slice(0, 30).forEach(function (a) {
+    var listNote = statsListNote(listState, q);
+    if (listNote) out.push({ key: 'stat-list-note', html: listNote, full: true });
+    list.slice(0, listState.shown).forEach(function (a) {
       var appBadge = normPkg(a.pkg) === PKG_WX ? '' :
         '<span class="badge b-app">' + esc(pkgLabel(a.pkg)) + '</span>';
       var summary = (a.s2 && a.s2.summary) ? a.s2.summary : '';
@@ -3062,6 +3112,8 @@ function renderStats() {
         html: html
       });
     });
+    var listMore = statsListMore(listState);
+    if (listMore) out.push({ key: 'stat-list-more', html: listMore, full: true });
   }
   out.push({ key: 'stat-note', html: refreshNote(), full: true });
   return out;

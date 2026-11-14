@@ -417,6 +417,16 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 `filteredAnalyses` / 与 `renderAdvisor` 同形的 `ADVISORS.filter`）——两个数各写一遍必然在改过滤条件时分叉，分叉的后果是空态开始报错数。
 规则脚本缺失时 `try/catch` 兜 `null`，退回旧文案「该来源下暂无数据」；该降级路径有用例钉住字符串。
 
+**列表只画一部分时，标题与切片必须读同一个判定**：统计 Tab 底部的「最近分析结果」既是展示区，也是全局搜索按 `s1` / `s2` / `case_id` 命中的入口，
+它一直只画前 30 条（`list.slice(0, 30)`），却把标题写成「最近分析结果（list.length）」—— 翻到第 2 页之后标题报 200、下面只有 30 张卡，中间 170 条既没画也没有任何说明，
+用户会以为这些分析结果被丢弃了。判定收进 `console_classify.statsListState(loaded, cap, expanded)`（纯函数、UMD、node 可测），返回
+`{loaded, shown, cap, hidden, capped, expanded}`：`shown = expanded ? loaded : min(loaded, cap)`、`hidden = loaded - shown`、`capped = loaded > cap`。
+四条约定：① `capped` 与 `expanded` 是**两个正交标志** —— `capped` 只回答「数据有没有超过上限」（决定是否给开关），`expanded` 只回答「用户有没有点开」，
+把两者合成一个布尔会让「展开了但刚好没超上限」和「没展开但不超上限」分不开；② 上限由 UI 传入（`STATS_LIST_CAP = 30`），脏值 / 0 / 负数回落 `DEFAULT_STATS_LIST_CAP = 30`，
+规则层不写死调用方的展示上限；③ `shown` 由函数自己算，调用方不许传 —— 传了就有第二份口径，切片与文案必然分叉；④ 标题、`stat-list-note`、`stat-list-more` 三处都读同一个 `listState`。
+展开状态 `STATS_LIST_OPEN` 只存内存、不落盘：刷新页面回到折叠态是安全选择（一次展开 200 张卡的渲染代价不该被持久化成默认）。
+规则脚本缺失时 `try/catch` 兜 `null`，`renderStats` 就地算同样的六个键，退化成「只画前 30 条 + 说明」，绝不再回到「标题说 200、画 30 张」的旧口径。
+
 ### POST /queue —— 上报排队任务快照（需 token）
 
 请求体 `{"device_id": "android-1f2a3b4c", "tasks": [...]}`，按 `(device_id, task_id)` 整份覆盖

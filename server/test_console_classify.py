@@ -1483,3 +1483,51 @@ def test_app_empty_scope_clamps_and_tolerates_bad_input(call):
     assert got["db"] == 2 and got["mode"] == "elsewhere", f"{got!r}"
     got = call("appEmptyScope", "com.tencent.mm", 200, 0, [{"pkg": "com.tencent.mm", "count": 0}])
     assert got["db"] == 0 and got["mode"] == "none", f"计数 0 就是没有：{got!r}"
+
+
+# --------------------------------------------------------------------------
+# 统计 tab「最近分析结果」的显示上限（statsListState）
+# 缺陷背景：标题写「最近分析结果（200）」，下面 list.slice(0, 30) 只画 30 张卡，
+# 没有任何「另有 170 条未显示」的说明 —— 用户以为数据丢了。上限保留（一屏 200 张
+# 卡既卡又没人读），但少了几条必须说清，并且要有一个真能把它们画出来的开关。
+# --------------------------------------------------------------------------
+
+
+def test_stats_list_state_reports_the_rows_it_hides(call):
+    """超过上限时必须报出被藏起来的条数，且 capped 只看「已加载 vs 上限」。"""
+    got = call("statsListState", 200)
+    assert got["loaded"] == 200 and got["shown"] == 30, f"{got!r}"
+    assert got["hidden"] == 170 and got["cap"] == 30, f"{got!r}"
+    assert got["capped"] is True and got["expanded"] is False, f"{got!r}"
+    # 恰好等于上限：全部画得下，不该出现「另有 0 条」这种噪声说明
+    got = call("statsListState", 30)
+    assert got["hidden"] == 0 and got["capped"] is False, f"{got!r}"
+    got = call("statsListState", 12)
+    assert got["loaded"] == 12 and got["shown"] == 12 and got["capped"] is False, f"{got!r}"
+    got = call("statsListState", 0)
+    assert got["loaded"] == 0 and got["shown"] == 0 and got["hidden"] == 0, f"{got!r}"
+
+
+def test_stats_list_state_expanded_shows_everything(call):
+    """展开态：shown = loaded、hidden = 0，但 capped 仍为真（开关要能收起）。"""
+    got = call("statsListState", 200, 30, True)
+    assert got["expanded"] is True, f"{got!r}"
+    assert got["shown"] == 200 and got["hidden"] == 0, f"{got!r}"
+    # capped 与展开无关：展开后依然「已加载超过上限」，否则收起按钮会凭空消失
+    assert got["capped"] is True and got["cap"] == 30, f"{got!r}"
+    got = call("statsListState", 12, 30, True)
+    assert got["shown"] == 12 and got["capped"] is False, f"{got!r}"
+
+
+def test_stats_list_state_defaults_cap_and_tolerates_bad_input(call):
+    """上限由 UI 传入，脏值 / 0 / 负数一律回落默认值；条数不许变成 NaN。"""
+    assert call("__get__", "DEFAULT_STATS_LIST_CAP") == 30
+    for bad in ("x", -5, 0, None):
+        got = call("statsListState", 200, bad)
+        assert got["cap"] == 30 and got["shown"] == 30, f"cap={bad!r} {got!r}"
+    for bad in ("abc", None):
+        got = call("statsListState", bad)
+        assert got["loaded"] == 0 and got["shown"] == 0 and got["capped"] is False, f"{bad!r} {got!r}"
+    # 小数按向下取整：42.9 条已加载没有意义，但不能出现 32.9 这种「另有 N 条」
+    got = call("statsListState", 42.9, 10)
+    assert got["loaded"] == 42 and got["shown"] == 10 and got["hidden"] == 32, f"{got!r}"

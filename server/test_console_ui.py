@@ -671,3 +671,36 @@ def test_app_filter_empty_state_separates_three_causes():
     assert "if (APP_FILTER && tab !== 'queue') {" in html, "排队空态被来源筛选劫持了"
     # 规则脚本缺失时仍要退回原文案（不能凭空断成某一档）
     assert "该来源下暂无数据" in html, "规则层缺失时缺少保守回退"
+
+
+def test_stats_list_note_explains_the_hidden_rows():
+    """统计 Tab 的「最近分析结果」只画前 30 条，必须说明还有多少条没画出来。
+
+    旧写法标题写「最近分析结果（200）」而下面 list.slice(0, 30) 只有 30 张卡，
+    中间 170 条凭空消失，页面里一句解释都没有；这些卡还是全局搜索命中 S2 摘要 /
+    case_id 的唯一入口，用户以为数据丢了。上限保留，改成说明 + 可展开开关。判定
+    收在规则层 statsListState，UI 只负责措辞与动作。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "function statsListNote(st, q)" in html, "缺少截断说明的措辞函数"
+    assert "function statsListMore(st)" in html, "缺少展开 / 收起开关"
+    assert "CC.statsListState(list.length, STATS_LIST_CAP, STATS_LIST_OPEN)" in html, \
+        "截断判定没有走规则层"
+    assert "var STATS_LIST_OPEN = false;" in html, "缺少展开状态（刷新应回到只看前 N 条）"
+    # 说明必须给出「画了多少 / 藏了多少」，否则等于没说
+    assert "这里只画前 " in html and "没有画出来" in html
+    assert "点下面的「显示全部」把它们一并展开" in html
+    # 展开后要能收起（capped 与 expanded 无关，收起按钮不能凭空消失）
+    assert "已展开全部 " in html and "点「收起」回到只看前 " in html
+    # 渲染必须真的按 listState.shown 切片，旧的无条件 30 条写死必须退场
+    assert "list.slice(0, listState.shown).forEach(function (a) {" in html, \
+        "渲染没有按 listState.shown 切片"
+    assert "list.slice(0, 30)" not in html, "仍在无条件只画 30 条"
+    # 标题读 listState.loaded（= list.length），说明与标题必须同源
+    assert "最近分析结果（' + listState.loaded + '）" in html, "标题没有读判定结果"
+    # 动作要接进委托链，否则按钮点了没反应
+    assert "if (action === 'stats-more') { setStatsListOpen(" in html, \
+        "展开动作没有接进 handleAction"
+    # 规则脚本缺失时退回旧口径（画前 N 条 + 同一组数说明），不许静默截断
+    assert "statsListState(list.length, STATS_LIST_CAP, STATS_LIST_OPEN)" in html
+    assert "capped: list.length > capN" in html, "缺少规则层缺失时的降级判定"
