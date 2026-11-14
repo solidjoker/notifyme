@@ -2900,6 +2900,8 @@ function renderStats() {
   // GROUP BY 出来的，库里 pkg 是 NULL 与空串时各自成一组，直接按标签渲染会得到
   // 「微信 1 / 微信 1 / 微博 1 / 微信 1」（实测 4 行里 2 行没有包名）。本地估算档
   // 走 normPkg(m.pkg) 天然归一 —— 两条路径必须同一个口径。
+  // 归并会改次数，顺序必须重排为次数降序（同次数键名升序），与 /stats 的
+  // ORDER BY COUNT(*) DESC, key ASC 对齐；沿用首次出现序会渲染成「微博 2 / 微信 3」。
   function distPairs(obj, keyName, normalize) {
     var pairs = pairList(obj, keyName);
     if (CC && CC.mergePairsBy) {
@@ -2913,7 +2915,11 @@ function renderStats() {
       map[k] += Number((p && p[1]) || 0);
     });
     return order.map(function (k) { return [k, map[k]]; })
-      .filter(function (p) { return p[1] > 0; });
+      .filter(function (p) { return p[1] > 0; })
+      .sort(function (a, b) {
+        if (a[1] !== b[1]) return b[1] - a[1];
+        return a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0);
+      });
   }
   var srcPairs = distPairs(bySrc, 'source', function (s) { return s ? String(s) : 'unknown'; });
   var appPairs = distPairs(byApp, 'pkg', normPkg);

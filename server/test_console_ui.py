@@ -590,3 +590,7 @@ def test_stats_dist_merges_pkg_and_source_before_render():
     # 旧写法（直接 pairList 后按标签渲染）必须已经消失
     assert "var appPairs = pairList(byApp, 'pkg');" not in html, "应用分布仍在按原始列渲染"
     assert "var srcPairs = pairList(bySrc, 'source');" not in html, "来源分布仍在按原始列渲染"
+    # distPairs 的兜底分支（规则脚本缺失时）也必须按次数降序重排：归并会改次数，
+    # 沿用首次出现序会渲染成「微博 2 / 微信 3」。规则层自身由 test_console_classify 守着。
+    assert html.count("if (a[1] !== b[1]) return b[1] - a[1];") == 1, \
+        "distPairs 兜底分支没有按次数降序排（规则层与兜底必须同口径）"

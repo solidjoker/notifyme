@@ -1182,11 +1182,20 @@ def test_merge_pkg_pairs_folds_null_and_empty_into_wechat(call):
     assert got == [[PKG_WX, 3], ["com.sina.weibo", 1]], f"归并结果不对：{got!r}"
 
 
-def test_merge_pkg_pairs_keeps_first_seen_order(call):
-    """顺序沿用首次出现序（服务端已按次数降序，归并后仍是次数降序）。"""
-    pairs = [["com.a", 3], [None, 1], ["com.b", 2], ["", 4]]
+def test_merge_pkg_pairs_sorts_by_count_desc(call):
+    """归并会改次数，顺序必须重排为次数降序（不能沿用首次出现序）。
+
+    反例：服务端返回「微博 2 / 微信 NULL 1 / 微信空串 1 / 微信 1」时，沿用首次
+    出现序会渲染成「微博 2 / 微信 3」—— 最大头排在后面，同一张卡自相矛盾。
+    """
+    pairs = [["com.sina.weibo", 2], [None, 1], ["", 1], [PKG_WX, 1]]
     got = call("mergePkgPairs", pairs)
-    assert got == [["com.a", 3], [PKG_WX, 5], ["com.b", 2]], f"顺序不对：{got!r}"
+    assert got == [[PKG_WX, 3], ["com.sina.weibo", 2]], f"次数降序不对：{got!r}"
+    # 同次数按键名码点升序，保证同一份数据永远同一串
+    assert call("mergePkgPairs", [["b", 2], ["a", 2]]) == [["a", 2], ["b", 2]]
+    # 三档混合：微信 5 / 微博 3 / 其它 1
+    mixed = [["com.b", 3], [None, 2], ["com.a", 1], ["", 3]]
+    assert call("mergePkgPairs", mixed) == [[PKG_WX, 5], ["com.b", 3], ["com.a", 1]]
 
 
 def test_merge_pkg_pairs_survives_prototype_keys(call):
@@ -1200,7 +1209,7 @@ def test_merge_source_pairs_folds_blank_into_unknown(call):
     """来源通道空值归成 unknown，与前端本地估算档的 m.source || 'unknown' 一致。"""
     pairs = [["android-notification", 2], [None, 1], ["", 3]]
     got = call("mergeSourcePairs", pairs)
-    assert got == [["android-notification", 2], ["unknown", 4]], f"来源归并不对：{got!r}"
+    assert got == [["unknown", 4], ["android-notification", 2]], f"来源归并不对：{got!r}"
 
 
 def test_merge_pairs_tolerates_bad_input(call):
