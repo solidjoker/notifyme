@@ -837,3 +837,15 @@ def test_analysis_search_covers_both_codes_and_chinese_labels():
         src = fh.read()
     assert "function analysisCodeParts(a)" in src, "规则层缺少 analysisCodeParts"
     assert "hasDisplayDue(a.todo_due, s2Due, s1.due_window)" in src, "搜索面没有用 hasDisplayDue 排除 none"
+
+def test_suggestion_cards_carry_their_own_scope():
+    """建议卡片必须逐卡标口径；标题只在「全部按来源过滤」时才写「· 仅 X」。"""
+    html = _ui().CONSOLE_HTML
+    assert "function suggestScopeText(s)" in html
+    assert "CC.suggestScope(s, APP_FILTER, PKG_LABELS)" in html
+    assert "var scopeTxt = suggestScopeText(s);" in html
+    assert "scopeTxt ? '<span class=\"badge b-app\">'" in html
+    assert "var allPkg = true;" in html
+    assert "SUGGESTS[i].scope !== 'pkg'" in html
+    # 旧的一刀切写法不能再出现（会把全库数字罩成「仅 X」）
+    assert "var scope = APP_FILTER ? (' · 仅 ' + pkgLabel(APP_FILTER)) : '';" not in html

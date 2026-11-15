@@ -2325,8 +2325,21 @@ function render() {
   renderData();
 }
 // 下一步建议：服务端表驱动规则给的 0–3 条动作，按 jump 提供跳转按钮
+// 建议卡片的来源口径文案：规则层判 scope（pkg = 按来源 App 过滤 / global =
+// 全库口径），这里只取文案。规则脚本缺失时保守写「全库」——宁可说全库，
+// 也不能把全库数字挂在「仅 微博」名下。
+function suggestScopeText(s) {
+  if (CC && CC.suggestScope) {
+    try {
+      var r = CC.suggestScope(s, APP_FILTER, PKG_LABELS);
+      return (r && r.label) ? String(r.label) : '';
+    } catch (e) { }
+  }
+  return APP_FILTER ? '全库' : '';
+}
 function suggestHtml(s) {
   if (!s) return '';
+  var scopeTxt = suggestScopeText(s);
   var jumpMap = { queue: 'queue', todo: 'todo', conv: 'conv', adv: 'adv' };
   var to = jumpMap[s.jump] || '';
   var labelMap = { queue: '去看排队', todo: '去处理待办', conv: '去看会话', adv: '去看顾问' };
@@ -2336,6 +2349,7 @@ function suggestHtml(s) {
     '<div class="conv-head"><span class="conv-main">' +
     '<span class="conv-title-row"><span class="conv-name">' + esc(s.title || '建议') + '</span>' +
     '<span class="badge b-app">优先级 ' + esc(s.priority == null ? '—' : s.priority) + '</span>' +
+    (scopeTxt ? '<span class="badge b-app">' + esc(scopeTxt) + '</span>' : '') +
     '</span></span></div>' +
     (s.why ? '<div class="ana-meta">为什么：' + esc(s.why) + '</div>' : '') +
     (s.how ? '<div class="ana-meta">怎么做：' + esc(s.how) + '</div>' : '') +
@@ -2346,9 +2360,17 @@ function suggestHtml(s) {
 }
 function suggestSections() {
   if (!SUGGESTS || !SUGGESTS.length) return [];
-  // 标题带来源口径：待办 / 未分析会话这两族数字是服务端按 pkg 算的，不标出来
-  // 用户会以为「已筛选：飞书」下面的数字还是全库的。
-  var scope = APP_FILTER ? (' · 仅 ' + pkgLabel(APP_FILTER)) : '';
+  // 标题的口径只在「所有建议都按来源过滤」时才标：排队（按设备）与顾问
+  // （全局报告）的数字与来源无关，一刀切写「· 仅 微博」会把全库数字也罩
+  // 进去。混排时由每张卡片自己带口径徽标（suggestScopeText）。
+  var scope = '';
+  if (APP_FILTER && SUGGESTS.length) {
+    var allPkg = true;
+    for (var i = 0; i < SUGGESTS.length; i++) {
+      if (!SUGGESTS[i] || SUGGESTS[i].scope !== 'pkg') { allPkg = false; break; }
+    }
+    if (allPkg) scope = ' · 仅 ' + pkgLabel(APP_FILTER);
+  }
   var out = [{
     key: 'suggest-head',
     html: '<div class="sec-head">下一步建议（' + SUGGESTS.length + '）' +

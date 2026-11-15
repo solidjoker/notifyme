@@ -1903,3 +1903,32 @@ def test_analysis_code_parts_lift_codes_and_labels_into_search(call):
     assert call("analysisCodeParts", {}) == []
     assert call("analysisCodeParts", None) == []
     assert call("analysisCodeParts", {"s1": None}) == []
+
+def test_suggest_scope_marks_source_dependent_cards(call):
+    """按来源过滤的卡片标「仅 X」，全库口径的标「全库」。"""
+    labels = {"com.tencent.mm": "微信"}
+    got = call("suggestScope", {"scope": "pkg", "jump": "todo"}, "com.tencent.mm", labels)
+    assert got["scope"] == "pkg", got
+    assert got["label"] == "仅 微信", got
+    got = call("suggestScope", {"scope": "global", "jump": "queue"}, "com.tencent.mm", labels)
+    assert got["scope"] == "global", got
+    assert got["label"] == "全库", got
+
+
+def test_suggest_scope_without_filter_marks_nothing(call):
+    """没筛选时所有数字都是全库口径，不标（标了反而像在筛）。"""
+    for pkg in ("", "   ", None):
+        got = call("suggestScope", {"scope": "pkg"}, pkg, {})
+        assert got["scope"] == "global", got
+        assert got["label"] == "", got
+
+
+def test_suggest_scope_tolerates_bad_input(call):
+    """卡片缺 scope / 不是对象时一律按全库口径（不能把全库数字说成「仅 X」）。"""
+    got = call("suggestScope", {}, "com.tencent.mm", {})
+    assert got["scope"] == "global", got
+    assert got["label"] == "全库", got
+    got = call("suggestScope", None, "com.tencent.mm", {})
+    assert got["scope"] == "global", got
+    got = call("suggestScope", {"scope": "pkg"}, "com.unknown.app", {})
+    assert got["label"] == "仅 com.unknown.app", got

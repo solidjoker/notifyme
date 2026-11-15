@@ -11,6 +11,8 @@
   1. 纯表驱动 + 本库聚合，不调任何模型 —— 没有不确定性、没有额外依赖、可单测；
   2. 每条建议必须能指到具体数字（依据），否则宁可不给；
   3. 规则表按 priority 降序声明，_pick 不再二次排序（表本身就是优先级）。
+  4. 每条建议必须带自己的口径（scope = pkg / global），前端据此逐卡标注 ——
+     「仅 微博」只能罩住按来源过滤的那几条。
 """
 
 import json
@@ -186,6 +188,11 @@ def _build(rule, ctx):
     return {
         "type": rule["type"],
         "priority": rule["priority"],
+        # 这条建议里的数字是「按来源 App 过滤」还是「全库口径」：pkg 只作用于
+        # 待办 / 未分析会话两族规则，排队（按设备）与顾问（全局报告）与来源无关。
+        # 前端必须逐卡标口径，不能在标题里一刀切写「仅 微博」——那会把全库数字
+        # （排队任务数、顾问份数）也罩进去，用户以为「3 个排队任务失败」是微博的。
+        "scope": "pkg" if rule.get("pkg_scoped") else "global",
         "title": _fill(rule["title"], ctx),
         "why": _fill(rule["why"], ctx),
         "how": _fill(rule["how"], ctx),
@@ -214,7 +221,9 @@ def query_suggests_next():
           全局报告，与来源无关；生效后的数字就是证据串里看到的数字。
     返回：{"ok": true, "suggests": [...], "count": n, "generated_at": ..., "pkg": ...}
           顾问存档损坏时不会给「还没有顾问报告」，改给「顾问存档损坏」这条。
-          每条：{type, priority, title, why, how, evidence, jump}
+          每条：{type, priority, scope, title, why, how, evidence, jump}
+          scope：pkg = 这条的数字按来源 App 过滤（待办 / 未分析会话两族）；
+          global = 全库口径（排队按设备、顾问是全局报告），与来源无关。
           jump：conv / todo / queue / adv / ""（空串 = 无需跳转）。
     """
     import app as app_module
@@ -299,6 +308,7 @@ RULES = (
         "type": "check",
         "priority": 80,
         "field": "todo", "op": "gt", "bound": 0,
+        "pkg_scoped": True,
         "title": "有 {todo} 条待办还没处理完",
         "why": "待办是分析结果里 need_action=1 的消息，总量还在涨说明有积压。",
         "how": "从待办 Tab 按重要度从高到低清，先清 high 再清 mid。",
@@ -309,6 +319,7 @@ RULES = (
         "type": "rerun",
         "priority": 70,
         "field": "convs_missing", "op": "gt", "bound": 0,
+        "pkg_scoped": True,
         "title": "有 {convs_missing} 个会话还没分析过，建议补跑一次分析",
         "why": "消息抓到不等于分析过；没分析过的会话不会出现在待办与统计里。",
         "how": "在 Android 端对该会话点「立即分析」，或等周期任务跑到。",

@@ -2711,3 +2711,123 @@ python -m pytest server/ -q                                # 746 passed
 **计数.** `server/console_classify.js` 831 / 778 → **1013 / 946**（`TOPIC_LABELS` @327 · `DUE_LABELS` @347 · `_codeOf` @373 · `normalizeTopic` @382 · `topicLabel` @387 · `dueLabel` @394 · `isNoDue` @401 · `displayDueCode` @409 · `hasDisplayDue` @417 · `displayDueLabel` @422 · `IMPORTANCE_CHIPS` @431 · `importanceKey` @437 · `importanceChip` @448 · `analysisCodeParts` @456 · 导出块 @951-1012）；`server/console_ui.py` 3911 / 3819 → **3968 / 3875**（`impChipText` @2893 · `topicChipText` @2902 · `displayDueText` @2911 · `renderAnalysisBlock` @2928 · `analysisSearchText` @1744 · `todoSection` @2971 · `renderStats` @3062）；`server/test_console_classify.py` 1792 / 1467 → **1905 / 1569**；`server/test_console_ui.py` 787 / 650 → **839 / 693**；服务端用例 738 → **746**。
 
 **教训.** 「码值」与「内容」是两回事，展示层拿到任何字段都要先问一句：**这是给人看的，还是给机器用的**？本案的三个症状（`截止 today`、`截止 none`、`重要度 high`）全部来自同一个动作 —— 把码值直接当文案拼进 HTML。判据很具体：**只要一个字段有枚举表，就必须有一个「该不该显示 / 显示成什么」的判定函数**，而这个判定不许写在 UI 里（否则每处 UI 各判一次，必然漂移）。跨端还有一条：**端上已经归一过的枚举，控制台不该「再写一份」，只能转发同一份口径** —— 本案漂移了至少一个版本，靠的是端上 33 条单测与控制台零条单测的落差。
+## E-76 建议区块的来源口径一刀切：筛选到某个来源后标题写「仅 微博」，卡里的数字却是全库（`console_classify.suggestScope`，fix/suggest-scope，2026-11-15）
+
+**现象.**
+
+改前 `server/console_ui.py` 的 `suggestSections()` 把来源筛选一刀切写进标题：
+
+```js
+  var scope = APP_FILTER ? (' · 仅 ' + pkgLabel(APP_FILTER)) : '';
+  // 标题后面跟着排的是全部建议卡
+```
+
+但 `/suggests/next` 的 7 条规则里只有 2 条真的按来源过滤：
+
+| 规则 | priority | 口径 |
+| --- | --- | --- |
+| `todo` | 80 | **按 `pkg` 过滤**（只数该来源的待办会话） |
+| `convs_missing` | 70 | **按 `pkg` 过滤**（只数该来源缺分析的会话） |
+| `queue_failed` | 100 | 全库（排队任务按设备计，与来源无关） |
+| `queue_stale` | 90 | 全库（同上） |
+| `advisor_broken` | 85 | 全库（顾问报告是全局的） |
+| `advisor_age_days` | 60 | 全库（同上） |
+| `advisor_total` | 50 | 全库（同上） |
+
+于是筛选到微博后，页面上是这么几张卡：
+
+| 卡 | 改前显示 | 实际口径 |
+| --- | --- | --- |
+| 标题 | 建议 · 仅 微博 | —（头部一刀切） |
+| 「有 3 个待办会话未分析」 | 建议 · 仅 微博 | **仅 微博** |
+| 「有 2 个排队任务失败」 | 建议 · 仅 微博 | **全库** |
+| 「顾问存档损坏」 | 建议 · 仅 微博 | **全库** |
+
+用户看的是「这些数字是微博的」，实际第二行是全库数字。
+
+**根因.**
+
+建议区块的标题口径写死了：它看的是「页面正在看哪个来源」，而卡片里的数字各有各的口径。服务端早就把这两个口径分开了 —— `server/test_stats_api.py` 的 `test_suggests_pkg_does_not_touch_queue_or_advisor_rules` 钉住「带 `pkg` 只过滤 todo / convs_missing」，但这条信息没跟着进控制台。控制台回一口选择就把全库数字统一加上「仅 X」。
+
+**修法.**
+
+口径跟数据走，不跟筛选走：
+
+① 服务端给每条建议带 `scope`（`server/suggests.py`）：
+
+```python
+  item = {
+      "type": rule["type"], "priority": rule["priority"],
+      # 口径由规则自身决定，不看请求参数
+      "scope": "pkg" if rule.get("pkg_scoped") else "global",
+      ...
+  }
+```
+
+② 规则层翻成文案（`server/console_classify.js`，UMD，node 可测）：
+
+```js
+  function suggestScope(item, pkg, labels) {
+    var trimmed = String(pkg == null ? '' : pkg).trim();
+    if (!trimmed) return { scope: 'global', label: '' };
+    if (item && item.scope === 'pkg') {
+      return { scope: 'pkg', label: '仅 ' + pkgLabel(trimmed, labels) };
+    }
+    return { scope: 'global', label: '全库' };
+  }
+```
+
+③ 控制台逐卡带徽标，标题只在**全部**建议都按来源过滤时才保留「· 仅 X」（`server/console_ui.py`）：
+
+```js
+  function suggestScopeText(s) {
+    try {
+      var sc = CC.suggestScope(s, APP_FILTER, PKG_LABELS);
+      return sc && sc.label ? sc.label : '';
+    } catch (e) { return APP_FILTER ? '全库' : ''; }
+  }
+  // suggestHtml() 里每张卡跟优先级徽标后加一枚口径徽标
+  var scopeTxt = suggestScopeText(s);
+  if (scopeTxt) html += '<span class="badge b-app">' + esc(scopeTxt) + '</span>';
+  // suggestSections() 标题：只有全部是 pkg 口径才标
+  var allPkg = true;
+  for (var i = 0; i < SUGGESTS.length; i++) {
+    if (!SUGGESTS[i] || SUGGESTS[i].scope !== 'pkg') { allPkg = false; break; }
+  }
+  if (allPkg) scope = ' · 仅 ' + pkgLabel(APP_FILTER);
+```
+
+**刻意取舍.**
+
+① **口径由规则自身标记，不看请求参数**：`pkg_scoped` 是规则的属性，不是请求的属性。同一条建议在不同请求下口径必须一致，不能因为本次带了 `pkg` 就换个说法。
+
+② **没筛选时不标任何徽标**：`pkg` 为空时数字就是全库口径，写「全库」只是一句多余的话；无来源时标题不加任何东西，卡片也不加徽标。
+
+③ **标题与卡片可以同时存在，但只在全部同口径时才把标题写成「仅 X」**：一个页面上可能有 pkg 卡与 global 卡，这时标题必须回空标，只留逐卡徽标，不允许一个全库卡被标题冒充。
+
+④ **规则层返回空字符串而不是固定文案**：无筛选时 `label` 返空串（「无来源就不标」），有筛选时才给「仅 X」或「全库」；UI 只负责把它摆到哪里，不自己拼字符串。
+
+**测试.**
+
+| 用例 | 断言 |
+| --- | --- |
+| `test_suggests_each_item_carries_its_own_scope` | 每条建议的 `scope` ∈ {`pkg`, `global`} |
+| `test_suggests_scope_marks_source_dependent_rules_only` | 排队=`global`、待办=`pkg`、无分析会话=`pkg` |
+| `test_suggests_advisor_rule_is_whole_library_scope` | 空库时顾问那条 `scope=global` |
+| `test_suggest_scope_marks_source_dependent_cards` | pkg 卡翻「仅 微信」，global 卡翻「全库」 |
+| `test_suggest_scope_without_filter_marks_nothing` | `pkg` 为空串 / 空白串 / null 时不翻任何标签 |
+| `test_suggest_scope_tolerates_bad_input` | 缺 `scope` / null → global 全库；未知来源 → 「仅 com.unknown.app」 |
+| `test_suggestion_cards_carry_their_own_scope` | 口径 helper 在、每卡带自己的 scope、旧的一刀切写法已退场 |
+
+**验证.**
+
+```powershell
+python -m pytest server/test_stats_api.py server/test_console_classify.py server/test_console_ui.py -q   # 243 passed
+python -m pytest server/ -q                                                       # 753 passed
+```
+
+另外把 `CONSOLE_HTML` 的 4 段内联 `<script>` 抽出来拼成单文件跑 `node --check`（退出码 0），再用 node 直跑规则层核对九档输入：pkg 卡 → 「仅 微信」；global 卡 / 缺 scope 卡 / null 卡 → 「全库」；无筛选 → 空标签；pkg 卡 HTML 只含「仅 微信」不含「全库」，queue 卡只含「全库」。
+
+**计数.** `server/suggests.py` 344 / 301 → **355 / 312**（`_build` @186 · `query_suggests_next` @216 · `_pick` @204）；`server/console_classify.js` 1013 / 946 → **1028 / 961**（`suggestScope` @955 · 导出块 @1013-1027）；`server/console_ui.py` 3968 / 3875 → **3990 / 3897**（`suggestScopeText` @2331 · `suggestHtml` @2340 · `suggestSections` @2361）；`server/test_stats_api.py` 897 / 766 → **933 / 796**；`server/test_console_classify.py` 1905 / 1569 → **1934 / 1593**；`server/test_console_ui.py` 839 / 693 → **851 / 704**；服务端用例 746 → **753**。
+
+**教训.** 一个标题不能同时继承多个口径。本案的错误不在「字符串写错了」，而在「页面级的标题被当成了所有卡片的共同前提」：口径是**每条数据的属性**，不是**页面的属性**。一条可用的规则：**要标一个口径，就把它随数据一起下发，让消费方只负责摆位**。服务端已经分好的口径，控制台不能再额外定义一个一刀切的。
