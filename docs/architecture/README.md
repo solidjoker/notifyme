@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **131 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 138 个，`app/src/test` 86 个 / 1384 条），服务端已拆成 **8+1 模块**（`app.py` 627 / `util.py` 384 / `storage.py` 821 / `routes.py` 1030 / `console_ui.py` 3904 / `stats_api.py` 201 / `suggests.py` 312 / `extract_common.py` 474 + `console_classify.js` 1007），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **131 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 138 个，`app/src/test` 86 个 / 1384 条），服务端已拆成 **8+1 模块**（`app.py` 627 / `util.py` 416 / `storage.py` 821 / `routes.py` 1033 / `console_ui.py` 3911 / `stats_api.py` 201 / `suggests.py` 312 / `extract_common.py` 474 + `console_classify.js` 1024），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -14,13 +14,13 @@
 
 | # | 图 | 回答的问题 | 尺寸 (px) |
 |---|---|---|---|
-| 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3962 × 1791 |
+| 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3962 × 1814 |
 | 02 | [Android 分层架构](#02-android-分层架构) | 131 个顶层 Kotlin 文件各自属于哪一层？ | 14806 × 2070 |
 | 03 | [三条采集通道](#03-三条采集通道) | 消息是怎么进来的？为什么需要三条路？ | 3386 × 1048 |
 | 04 | [分析决策流水线](#04-分析决策流水线) | 一条消息如何变成一条待办？ | 2510 × 5356 |
 | 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1973 × 3290 |
 | 06 | [功能全景脑图](#06-功能全景脑图) | 这个 App 到底有哪些功能？ | 3135 × 1556 |
-| 07 | [服务端架构](#07-服务端架构) | 服务端 8+1 模块里各装了什么？路由在哪一行？ | 6960 × 4997 |
+| 07 | [服务端架构](#07-服务端架构) | 服务端 8+1 模块里各装了什么？路由在哪一行？ | 6960 × 5060 |
 | 08 | [构建与部署](#08-构建与部署) | 从源码到手机、从手机到公网的完整链路 | 6850 × 4895 |
 | 09 | [同步时序](#09-同步时序) | 冷启动回填与三通道上报的精确行为 | 5769 × 7926 |
 

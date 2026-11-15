@@ -2989,3 +2989,55 @@ dumpsys 原文：悬浮卡 `mAttrs={(49,32)(1122xwrap)}` → `frame=[49,182][117
 **计数.** 新增 `OverlayPlacementCore.kt` 98 行；`OverlayService.kt` 460 → **556 行**；主源码顶层 130 → **131**、全树 137 → **138**；`app/src/test` 85 → **86 个 .kt**；全量单测 1369 → **1384 条**；Core 逻辑内核 49 → **50**；架构图 02 重渲后 **14806 × 2070**。
 
 **教训.** 写悬浮窗时有两套坐标（内容区 / 绝对）与两套尺寸（应用区 / 屏区），混用任何一对都会得到「看起来偏了一点」的现象。本案水平方向偏差（满屏）来自 margin 失效，垂直方向偏差（多一个状态栏 + 下移 0.2×）来自坐标系与居中基准，三者叠加才让面板「又宽又低又偏」。**凡是 `params.x/y` 的写入点，都要能立刻回答「这是内容区坐标还是绝对坐标」。**
+
+## E-79 库侧 0/1 flag 的读出口用 Python 原生真值：概览条说 0 条待办，列表却挂着「⚡待办」（`util._db_bool`，fix/db-bool-readout，2026-11-16）
+
+**现象.**
+
+服务端两套布尔口径打架。**写入口**早就有严格真值表 `util._safe_bool`（字符串只认 `true` / `1` / `yes` / `on` / `y` / `t`，认不出的**一律假**），但**读出口**（从 SQLite 把 0/1 列读回来）用的是 Python 原生真值 `bool(r[i])`：
+
+- `server/routes.py`：`is_group` / `escalated` / `need_action` / `filtered` / `redacted` 五处；
+- `server/app.py`：极简消息页的「群聊」徽标。
+
+而 `server/stats_api.py` 的聚合一律用 SQL `need_action = 1` —— **脏行不计**。同一个库、两种口径：概览条与 `/stats` 说「待处理 0 条」，逐行读出口却把脏值当真，列表里照样挂着待办徽标。
+
+实测（SQLite 亲和性探针）：INTEGER 亲和列会把 `0` / `1` 这类文本自动转成整数 0/1，**能活下来的脏值是非数字文本**（`false` / `true` / 空串 / `abc`）与 real `0.5` —— 这些 `bool()` 全判真，而 SQL `= 1` 全判假；TEXT 亲和的老库则连 `0` 都留成文本。
+
+**根因.**
+
+- **写入口与读出口是两套表，但只有写入口被钉住**：`_safe_bool` 覆盖「用户上报的自由格式」，`bool()` 覆盖「库里该是 0/1 的列」，后者没人管；
+- **SQL 聚合天然免疫脏值**（`col = 1` 只认整数 1），所以 `/stats` 一直是对的 —— 于是「统计对、列表错」被误当成偶发；
+- **JS 侧同样靠真值判断**：`console_ui` 的 `a.redacted` / `m.is_group` / `t.stale` 与 `console_classify` 的 `stale` 都是裸真值，即使服务端已归一成布尔，前端遇到脏值仍会判错（纵深防御缺失）。
+
+**修法.**
+
+- **服务端**：新增 `util._db_bool(value, default=False)` —— **只有 1 / `1` 算真**（与 SQL `col = 1` 同口径）：布尔直接用；数字只有 1 算真（0.5 / 2 都不算）；文本 strip 后按 SQLite 数值亲和解析（`1` / `01` / `1.0` / `+1` / `1e0` 都算 1，`false` / `abc` / 空串 / `nan` / `inf` 一律假）；`default` 只兜 `None` 与认不出的类型。五处读出口 + `app.py` 的群聊徽标改用它。
+- **控制台**：新增 `console_classify.dbBool(v)`（与服务端 `_db_bool` 逐条对齐）+ `console_ui.dbBoolOf(v)` 包装，替换 `a.redacted`（3 处）、`m.is_group`、`t.stale`（2 处）与规则层的 `stale` 两处。
+- **两套真值表刻意不同**：写入口认 `true` / `yes`，读出口只认 `1` —— 库里不该有「是 / 否」的文本。
+
+**刻意取舍.**
+
+① **不改成「宽松真值」**：把 `true` 也算真虽然更宽容，但 SQL 聚合（`col = 1`）不会跟着变，两侧口径反而更远；宁可读出口更严。
+
+② **不动写入口**：`_safe_bool` 管的是「用户上报的自由格式」，`true` / `yes` 在那里是合法输入，与库里 0/1 列不是一回事。
+
+③ **前端保留一份同口径副本**（`dbBool`），而不是只依赖服务端归一 —— 直写 SQLite 或迁移前的老库仍可能把脏值送进 JSON。
+
+**测试.**
+
+- 新增 `server/test_bool_readout.py` 35 条：真值表 27 组参数化 / `default` 只兜 `None` / 与 `_safe_bool` 的刻意差异（`true` 一真一假）/ **在真 SQLite 内存库里逐条比对 `flag = 1`**（INTEGER 与 TEXT 亲和列各跑一遍）/ 消息与分析的读出口不再走 Python 真值 / `/analysis?todo_only=1` 与 `/stats` 的 `analyses.todo` 与行级读出口一致 / 极简页群聊徽标跳过脏行。
+- `server/test_console_classify.py` +4 条：真值表 / **跨层契约**（`CC.dbBool` 逐条等于 `util._db_bool`）/ 与 `_safe_bool` 的差异 / 排队条目的 `stale` 脏值不计数。
+- `server/test_console_ui.py` +1 条：三处读出口走 `dbBoolOf`，旧的 JS 真值写法已退场。
+- `server/test_module_split.py` +1 条（参数化）：`util._db_bool` 的归属登记在 `EXPECTED_OWNER`。
+
+**验证.**
+
+`python -m pytest server/ -q` → **800 passed**（基线 759 + 本轮 41）；`python -m compileall -q server` 通过；`node --check server/console_classify.js` 通过；控制台内联 JS 抽出后 `node --check` 退出码 0。
+
+**计数.**
+
+`server/util.py` 432 / 384 → **468 / 416**（`_db_bool` @158）；`server/routes.py` 1092 / 1030 → **1095 / 1033**；`server/app.py` 742 / 627（不变）；`server/console_classify.js` 1077 / 1007 → **1095 / 1024**（`dbBool` @985 · 导出块 @1028-1094）；`server/console_ui.py` 3997 / 3904 → **4005 / 3911**（`dbBoolOf` @1485）；`server/test_bool_readout.py` 新增 **269 / 233**；`server/test_console_classify.py` 1934 / 1593 → **2050 / 1685**；`server/test_console_ui.py` 851 / 704 → **899 / 746**；服务端用例 759 → **800**；架构图 01 重渲后 **3962 × 1814**、07 重渲后 **6960 × 5060**。
+
+**教训.**
+
+**「写入口严、读出口松」是同一类缺陷的两面**：写侧有真值表不代表读侧也有。同一个布尔列，从库里读回来时必须再过一次与聚合 SQL 同口径的判定 —— 否则统计口径与列表口径会长期背离，而背离的方向恰恰是「看起来更热闹」。
