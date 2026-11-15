@@ -8,14 +8,18 @@ import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.Service
 import android.content.Intent
+import android.content.res.Configuration
 import android.content.res.Resources
 import android.graphics.PixelFormat
+import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.DisplayMetrics
 import android.util.Log
 import android.util.TypedValue
+import android.view.Display
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -56,6 +60,9 @@ class OverlayService : Service() {
         private const val CLICK_SLOP_DP = 8
         private const val BALL_SIZE_DP = 48
 
+        /** 悬浮球贴边时与屏幕边缘的间距 */
+        private const val BALL_EDGE_GAP_DP = 6
+
         /** 悬浮卡同时最多几张：autoDismissSeconds ≤ 0（不自动消失）时防止无限堆叠盖满屏幕 */
         private const val MAX_CARDS = 3
 
@@ -77,6 +84,10 @@ class OverlayService : Service() {
     private var ballParams: WindowManager.LayoutParams? = null
     private var panelView: View? = null
 
+    /** 屏尺寸与系统栏 inset 缓存（配置变化时清空） */
+    private var displaySizeCache: Pair<Int, Int>? = null
+    private var barInsetsCache: Pair<Int, Int>? = null
+
     override fun onCreate() {
         super.onCreate()
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -94,6 +105,14 @@ class OverlayService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /** 旋转/折叠展开：屏尺寸与系统栏 inset 变了，重新取并重排卡片 */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        displaySizeCache = null
+        barInsetsCache = null
+        relayoutCards()
+    }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
@@ -136,12 +155,12 @@ class OverlayService : Service() {
         }
 
         val params = baseOverlayParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
+            OverlayPlacementCore.cardWidth(displayWidth()),
             WindowManager.LayoutParams.WRAP_CONTENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            horizontalMargin = 0.04f
-            y = statusBarHeight() + dp(10) + activeCards.size * dp(96)
+            x = OverlayPlacementCore.cardLeft(displayWidth())
+            y = OverlayPlacementCore.toContent(cardTopAbsolute(activeCards.size), topInset())
         }
         // 权限在入口判过，但到 addView 之间可能被吊销：崩服务不如丢这张卡
         //（消息本体已落库，主页永远可见，不丢数据）
@@ -181,13 +200,27 @@ class OverlayService : Service() {
         maybeStopSelf()
     }
 
-    /** 重排卡片纵向位置：第 i 张卡片固定在第 i 行，摘卡/deck 变化后调用。 */
+    /** 重排卡片纵向位置：按前一张的实测高度顺延，摘卡/deck 变化后调用。 */
     private fun relayoutCards() {
+        val tops = cardTops(activeCards.size)
         activeCards.forEachIndexed { i, c ->
-            c.params.y = statusBarHeight() + dp(10) + i * dp(96)
+            c.params.y = OverlayPlacementCore.toContent(tops[i], topInset())
             runCatching { wm.updateViewLayout(c.view, c.params) }
         }
     }
+
+    /** 前 [count] 张悬浮卡的绝对顶部（按已挂卡片的实测高度顺延，未测量时用兜底步进） */
+    private fun cardTops(count: Int): List<Int> = OverlayPlacementCore.cardTopsAbsolute(
+        count = count,
+        topInset = topInset(),
+        topGap = dp(10),
+        heights = activeCards.map { it.view.height },
+        fallbackPitch = dp(OverlayPlacementCore.CARD_FALLBACK_PITCH_DP),
+        gap = dp(OverlayPlacementCore.CARD_GAP_DP)
+    )
+
+    /** 第 [index] 张悬浮卡的绝对顶部 */
+    private fun cardTopAbsolute(index: Int): Int = cardTops(index + 1)[index]
 
     /** 球未启用、卡片清空后服务没有继续存在的理由。 */
     private fun maybeStopSelf() {
@@ -210,8 +243,11 @@ class OverlayService : Service() {
         val size = dp(BALL_SIZE_DP)
         val params = baseOverlayParams(size, size).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = displayWidth() - size - dp(6)
-            y = displayHeight() / 3
+            x = OverlayPlacementCore.ballLeft(displayWidth(), size, dp(BALL_EDGE_GAP_DP))
+            y = OverlayPlacementCore.toContent(
+                OverlayPlacementCore.ballTopAbsolute(displayHeight()),
+                topInset()
+            )
         }
         if (runCatching { wm.addView(view, params) }.isFailure) {
             Log.w(TAG, "悬浮球挂载失败（权限可能刚被吊销），等下一次 reconcile")
@@ -263,7 +299,14 @@ class OverlayService : Service() {
                     val dy = ev.rawY - downY
                     if (abs(dx) > dp(CLICK_SLOP_DP) || abs(dy) > dp(CLICK_SLOP_DP)) moved = true
                     params.x = (startX + dx).toInt().coerceIn(0, (displayWidth() - dp(BALL_SIZE_DP)).coerceAtLeast(0))
-                    params.y = (startY + dy).toInt().coerceIn(0, (displayHeight() - dp(BALL_SIZE_DP)).coerceAtLeast(0))
+                    val absTop = OverlayPlacementCore.clampBallTop(
+                        top = startY + topInset() + dy.toInt(),
+                        displayHeight = displayHeight(),
+                        topInset = topInset(),
+                        bottomInset = bottomInset(),
+                        ballSize = dp(BALL_SIZE_DP)
+                    )
+                    params.y = OverlayPlacementCore.toContent(absTop, topInset())
                     wm.updateViewLayout(view, params)
                     true
                 }
@@ -284,9 +327,12 @@ class OverlayService : Service() {
 
     /** 松手吸附到最近的左右边缘。 */
     private fun snapToEdge(view: View, params: WindowManager.LayoutParams) {
-        val target = if (params.x + dp(BALL_SIZE_DP) / 2 < displayWidth() / 2)
-            dp(6)
-        else displayWidth() - dp(BALL_SIZE_DP) - dp(6)
+        val target = OverlayPlacementCore.snapBallLeft(
+            params.x + dp(BALL_SIZE_DP) / 2,
+            displayWidth(),
+            dp(BALL_SIZE_DP),
+            dp(BALL_EDGE_GAP_DP)
+        )
         val anim = ValueAnimator.ofInt(params.x, target)
         anim.duration = 200
         anim.addUpdateListener {
@@ -305,12 +351,13 @@ class OverlayService : Service() {
         }
         val view = LayoutInflater.from(this).inflate(R.layout.view_overlay_panel, null)
         val params = baseOverlayParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
+            OverlayPlacementCore.panelWidth(displayWidth()),
             WindowManager.LayoutParams.WRAP_CONTENT
         ).apply {
             gravity = Gravity.CENTER
-            horizontalMargin = 0.12f
-            verticalMargin = 0.2f
+            // 不设 horizontalMargin / verticalMargin：实测这两个 margin 对 MATCH_PARENT 宽度
+            // 不生效（面板与卡片都是满屏），对 gravity=CENTER 则是把窗口整体下推 0.2×内容区高
+            y = OverlayPlacementCore.panelCenterOffsetY(topInset(), bottomInset())
         }
 
         val container = view.findViewById<LinearLayout>(R.id.llPanelTodos)
@@ -442,19 +489,68 @@ class OverlayService : Service() {
         TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), Resources.getSystem().displayMetrics
     ).toInt()
 
-    private fun displayWidth(): Int = Resources.getSystem().displayMetrics.widthPixels
-    private fun displayHeight(): Int = Resources.getSystem().displayMetrics.heightPixels
+    // ---------------- 几何口径 ----------------
 
     /**
-     * 状态栏高度：API 30+ 直接读窗口 insets（顺带覆盖刘海屏区域），
-     * 更低版本退回兜底尺寸，不再用 getIdentifier 反射系统资源。
+     * 真实屏尺寸（含系统栏区域）。
+     *
+     * 不用 [Resources.getSystem] 的 displayMetrics：那玩意在不同 ROM 上口径不一致
+     * （小米 25098PN5AC 上 2441 = 2656-150-65，云手机 16384 上 1920 = 整屏），
+     * 悬浮球位置会随 ROM 漂移。一律以 [Display] 的真实尺寸为准。
      */
-    private fun statusBarHeight(): Int {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val insets = wm.currentWindowMetrics.windowInsets
-                .getInsets(WindowInsets.Type.statusBars())
-            if (insets.top > 0) return insets.top
+    private fun displaySize(): Pair<Int, Int> {
+        displaySizeCache?.let { return it }
+        val dm = DisplayMetrics()
+        val display = (getSystemService(DisplayManager::class.java))
+            ?.getDisplay(Display.DEFAULT_DISPLAY)
+        if (display != null) {
+            @Suppress("DEPRECATION")
+            runCatching { display.getRealMetrics(dm) }
         }
-        return resources.getDimensionPixelSize(R.dimen.status_bar_height_fallback)
+        val fallback = Resources.getSystem().displayMetrics
+        val size = (if (dm.widthPixels > 0) dm.widthPixels else fallback.widthPixels) to
+            (if (dm.heightPixels > 0) dm.heightPixels else fallback.heightPixels)
+        displaySizeCache = size
+        return size
     }
+
+    private fun displayWidth(): Int = displaySize().first
+    private fun displayHeight(): Int = displaySize().second
+
+    /**
+     * 系统栏 inset（顶部状态栏 / 底部导航栏）。
+     *
+     * API 30+ 先读 maximumWindowMetrics（显示级、不需要视觉上下文，Service 里可用），
+     * 读不到再退窗口 insets，最后退兜底尺寸；**任何一步都不抛**。
+     */
+    private fun systemBarInsets(): Pair<Int, Int> {
+        barInsetsCache?.let { return it }
+        var top = 0
+        var bottom = 0
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val max = runCatching {
+                wm.maximumWindowMetrics.windowInsets.getInsets(WindowInsets.Type.systemBars())
+            }.getOrNull()
+            if (max != null && max.top > 0) {
+                top = max.top
+                bottom = max.bottom
+            } else {
+                val cur = runCatching {
+                    wm.currentWindowMetrics.windowInsets.getInsets(WindowInsets.Type.statusBars())
+                }.getOrNull()
+                if (cur != null) top = cur.top
+            }
+        }
+        if (top <= 0) {
+            top = runCatching {
+                resources.getDimensionPixelSize(R.dimen.status_bar_height_fallback)
+            }.getOrDefault(0)
+        }
+        val insets = top to bottom
+        barInsetsCache = insets
+        return insets
+    }
+
+    private fun topInset(): Int = systemBarInsets().first
+    private fun bottomInset(): Int = systemBarInsets().second
 }
