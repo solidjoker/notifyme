@@ -155,6 +155,42 @@ def _safe_bool(value, default=False):
         return default
     return default
 
+def _db_bool(value, default=False):
+    """库侧 0/1 列的取真口径：必须与 SQL 的 `col = 1` 判定一致。
+
+    SQLite 的列有类型亲和：INTEGER 亲和列能存 TEXT（'false' / 'true' / 'abc'
+    这类非数字串会原样留下），TEXT 亲和的老库连 '0' 都会留成文本。
+    Python 的真值判断把非空字符串都当成真（bool('false') is True），读出口就会
+    把「私聊」说成「群聊」、「未脱敏」说成「已脱敏」、「不需要行动」说成「待办」；
+    更糟的是它与 /stats 的聚合口径（SQL `WHERE need_action = 1`）互相打架 ——
+    概览条说 0 条待办，列表里却挂着一条「⚡待办」。
+
+    口径：布尔直接用；数字只有 1 算真（0.5 / 2 都不算，与 SQL 的 `= 1` 对齐）；
+    文本按 SQLite 的数值亲和判定（'1' / '01' / '1.0' / '+1' 都算 1，转不成
+    数字的 'false' / 'abc' 一律假）；default 只兜 None 与认不出的类型。
+
+    与 _safe_bool 的分工：_safe_bool 管「上报侧 JSON 的任意值」，
+    _db_bool 管「库侧 0/1 列的读出口」，两套真值表刻意不同。
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return False
+        # 按 SQLite 的数值亲和理解文本：'1' / '01' / '1.0' / '+1' 都等价于 1，
+        # 与 SQL `col = 1` 的判定一致；转不成数字的（'false' / 'abc'）一律假。
+        try:
+            number = float(text)
+        except ValueError:
+            return False
+        return number == 1
+    return default
+
 def _parse_tz_offset(raw_tz, raw_offset):
     """解析时区参数，返回分钟偏移（东八区 = +480）或 None（未指定）。
 

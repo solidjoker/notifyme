@@ -2003,3 +2003,48 @@ def test_need_action_chip_is_two_states(call):
     assert call("needActionChip", {"s1": {"importance": 7}}) is None
     assert call("needActionChip", {}) is None
     assert call("needActionChip", None) is None
+
+
+# —— 库侧 0/1 flag 的前端口径（与服务端 util._db_bool 同源）——
+
+_DB_TRUTHY = [True, 1, "1", " 1 ", "01", "1.0", "+1", "1e0"]
+_DB_FALSY = [False, 0, "0", " 0 ", "false", "False", "true", "yes", "on", "",
+             "  ", "abc", "maybe", 0.5, 2, -1, "nan", "inf", None]
+
+
+def test_db_bool_truth_table(call):
+    """库侧 flag 的真值表：只有 1 / '1' 算真（与 SQL `col = 1` 同口径）。"""
+    for value in _DB_TRUTHY:
+        assert call("dbBool", value) is True, value
+    for value in _DB_FALSY:
+        assert call("dbBool", value) is False, value
+
+
+def test_db_bool_agrees_with_server_util(call):
+    """跨层契约：规则层 dbBool 必须逐条等于服务端 util._db_bool。"""
+    for value in _DB_TRUTHY + _DB_FALSY:
+        assert call("dbBool", value) is server_util._db_bool(value), value
+
+
+def test_db_bool_differs_from_safe_bool_on_text_true(call):
+    """刻意差异：'true' 在写入口真值表里算真，在库侧读出口算假 —— 库里只有 0/1。"""
+    assert call("safeBool", "true") is True
+    assert call("dbBool", "true") is False
+    assert server_util._safe_bool("true") is True
+    assert server_util._db_bool("true") is False
+
+
+def test_queue_stale_flag_is_not_js_truthy(call):
+    """排队条目的 stale 脏值（'false'）不得被当成真。"""
+    tasks = call("normalizeQueueTasks", [
+        {"device_id": "d1", "task_id": "t1", "kind": "analysis", "state": "queued",
+         "title": "脏标记", "detail": "", "queued_at": 1, "updated_at": 2, "stale": "false"},
+        {"device_id": "d1", "task_id": "t2", "kind": "analysis", "state": "queued",
+         "title": "真标记", "detail": "", "queued_at": 1, "updated_at": 2, "stale": 1},
+    ])
+    assert tasks[0]["stale"] is False, tasks
+    assert tasks[1]["stale"] is True, tasks
+    summary = call("queueSummary", tasks)
+    assert summary["stale"] == 1, summary
+    assert summary["queued"] == 1, summary
+    assert summary["total"] == 2, summary

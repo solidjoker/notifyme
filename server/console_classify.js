@@ -560,7 +560,7 @@
         detail: detail,
         queued_at: queuedAt,
         updated_at: updatedAt,
-        stale: !!t.stale
+        stale: dbBool(t.stale)
       };
       if (seen[key] !== undefined) {
         list[seen[key]] = item;   // 同一条目后到的覆盖先到的
@@ -587,7 +587,7 @@
     for (var i = 0; i < arr.length; i++) {
       var t = arr[i] || {};
       out.total += 1;
-      if (t.stale) { out.stale += 1; continue; }
+      if (dbBool(t.stale)) { out.stale += 1; continue; }
       var st = String(t.state || '');
       if (out[st] !== undefined) { out[st] += 1; }
     }
@@ -979,6 +979,23 @@
     return false;
   }
 
+  // 库侧 0/1 flag 的前端口径：与服务端 util._db_bool 逐条对齐。
+  // 只有 1 / '1' 算真；'false' / '0' / 0.5 / null 一律假 ——
+  // 与 SQL 的 `col = 1` 判定一致，别让 JS 真值判断把脏行当成真。
+  function dbBool(v) {
+    if (v === true) return true;
+    if (v === false || v === null || v === undefined) return false;
+    if (typeof v === 'number') return v === 1;
+    if (typeof v === 'string') {
+      var t = v.replace(/^\s+|\s+$/g, '');
+      if (t === '') return false;
+      // 数字文本按 SQLite 数值亲和判定：'1' / '01' / '1.0' / '+1' 都算 1
+      if (!/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(t)) return false;
+      return Number(t) === 1;
+    }
+    return false;
+  }
+
   // 「是否待办」：与 /stats 的 todo 口径同源（服务端 need_action 列）。
   // 顶层 need_action 是服务端归一后的结果，优先用它；顶层缺失才退回 s1，
   // 且与服务端 routes.py 同口径 —— s1.need_action 必须是对象才读它的 value。
@@ -1071,6 +1088,7 @@
     queueEmptyScope: queueEmptyScope,
     suggestScope: suggestScope,
     safeBool: safeBool,
+    dbBool: dbBool,
     needActionOf: needActionOf,
     needActionChip: needActionChip
   };

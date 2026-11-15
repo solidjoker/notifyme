@@ -9,7 +9,7 @@
 | 文件 | 职责 |
 |---|---|
 | `app.py` | 启动入口与 Flask 壳：鉴权（`check_token`）、错误处理（404/413/500）、`/console` 与落地页、`create_app()` 工厂 |
-| `util.py` | 纯函数工具层：数值归一、时间戳格式化、文本转义、来源包名映射 |
+| `util.py` | 纯函数工具层：数值归一、时间戳格式化、文本转义、来源包名映射、库侧 0/1 flag 读出口真值表（`_db_bool`） |
 | `storage.py` | 存储层：SQLite 连接与建库、JSONL 存档与轮转、顾问存档读写、抽库后台任务 |
 | `routes.py` | 数据面路由：`/weixin`、`/messages`、`/analysis`、`/advisor`、`/queue`、`/admin/extract`，由 `register(app)` 挂载 |
 | `stats_api.py` | 全库聚合 `/stats`：数值列一律走安全取值（脏值归 0，不让单行脏数据把整页打成 500）；消息段（含 `by_pkg` / `by_source`）、分析段（含脱敏证据）、排队段（`devices` 台数 + `devices_active` 在跑台数 + `by_kind` 类型分布，**分布只数未过期行**，所以 `sum(by_kind) == total - stale`）；**分析段不接受 `pkg` 过滤**；会话数（`convs` / `todo_convs`）按 `(pkg, conversation)` 计，与 `/messages` 行和控制台会话卡同口径；带 `?pkg=` 时消息段的 `by_pkg` / `by_source` 也一并跟着过滤（同一段内分布之和恒等于 `total`） |
@@ -471,6 +471,12 @@ UI 侧只挑措辞：`console_ui.impChipText()` / `topicChipText()` / `displayDu
 判定收进 `console_classify.safeBool(v)`（与服务端 `util._safe_bool` 同一张表，`test_safe_bool_agrees_with_server_util` 跨层钉死）+ `console_classify.needActionOf(a)`（**优先**顶层 `a.need_action` = 服务端归一后的列 = `/stats` 的口径；顶层缺失才退回 `s1.need_action.value`，且必须是对象）+ `console_classify.needActionChip(a)`（两态：待办 →「⚡待办」/ warn，非待办 →「✓ 无需行动」，没有 `s1.need_action` 就不出徽标 —— **没有信息 ≠ 无需行动**）。
 
 UI 侧只挑措辞：`console_ui.needActionOf()` 委托规则层（脚本缺失时降级为「只认顶层布尔」），`console_ui.needActionChip()` 包装规则层。
+**库侧 0/1 flag 的读出口只有一份口径：`util._db_bool`**：服务端**写入口**有严格真值表 `util._safe_bool`（字符串只认 `true` / `1` / `yes` / `on` / `y` / `t`，认不出的**一律假**），但**读出口**（从 SQLite 读回 0/1 列）曾经直接用 Python 原生真值 `bool(r[i])` —— 库里残留的 `false` 这类文本与 real `0.5` 全被判真，而 `stats_api` 的聚合走 SQL `need_action = 1`（脏行不计），于是「概览条 0 条待办 / 列表挂着 ⚡待办」两套口径长期背离。
+
+`_db_bool(value, default=False)` 的口径 = **只有 1 / `1` 算真**（与 SQL `col = 1` 同口径）：布尔直接用；数字只有 1 算真（0.5 / 2 都不算）；文本 strip 后按 SQLite 数值亲和解析（`1` / `01` / `1.0` / `+1` / `1e0` 都算 1，`false` / `abc` / 空串 / `nan` / `inf` 一律假）；`default` 只兜 `None` 与认不出的类型。五处读出口（`is_group` / `escalated` / `need_action` / `filtered` / `redacted`）与 `app.py` 的群聊徽标都走它。
+
+控制台侧同口径副本在 `console_classify.dbBool(v)`（与服务端 `_db_bool` 逐条对齐，`test_console_classify.py` 的跨层用例钉死），`console_ui.dbBoolOf(v)` 只做包装与降级（脚本缺失时退 `v === true`），`is_group` / `redacted` / `stale` 三处读出口都走它。**两套真值表刻意不同**：写入口认 `true` / `yes`，读出口只认 `1` —— 库里不该有「是 / 否」的文本。
+
 
 ### POST /queue —— 上报排队任务快照（需 token）
 

@@ -314,7 +314,9 @@ def query_messages():
             # 已被 typeof 守卫挡掉，这里再兜一层：真出现非常规值也不吐脏字符串
             "timestamp": app_module._safe_int(r[2], default=None),
             "conversation": r[3] if r[3] is not None else "",
-            "is_group": bool(r[4]),
+            # 库侧 0/1 列的读出口统一走 _db_bool：口径与 SQL 的 `col = 1` 一致，
+            # 脏行（'false' 这类非数字文本）不会被 Python 真值判断当成真。
+            "is_group": app_module._db_bool(r[4]),
             "received_at": r[5],
             "source": r[6],
             "pkg": r[7],
@@ -712,22 +714,23 @@ def query_analysis():
                 # s1/s2 解析回对象，与上报结构一致；
                 # 坏 JSON 不能再让整个查询 500（原来一行脏数据就挂掉整个接口）
                 "s1": app_module._safe_json(r[7]),
-                "escalated": bool(r[6]),
+                # 同上：读出口的布尔列一律 _db_bool，别用 Python 真值判断
+                "escalated": app_module._db_bool(r[6]),
                 "s2": app_module._safe_json(r[8]),
                 # 归一后的重要度 / 是否需要行动：
                 # 库里 importance 可能是 0-9 数值，也可能是 high/mid/low 文本，
                 # 统一归一成 high/mid/low 标签，前端不用再自己判类型。
-                "need_action": bool(r[4]),
+                "need_action": app_module._db_bool(r[4]),
                 "importance": app_module._importance_label(r[5]),
                 "analyzed_at": r[9],
                 "protocol": r[10],
                 "received_at": app_module._safe_int(r[11], default=None),
                 # fork 层轨迹（App v0.1.2+；老数据为 None/False）
                 "forks": app_module._safe_json(r[12]),
-                "filtered": bool(r[13]),
+                "filtered": app_module._db_bool(r[13]),
                 "pkg": r[14],
                 # 脱敏证据与手动改写（客户端一直在上报，服务端以前直接丢掉）
-                "redacted": bool(r[15]),
+                "redacted": app_module._db_bool(r[15]),
                 "redaction_rules": app_module._safe_json(r[16]),
                 "redaction_hits": app_module._safe_json(r[17]),
                 "todo_text": r[18],

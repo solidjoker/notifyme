@@ -1478,6 +1478,14 @@ function needActionChip(a) {
   var todo = needActionOf(a);
   return { text: todo ? '⚡待办' : '✓ 无需行动', prob: null, warn: todo };
 }
+
+// 库侧 0/1 flag（is_group / redacted / stale）的前端口径：与服务端
+// util._db_bool 同口径（只有 1 / '1' 算真）。服务端读出口已归一成 JSON 布尔，
+// 这层是纵深防御 —— 别用 JS 真值判断，'false' 这类脏值会被当成真。
+function dbBoolOf(v) {
+  if (CC && CC.dbBool) return CC.dbBool(v);
+  return v === true;
+}
 // 重要度：优先 s1.importance，缺失时退回接口顶层 importance
 function importanceOf(a) {
   if (!a) return '';
@@ -1770,19 +1778,19 @@ function analysisSearchText(a) {
     parts.push(String(a.redaction_rules));
   }
   if (a.redaction_hits != null) parts.push(String(a.redaction_hits));
-  if (a.redacted) parts.push('已脱敏');
+  if (dbBoolOf(a.redacted)) parts.push('已脱敏');
   return parts.join(' ').toLowerCase();
 }
 // 脱敏徽标：redacted 为真时说明这条分析结果里有内容被替换成占位符
 function redactBadge(a) {
-  if (!a || !a.redacted) return '';
+  if (!a || !dbBoolOf(a.redacted)) return '';
   var hits = Number(a.redaction_hits || 0);
   return '<span class="badge b-grp" title="上报前已脱敏">🛡 已脱敏 ' +
     (hits > 0 ? hits + ' 处' : '') + '</span>';
 }
 // 脱敏明细：命中了几条规则、共几处；没命中就不占版面
 function redactDetail(a) {
-  if (!a || !a.redacted) return '';
+  if (!a || !dbBoolOf(a.redacted)) return '';
   var rules = [];
   var raw = a.redaction_rules;
   if (raw) {
@@ -2816,7 +2824,7 @@ function sourceBadgeHtml(source) {
 
 // 单条消息的 HTML（会话卡内复用）
 function msgHtml(m) {
-  var badges = (m.is_group ? '<span class="badge b-grp">群</span>' : '') +
+  var badges = (dbBoolOf(m.is_group) ? '<span class="badge b-grp">群</span>' : '') +
     (normPkg(m.pkg) !== PKG_WX ? '<span class="badge b-app">' +
       esc(pkgLabel(m.pkg)) + '</span>' : '') +
     sourceBadgeHtml(m.source);
@@ -3635,11 +3643,11 @@ function queueCard(t) {
   var st = t.state || 'queued';
   var meta = QUEUE_STATE_META[st];
   var cls = meta ? meta.cls : 'q-queued';
-  if (t.stale) cls += ' q-stale';
+  if (dbBoolOf(t.stale)) cls += ' q-stale';
   var html = '<div class="card q-card ' + cls + '">';
   html += '<div class="q-head"><span class="chip">' + esc(queueKindLabel(t.kind)) + '</span>' +
     '<span class="q-title">' + esc(t.title || '未命名任务') + '</span>' +
-    (t.stale ? '<span class="chip">已过期</span>' : '') + '</div>';
+    (dbBoolOf(t.stale) ? '<span class="chip">已过期</span>' : '') + '</div>';
   if (t.detail) html += '<div class="q-detail">' + esc(t.detail) + '</div>';
   html += '<div class="q-meta"><span>' + esc(queueStateLabel(st)) + '</span>' +
     '<span>设备 ' + esc(t.device_id || '—') + '</span>' +

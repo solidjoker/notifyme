@@ -482,7 +482,7 @@ def test_redaction_evidence_is_rendered_and_searchable():
     assert "function redactDetail(a)" in html
     assert "redactBadge(a)" in html and "redactDetail(a)" in html
     assert "已脱敏" in html
-    assert "if (a.redacted) parts.push('已脱敏');" in html
+    assert "if (dbBoolOf(a.redacted)) parts.push('已脱敏');" in html
     assert "if (a.redaction_hits != null) parts.push(String(a.redaction_hits));" in html
 
 
@@ -872,3 +872,28 @@ def test_need_action_judgement_uses_the_shared_truth_table():
     assert "function needActionOf(a)" in src, "规则层缺少 needActionOf"
     assert "function needActionChip(a)" in src, "规则层缺少 needActionChip"
     assert "无需行动" in src, "规则层缺少「无需行动」文案"
+
+
+def test_db_flags_use_the_shared_readout_truth_table():
+    """库侧 0/1 flag（is_group / redacted / stale）的前端判定必须走 dbBoolOf。
+
+    服务端读出口已用 util._db_bool 归一成 JSON 布尔，但库里可能残留 'false' 这类
+    脏值（直写 SQLite / 迁移前的 TEXT 列）；JS 真值判断会把它们全当成真，
+    于是「群」徽标、「已脱敏」徽标、排队「已过期」标记全错。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "function dbBoolOf(v)" in html, "缺少库侧 flag 的统一判定"
+    assert "CC.dbBool(v)" in html, "dbBoolOf 没有走规则层"
+    assert "dbBoolOf(a.redacted)" in html, "脱敏判定没有走 dbBoolOf"
+    assert "dbBoolOf(m.is_group) ?" in html, "群聊徽标没有走 dbBoolOf"
+    assert "dbBoolOf(t.stale)" in html, "排队过期标记没有走 dbBoolOf"
+    # 旧的 JS 真值写法不能再出现
+    assert "if (a.redacted)" not in html, "脱敏判定仍用 JS 真值"
+    assert "!a.redacted" not in html, "脱敏判定仍用 JS 真值"
+    assert "if (t.stale)" not in html, "排队过期判定仍用 JS 真值"
+    classify = os.path.join(ROOT, "server", "console_classify.js")
+    with open(classify, "r", encoding="utf-8") as fh:
+        src = fh.read()
+    assert "function dbBool(v)" in src, "规则层缺少 dbBool"
+    assert "dbBool: dbBool" in src, "规则层没有导出 dbBool"
+    assert "stale: dbBool(t.stale)" in src, "排队归一化没有走 dbBool"
