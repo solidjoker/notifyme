@@ -849,3 +849,26 @@ def test_suggestion_cards_carry_their_own_scope():
     assert "SUGGESTS[i].scope !== 'pkg'" in html
     # 旧的一刀切写法不能再出现（会把全库数字罩成「仅 X」）
     assert "var scope = APP_FILTER ? (' · 仅 ' + pkgLabel(APP_FILTER)) : '';" not in html
+
+
+def test_need_action_judgement_uses_the_shared_truth_table():
+    """待办判定必须走规则层的真值表；旧写法与「非待办也挂 ⚡待办」不能再出现。
+
+    端上把 false 上报成字符串 "false" / "no" 时，JS 真值判断全当成真：
+    待办 Tab 于是比 /stats 的 todo 多出一堆假待办，每张卡还挂着「⚡待办」徽标。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "CC.needActionOf" in html, "待办判定没有走规则层"
+    assert "CC.needActionChip" in html, "待办徽标没有走规则层"
+    assert "!!na.value" not in html, "旧写法仍用 JS 真值判断 need_action"
+    assert "if (s1.need_action) {" not in html, "待办徽标仍只看 s1.need_action 存不存在"
+    assert "esc(naChip.text)" in html, "徽标文案没有走 naChip"
+    assert "naChip.warn" in html, "徽标没有区分待办 / 无需行动"
+    assert "naChip.prob == null" in html, "徽标没处理「没有概率」的情况"
+    classify = os.path.join(ROOT, "server", "console_classify.js")
+    with open(classify, "r", encoding="utf-8") as fh:
+        src = fh.read()
+    assert "function safeBool(v)" in src, "规则层缺少 safeBool"
+    assert "function needActionOf(a)" in src, "规则层缺少 needActionOf"
+    assert "function needActionChip(a)" in src, "规则层缺少 needActionChip"
+    assert "无需行动" in src, "规则层缺少「无需行动」文案"
