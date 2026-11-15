@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **130 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 137 个，`app/src/test` 85 个 / 1369 条），服务端已拆成 **8+1 模块**（`app.py` 627 / `util.py` 384 / `storage.py` 821 / `routes.py` 1030 / `console_ui.py` 3904 / `stats_api.py` 201 / `suggests.py` 312 / `extract_common.py` 474 + `console_classify.js` 1007），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **131 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 138 个，`app/src/test` 86 个 / 1384 条），服务端已拆成 **8+1 模块**（`app.py` 627 / `util.py` 384 / `storage.py` 821 / `routes.py` 1030 / `console_ui.py` 3904 / `stats_api.py` 201 / `suggests.py` 312 / `extract_common.py` 474 + `console_classify.js` 1007），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -15,7 +15,7 @@
 | # | 图 | 回答的问题 | 尺寸 (px) |
 |---|---|---|---|
 | 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3962 × 1791 |
-| 02 | [Android 分层架构](#02-android-分层架构) | 130 个顶层 Kotlin 文件各自属于哪一层？ | 15150 × 2070 |
+| 02 | [Android 分层架构](#02-android-分层架构) | 131 个顶层 Kotlin 文件各自属于哪一层？ | 14806 × 2070 |
 | 03 | [三条采集通道](#03-三条采集通道) | 消息是怎么进来的？为什么需要三条路？ | 3386 × 1048 |
 | 04 | [分析决策流水线](#04-分析决策流水线) | 一条消息如何变成一条待办？ | 2510 × 5356 |
 | 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1973 × 3290 |
@@ -50,7 +50,7 @@
 
 五层 + Application 入口。**刻意不引 Compose**：全部传统 View + RecyclerView，运行时依赖只有 5 个（core-ktx / recyclerview / work-runtime-ktx / okhttp / **litert-api**——`com.google.ai.edge.litert:litert:2.2.0`，端侧 LiteRT 推理用），把首次构建失败风险降到最低。JSON 用平台内置 `org.json`，不引 Gson/Moshi。
 
-源码规模：`app/src/main/java/com/notifyme/android/` **顶层 130 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 137 个；`app/src/test` 85 个 .kt / 1369 条（纯 JVM 单测）。
+源码规模：`app/src/main/java/com/notifyme/android/` **顶层 131 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 138 个；`app/src/test` 86 个 .kt / 1384 条（纯 JVM 单测）。
 
 ![Android 分层架构图](diagrams/02-android-layers.png)
 
@@ -59,10 +59,10 @@
 | ① UI 层 | **18 个 Activity**：Main（首页）· Console（控制台 8 卡）· Conversation（会话详情+分析面板）· AnalysisList · **AnalysisSettings（S1/S2 槽位）** · Watchlist · Sources（通知来源）· ReminderList · **ReminderSettings** · PromptEdit · ModelList · Onboarding · **Capture** · **CaptureDiagnostics** · **EngineSmoke** · **OverlaySettings** · **PrivacySettings** · **RedactorPreview** |
 | ② 采集与常驻层 | `NotifyMeListener`（通知监听）· `A11yExtractService`（无障碍直读，仅微信）· `KeepAliveService`（60s 看门狗 requestRebind）· `BootReceiver` · `ReminderReceiver` · **`OverlayService`**（悬浮窗）· **`OverlayActionReceiver`** |
 | ③ 后台任务层 | 4 个 Worker：Sync（三通道上报）· Analysis（逐会话窗口 case）· Advisor（近 7 天复盘）· ModelDownload（.part 断点续传）；3 个 Scheduler 全部 `enqueueUniquePeriodicWork` + UPDATE 策略 |
-| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 49 个 Core 逻辑内核**（见下表） |
+| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 50 个 Core 逻辑内核**（见下表） |
 | ⑤ 存储层 | 5 个 JSONL + `files/models/` 目录 + **22 个** SharedPreferences 文件（见下方存储清单） |
 
-**④ 层本轮新增的 49 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
+**④ 层本轮新增的 50 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
 
 | 主题 | 类 | 职责 |
 |---|---|---|
@@ -98,6 +98,7 @@
 | 分析窗口 | `AnalysisWindowCore`（190） | 分析记录（`analysis.jsonl`）的取窗口口径：此前三处各自 `readRecent(N)` —— 文件尾部 N 行被当成「某会话的全部记录 / 每会话最新一条 / 全库列表」，别的会话占满尾部时安静会话的 case 一条都读不到（分析列表从会话头进入显示「暂无分析结果」、首页 `latestCases` 丢掉它、详情页轮询与悬浮面板取不到最新结论）。`group()` 先放大窗口再按 `convKey` 分组、组内按 `windowEnd` 升序；`latest()` / `latestByConvKey()` 回每会话最新一条；`forConversation()` 按 `analyzedAt` 倒序只回本会话；`recent()` 才是全库倒序。窗口量级分三档：`TAIL_LINES = 5000`（列表 / 首页）、`POLL_LINES = 1500`（详情页轮询 / 悬浮面板）与 `ADVISOR_LINES = 20000`（顾问复盘的近 7 天：旧 `readRecent(500)` 只够活跃会话，安静会话的 case 进不了报告）。`since(records, cutoff)` 按 `analyzedAt` 升序取区间内记录，`AnalysisStore.readSince(context, cutoff)` 是它的文件级入口；文件级读写放同文件的 `internal class AnalysisWindowFile`，`readRecent(context, limit)` 只留给「本意全局最近 N 条」的调用点 |
 | 首页窗口 | `FeedWindowCore`（191） | 首页信息流的取样口径：此前是 `readRecent(500)` —— 跨所有会话的最近 500 条，几个群刷满窗口后安静但有内容的会话在首页一条都不出现，首页「最近待办」的可见集（`todoVisibleKeys`）随之看不到它（同源隐患第五处）。改成按会话各留一窗：`perConvFor(convCount)` 按会话数把 `TOTAL_BUDGET = 6000` 摊薄，单会话夹在 `[MIN_PER_CONV = 20, PER_CONV = 200]` 之间（20 = 2 倍 `AnalysisCase.WINDOW_SIZE`，保证每会话至少凑一个分析窗口）；`group()` 会话间按最近一条倒序（稳定排序 → 可复现）、组内升序、`ts <= 0` 归 0 排最前、超限保最近；`Bucket.truncated` 在「已读到文件头」时用 `size > keep`、否则 `size >= keep`，首页据此把条数写成 `N+ 条`（下限而非确数）。`sample(result, limit)` 另有按会话轮流取样：逐条列表（脱敏预览）要的是每个会话都有代表，recent 式的全表最近 N 条在活跃会话刷屏时仍会把安静会话挤掉（这条是先被测试探测出失败才改对的）。接线：首页信息流、悬浮面板窗口键、控制台折叠作用域、关注名单会话键、分析范围会话多选器都走 `MessageStore.feedGroups()`，脱敏预览走 `sample()` |
 | 可见性 | `ConvVisibilityCore`（123） | 「这个会话在主页/悬浮面板/分析门禁里可不可见」的唯一口径：四层门槛按序判定（关注名单 → 自身/系统源 → 启用集合 → 首页来源筛选），`why()` 回拦截原因码 `unwatched`/`blocked`/`disabled`/`filtered`、`isVisible()` 是布尔形态、`visibleKeys()` 供首页「最近待办」与悬浮面板共用；`forced` 只放宽「启用集合」一层，自身/系统源任何情况都拦；首页筛选只影响展示，分析门禁传 `ALL`。顺带修掉悬浮面板没接首页筛选（首页筛飞书时面板仍列微信待办）的缺口 |
+| 悬浮层几何 | `OverlayPlacementCore`（98） | 悬浮球 / 悬浮卡 / 待办面板的位置口径：`WindowManager.LayoutParams` 的 `y` 是**内容区坐标**（绝对位置 = `y` + 状态栏 inset），人说的「在屏幕哪儿」是绝对坐标 —— 混用一次就整整错一个状态栏，`toAbsolute` / `toContent` 负责换算；窗口 margin 在部分 ROM 上不生效（`MATCH_PARENT` 仍满屏、`gravity=CENTER` + `verticalMargin` 整体下推），面板改显式宽度（76% 屏宽）+ 按 systemBars inset 反向偏移做**整屏**居中；屏高只认 `Display.getRealMetrics`（`Resources.getSystem()` 在不同 ROM 上口径不一，球会漂）；卡片纵向按前一张**实测高度**顺延，球初始落屏高 1/3、拖拽夹在系统栏之间、抬手贴边吸附 |
 | 交互与提醒 | `ManualReminderCore`（128）· `ReminderChainCore`（106）· `TodoPanelCore`（27） | 手动提醒**先解析成功再落库** · 三级降级决策（L1 日历 → L2 唤起 → L3 闹钟，13 条单测） · 待办面板（DEFAULT_LIMIT=8）与首页联动 |
 
 **本地存储全清单**
