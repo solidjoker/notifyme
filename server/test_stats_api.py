@@ -895,3 +895,39 @@ def test_analysis_skipped_zero_when_clean(api):
     body = api.get("/analysis?limit=10").get_json()
     assert body["count"] == 1 and body["skipped"] == 0, body
 
+
+def test_suggests_each_item_carries_its_own_scope(api):
+    """每条建议都要带自己的口径（pkg / global）——前端据此逐卡标注。
+
+    修前 /suggests/next 只回 type/priority/title/...，控制台只能在标题上一刀切
+    写「· 仅 微博」，把排队（按设备）与顾问（全局报告）的全库数字也罩成「仅 微博」。
+    """
+    now = _now_ms()
+    _insert_messages([("a", "hi", now - 1000, "conv1", "微信", "com.tencent.mm")])
+    _insert_analyses([("c1", "conv2", 1, "com.tencent.mm", 0, 0)])
+    _insert_queue([("dev-a", "t1", "analysis", "分析 A", "failed", "busy")])
+    data = api.get("/suggests/next").get_json()
+    assert data["suggests"], data
+    for item in data["suggests"]:
+        assert item["scope"] in ("pkg", "global"), item
+
+
+def test_suggests_scope_marks_source_dependent_rules_only(api):
+    """只有待办 / 未分析会话两族按 pkg 过滤；排队是全库口径。"""
+    now = _now_ms()
+    _insert_messages([("a", "hi", now - 1000, "conv1", "微信", "com.tencent.mm")])
+    _insert_analyses([("c1", "conv2", 1, "com.tencent.mm", 0, 0)])
+    _insert_queue([("dev-a", "t1", "analysis", "分析 A", "failed", "busy")])
+    data = api.get("/suggests/next").get_json()
+    by_jump = {item["jump"]: item for item in data["suggests"]}
+    assert by_jump["queue"]["scope"] == "global", by_jump["queue"]
+    assert by_jump["todo"]["scope"] == "pkg", by_jump["todo"]
+    assert by_jump["conv"]["scope"] == "pkg", by_jump["conv"]
+
+
+def test_suggests_advisor_rule_is_whole_library_scope(api):
+    """顾问报告是全局的（与来源 App 无关），空存档时那条建议必须是 global。"""
+    data = api.get("/suggests/next").get_json()
+    adv = [item for item in data["suggests"] if item["jump"] == "adv"]
+    assert len(adv) == 1, data["suggests"]
+    assert adv[0]["scope"] == "global", adv[0]

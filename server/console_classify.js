@@ -948,6 +948,20 @@
     return out;
   }
 
+  // 建议卡片的来源口径：服务端规则表逐条标了 scope（pkg = 数字按来源 App 过滤，
+  // global = 全库口径，与来源无关 —— 排队按设备、顾问是全局报告）。
+  // 标题里一刀切写「· 仅 微博」会把全库数字也罩进去：用户以为「3 个排队任务
+  // 失败」是微博的，实际是全库的。所以口径必须逐卡标。
+  function suggestScope(item, pkg, labels) {
+    var raw = (pkg == null) ? '' : String(pkg);
+    var trimmed = raw.replace(/^\s+|\s+$/g, '');
+    // 没筛选 = 所有数字都是全库口径，不标（标了反而像在筛）
+    if (!trimmed) return { scope: 'global', label: '' };
+    if (item && item.scope === 'pkg') {
+      return { scope: 'pkg', label: '仅 ' + pkgLabel(trimmed, labels) };
+    }
+    return { scope: 'global', label: '全库' };
+  }
   return {
     VERSION: VERSION,
     QUEUE_STATE_ORDER: QUEUE_STATE_ORDER,
@@ -1008,6 +1022,7 @@
     importanceKey: importanceKey,
     importanceChip: importanceChip,
     analysisCodeParts: analysisCodeParts,
-    queueEmptyScope: queueEmptyScope
+    queueEmptyScope: queueEmptyScope,
+    suggestScope: suggestScope
   };
 });
