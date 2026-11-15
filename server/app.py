@@ -46,7 +46,7 @@ from datetime import datetime, timedelta, timezone
 
 from flask import Flask, request, jsonify, Response, send_from_directory
 from util import (
-    _advisor_ts, _analyzed_at_text, _clamp_int, _day_bounds_ms, _esc_html, _fmt_ts,
+    _advisor_ts, _analyzed_at_text, _clamp_int, _db_bool, _day_bounds_ms, _esc_html, _fmt_ts,
     _fmt_tz_offset, _local_ms, _utc_ms,
     _importance_label, _like_escape, _parse_cursor, _parse_tz_offset, _prefix_upper,
     _safe_bool,
@@ -609,7 +609,7 @@ def index():
     for sender, text, ts, conversation, is_group, source, pkg in rows:
         # 越界时间戳不再打挂整页（原来一条 10**18 就让整页 500）
         time_str = _fmt_ts(ts)
-        group_badge = '<span class="badge">群聊</span>' if is_group else ""
+        group_badge = '<span class="badge">群聊</span>' if _db_bool(is_group) else ""
         src_badge = SOURCE_BADGE.get(source, "")
         # App 角标：微信不显示（主场景），其它 App 显示中文名
         app_badge = None
