@@ -3041,3 +3041,52 @@ dumpsys 原文：悬浮卡 `mAttrs={(49,32)(1122xwrap)}` → `frame=[49,182][117
 **教训.**
 
 **「写入口严、读出口松」是同一类缺陷的两面**：写侧有真值表不代表读侧也有。同一个布尔列，从库里读回来时必须再过一次与聚合 SQL 同口径的判定 —— 否则统计口径与列表口径会长期背离，而背离的方向恰恰是「看起来更热闹」。
+
+## E-80 端云上报通道（/weixin 与 /analysis）没有跨端字段守卫：端侧改字段、服务端不改，CI 全绿
+
+**现象.**
+
+仓库里已经有一条端云字段契约守卫 `server/test_queue_contract.py`（排队通道），但**消息**（`POST /weixin`）与**会话分析**（`POST /analysis`）两条上报通道没有对应机制。端上 `MessageStore.ChatMessage.toJson` + `SyncWorker` 的 remove/put 变换决定最终上报哪些键，服务端 `REQUIRED_FIELDS` + `routes.receive_weixin` / `routes.receive_analysis` 决定消费哪些键，两边各改各的：端上多发一个键，服务端默默丢掉；服务端少读一个键，端上照发；`is_group` 写成驼峰 `isGroup`，服务端直接 207 拒收整批 —— 这类漂移没有任何测试会发现。
+
+**根因.**
+
+跨端契约的「发送端」在 Kotlin、「接收端」在 Python，两边代码库之间没有任何共同定义。既有测试都是从**行为**角度写的（消息能不能落库、分析能不能入库），行为层看不见「多发 / 少读 / 改名」这类语义漂移；只有像排队通道那样**把两端的源码放在一起比对**，才能把漂移变成 CI 红灯。
+
+**修法.**
+
+新增 `server/test_report_contract.py`（25 条），两条腿：
+
+① **源码级静态比对**（17 条）。用一个「缩进 + 容器栈」的扫描器读 Kotlin 源码里所有 `put("键", …)` 调用，按对象路径还原嵌套结构（顶层键 = 路径长度 1、`s1` 子键 = 2、`s1.need_action` 孙层 = 3）；条件块（`if (escalated) { … }`）里的 `put` 必须带出来，否则会漏掉 `source` / `appLabel` / `redacted` / `redaction_rules` / `redaction_hits` / `s2`。Python 侧抠 `REQUIRED_FIELDS`（`app.py`）、两个 `receive_*` 函数体里 `item.get("键")` 的键、以及建表列。断言四组不变量：
+
+- 客户端最终键集**钉死**：消息 8 个（`sender` / `text` / `timestamp` / `conversation` / `source` / `pkg` / `appLabel` / `is_group`）、分析 20 个（`raw_json` 被 `remove` 掉之后的最终形态）；
+- 必填 ⊆ 客户端必写（`REQUIRED_FIELDS` 的 5 个字段必须都在端上 `toJson` 里）；
+- 客户端 ⊆ 服务端读 ∪ 白名单；
+- 白名单**精确相等**：消息侧 `appLabel`（展示快照，服务端按 pkg 映射标签，不入库）、分析侧 `rejected_count` / `first_rejected_at` / `quarantined`（端侧本地拒收与隔离状态，服务端不消费）。
+
+另钉三条：蛇形 `is_group`（端上 `remove("isGroup")` + `put("is_group")` 两处都要在）、`raw_json` 绝不上报、`s2` 恒在（端上无 s2 时上报 `JSONObject.NULL`，不是缺键）。
+
+② **运行级真实 POST**（8 条）。用真实 Flask test client 打 `POST /weixin` 与 `POST /analysis`：客户端形状的消息 / 分析记录都能 200 落库；把 `is_group` 写成驼峰 `isGroup` → 207 `invalid=1` `rejected=[0]`；缺 `sender` / 缺 `case_id` → 207 拒收；带上三个端侧本地状态键仍 accepted；多余未知键两条通道都接受（服务端不因未知键拒收）。
+
+**刻意取舍.**
+
+① **契约是「源码级」的，不是「运行时抓包」的**：只发一包样本只能证明这一包没坏，证明不了字段集合没漂移。静态比对 + 少量运行级用例的组合，兼顾「全字段」与「真行为」。
+② **白名单是显式列举的，不是「服务端读了什么就算什么」**：否则「端上新加一个键」会被当成新契约默默放行，失去守卫意义。
+③ **刻意不消费 `appLabel`**：它只是端上的展示快照，服务端按 pkg 映射标签，入库反而多一份会漂移的数据。
+④ **刻意不消费三个端侧本地状态键**：`rejected_count` / `first_rejected_at` / `quarantined` 描述的是设备内状态，服务端不需要知道。
+⑤ **不做双向运行时 fuzz**：那要先把 Kotlin 侧序列化成独立可测组件，成本远大于收益；静态比对已能覆盖「改字段忘改对端」这一类真事故。
+
+**测试.**
+
+`server/test_report_contract.py` **25 条**（源码级 17 + 运行级 8）。服务端全量用例 **825** 条（基线 800 + 本轮 25）。
+
+**验证.**
+
+`python -m pytest server/test_report_contract.py -q` → **25 passed**；`python -m pytest server/ -q` → **825 passed**；`python -m compileall -q server` 通过。
+
+**计数.**
+
+新增 `server/test_report_contract.py` **509 行 / 20070 B**（CRLF）；服务端用例 800 → **825**；Android 侧源码与单测本轮不变（顶层 131 个 .kt、全树 138、`app/src/test` 86 个 .kt / 1384 条）。
+
+**教训.**
+
+**「两端各自都有测试」不等于「两端之间有契约」**：消息通道与分析通道的行为测试只能证明「一包能通」，证明不了「字段集合没漂移」。跨端契约要么把两端源码放在一起比对（像排队通道那样），要么把发送端序列化抽成两端共用的可测组件，否则字段改名 / 新增 / 删除永远靠线上报错来发现。

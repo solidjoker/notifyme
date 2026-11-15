@@ -152,7 +152,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - 单测是纯 JVM（`unitTests.isReturnDefaultValues = true`），只有不依赖 Android 框架的逻辑才放得进 `app/src/test/`。
 - 通知监听 + 无障碍双通道会拿到同一批消息，去重靠 `dedup_key` / 消息指纹，改动去重逻辑时务必补回归用例。
 - 提醒链是三级降级：系统日历事件 → 日历插入 Intent → 本地闹钟；改链路时三种终态都要验。
-- `lintOpenDebug` 输出里的 `e: ... Module was compiled with an incompatible version of Kotlin` 是 **AGP 8.5.2 自带 lint 内嵌的 Kotlin 编译器（2.0.x）**在解析 2.2.21 stdlib / litert-api 元数据时的噪音，**不影响编译**（单独重跑 `compileOpenDebugKotlin` 是干净的）；看到它别去动 Kotlin 版本。
+- `lintOpenDebug` 输出里的 `e: ... Module was compiled with an incompatible version of Kotlin` 是 AGP 8.5.2 内嵌 lint 的 Kotlin 编译器（2.0.x）解析 2.2.21 元数据的噪音，**不影响编译**；别因此动 Kotlin 版本。
 - **同步水位口径＝「已结算前缀」**：水位只推进到「本轮被接受 ∪ 本轮新被隔离」的连续前缀；
   中间有洞（被拒未隔离 / 未脱敏 / 结论不明）时**停在洞前绝不越过** —— 越过的记录 `analyzedAt <= 水位` 会被当已同步跳过，**永远补报不了**。改水位逻辑时同步看 `SyncWatermarkCore` 单测。
 - **413 单独处置**：服务端单条请求体上限 8 MiB，超限的那一条是「毒丸」，重试无用。
@@ -193,7 +193,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **会话卡内的「日期 / 发送者」两级分组**：规则在 `console_classify.groupMessages(msgs, dim, getTs, getSender)` —— **按 `getTs` 精确值分桶，不按天切**，调用方要传当天零点对齐的时间戳（`console_ui.dayStartMs()`），传原始毫秒会一条一桶。状态存 `wx_group_v1`；`setConvGroupDim` / `convDimBar` / `groupMsgsByDim` / `convGroupHtml` 四处一起改。
 - **排队 Tab 的「设备」维度有两套口径**：设备清单来自服务端 `GET /queue` 的 `devices` 聚合（`server/storage.py` 的 `queue_devices()`，`summary.devices` 是台数），控制台的设备 chip 用这一份；前端 `server/console_classify.js` 的 `groupQueueTasksByDevice` 是纯函数版本（对内存里的 task 列表分组），只在离线/单测场景用，两处别混算。
-- **端云排队字段有契约守卫**：`server/test_queue_contract.py` 读 `QueueStateCore.kt` 的 `buildPayload` 与 `storage._normalize_queue_task` 比对字段名 / 顶层键 / `state`+`kind` 枚举 / 长度上限 —— 端侧改字段忘改服务端 CI 直接红。坑：Kotlin 源 CRLF、Python 源 LF；Kotlin 键名是转义引号，切出的名字尾部带反斜杠记得 `rstrip`。
+- **端云字段有契约守卫**：① 排队通道 `server/test_queue_contract.py` 读 `QueueStateCore.kt` 的 `buildPayload` 与 `storage._normalize_queue_task` 比对字段名 / 顶层键 / `state`+`kind` 枚举 / 长度上限。② **消息 / 分析两条上报通道 `server/test_report_contract.py`**（25 条）：读端上 `toJson` + `SyncWorker` 的 remove/put 变换与服务端读的键（`REQUIRED_FIELDS` / 两个 receive / 建表列）比对 —— 客户端键集钉死、必填 ⊆ 客户端必写、客户端 ⊆ 服务端读 ∪ 白名单（`appLabel` 与三个端侧本地状态键刻意不消费）、白名单精确相等；另钉蛇形 `is_group`、`raw_json` 不上报、`s2` 恒在。端侧改字段忘改服务端 CI 直接红。坑：Kotlin 源 CRLF、Python 源 LF；Kotlin 键名是转义引号，切出的名字尾部带反斜杠记得 `rstrip`。
 - **版本信息只有一份口径：`VersionInfoCore`**（internal object + 14 条）。控制台版本卡与 ☰ 菜单弹窗都调它。① `versionLine` 必须带 `versionCode`（debug 原地覆盖时 `versionName` 可能不变，只有 code 能证明装上新包）；② beta 的 `versionName` 自带 `-test`，`title()` 不再拼渠道后缀。改文案前看 `VersionInfoCoreTest.kt`。
 
 - **历史重复消息只能靠 `MessageDedupeCore` 归并，别在别处另写删行逻辑**：真机量化 78 组 / 271 行是「同一条通知被多次捕获」（微信正文形如 `[11条]发言人: 正文`，未读数一变正文就变，而入库去重键含正文原文）。
@@ -376,10 +376,10 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **每条建议的数字必须自带口径：`suggests._build` 的 `scope` + `console_classify.suggestScope`**（3+3+1 条守着）。① `scope` 由规则的 `pkg_scoped` 决定，不看请求参数；② `pkg` / `global` 两态，排队与顾问恒 `global`；③ 标题只在全部建议都按来源过滤时才标「仅 X」，每张卡另带一枚口径徽标。
 - **一个句子里的两个计数必须各带口径：`console_classify.syncCounters`**（4 条规则层 + 1 条 UI）。① 逐侧复用 `badgeState` 定档，返 `{msg, ana, mixed}`；② `null`（拿不到）≠ `0`（真的是 0）；③ `filtered` 一票否决两侧；④ UI 只给退化的那侧加「已加载」前缀。
 
-- **枚举的文案映射只在规则层：`console_classify.SOURCE_LABELS` / `sourceLabel` / `sourceBadge` / `queueKindLabel` / `queueStateLabel` / `pairText`**（9 条规则层 + 2 条 UI 守着）。① 认不出原码原样回显，只有空值折 `unknown`；② 查表走 `hasOwnProperty`，`constructor` / `__proto__` 不许命中原型链；③ `queueKindLabel` / `queueStateLabel` 未知返 `null` 让 UI 定兜底；④ 新增采集通道只改 `SOURCE_LABELS` 一处（用例钉全集），UI 只留 `android-db` 降级。
+- **枚举的文案映射只在规则层：`console_classify.SOURCE_LABELS` / `sourceLabel` / `sourceBadge` / `queueKindLabel` / `queueStateLabel` / `pairText`**（9 条规则层 + 2 条 UI 守着）。① 认不出原码原样回显，空值折 `unknown`；② 查表走 `hasOwnProperty`，`constructor` / `__proto__` 不许命中原型链；③ `queueKindLabel` / `queueStateLabel` 未知返 `null` 让 UI 兜底；④ 新增采集通道只改 `SOURCE_LABELS` 一处（用例钉全集）。
 
-- **枚举码值与展示文案要分开：S1 的 topic / due_window / 重要度走规则层码值→中文表**（`console_classify.TOPIC_LABELS` / `DUE_LABELS` + `topicLabel` / `dueLabel` / `importanceChip` 等）。① 认不出的原码原样回显，只有空值才回落；② `none` 整段不渲染；③ 「截止」优先序 `todo_due → s2.due_time → s1.due_window`；④ 数值重要度与服务端 `util._importance_label` 同源（`2.9` 也算数值）；⑤ 搜索面码值与中文都收、排除 `none`。
+- **控制台侧的 S1 码值→中文映射只在规则层**（`console_classify.TOPIC_LABELS` / `DUE_LABELS` + `topicLabel` / `dueLabel` / `importanceChip`）：认不出原码原样回显、空值才回落；`none` 整段不渲染；「截止」优先序 `todo_due → s2.due_time → s1.due_window`；数值重要度与服务端 `util._importance_label` 同源。
 - **同一段里的分布与标量必须能对上：`stats_api._queue_block.by_kind`、`console_classify.mergePairsBy`**（9 条用例）。① 类型计数必须在「过期 → `continue`」**之后**；② 契约 `sum(by_kind.count) == total - stale`；③ `by_pkg` 的 NULL / 空串各成分组而 `normPkg()` 都折成微信 → `mergePairsBy` 归并后**按次数降序、同次数键名升序重排**（`distPairs` 同口径）；④ 加分布字段先问该不该跟同段过期口径走。
-- **控制台「是否待办」只有一份口径：`console_classify.safeBool` / `needActionOf` / `needActionChip`**（三处测试守着）。① 真值表与服务端 `util._safe_bool` 逐条对齐（字符串只认 true/1/yes/on/y/t，其余一律 False）—— JS 真值把 "false"/"no"/"0" 都当真，别再写 `!!na.value`；② `needActionOf` 优先取顶层归一后的 `a.need_action`（= `/stats` 的 todo 口径），缺失才退回 `s1.need_action.value`；③ 徽标两态（`needActionChip`）：⚡待办 / ✓ 无需行动。
+- **控制台「是否待办」只有一份口径：`console_classify.safeBool` / `needActionOf` / `needActionChip`**（三处测试守着）。① 真值表与服务端 `util._safe_bool` 逐条对齐（字符串只认 true/1/yes/on/y/t）—— JS 真值把 "false"/"no"/"0" 都当真，别再写 `!!na.value`；② `needActionOf` 优先取顶层 `a.need_action`（= `/stats` 的 todo 口径），缺失才退回 `s1.need_action.value`；③ 徽标两态：⚡待办 / ✓ 无需行动。
 - **悬浮层几何只有一份口径：`OverlayPlacementCore`**（纯函数 + 15 条）。① 写 `params.x/y` 前先过 `toContent()`：悬浮窗 `y` 是**内容区**坐标（绝对位置 = y + 状态栏 inset），状态栏只算一遍；② 悬浮窗 margin 不生效，宽度显式给（卡片 92%、面板 76%）；③ `CENTER` 按内容区居中，对齐整屏加 `panelCenterOffsetY(topInset, bottomInset)`；④ 屏尺寸用 `Display.getRealMetrics`；⑤ 卡片顺延按前张实测高度，球位 = 屏高 1/3。
 - **库侧 0/1 flag 的读出口只有一份口径：`util._db_bool`（只有 1 / `1` 算真，与 SQL `col = 1` 同口径）+ `console_classify.dbBool` + `console_ui.dbBoolOf`**；写入口的 `_safe_bool` 是另一张表（认 true/yes），两者刻意不同 —— 别用 Python / JS 原生真值判库列。

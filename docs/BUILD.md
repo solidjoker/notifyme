@@ -267,8 +267,8 @@ sha256 下载并缓存到 `~/.notifyme-tools/ktlint/1.8.0/`，不参与 Gradle �
 │       │   ├── AndroidManifest.xml      # 服务/权限/Activity 声明
 │       │   ├── res/                     # 布局、图标、主题、服务配置 XML
 │       │   ├── cpp/                     # M4 端侧推理 JNI（llama.cpp）
-│       │   └── java/com/notifyme/android/  # Kotlin 主源码（122 个 .kt）
-│       └── test/java/com/notifyme/android/  # 纯 JVM 单元测试（85 个 .kt / 1369 条）
+│       │   └── java/com/notifyme/android/  # Kotlin 主源码（131 个 .kt）
+│       └── test/java/com/notifyme/android/  # 纯 JVM 单元测试（86 个 .kt / 1384 条）
 ├── server/                     # 可选配套 Flask 服务端（见 server/README.md）
 │   ├── app.py                  # Flask 壳：鉴权、错误处理、/console 与落地页、create_app 工厂
 │   ├── util.py                 # 纯函数工具层（数值归一、时间格式化、文本转义）
@@ -280,7 +280,7 @@ sha256 下载并缓存到 `~/.notifyme-tools/ktlint/1.8.0/`，不参与 Gradle �
 │   ├── console_classify.js     # 控制台归类规则单一事实源（UMD：浏览器 + node 共用，node 可单测；含会话两级分组 groupMessages 与设备分组 groupQueueTasksByDevice）
 │   ├── extract_common.py       # 两个抽取脚本的共享内核（结构化日志 / 原文存档 / 跨进程写锁 / 去重 / 分批提交 / 主库结构兜底，`activate()` 注入宿主配置）
 │   ├── android_db_extract.py / pc_db_extract.py / gen_icons.py  # 本地库提取与图标脚本（安卓 / PC）+ 图标生成
-│   └── test_*.py               # 服务端 pytest 用例（含 test_queue_contract.py 端云字段契约守卫）
+│   └── test_*.py               # 服务端 pytest 用例（含 test_queue_contract.py 排队通道与 test_report_contract.py 消息/分析上报通道 端云字段契约守卫）
 ├── docs/
 │   ├── BUILD.md                # 本文件
 │   ├── ROADMAP.md              # 里程碑 M0–M8、工作量、风险与决策门
