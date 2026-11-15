@@ -154,26 +154,21 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - 提醒链是三级降级：系统日历事件 → 日历插入 Intent → 本地闹钟；改链路时三种终态都要验。
 - `lintOpenDebug` 输出里的 `e: ... Module was compiled with an incompatible version of Kotlin` 是 **AGP 8.5.2 自带 lint 内嵌的 Kotlin 编译器（2.0.x）**在解析 2.2.21 stdlib / litert-api 元数据时的噪音，**不影响编译**（单独重跑 `compileOpenDebugKotlin` 是干净的）；看到它别去动 Kotlin 版本。
 - **同步水位口径＝「已结算前缀」**：水位只推进到「本轮被接受 ∪ 本轮新被隔离」的连续前缀；
-  中间存在「被拒未隔离 / 未脱敏 / 本轮结论不明（207 清单读不出来）」的洞时，
-  水位**停在洞前，绝不越过** —— 越过的记录 `analyzedAt <= 水位`，扫描会当已同步跳过，
-  **永远补报不了**。改 `SyncWorker` / `AnalysisStore` 的水位逻辑时，
-  必须同步看 `SyncWatermarkCore` 的单测。
+  中间有洞（被拒未隔离 / 未脱敏 / 结论不明）时**停在洞前绝不越过** —— 越过的记录 `analyzedAt <= 水位` 会被当已同步跳过，**永远补报不了**。改水位逻辑时同步看 `SyncWatermarkCore` 单测。
 - **413 单独处置**：服务端单条请求体上限 8 MiB，超限的那一条是「毒丸」，重试无用。
   端上先把批次二分重试，拆到单条仍 413 才单独隔离该条并继续下一批，
   **不触发整轮 retry**（否则一条毒丸会永久卡住它后面的整条队列）。
-- **`gh pr merge` / `PUT /pulls/{n}/merge` 会 403 `Resource not accessible by personal access token`**，但 `gh pr create`、写 label、写 issue comment 都通 —— 因为 fine-grained PAT 只有 Issues / Pull requests 写权限，**缺 `Contents: write`**（合并要往 base 分支写合并提交）。修法三选一（按推荐顺序）：
-  - **① 用全权限 OAuth token 临时覆盖 `GH_TOKEN`（推荐，零改配置）**：本机凭据管理器里的 `git:https://github.com` OAuth token（scope `gist, repo, workflow`）对合并端点有写权限，`gh` 优先读 `GH_TOKEN`。
-  - **② 给该 PAT 加 `Contents: Read and write`**（范围由维护者定）。
-  - **③ 走浏览器点合并**（姿势见下一条）。
-  - 取 token 并覆盖（**别把 token 打印进日志、提交或 CI**）：
+- **`gh pr merge` 会 403 `Resource not accessible by personal access token`**：fine-grained PAT 只有 Issues / Pull requests 写权限，**缺 `Contents: write`**（合并要往 base 写提交），而 `gh pr create` / 写 label / 写 comment 都通。修法三选一：
+  - **① 临时覆盖 `GH_TOKEN`（推荐）**：凭据管理器里 `git:https://github.com` 的 OAuth token（scope 含 `repo`）有写权限，`gh` 优先读 `GH_TOKEN`；**别把 token 打印进日志 / 提交 / CI**：
     ```powershell
     $cred = "protocol=https`nhost=github.com`n`n" | git credential fill 2>$null
     $env:GH_TOKEN = (($cred | Select-String '^password=' | Select-Object -First 1).ToString() -replace '^password=','')
     gh pr merge 8 --squash --delete-branch
-    Remove-Item Env:\GH_TOKEN   # 用完立刻清掉，别留在会话里
+    Remove-Item Env:\GH_TOKEN   # 用完立刻清掉
     ```
-  - 验证 scope：`gh api -i user | Select-String x-oauth-scopes`（fine-grained PAT 这行是空的）。
-- **浏览器点合并（备选路径）**：合并方式选择器在主按钮旁的 `[data-dd-action-name="pull_requests.merge.open_method"]`（选 `Squash and merge`）→ 点 `[data-dd-action-name="pull_requests.merge.open"]`；合并框本体（`.mergePartialContainer__VUMolp`）里只有提交信息框。
+    验证 scope：`gh api -i user | Select-String x-oauth-scopes`（fine-grained PAT 这行是空的）。
+  - **② 给该 PAT 加 `Contents: Read and write`**（范围由维护者定）。**③ 走浏览器点合并**（姿势见下一条）。
+- **浏览器点合并（备选路径）**：合并方式选择器在主按钮旁 `[data-dd-action-name="pull_requests.merge.open_method"]`（选 `Squash and merge`）→ 点 `[data-dd-action-name="pull_requests.merge.open"]`；合并框本体里只有提交信息框。
 - **Android 单测里起不了 JDK 自带的 HTTP 服务**：单测编译 classpath = `android.jar` + 显式依赖，Kotlin 走 `-no-jdk`，`com.sun.net.httpserver` 编译期直接报 `Unresolved reference 'sun'`。想在纯 JVM 单测里起本地服务，只能用 `java.net.ServerSocket` 自己写 HTTP/1.1（见 `app/src/test/java/com/notifyme/android/HttpEndToEndFixture.kt`），或引入 okhttp mockwebserver（会多一条外部依赖解析，CI 上要权衡）。
 - **服务端要写「真实 HTTP 端到端」用例**：用 `werkzeug.serving.make_server("127.0.0.1", 0, app, threaded=True)` 起真实 HTTP/1.1，客户端用 `urllib.request`；数据隔离靠改模块属性 `app.DATA_DIR / DB_PATH / JSONL_PATH / ADVISOR_PATH` 指到临时目录。两个坑：
 ① 测 413 要把 `app.config["MAX_CONTENT_LENGTH"]` 调小（如 1024）再发几 KB —— 真按 8 MiB 阈值发，服务端读完 body 前就回 413 并断连，客户端 `sendall` 撞连接重置拿不到状态码；
@@ -183,11 +178,11 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **通知形状 / 解析口径改动会先被 `NotificationShapeEvidenceTest` 拦下**：该文件固化「某家 App 的通知 → 入库字段（sender / text / conversation / isGroup / pkg）」的映射，与 `NotificationParserTest`（解析器边界）分工不同。改 `PrefixImParser` / `GenericNotificationParser` / `NotifyMeListener.toRawNotification` 任一都要同步看它。
 - **三个解析器的抽取口径统一在 `NotificationTextCore`**（+19 条）：真机取证证实微信正文是 `[11条]发言人: 正文`、不带 MessagingStyle；`hasUnreadPrefix` / `splitSender` / `isPlausibleSender` 是唯一口径，别再各写一套。
 - **`lintOpenDebug` 只剩 3 条 warning，都是刻意保留的，别去“修”**：① `ObsoleteLintCustomCheck` —— 依赖库 `lifecycle-livedata-core-2.10.0` 自带的 lint.jar，改不了；② `OldTargetApi` —— `targetSdk 34` 是产品决定；③ `ChromeOsAbiSupport` —— release 只打 `arm64-v8a`，是体积取舍。
-- **改 `docs/architecture/diagrams/*.mmd` 必须重渲并回写尺寸表**：`mmdc -i X.mmd -o X.svg`，PNG 给 `-w <viewBox 宽 + 20> -H <viewBox 高 + 60>`；**脑图 06 的 viewBox 起点不是 `0 0`**，单独用 `-w 3200 -H 1600`（否则渲染出 14×7 废图）；**`-h` 是 help 不是高度**。渲完用 `[System.Drawing.Image]::FromFile` 量像素回写 `docs/architecture/README.md` 索引表。
+- **改 `docs/architecture/diagrams/*.mmd` 必须重渲并回写尺寸表**：`mmdc -i X.mmd -o X.svg`，PNG 给 `-w <viewBox 宽 + 20> -H <viewBox 高 + 60>`；**脑图 06 的 viewBox 起点不是 `0 0`**，单独用 `-w 3200 -H 1600`（否则渲出 14×7 废图）；**`-h` 是 help 不是高度**；渲完量像素回写 `docs/architecture/README.md` 索引表。
 - **控制台归类规则只在 `server/console_classify.js`**（UMD：浏览器挂 `window.ConsoleClassify`、node 走 `module.exports`，无 DOM），别写进 `console_ui.py` 的 HTML；`app.py` 注入 `/*__CONSOLE_CLASSIFY_JS__*/`。改规则跑 `server/test_console_classify.py`（subprocess 调真 node，`REQUIRE_NODE=1` 时 node 缺失要 **fail 不是 skip**）；前端降级 `var CC = window.ConsoleClassify || null`。
 - **本机起浏览器调试实例的两个坑**：WinINET 代理指向 `127.0.0.1:18888`（Edge 报 `ERR_TUNNEL_CONNECTION_FAILED`），必须显式带 `--proxy-server=http://127.0.0.1:7890`；默认 user-data-dir 不允许 `--remote-debugging-port`（136+ 策略），要拷到独立目录再带 `--remote-debugging-port=9223` 启动。访问 token 页会撞 **sudo mode**（需 2FA）。
 - **排队通道 `/queue` 是 best-effort**：端上 `SyncWorker.pushQueue` 只认 2xx，失败不重试也不阻塞消息同步；服务端 `queue_tasks` 按 `(device_id, task_id)` 整份覆盖、保留 7 天，`stale` = `updated_at` 超 30 分钟。端侧 `task_id` 含原始会话名（与分析通道同口径）。
-- **控制台有 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）**：改 `console_ui.py` 的 HTML/CSS/JS 后自检三件事：① 内联脚本 `node --check`；② `pytest server/test_console_queue.py server/test_console_ui.py -q`；③ 浏览器实跑看 `errs: []`。**`patchSections` 只追加 `.pane-sec`、不清理临时节点** —— 骨架屏残留就是这么来的。桌面 `.tabbar` 必须 `position:sticky`。
+- **控制台有 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）**：改 `console_ui.py` 的 HTML/CSS/JS 后自检三件事：① 内联脚本 `node --check`；② `pytest server/test_console_*.py -q`；③ 浏览器实跑看 `errs: []`。**`patchSections` 只追加 `.pane-sec`、不清理临时节点** —— 骨架屏残留就是这么来的。桌面 `.tabbar` 必须 `position:sticky`。
 - **端侧排队上报的 device_id 不能碰硬件标识**：`QueueStateCollector` 用 SharedPreferences("queue_state", "device_seed") 里的随机种子做 FNV-1a 派生（`android-` + 8 位 hex），**不要改用 ANDROID_ID / IMEI / 序列号**。
 - **控制台统计口径＝服务端全库真值，不是前端已加载页**：控制台概览条与统计 Tab 的数据来自 `GET /stats`（server/stats_api.py 聚合全库），
 前端只有在接口不可用或用户切了来源过滤时才退回本地估算，并在指标下方标「估算 · 仅已加载 N 条」。
@@ -196,7 +191,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 但前端要显式渲染（`redactBadge` / `redactDetail`）并纳入 `analysisSearchText` 搜索，否则看不到「哪些内容被替换成占位符」。
 - **周期分析任务按 tag 反查不到就不上报**：`AnalysisScheduler` 的周期任务（unique 名 `wechat_analysis` / `conv_analysis_<id>`）不带 tag，`QueueStateCollector.collect()` 只按 tag `analysis_on_demand` / `analysis_conv:<id>` 采集，所以控制台「排队」Tab 里看不到周期任务——这是已知取舍，不是 bug。
 
-- **会话卡内的「日期 / 发送者」两级分组**：规则在 `server/console_classify.js` 的 `groupMessages(msgs, dim, getTs, getSender)` —— **按 `getTs` 精确值分桶，不按天切**，调用方必须传当天零点对齐的时间戳（`console_ui.py` 的 `dayStartMs()`），传原始毫秒会一条一桶。状态存 `wx_group_v1`；`setConvGroupDim` / `convDimBar` / `groupMsgsByDim` / `convGroupHtml` 四处一起改。
+- **会话卡内的「日期 / 发送者」两级分组**：规则在 `console_classify.groupMessages(msgs, dim, getTs, getSender)` —— **按 `getTs` 精确值分桶，不按天切**，调用方要传当天零点对齐的时间戳（`console_ui.dayStartMs()`），传原始毫秒会一条一桶。状态存 `wx_group_v1`；`setConvGroupDim` / `convDimBar` / `groupMsgsByDim` / `convGroupHtml` 四处一起改。
 - **排队 Tab 的「设备」维度有两套口径**：设备清单来自服务端 `GET /queue` 的 `devices` 聚合（`server/storage.py` 的 `queue_devices()`，`summary.devices` 是台数），控制台的设备 chip 用这一份；前端 `server/console_classify.js` 的 `groupQueueTasksByDevice` 是纯函数版本（对内存里的 task 列表分组），只在离线/单测场景用，两处别混算。
 - **端云排队字段有契约守卫**：`server/test_queue_contract.py` 读 `QueueStateCore.kt` 的 `buildPayload` 与 `storage._normalize_queue_task` 比对字段名 / 顶层键 / `state`+`kind` 枚举 / 长度上限 —— 端侧改字段忘改服务端 CI 直接红。坑：Kotlin 源 CRLF、Python 源 LF；Kotlin 键名是转义引号，切出的名字尾部带反斜杠记得 `rstrip`。
 - **版本信息只有一份口径：`VersionInfoCore`**（internal object + 14 条）。控制台版本卡与 ☰ 菜单弹窗都调它。① `versionLine` 必须带 `versionCode`（debug 原地覆盖时 `versionName` 可能不变，只有 code 能证明装上新包）；② beta 的 `versionName` 自带 `-test`，`title()` 不再拼渠道后缀。改文案前看 `VersionInfoCoreTest.kt`。
@@ -385,4 +380,5 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **枚举码值与展示文案要分开：S1 的 topic / due_window / 重要度走规则层码值→中文表**（`console_classify.TOPIC_LABELS` / `DUE_LABELS` + `topicLabel` / `dueLabel` / `importanceChip` 等）。① 认不出的原码原样回显，只有空值才回落；② `none` 整段不渲染；③ 「截止」优先序 `todo_due → s2.due_time → s1.due_window`，同 `displayDueCode` 序；④ 数值重要度与服务端 `util._importance_label` 同源（`2.9` 也算数值）；⑤ 搜索面码值与中文都收、排除 `none`；⑥ 端上已有的口径不许在控制台再抄。
 - **同一段里的分布与标量必须能对上：`stats_api._queue_block.by_kind`、`console_classify.mergePairsBy`**（9 条用例）。① 类型计数必须在「过期 → `continue`」**之后**；② 契约 `sum(by_kind.count) == total - stale`；③ `by_pkg` 的 NULL / 空串各成分组而 `normPkg()` 都折成微信 → `mergePairsBy` 归并后**按次数降序、同次数键名升序重排**（`distPairs` 同口径）；④ 加分布字段先问该不该跟同段过期口径走。
-- **控制台「是否待办」只有一份口径：`console_classify.safeBool` / `needActionOf` / `needActionChip`**（`test_console_classify.py` + `test_console_ui.py` + `test_stats_api.py` 守着）。① **真值表与服务端 `util._safe_bool` 逐条对齐**：布尔直接用、数字按 != 0、字符串只认 true/1/yes/on/y/t，其余（false/0/no/off/n/f/空串/未知串）一律 False —— JS 真值把 "false"/"no"/"0"/"" 都当真，别再写 `!!na.value`。② **`needActionOf` 优先取顶层归一后的 `a.need_action` 布尔**（= 服务端 `routes.py` 落的列 = `/stats` 的 todo 口径），顶层缺失才退回 `s1.need_action.value`（必须是对象，与入库同口径）。③ **徽标两态**（`needActionChip`）：真待办 `⚡待办`、非待办 `✓ 无需行动` —— 端上每条记录都写 `s1.need_action{value,prob}`，旧写法让全量卡都挂「待办」徽标。④ 改判定前跑这三个测试类。
+- **控制台「是否待办」只有一份口径：`console_classify.safeBool` / `needActionOf` / `needActionChip`**（`test_console_classify.py` + `test_console_ui.py` + `test_stats_api.py` 守着）。① **真值表与服务端 `util._safe_bool` 逐条对齐**：布尔直接用、数字按 != 0、字符串只认 true/1/yes/on/y/t，其余一律 False —— JS 真值把 "false"/"no"/"0" 都当真，别再写 `!!na.value`。② **`needActionOf` 优先取顶层归一后的 `a.need_action` 布尔**（= 服务端落的列 = `/stats` 的 todo 口径），顶层缺失才退回 `s1.need_action.value`（必须是对象）。③ **徽标两态**（`needActionChip`）：真待办 `⚡待办`、非待办 `✓ 无需行动` —— 端上每条都写 `s1.need_action{value,prob}`，旧写法让全量卡都挂「待办」徽标。④ 改判定前跑这三个测试类。
+- **悬浮层几何只有一份口径：`OverlayPlacementCore`**（纯函数 + 15 条）。① 写 `params.x/y` 前先过 `toContent()`：悬浮窗 `y` 是**内容区**坐标（绝对位置 = y + 状态栏 inset），状态栏只算一遍；② 悬浮窗 margin 不生效，宽度显式给（卡片 92%、面板 76%）；③ `CENTER` 按内容区居中，对齐整屏加 `panelCenterOffsetY(topInset, bottomInset)`；④ 屏尺寸用 `Display.getRealMetrics`（`Resources.getSystem()` 随 ROM 变）；⑤ 卡片顺延按前张实测高度，球位 = 屏高 1/3。

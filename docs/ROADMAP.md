@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 85 个 `.kt` / 1369 条（`app/src/test`）+ 服务端 `server/test_*.py`（759 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 86 个 `.kt` / 1384 条（`app/src/test`）+ 服务端 `server/test_*.py`（759 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -674,6 +674,11 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 测试：`server/test_console_classify.py` +4 条（真值表 13 真 + 16 假样本 / **跨层契约**：`CC.safeBool` 逐条等于 `util._safe_bool` / 顶层布尔优先 / 徽标两态）、`server/test_console_ui.py` +1 条（走规则层、旧 `!!na.value` 与 `if (s1.need_action) {` 已退场、两态文案在）、`server/test_stats_api.py` +1 条（8 种上报形态 → `/stats` 的 todo/todo_convs 与每行顶层 need_action 逐条一致）；另做 `node --check`（抽 4 段内联脚本）与 node 直跑规则层复现（修前服务端 todo=1 / 控制台实列 3，修后两者都是 1）。
   - 计数：`server/console_classify.js` 1028 / 961 → **1077 / 1007**（`safeBool` @971 · `needActionOf` @985 · `needActionChip` @999 · 导出块 @1011-1076）；`server/console_ui.py` 3990 / 3897 → **3997 / 3904**（`needActionOf` @1468 · `needActionChip` @1475 · `renderAnalysisBlock` @2956）；服务端用例 753 → **759**。
 
+- **悬浮层的几何混用了「内容区坐标」与「绝对坐标」：状态栏算两遍、面板满屏且整体下移 400~530px、悬浮球初始位置随 ROM 漂移（feat/overlay-placement-core）**
+  - 问题：`WindowManager.LayoutParams.y` 在 `TYPE_APPLICATION_OVERLAY` 下是**内容区**坐标（绝对位置 = y + 状态栏 inset），旧代码写卡片 y 时又加了一次 `statusBarHeight()` → 状态栏算两遍（真机实测卡片落在绝对 332，应为 182）；待办面板用 `MATCH_PARENT` + `horizontalMargin = 0.12`，实测在小米与云手机上都是**满屏**（悬浮窗不吃 margin），而 `gravity = CENTER` + `verticalMargin = 0.2` 把窗口整体下推 0.2×内容区高（面板中心 1858 / 1362，整屏中心 1328 / 960）；悬浮球初始 y 取 `Resources.getSystem().displayMetrics.heightPixels`（小米 2441 = 2656-150-65、云手机 1920 = 整屏）→ 位置随 ROM 漂移
+  - 修法：几何收进纯函数内核 `OverlayPlacementCore`（98 行 / 15 条）—— `toAbsolute` / `toContent` 换算内容区↔绝对坐标；`cardTopsAbsolute` 按前张**实测高度**顺延；`cardWidth` 92% / `panelWidth` 76% 显式宽度（不靠 margin）；`panelCenterOffsetY` 按 systemBars inset 反向偏移做**整屏**居中；`ballTopAbsolute` 落屏高 1/3、`clampBallTop` 夹在系统栏之间、`snapBallLeft` 抬手贴边。`OverlayService` 改用 `Display.getRealMetrics` 取真实屏尺寸、API30+ `maximumWindowMetrics → systemBars` 取 inset（全程 `runCatching`，Service 上下文可能抛），删掉旧 `statusBarHeight()`，新增 `onConfigurationChanged` 清缓存重排
+  - 测试：新增 `app/src/test/java/com/notifyme/android/OverlayPlacementCoreTest.kt` 15 条（坐标互换 / 卡片四档顺延 / 卡片左右对称留白 / 面板整屏居中 / 球初始与夹取吸附 / 小米真机回归对照）
+  - 计数：`OverlayService.kt` 460 → **556 行**；主源码顶层 130 → **131**（全树 138）、`app/src/test` 85 → **86 个 .kt`**、全量单测 1369 → **1384 条**；Core 逻辑内核 49 → **50**；架构图 02 重渲后 **14806 × 2070**；`local_check.ps1` 七步全 PASS，lint 仍是刻意保留的三条 warning / 0 error。
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：

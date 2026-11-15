@@ -2913,3 +2913,79 @@ python -m pytest server/ -q                                                     
 **计数.** `server/console_classify.js` 1028 / 961 → **1077 / 1007**（`TRUE_TOKENS` @969 · `safeBool` @971 · `needActionOf` @985 · `needActionChip` @999 · 导出块 @1011-1076）；`server/console_ui.py` 3990 / 3897 → **3997 / 3904**（`needActionOf` @1468 · `needActionChip` @1475 · `renderAnalysisBlock` @2956）；服务端用例 753 → **759**。
 
 **教训.** 「模型给了这个字段」和「这个字段的值为真」是两件事，`if (obj.field)` 判的是前者。本案的第二个缺陷（徽标全挂）比第一个更刺眼，却更简单：**判存在 ≠ 判真假**。凡是拿模型输出当布尔用的地方，都必须先过一遍与服务端同源的显式真值表，别让 JS 的隐式真值判断替业务做决定。
+
+## E-78 悬浮层把「内容区坐标」当「绝对坐标」用：状态栏算两遍、面板满屏且整体下移 400~530px、悬浮球初始位置随 ROM 漂移（`OverlayPlacementCore`，feat/overlay-placement-core，2026-11-15）
+
+**现象.**
+
+真机（小米 25098PN5AC / Android 17 / 1220×2656 / 状态栏 150 / 导航栏 65）上实测 `dumpsys window windows`：
+
+- 顶部悬浮卡 frame = `[0,332][1220,718]` → **满屏宽 1220**，且绝对顶部比设计值低整整一个状态栏；
+- 待办面板 frame = `[0,1636][1220,2081]` → **满屏宽**（设计 76%），垂直中心落在 1858，而整屏中心是 1328 → **整体下移约 530px**；
+- 悬浮球绝对位置 = 963（= 状态栏 150 + 2441/3），期望 885（整屏 1/3）。
+
+云手机 `127.0.0.1:16384`（1080×1920）同款：面板 `[0,1187][1080,1537]` 满屏、中心 1362（整屏中心 960，下移 400px）；球 700 而非 640。
+
+**根因.**
+
+三处「坐标 / 尺寸语义」混用：
+
+① **内容区坐标 vs 绝对坐标**。`WindowManager.LayoutParams.y` 在 `TYPE_APPLICATION_OVERLAY` 下是**内容区坐标**，绝对位置 = `y` + 状态栏 inset。旧代码在写卡片 y 时先算 `statusBarHeight()` 再加到 `params.y` 上，等于把状态栏算了两遍（内容区本来就在状态栏之下）。实测：请求值 813 → 绝对 963（偏移 150 = 状态栏 inset），两台设备都对得上。
+
+② **悬浮窗不吃窗口 margin**。待办面板用 `MATCH_PARENT` + `horizontalMargin = 0.12`，但实测宽度就是满屏（1220 / 1080）；同时 `gravity = CENTER` + `verticalMargin = 0.2` 把窗口整体下推 0.2×内容区高。
+
+③ **屏高取的是 `Resources.getSystem().displayMetrics.heightPixels`**，这个值随 ROM 变：小米 2441（= 2656 − 150 状态栏 − 65 导航栏），云手机 1920（整屏高）。同一份代码在两台设备上算出的球初始位置不同。
+
+**修法.**
+
+几何收进纯函数内核 `app/src/main/java/com/notifyme/android/OverlayPlacementCore.kt`（98 行 / 15 条单测）：
+
+- `toAbsolute(contentY, topInset)` / `toContent(absoluteY, topInset)`：内容区 ↔ 绝对坐标的**唯一**换算口；
+- `cardTopsAbsolute(count, topInset, topGap, heights, fallbackPitch, gap)`：首张 top = `topInset + topGap`，之后按前张**实测高度**（≤0 时用 `fallbackPitch`）顺延，不再用固定步长；
+- `cardWidth(displayWidth)` = 92%、`cardLeft(displayWidth)` = 水平居中、`panelWidth(displayWidth)` = 76%：全部**显式宽度**，不再指望 margin；
+- `panelCenterOffsetY(topInset, bottomInset) = (bottomInset - topInset) / 2`：`gravity = CENTER` 是按**内容区**居中的，要对齐**整屏**中心就得反向偏移（小米 (65 − 150) / 2 = −42）；
+- `ballTopAbsolute(displayHeight) = displayHeight / 3`、`ballLeft(w, size, gap)`、`clampBallTop(...)`（夹在系统栏之间）、`snapBallLeft(...)`（抬手贴边）。
+
+`OverlayService` 侧：屏尺寸改用 `DisplayManager` + `Display.getRealMetrics`（失败退 `Resources.getSystem()`），inset 用 API 30+ 的 `maximumWindowMetrics → systemBars`（退 `currentWindowMetrics → statusBars`，再退 `R.dimen.status_bar_height_fallback` = 24dp），全程 `runCatching` —— Service 不是视觉上下文，取 inset 可能抛；删掉旧的 `statusBarHeight()`；新增 `onConfigurationChanged` 清缓存并重排卡片。
+
+**刻意取舍.**
+
+① **坐标系只在 Core 里换算一次**：OverlayService 里不再出现裸的 `+ statusBarHeight()`，所有写入 `params.x/y` 的值都先过 `toContent()` —— 以后再有人加浮层也不会重蹈覆辙。
+
+② **面板宽度从「比例 + margin」改成「比例 + 显式宽度」**：悬浮窗不吃 `horizontalMargin` 是平台行为，显式宽度是唯一可靠口径。
+
+③ **居中基准从「内容区居中」改成「整屏居中」**：悬浮面板是全局浮层，视觉上应相对整屏居中；系统栏不等宽（状态栏 150 / 导航栏 65）时，差值的一半就是需要的偏移。
+
+④ **inset 全部 runCatching**：Service 上下文拿 `currentWindowMetrics` 有抛异常的可能，异常时退回 24dp 常量 —— 宁可差一点也不要崩。
+
+**测试.**
+
+`app/src/test/java/com/notifyme/android/OverlayPlacementCoreTest.kt` 15 条：坐标互换、卡片四档顺延（首张 / 实测高度 / 高度未知兜底 / 空列表）、卡片左右对称留白（1220 → 宽 1122、左 49）、面板宽 927、`panelCenterOffsetY` = −42 且中心落 1328、无系统栏时为 0、球初始 1/3（2656 → 885、1920 → 640）、球贴右 1045、越界夹取、抬手吸附左右、小米真机回归对照（卡 1122 / 顶 182、面板 927 / 中心 1328、球 885）。
+
+**验证.**
+
+```powershell
+.\gradlew.bat --no-build-cache testOpenDebugUnitTest --tests "com.notifyme.android.OverlayPlacementCoreTest"   # 15 passed
+.\docs\scripts\local_check.ps1                                                                                 # 七步全 PASS
+```
+
+全量单测 1384 条全绿（85 个 XML / 0 failure / 0 error）。
+
+**真机复测（修后，同一台小米 25098PN5AC）.**
+
+修后重装 open/debug 包（45,952,835 B），在同一台真机上重新量 `dumpsys window windows`：
+
+| 对象 | 修前 | 修后 | 期望 |
+| --- | --- | --- | --- |
+| 悬浮卡 宽 | 1220（满屏） | **1122** | 1122 ✓ |
+| 悬浮卡 绝对顶 | 332 | **182** | 182 ✓ |
+| 悬浮卡 左 | 0 | **49** | 居中 ✓ |
+| 待办面板 宽 | 1220（满屏） | **927** | 927 ✓ |
+| 待办面板 中心 Y | 1858 | **1328** | 1328 ✓ |
+| 悬浮球 绝对顶 | 963 | **885** | 885 ✓ |
+
+dumpsys 原文：悬浮卡 `mAttrs={(49,32)(1122xwrap)}` → `frame=[49,182][1171,624]`；面板 `mAttrs={(0,-42)(927xwrap) gr=CENTER}` → `frame=[146,1106][1073,1551]`（中心 1328.5）；悬浮球 `mAttrs={(1045,735)(156x156)}` → `frame=[1045,885][1201,1041]`。面板的 −42 正是 `panelCenterOffsetY(150, 65)`，与单测断言同值。
+
+**计数.** 新增 `OverlayPlacementCore.kt` 98 行；`OverlayService.kt` 460 → **556 行**；主源码顶层 130 → **131**、全树 137 → **138**；`app/src/test` 85 → **86 个 .kt**；全量单测 1369 → **1384 条**；Core 逻辑内核 49 → **50**；架构图 02 重渲后 **14806 × 2070**。
+
+**教训.** 写悬浮窗时有两套坐标（内容区 / 绝对）与两套尺寸（应用区 / 屏区），混用任何一对都会得到「看起来偏了一点」的现象。本案水平方向偏差（满屏）来自 margin 失效，垂直方向偏差（多一个状态栏 + 下移 0.2×）来自坐标系与居中基准，三者叠加才让面板「又宽又低又偏」。**凡是 `params.x/y` 的写入点，都要能立刻回答「这是内容区坐标还是绝对坐标」。**
