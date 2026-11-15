@@ -17,7 +17,7 @@
 | `console_ui.py` | 内嵌 PWA 控制台前端（HTML/CSS/JS，无外部依赖） |
 | `extract_common.py` | 两个抽取脚本的共享内核：结构化日志、原文 JSONL 存档与轮转、跨进程写锁、五列去重、分批提交、主库结构兜底；配置由 `activate(module)` 注入宿主模块，`_setting()` 每次调用时读取 |
 | `android_db_extract.py` / `pc_db_extract.py` / `gen_icons.py` | 安卓 / PC 本地库解密提取与图标生成脚本 |
-| `test_*.py` | pytest 用例（`python -m pytest server/` 全量跑） |
+| `test_*.py` | pytest 用例（`python -m pytest server/` 全量跑）；含端云字段契约守卫：`test_queue_contract.py`（排队通道）与 `test_report_contract.py`（消息 / 分析两条上报通道） |
 
 运行期配置（`WEIXIN_TOKEN`、数据目录、各项限额）只在 `app.py` 一处定义，其余模块在函数体内动态读取，因此测试里的 `monkeypatch` 立即生效。
 

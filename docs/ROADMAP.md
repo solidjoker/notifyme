@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 86 个 `.kt` / 1384 条（`app/src/test`）+ 服务端 `server/test_*.py`（800 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 86 个 `.kt` / 1384 条（`app/src/test`）+ 服务端 `server/test_*.py`（825 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -685,6 +685,12 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 修法：新增 `util._db_bool(value, default=False)` —— **只有 1 / `1` 算真**（与 SQL `col = 1` 同口径；数字 0.5 / 2 不算，文本按 SQLite 数值亲和解析，`false` / `abc` / 空串一律假；`default` 只兜 `None`），五处读出口 + `app.py` 群聊徽标改用它；控制台新增 `console_classify.dbBool(v)`（与服务端逐条对齐）+ `console_ui.dbBoolOf(v)` 包装，替换 `a.redacted`（3 处）、`m.is_group`、`t.stale`（2 处）与规则层 `stale` 两处。**两套真值表刻意不同**：写入口认 true/yes，读出口只认 1。
   - 测试：新增 `server/test_bool_readout.py` 35 条（真值表 27 组 / `default` 只兜 `None` / 与 `_safe_bool` 的刻意差异 / 在真 SQLite 内存库里逐条比对 `flag = 1`（INTEGER 与 TEXT 亲和列各一遍）/ 消息与分析读出口 / `/analysis?todo_only=1` 与 `/stats` 的 todo 与行级读出口一致 / 极简页群聊徽标跳过脏行）；`test_console_classify.py` +4 条（真值表 / **跨层契约** `CC.dbBool` 逐条等于 `util._db_bool` / 与 `_safe_bool` 的差异 / 排队 `stale` 脏值）、`test_console_ui.py` +1 条（走 `dbBoolOf`，旧 JS 真值写法已退场）、`test_module_split.py` +1 条（`_db_bool` 归属登记）。
   - 计数：`server/util.py` 432 / 384 → **468 / 416**（`_db_bool` @158）；`server/routes.py` 1092 / 1030 → **1095 / 1033**；`server/app.py` 742 / 627（不变）；`server/console_classify.js` 1077 / 1007 → **1095 / 1024**（`dbBool` @985 · 导出块 @1028-1094）；`server/console_ui.py` 3997 / 3904 → **4005 / 3911**（`dbBoolOf` @1485）；`server/test_bool_readout.py` 新增 **269 / 233**；`server/test_console_classify.py` 1934 / 1593 → **2050 / 1685**；`server/test_console_ui.py` 851 / 704 → **899 / 746**；服务端用例 759 → **800**；架构图 01 重渲后 **3962 × 1814**、07 重渲后 **6960 × 5060**。
+
+- **端云上报通道没有字段契约守卫：端侧改字段、服务端不改，CI 全绿（feat/report-contract-guard）**
+  - 问题：`/weixin`（消息）与 `/analysis`（会话分析）两条上报通道此前**没有任何跨端字段契约测试** —— 只有排队通道有 `server/test_queue_contract.py`。端上 `MessageStore.ChatMessage.toJson` + `SyncWorker` 的 remove/put 变换决定最终上报键，服务端 `REQUIRED_FIELDS` + 两个 `receive_*` 决定消费哪些键，两边各改各的：端上多发一个键被默默丢掉、服务端少读一个键端上照发、`is_group` 写成驼峰 `isGroup` 直接 207 拒收整批 —— 没有任何测试会发现。
+  - 修法：新增 `server/test_report_contract.py`（25 条），**源码级静态比对 + 运行级真实 POST** 双向守住：① 客户端最终键集钉死（消息 8 个 / 分析 20 个）；② 必填 ⊆ 客户端必写；③ 客户端 ⊆ 服务端读 ∪ 白名单；④ 白名单精确相等（消息侧 `appLabel` 是展示快照、服务端按 pkg 映射标签故不入库；分析侧 `rejected_count` / `first_rejected_at` / `quarantined` 是端侧本地状态、服务端不消费）；另钉蛇形 `is_group`、`raw_json` 绝不上报、`s2` 恒在。提取器用「缩进 + 容器栈」扫 Kotlin `put` 调用，才能拿到条件块里的键（`source` / `appLabel` / `redacted` / `redaction_rules` / `redaction_hits` / `s2`）。
+  - 测试：源码级 17 条（键集钉死 / REQUIRED ⊆ 客户端 / 客户端 ⊆ 服务端∪白名单 / 白名单精确相等 / 蛇形 is_group / 建表列 / raw_json / s2 / s1 子键 / need_action 子键 / 必填归属）+ 运行级 8 条（客户端形状的消息与分析记录都能 200 落库；`isGroup` 驼峰 207 `invalid=1`；缺必填字段 207；带三个本地状态键仍 accepted；多余未知键两条通道都接受）。
+  - 计数：新增 `server/test_report_contract.py` **509 行 / 20070 B**（CRLF）；服务端用例 800 → **825**。
 
 ## 12. 决策门汇总
 
