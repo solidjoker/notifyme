@@ -931,3 +931,46 @@ def test_suggests_advisor_rule_is_whole_library_scope(api):
     adv = [item for item in data["suggests"] if item["jump"] == "adv"]
     assert len(adv) == 1, data["suggests"]
     assert adv[0]["scope"] == "global", adv[0]
+
+
+def test_analysis_need_action_follows_the_shared_truth_table(api):
+    """上报 need_action 的各种形态后，/stats 的待办数与每行顶层 need_action 必须一致。
+
+    util._safe_bool 是唯一真值表（布尔直接用；数字按 != 0；字符串只认
+    true/1/yes/on/y/t，其余一律假）。控制台前端必须用同一张表，否则待办 Tab
+    会比 /stats 多出一堆假待办。
+    """
+    now = _now_ms()
+    cases = [
+        ("c-true", True, True),
+        ("c-false", False, False),
+        ("c-str-true", "true", True),
+        ("c-str-false", "false", False),
+        ("c-str-no", "no", False),
+        ("c-num-1", 1, True),
+        ("c-num-0", 0, False),
+        ("c-missing", None, False),
+    ]
+    rows = []
+    for cid, value, _expected in cases:
+        s1 = {"importance": 7, "due_window": "today", "topic": "work_task"}
+        if value is not None:
+            s1["need_action"] = {"value": value, "prob": 0.5}
+        rows.append({
+            "case_id": cid, "conversation": "conv-" + cid, "window_end": now,
+            "message_count": 2, "analyzed_at": now, "protocol": "v2",
+            "pkg": "com.tencent.mm", "s1": s1, "escalated": False,
+            "filtered": False,
+        })
+    resp = api.post("/analysis", json=rows)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    body = resp.get_json()
+    assert body["received"] == len(rows), body
+    stats = api.get("/stats").get_json()
+    expected_todo = sum(1 for _c, _v, expected in cases if expected)
+    assert stats["analyses"]["todo"] == expected_todo, stats["analyses"]
+    assert stats["analyses"]["todo_convs"] == expected_todo, stats["analyses"]
+    data = api.get("/analysis?limit=100").get_json()
+    got = {row["case_id"]: row["need_action"] for row in data["analyses"]}
+    for cid, value, expected in cases:
+        assert got.get(cid) is expected, (cid, value, got.get(cid))

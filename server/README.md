@@ -466,6 +466,12 @@ UI 侧只挑措辞：`console_ui.queueEmptyHtml()` 在 `scope.scope === 'device'
 
 UI 侧只挑措辞：`console_ui.impChipText()` / `topicChipText()` / `displayDueText()` 三个 helper 走规则层（缺失时降级为「原码原样 + none 不出」），
 `renderAnalysisBlock()` 的截止 chip 与主题 chip 都由它们产出，S2 段里单独的「截止时间」行删掉（与截止 chip 重复，且会把桶名原样贴在正文里）。
+**「是否待办」的真值表只有一份，与服务端 `_safe_bool` 逐条对齐**：控制台曾用 JS 的 `!!` 判 `s1.need_action.value` —— 任何非空字符串都是真，于是端上把 `false` 上报成 `"false"` / `"no"` 的记录在控制台全成了待办（服务端 `_safe_bool` 只认 `true` / `1` / `yes` / `on` / `y` / `t`，认不出的**一律假**）；徽标更糟：`renderAnalysisBlock()` 原来判 `if (s1.need_action)`（对象存不存在），而端上**每条**记录都写 `s1.need_action = {value, prob}`，于是每张卡都挂「⚡待办」。
+
+判定收进 `console_classify.safeBool(v)`（与服务端 `util._safe_bool` 同一张表，`test_safe_bool_agrees_with_server_util` 跨层钉死）+ `console_classify.needActionOf(a)`（**优先**顶层 `a.need_action` = 服务端归一后的列 = `/stats` 的口径；顶层缺失才退回 `s1.need_action.value`，且必须是对象）+ `console_classify.needActionChip(a)`（两态：待办 →「⚡待办」/ warn，非待办 →「✓ 无需行动」，没有 `s1.need_action` 就不出徽标 —— **没有信息 ≠ 无需行动**）。
+
+UI 侧只挑措辞：`console_ui.needActionOf()` 委托规则层（脚本缺失时降级为「只认顶层布尔」），`console_ui.needActionChip()` 包装规则层。
+
 ### POST /queue —— 上报排队任务快照（需 token）
 
 请求体 `{"device_id": "android-1f2a3b4c", "tasks": [...]}`，按 `(device_id, task_id)` 整份覆盖

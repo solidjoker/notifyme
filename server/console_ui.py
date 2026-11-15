@@ -1461,16 +1461,22 @@ function ckOf(o) {
     (normPkg(o.pkg) + SEP + (o.conversation == null ? '' : o.conversation));
 }
 
-// 需要行动：优先看 s1.need_action.value（端上上报结构），
-// s1 缺失时退回接口顶层归一后的 need_action 布尔值
+// 需要行动：优先看服务端归一后的顶层 need_action（与 /stats 的 todo 同源），
+// 顶层缺失才退回 s1.need_action.value；真值表在规则层（CC.safeBool）。
+// 旧写法「先看 s1.need_action.value 再 !! 取真值」会把端上上报的字符串
+// "false" / "no" 全当成真 —— 待办 Tab 于是比 /stats 多出一堆假待办。
 function needActionOf(a) {
-  if (!a) return false;
-  if (a.s1 && a.s1.need_action) {
-    var na = a.s1.need_action;
-    if (na && typeof na === 'object') return !!na.value;
-    return !!na;
-  }
-  return a.need_action === true;
+  if (CC && CC.needActionOf) return CC.needActionOf(a);
+  // 降级：只认服务端归一后的顶层布尔（没有真值表就不猜 s1 里的字符串）
+  return !!(a && a.need_action === true);
+}
+// 待办徽标：{text, prob, warn}；没有 need_action 信息就不出徽标
+// （「没有信息」不等于「模型判定无需行动」）
+function needActionChip(a) {
+  if (CC && CC.needActionChip) return CC.needActionChip(a);
+  if (!a || !a.s1 || !a.s1.need_action || typeof a.s1.need_action !== 'object') return null;
+  var todo = needActionOf(a);
+  return { text: todo ? '⚡待办' : '✓ 无需行动', prob: null, warn: todo };
 }
 // 重要度：优先 s1.importance，缺失时退回接口顶层 importance
 function importanceOf(a) {
@@ -2952,10 +2958,11 @@ function renderAnalysisBlock(a) {
   if (a.s1) {
     var s1 = a.s1, chips = '';
     chips += redactBadge(a);
-    if (s1.need_action) {
-      var prob = Number(s1.need_action.prob);
-      chips += '<span class="chip warn">⚡待办 ' +
-        (isNaN(prob) ? '—' : Math.round(prob * 100) + '%') + '</span>';
+    var naChip = needActionChip(a);
+    if (naChip && naChip.text) {
+      chips += '<span class="chip' + (naChip.warn ? ' warn' : '') + '">' +
+        esc(naChip.text) +
+        (naChip.prob == null ? '' : ' ' + Math.round(naChip.prob * 100) + '%') + '</span>';
     }
     var impVal = importanceOf(a);
     if (impVal) {

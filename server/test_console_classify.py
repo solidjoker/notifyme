@@ -21,11 +21,16 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUNNER_PATH = os.path.join(HERE, "test_console_classify_runner.js")
+# 跨层契约用：服务端 util._safe_bool 是「是否需要行动」的唯一真值表，
+# 规则层的 safeBool 必须逐条等于它（util 是纯函数工具层，导入不碰运行期状态）。
+sys.path.insert(0, HERE)
+import util as server_util  # noqa: E402
 
 # 契约常量：测试侧只留「跨用例都要用」的几个，其余从被测模块读，避免两边漂移
 PKG_WX = "com.tencent.mm"
@@ -1932,3 +1937,69 @@ def test_suggest_scope_tolerates_bad_input(call):
     assert got["scope"] == "global", got
     got = call("suggestScope", {"scope": "pkg"}, "com.unknown.app", {})
     assert got["label"] == "仅 com.unknown.app", got
+
+
+# --------------------------------------------------------------------------
+# 「是否需要行动」的真值表（与服务端 util._safe_bool 同源）
+# --------------------------------------------------------------------------
+
+# 端上把 false 上报成字符串时，JS 的真值判断（非空字符串即真）会把它们全当成
+# 真待办：待办 Tab 列出的条数比 /stats 的 todo 多，卡片上还挂着「⚡待办」徽标。
+_TRUTHY = [True, 1, 2, 0.5, "true", "TRUE", " true ", "1", "yes", "on", "y", "t"]
+_FALSY = [False, 0, "false", "False", " false ", "0", "no", "off", "n", "f",
+          "", "  ", "maybe", "2", None, [], {}]
+
+
+def test_safe_bool_truth_table(call):
+    """规则层的真值表与服务端一致：只认 true/1/yes/on/y/t。"""
+    for value in _TRUTHY:
+        assert call("safeBool", value) is True, value
+    for value in _FALSY:
+        assert call("safeBool", value) is False, value
+
+
+def test_safe_bool_agrees_with_server_util(call):
+    """跨层契约：同一批样本，规则层 safeBool 必须逐条等于服务端 util._safe_bool。"""
+    for value in _TRUTHY + _FALSY:
+        assert call("safeBool", value) is server_util._safe_bool(value), value
+
+
+def test_need_action_of_prefers_server_normalized_flag(call):
+    """顶层 need_action（服务端归一后的列）优先：与 /stats 的 todo 同源。"""
+    # s1 说真、顶层说假 —— 以顶层（服务端那一列）为准
+    assert call("needActionOf", {"need_action": False,
+                             "s1": {"need_action": {"value": True}}}) is False
+    assert call("needActionOf", {"need_action": True,
+                             "s1": {"need_action": {"value": False}}}) is True
+    # 顶层缺失才退回 s1（判定仍走同一张真值表）
+    assert call("needActionOf", {"s1": {"need_action": {"value": True}}}) is True
+    assert call("needActionOf", {"s1": {"need_action": {"value": "false"}}}) is False
+    assert call("needActionOf", {"s1": {"need_action": {"value": "no"}}}) is False
+    # 服务端同口径：s1.need_action 不是对象就不取它的值
+    # （routes.py 只在 isinstance(na, dict) 时读 na.get("value")）
+    assert call("needActionOf", {"s1": {"need_action": True}}) is False
+    assert call("needActionOf", {"s1": {"need_action": "false"}}) is False
+    # 什么都没有 → 不是待办
+    assert call("needActionOf", {}) is False
+    assert call("needActionOf", None) is False
+
+
+def test_need_action_chip_is_two_states(call):
+    """徽标两态：真待办「⚡待办」，其余「✓ 无需行动」；没有信息就不出徽标。"""
+    todo = call("needActionChip", {"need_action": True,
+                                    "s1": {"need_action": {"value": True, "prob": 0.9}}})
+    assert todo["text"] == "⚡待办", todo
+    assert todo["warn"] is True, todo
+    assert todo["prob"] == 0.9, todo
+
+    notodo = call("needActionChip", {"need_action": False,
+                                       "s1": {"need_action": {"value": "false",
+                                                                 "prob": 0.05}}})
+    assert notodo["text"] == "✓ 无需行动", notodo
+    assert notodo["warn"] is False, notodo
+    assert notodo["prob"] == 0.05, notodo
+
+    # 没有 need_action 信息 → 不出徽标（别把「没信息」说成「无需行动」）
+    assert call("needActionChip", {"s1": {"importance": 7}}) is None
+    assert call("needActionChip", {}) is None
+    assert call("needActionChip", None) is None

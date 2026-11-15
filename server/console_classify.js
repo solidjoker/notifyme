@@ -962,6 +962,52 @@
     }
     return { scope: 'global', label: '全库' };
   }
+  // 「是否需要行动」的真值表：与服务端 util._safe_bool 逐条对齐。
+  // （布尔直接用；数字按 != 0；字符串只认 true/1/yes/on/y/t，
+  //   false/0/no/off/n/f/空串与认不出的一律 false ——
+  //   端上把 false 上报成字符串时，JS 的真值判断会把它们全当成真）
+  var TRUE_TOKENS = ['true', '1', 'yes', 'on', 'y', 't'];
+
+  function safeBool(v) {
+    if (v === null || v === undefined) return false;
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'number') return v !== 0;
+    if (typeof v === 'string') {
+      var t = v.replace(/^\s+|\s+$/g, '').toLowerCase();
+      return TRUE_TOKENS.indexOf(t) >= 0;
+    }
+    return false;
+  }
+
+  // 「是否待办」：与 /stats 的 todo 口径同源（服务端 need_action 列）。
+  // 顶层 need_action 是服务端归一后的结果，优先用它；顶层缺失才退回 s1，
+  // 且与服务端 routes.py 同口径 —— s1.need_action 必须是对象才读它的 value。
+  function needActionOf(a) {
+    if (!a) return false;
+    if (a.need_action !== undefined && a.need_action !== null) {
+      return safeBool(a.need_action);
+    }
+    if (a.s1 && typeof a.s1 === 'object' && a.s1.need_action &&
+        typeof a.s1.need_action === 'object') {
+      return safeBool(a.s1.need_action.value);
+    }
+    return false;
+  }
+
+  // 待办徽标：{text, prob, warn}。没有 need_action 信息就不出徽标
+  // （「没有信息」不等于「模型判定无需行动」）。
+  function needActionChip(a) {
+    if (!a || !a.s1 || typeof a.s1 !== 'object') return null;
+    var na = a.s1.need_action;
+    if (!na || typeof na !== 'object') return null;
+    var prob = null;
+    if (na.prob !== null && na.prob !== undefined && na.prob !== '') {
+      var p = Number(na.prob);
+      if (!isNaN(p)) prob = p;
+    }
+    var todo = needActionOf(a);
+    return { text: todo ? '⚡待办' : '✓ 无需行动', prob: prob, warn: todo };
+  }
   return {
     VERSION: VERSION,
     QUEUE_STATE_ORDER: QUEUE_STATE_ORDER,
@@ -1023,6 +1069,9 @@
     importanceChip: importanceChip,
     analysisCodeParts: analysisCodeParts,
     queueEmptyScope: queueEmptyScope,
-    suggestScope: suggestScope
+    suggestScope: suggestScope,
+    safeBool: safeBool,
+    needActionOf: needActionOf,
+    needActionChip: needActionChip
   };
 });
