@@ -162,9 +162,9 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   端上先把批次二分重试，拆到单条仍 413 才单独隔离该条并继续下一批，
   **不触发整轮 retry**（否则一条毒丸会永久卡住它后面的整条队列）。
 - **`gh pr merge` / `PUT /pulls/{n}/merge` 会 403 `Resource not accessible by personal access token`**，但 `gh pr create`、写 label、写 issue comment 都通 —— 因为 fine-grained PAT 只有 Issues / Pull requests 写权限，**缺 `Contents: write`**（合并要往 base 分支写合并提交）。修法三选一（按推荐顺序）：
-  - **① 用全权限 OAuth token 临时覆盖 `GH_TOKEN`（推荐，零改配置）**：本机 Windows 凭据管理器里通常还存着一个 `git:https://github.com` 条目的 OAuth token（scope = `gist, repo, workflow`），它对合并端点有写合并提交的权限；`gh` 优先读 `GH_TOKEN`。
-  - **② 给该 fine-grained PAT 加 `Contents: Read and write`**（会一并覆盖 token 选中的其它仓库，范围由维护者定）。
-  - **③ 走已登录浏览器点合并**（姿势见下一条，最麻烦，能不用就不用）。
+  - **① 用全权限 OAuth token 临时覆盖 `GH_TOKEN`（推荐，零改配置）**：本机凭据管理器里的 `git:https://github.com` OAuth token（scope `gist, repo, workflow`）对合并端点有写权限，`gh` 优先读 `GH_TOKEN`。
+  - **② 给该 PAT 加 `Contents: Read and write`**（范围由维护者定）。
+  - **③ 走浏览器点合并**（姿势见下一条）。
   - 取 token 并覆盖（**别把 token 打印进日志、提交或 CI**）：
     ```powershell
     $cred = "protocol=https`nhost=github.com`n`n" | git credential fill 2>$null
@@ -172,8 +172,8 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
     gh pr merge 8 --squash --delete-branch
     Remove-Item Env:\GH_TOKEN   # 用完立刻清掉，别留在会话里
     ```
-  - 验证 scope：`gh api -i user | Select-String x-oauth-scopes`（fine-grained PAT 这行是空的，别拿它判断细粒度权限）。
-- **浏览器点合并的正确姿势**：合并框本体（`.mergePartialContainer__VUMolp`）里只有提交信息框 + `[data-dd-action-name="pull_requests.merge.confirm_merge"]`；**合并方式选择器不在这个容器里**，在主按钮旁的图标按钮 `[data-dd-action-name="pull_requests.merge.open_method"]` 里（选项 `Create a merge commit` / `Squash and merge` / `Rebase and merge`），选完再点主按钮 `[data-dd-action-name="pull_requests.merge.open"]`。
+  - 验证 scope：`gh api -i user | Select-String x-oauth-scopes`（fine-grained PAT 这行是空的）。
+- **浏览器点合并（备选路径）**：合并方式选择器在主按钮旁的 `[data-dd-action-name="pull_requests.merge.open_method"]`（选 `Squash and merge`）→ 点 `[data-dd-action-name="pull_requests.merge.open"]`；合并框本体（`.mergePartialContainer__VUMolp`）里只有提交信息框。
 - **Android 单测里起不了 JDK 自带的 HTTP 服务**：单测编译 classpath = `android.jar` + 显式依赖，Kotlin 走 `-no-jdk`，`com.sun.net.httpserver` 编译期直接报 `Unresolved reference 'sun'`。想在纯 JVM 单测里起本地服务，只能用 `java.net.ServerSocket` 自己写 HTTP/1.1（见 `app/src/test/java/com/notifyme/android/HttpEndToEndFixture.kt`），或引入 okhttp mockwebserver（会多一条外部依赖解析，CI 上要权衡）。
 - **服务端要写「真实 HTTP 端到端」用例**：用 `werkzeug.serving.make_server("127.0.0.1", 0, app, threaded=True)` 起真实 HTTP/1.1，客户端用 `urllib.request`；数据隔离靠改模块属性 `app.DATA_DIR / DB_PATH / JSONL_PATH / ADVISOR_PATH` 指到临时目录。两个坑：
 ① 测 413 要把 `app.config["MAX_CONTENT_LENGTH"]` 调小（如 1024）再发几 KB —— 真按 8 MiB 阈值发，服务端读完 body 前就回 413 并断连，客户端 `sendall` 撞连接重置拿不到状态码；
@@ -185,7 +185,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **`lintOpenDebug` 只剩 3 条 warning，都是刻意保留的，别去“修”**：① `ObsoleteLintCustomCheck` —— 依赖库 `lifecycle-livedata-core-2.10.0` 自带的 lint.jar，改不了；② `OldTargetApi` —— `targetSdk 34` 是产品决定；③ `ChromeOsAbiSupport` —— release 只打 `arm64-v8a`，是体积取舍。
 - **改 `docs/architecture/diagrams/*.mmd` 必须重渲并回写尺寸表**：`mmdc -i X.mmd -o X.svg`，PNG 给 `-w <viewBox 宽 + 20> -H <viewBox 高 + 60>`；**脑图 06 的 viewBox 起点不是 `0 0`**，单独用 `-w 3200 -H 1600`（否则渲染出 14×7 废图）；**`-h` 是 help 不是高度**。渲完用 `[System.Drawing.Image]::FromFile` 量像素回写 `docs/architecture/README.md` 索引表。
 - **控制台归类规则只在 `server/console_classify.js`**（UMD：浏览器挂 `window.ConsoleClassify`、node 走 `module.exports`，无 DOM），别写进 `console_ui.py` 的 HTML；`app.py` 注入 `/*__CONSOLE_CLASSIFY_JS__*/`。改规则跑 `server/test_console_classify.py`（subprocess 调真 node，`REQUIRE_NODE=1` 时 node 缺失要 **fail 不是 skip**）；前端降级 `var CC = window.ConsoleClassify || null`。
-- **本机起浏览器调试实例的两个坑**：Windows WinINET 代理指向 `127.0.0.1:18888`（Edge 报 `ERR_TUNNEL_CONNECTION_FAILED`），必须显式带 `--proxy-server=http://127.0.0.1:7890`；默认 user-data-dir 不允许 `--remote-debugging-port`（136+ 策略），要把 User Data 拷到独立目录再带 `--remote-debugging-port=9223` 启动。访问仓库设置 / token 页还会撞 **sudo mode**，要过一次 2FA。
+- **本机起浏览器调试实例的两个坑**：WinINET 代理指向 `127.0.0.1:18888`（Edge 报 `ERR_TUNNEL_CONNECTION_FAILED`），必须显式带 `--proxy-server=http://127.0.0.1:7890`；默认 user-data-dir 不允许 `--remote-debugging-port`（136+ 策略），要拷到独立目录再带 `--remote-debugging-port=9223` 启动。访问 token 页会撞 **sudo mode**（需 2FA）。
 - **排队通道 `/queue` 是 best-effort**：端上 `SyncWorker.pushQueue` 只认 2xx，失败不重试也不阻塞消息同步；服务端 `queue_tasks` 按 `(device_id, task_id)` 整份覆盖、保留 7 天，`stale` = `updated_at` 超 30 分钟。端侧 `task_id` 含原始会话名（与分析通道同口径）。
 - **控制台有 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）**：改 `console_ui.py` 的 HTML/CSS/JS 后自检三件事：① 内联脚本 `node --check`；② `pytest server/test_console_queue.py server/test_console_ui.py -q`；③ 浏览器实跑看 `errs: []`。**`patchSections` 只追加 `.pane-sec`、不清理临时节点** —— 骨架屏残留就是这么来的。桌面 `.tabbar` 必须 `position:sticky`。
 - **端侧排队上报的 device_id 不能碰硬件标识**：`QueueStateCollector` 用 SharedPreferences("queue_state", "device_seed") 里的随机种子做 FNV-1a 派生（`android-` + 8 位 hex），**不要改用 ANDROID_ID / IMEI / 序列号**。
@@ -243,7 +243,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **会话可见性的四层门槛只有一份口径：`ConvVisibilityCore`**（纯函数 + 28 条），别在 `MainActivity` / `OverlayService` / `AnalysisWorker` 里各写一套：
   ① **顺序是契约**：关注名单（`WatchlistStore.getUnwatched` 的会话 id，形如 `pkg|会话名`，精确匹配）→ 自身/系统源（`AppSourceRegistry.isBlocked`）→ 启用集合（`AppSourceStore.isEnabled`）→ 首页来源筛选（`AppFilterCore.matches`，空串＝全部恒通过）。顺序只影响 `why()` 把拦截原因归到哪一类，四层全是 AND。
   ② **`forced` 只放宽「启用集合」这一层**。自身/系统源任何情况都拦 —— `isEnabled` 内部虽然也判过 `isBlocked`，但 forced 分支根本不走 `isEnabled`，那条判断此时失效，所以 Core 里这一行不是冗余，删掉就会出现「立即分析」把 a11y 自抓噪声喂给模型。
-  ③ **分析门禁传 `AppFilterCore.ALL`**：首页来源筛选只影响展示，不能让「首页正在看飞书」把其它来源的周期分析悄悄停掉。同理分析链的关注名单**故意传 `emptySet()`** —— 该门禁在下面 `ConvTagCore.shouldAnalyze`（`forced && !quiet` 时放行），两处都判会把「立即分析本会话」一起拦掉，并把 `skippedUnwatched` 的计数拆成两份。
+  ③ **分析门禁传 `AppFilterCore.ALL`**：首页来源筛选只影响展示，不能让「首页正在看飞书」停掉其它来源的周期分析；分析链的关注名单**故意传 `emptySet()`** —— 门禁在 `ConvTagCore.shouldAnalyze`（`forced && !quiet` 放行），两处都判会把「立即分析本会话」一起拦掉。
   ④ **首页「最近待办」与悬浮面板必须同口径**（都走 `visibleKeys`）：悬浮面板曾漏接首页筛选，首页筛了飞书、面板还列微信待办（真机复现过）。面板的可选项要用「过了前三层门槛」的来源集算 `AppFilterCore.resolve` 的回落，不能拿未过滤的全集，否则停用来源会让筛选卡住、面板整页空白。
   改门槛顺序、加第五层或改 forced 语义前先跑 `app/src/test/java/com/notifyme/android/ConvVisibilityCoreTest.kt`。
 
@@ -253,7 +253,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ③ **`ts <= 0` 的未标注日期消息归 0 参与排序**，超 `limit` 时保留最近若干条而不是最早。
   ④ **「共 N 条」只在 `preview().countedAll` 为真时才能报**：条数可信 = 已读到文件头（`linesRead < requested`，打满一律当没读全）**且** 命中未被 `limit` 砍掉（`visible < limit`）；否则走 `chat_truncated_window` / `chat_window_partial`，别拿窗口内命中数冒充总数。
   ⑤ **`MAX_RENDER = 200` 只留一份**；`MessageStore.readWindow` 因返回 `internal` 类型必须加 `internal`（否则报 `public function exposes its internal return type`）。
-  ⑥ **别再用 `readRecent(500)` 挑「本会话的一条消息」**：`latest(window)` 给 `MainActivity.runTodoReminderChain` 补日历描述、`knownIsGroup(window)` 给 `A11yExtractService` 判群聊，窗口占满时两处取 null（同源隐患第二次）。`knownIsGroup` 空窗口必须回 **null** 而不是 false。
+  ⑥ **别再用 `readRecent(500)` 挑「本会话的一条消息」**：`latest(window)` 补日历描述、`knownIsGroup(window)` 判群聊，窗口占满时两处取 null；`knownIsGroup` 空窗口必须回 **null** 而不是 false。
   ⑦ **`AnalysisListActivity.buildSourceMap` 同理**：`sourceKeys(records)` 给要读窗口的会话键集合（去重保序、跳过空会话名老记录），每键各读一次 `readWindow` 再交 `sourceMap` 还原原文。取不满返空串、调用方隐藏 —— 宁可不显示，也不拿别的窗口内容冒充原文（第三次复现）。
   改窗口大小、排序方向或可信度判据前先跑 `ConvWindowCoreTest.kt`（38 条，含 600 条噪声 + 本会话回归）。
 
@@ -266,7 +266,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   改 `PER_CONV`、排序方向或分组语义前先跑 `app/src/test/java/com/notifyme/android/CandidateWindowCoreTest.kt`（16 条，含「600 条噪声 + 本会话仍在候选」与旧写法对照实验）。
 
 - **分析记录（`analysis.jsonl`）的取窗口口径全在 `AnalysisWindowCore`**（纯函数 + 23 条；文件级操作在 `AnalysisWindowFile`），别在 Activity / Worker 里另写 `readRecent(N).filter{}` / `groupBy{}`：
-  ① **`AnalysisStore.readRecent(context, limit)` 是「文件尾部 limit 行」**，只留给本意就是全局最近 N 条的调用点。要「某会话全部 / 每会话最新一条 / 全库列表」必须走 `readGrouped` / `readForConversation` / `readRecentWindow` / `latestByConvKey`，否则尾部被别的会话占满、安静会话的 case 一条读不到（列表「暂无分析结果」）。已出现三处。
+  ① **`AnalysisStore.readRecent(context, limit)` 是「文件尾部 limit 行」**，只留给本意就是全局最近 N 条的调用点；要「某会话全部 / 每会话最新一条 / 全库列表」走 `readGrouped` / `readForConversation` / `readRecentWindow` / `latestByConvKey`（口径见下条「近 N 条」），否则尾部被别的会话占满、安静会话的 case 一条读不到。
   ② **窗口量级分两档**：`TAIL_LINES = 5_000` 给列表与首页聚合；`POLL_LINES = 1_500` 给详情页轮询（每 4 秒）与悬浮面板 —— 这两条路径给 5 000 = 每 4 秒解析 5 000 行。`LIST_LIMIT = 200` 只是展示上限，`UNLIMITED = -1` 是「本会话不限条数」。
   ③ **`group()` 保首次出现序、组内按 `windowEnd` 升序**（即窗口推进顺序）；`latest()` 取每组末条，**同 `windowEnd` 取最后写入那条**（旧 `maxByOrNull` 取第一条，别为它改语义）。
   ④ **不按会话设条数上限**（与 `CandidateWindowCore.PER_CONV` 不同），内存由 `TAIL_LINES` 兜住；窗口外老 case 读不到是已知局限，别把 `TAIL_LINES` 涨到几十万来「修」它。
@@ -281,11 +281,11 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ⑤ `MessageStore.feedGroups` 必须 `internal`；`REQUEST_LINES = 20000` 比 `TAIL_LINES = 5000` 大是刻意的（安静会话在文件靠前位置）。
   改名额/排序/截断前先跑 `FeedWindowCoreTest.kt`（22 条，含 600 条噪声与旧写法对照）。
 
-- **分析记录 / 消息侧的「近 N 条」取数只有三种口径，别再新写 `readRecent(N)`**（第七批同源隐患，2026-11-13 收口）：
-  ① **要「某时间区间内的全部记录」→ `AnalysisStore.readSince(context, cutoffMs)`**（内部 `AnalysisWindowCore.since` + `ADVISOR_LINES = 20000`）。顾问复盘旧写法 `readRecent(ctx, 500).filter{analyzedAt >= since}` 在 case 超 500 条或活跃会话占满尾部时漏安静会话，`nameMapFor()` 返空表、姓名原样出设备；`ADVISOR_LINES` 比 `TAIL_LINES` 宽是刻意的。
-  ② **要「全库聚合 / 每会话一条」→ `AnalysisStore.readGrouped` / `latestByConvKey`；要「会话候选集」→ `MessageStore.feedGroups(context).keys()`**。设置页统计（会话数 / 待办会话数）与隐私页白名单候选都属于这一档：旧 `readRecent(500)` / `readRecent(1000)` 数出来的是窗口内命中数，超窗口就是错数、也漏掉安静会话。
-  ③ **要「逐条列表」→ `FeedWindowCore.sample(MessageStore.feedGroups(context), limit)`**（脱敏预览用 `PREVIEW_LIMIT = 200`）。**别用 `recent()` 那类「全表最近 N 条再排序」**（等于把旧 `readRecent` 又写一遍，600 条噪声下安静会话仍是 0 条）。`sample` **按会话轮流取**（各轮取次新，组内取时间尾部，最后整体升序；`ts <= 0` 归 0 排最前）。
-  改这几处口径前先跑 `app/src/test/java/com/notifyme/android/AnalysisWindowCoreTest.kt`（27 条）与 `FeedWindowCoreTest.kt`（27 条），两边都有「旧写法对照实验」。
+- **「近 N 条」取数只有三种口径，别再新写 `readRecent(N)`**（第七批同源隐患，2026-11-13 收口）：
+  ① **时间区间内的全部记录 → `AnalysisStore.readSince(context, cutoffMs)`**（内部 `AnalysisWindowCore.since`，`ADVISOR_LINES = 20000`）；顾问复盘旧写法 `readRecent(ctx, 500).filter{analyzedAt >= since}` 在 case 超 500 条时漏安静会话、`nameMapFor()` 返空表，姓名原样出设备。
+  ② **全库聚合 / 每会话一条 → `AnalysisStore.readGrouped` / `latestByConvKey`；会话候选集 → `MessageStore.feedGroups(context).keys()`**（设置页统计、隐私页白名单属这档；旧 `readRecent(500)` 数出的是窗口内命中数 = 错数）。
+  ③ **逐条列表 → `FeedWindowCore.sample(MessageStore.feedGroups(context), limit)`**（脱敏预览 `PREVIEW_LIMIT = 200`），`sample` **按会话轮流取**；别用「全表最近 N 条再排序」那类写法（等于把旧 `readRecent` 又写一遍）。
+  改前跑 `AnalysisWindowCoreTest.kt`（27 条）与 `FeedWindowCoreTest.kt`（27 条）。
 
 - **JSONL 文件的「逐行打补丁 + 原子重写」只有一份口径：`JsonlPatchCore`**（纯函数 + 15 条，`JsonlPatchCoreTest.kt`）。此前两份 ~90 行同构实现（只差 schema 与 newly 容器）已收敛，两者只留 `keyOf`/`parse`/`encode`/`patch` 四个 lambda。
   ① **`target == null` = 扫全文件**（顾问通道 `reviveExpired` 复活过期隔离走这条），非 null 只碰命中 key 的行；同一 key 出现多行时**每行都打补丁**（与旧实现一致，别改成只改第一行）。
@@ -385,3 +385,4 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **枚举码值与展示文案要分开：S1 的 topic / due_window / 重要度走规则层码值→中文表**（`console_classify.TOPIC_LABELS` / `DUE_LABELS` + `topicLabel` / `dueLabel` / `importanceChip` 等）。① 认不出的原码原样回显，只有空值才回落；② `none` 整段不渲染；③ 「截止」优先序 `todo_due → s2.due_time → s1.due_window`，同 `displayDueCode` 序；④ 数值重要度与服务端 `util._importance_label` 同源（`2.9` 也算数值）；⑤ 搜索面码值与中文都收、排除 `none`；⑥ 端上已有的口径不许在控制台再抄。
 - **同一段里的分布与标量必须能对上：`stats_api._queue_block.by_kind`、`console_classify.mergePairsBy`**（9 条用例）。① 类型计数必须在「过期 → `continue`」**之后**；② 契约 `sum(by_kind.count) == total - stale`；③ `by_pkg` 的 NULL / 空串各成分组而 `normPkg()` 都折成微信 → `mergePairsBy` 归并后**按次数降序、同次数键名升序重排**（`distPairs` 同口径）；④ 加分布字段先问该不该跟同段过期口径走。
+- **控制台「是否待办」只有一份口径：`console_classify.safeBool` / `needActionOf` / `needActionChip`**（`test_console_classify.py` + `test_console_ui.py` + `test_stats_api.py` 守着）。① **真值表与服务端 `util._safe_bool` 逐条对齐**：布尔直接用、数字按 != 0、字符串只认 true/1/yes/on/y/t，其余（false/0/no/off/n/f/空串/未知串）一律 False —— JS 真值把 "false"/"no"/"0"/"" 都当真，别再写 `!!na.value`。② **`needActionOf` 优先取顶层归一后的 `a.need_action` 布尔**（= 服务端 `routes.py` 落的列 = `/stats` 的 todo 口径），顶层缺失才退回 `s1.need_action.value`（必须是对象，与入库同口径）。③ **徽标两态**（`needActionChip`）：真待办 `⚡待办`、非待办 `✓ 无需行动` —— 端上每条记录都写 `s1.need_action{value,prob}`，旧写法让全量卡都挂「待办」徽标。④ 改判定前跑这三个测试类。

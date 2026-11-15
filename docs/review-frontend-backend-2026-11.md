@@ -2831,3 +2831,85 @@ python -m pytest server/ -q                                                     
 **计数.** `server/suggests.py` 344 / 301 → **355 / 312**（`_build` @186 · `query_suggests_next` @216 · `_pick` @204）；`server/console_classify.js` 1013 / 946 → **1028 / 961**（`suggestScope` @955 · 导出块 @1013-1027）；`server/console_ui.py` 3968 / 3875 → **3990 / 3897**（`suggestScopeText` @2331 · `suggestHtml` @2340 · `suggestSections` @2361）；`server/test_stats_api.py` 897 / 766 → **933 / 796**；`server/test_console_classify.py` 1905 / 1569 → **1934 / 1593**；`server/test_console_ui.py` 839 / 693 → **851 / 704**；服务端用例 746 → **753**。
 
 **教训.** 一个标题不能同时继承多个口径。本案的错误不在「字符串写错了」，而在「页面级的标题被当成了所有卡片的共同前提」：口径是**每条数据的属性**，不是**页面的属性**。一条可用的规则：**要标一个口径，就把它随数据一起下发，让消费方只负责摆位**。服务端已经分好的口径，控制台不能再额外定义一个一刀切的。
+
+## E-77 控制台的「是否待办」用 JS 真值判断：上报成字符串 "false" / "no" 的记录被算成待办，徽标还全是「⚡待办」（`console_classify.safeBool` / `needActionOf` / `needActionChip`，fix/need-action-truth-table，2026-11-15）
+
+**现象.**
+
+控制台三个地方同时自相矛盾：
+
+- 概览条 / 角标 / 建议卡说「待处理 1 条」（服务端 `/stats` 的 `analyses.todo`）；
+- 待办 Tab 里实际列出 **3** 条；
+- 四张分析卡**全部**挂着「⚡待办 90%」「⚡待办 5%」这样的徽标 —— 包括模型明确判「无需行动」的那几条。
+
+手机端跑着同一批记录，App 里的文案是「⚡ 需要行动 90%」/「✓ 无需行动 5%」（`app/src/main/res/values/strings.xml` 的 `s1_need_action` / `s1_no_action`），两边结论相反。
+
+**根因.**
+
+服务端对 `need_action` 有一套**明确**的真值表：`server/util.py` 的 `_safe_bool(value, default=False)` ——
+
+- 布尔直接用；
+- 数字按 `!= 0`；
+- 字符串只认 `true` / `1` / `yes` / `on` / `y` / `t`（大小写不敏感、允许首尾空白）为真；
+- `false` / `0` / `no` / `off` / `n` / `f` / 空串 / **任何认不出的字符串**一律为假。
+
+入库走 `server/routes.py` 的 `receive_analysis()`（只在 `s1.need_action` 是**对象**时才读它的 `value`），统计走 `server/stats_api.py` 的 `_analysis_block()`（`need_action = 1` 计进 `todo` / `todo_convs`），查询接口回 `need_action: bool(列值)`。也就是说**服务端这条链是真值表说了算**。
+
+控制台前端却另起炉灶：`server/console_ui.py` 的 `needActionOf(a)` **优先**取 `s1.need_action.value` 再用 JS 的 `!!` 取真值：
+
+```js
+function needActionOf(a) {
+  var s1 = a && a.s1 ? a.s1 : {};
+  var na = s1.need_action;
+  if (na && na.value !== undefined) return !!na.value;   // ← 这里
+  return a.need_action === true;
+}
+```
+
+JS 的真值判断里，**任何非空字符串都是真**：端上把 `need_action.value` 序列化成字符串 `"false"` / `"no"` / `"0"` 时，这条记录在控制台就成了待办。
+
+徽标是第二个独立缺陷：`renderAnalysisBlock()` 原来写的是 `if (s1.need_action) {` —— 判的是「这个对象存不存在」，不是「模型说要不要行动」。而端上**每条**记录都写 `s1.need_action = {value, prob}`（`app/src/main/java/com/notifyme/android/AnalysisStore.kt` 的 `AnalysisCaseRecord.toJson`），于是**每张卡**都挂待办徽标，包括明确说「无需行动」的。
+
+**修法.**
+
+判定收进规则层 `server/console_classify.js`，与服务端逐条对齐：
+
+- `safeBool(v)`：与服务端 `_safe_bool` **同一张真值表**（`TRUE_TOKENS` 只认 `true` / `1` / `yes` / `on` / `y` / `t`；数字按 `!= 0`；认不出的字符串一律假）；
+- `needActionOf(a)`：**优先**用服务端归一后的顶层 `a.need_action`（它就是 `/stats` 用的那一列，天然同源），顶层缺失才退回 `s1.need_action.value`，且**必须 `s1.need_action` 是对象**才读（与 `routes.py` 同口径）；
+- `needActionChip(a)`：返回 `{text, prob, warn}` —— 待办 → `⚡待办` / `warn=true`，非待办 → `✓ 无需行动` / `warn=false`；`s1.need_action` 缺失或不是对象时返 `null`（**没有信息 ≠ 无需行动**）。
+
+UI 侧 `console_ui.py` 的 `needActionOf()` 改为委托 `CC.needActionOf`（规则脚本缺失时降级为「只认顶层布尔」），新增 `needActionChip()` 包装；`renderAnalysisBlock()` 的徽标改用 `needActionChip(a)`，于是待办卡是「⚡待办 90%」、非待办卡是「✓ 无需行动 5%」。
+
+**刻意取舍.**
+
+① **顶层优先、s1 兜底**：顶层 `need_action` 是服务端算好的列，读它就等于跟 `/stats` 同一份真值；只有老记录缺这一列时才看 `s1.need_action.value`，且退回路径仍走同一张表 —— 不再出现「两套判定」。
+
+② **字符串 `"false"` 判假是有意为之**，不是 bug：服务端 `_safe_bool` 就是这个口径，规则层必须逐条对齐，否则又会跨层打架；`test_safe_bool_agrees_with_server_util` 这条**跨层契约用例**把两边的真值表钉死（直接 `import util` 逐样本比对），以后任何一边改表都会红。
+
+③ **徽标没有概率就不出**：只有 `s1.need_action` 是对象才渲染徽标。端上老记录可能只有 `s1.need_action.value` 没有 `prob`，此时渲染「⚡待办」但不带百分比，比编一个 0% 诚实。
+
+④ **降级路径不猜**：`CC` 缺失时 UI 只认顶层 `need_action === true`，宁可少标也不误标 —— 规则脚本缺失属于异常路径，不是常态。
+
+**测试.**
+
+| 用例 | 断言 |
+| --- | --- |
+| `test_safe_bool_truth_table` | 13 个真值样本 + 16 个假值样本逐条对齐 |
+| `test_safe_bool_agrees_with_server_util` | `CC.safeBool(v)` 逐条等于 `util._safe_bool(v)`（跨层契约） |
+| `test_need_action_of_prefers_server_normalized_flag` | 顶层布尔优先于 `s1.need_action.value` |
+| `test_need_action_chip_is_two_states` | 待办 → `⚡待办` / `warn=true`；非待办 → `✓ 无需行动` / `warn=false`；无信息 → `null` |
+| `test_need_action_judgement_uses_the_shared_truth_table` | UI 走 `CC.needActionOf` / `CC.needActionChip`，旧 `!!na.value` 与 `if (s1.need_action) {` 已退场 |
+| `test_analysis_need_action_follows_the_shared_truth_table` | 8 种上报形态 → `/stats` 的 `todo` / `todo_convs` 与每行顶层 `need_action` 逐条一致 |
+
+**验证.**
+
+```powershell
+python -m pytest server/test_console_classify.py server/test_console_ui.py server/test_stats_api.py -q   # 249 passed
+python -m pytest server/ -q                                                       # 759 passed
+```
+
+另外把 `CONSOLE_HTML` 的 4 段内联 `<script>` 抽出来跑 `node --check`（退出码 0），再用 node 直跑规则层复现四档：修前「服务端 todo = 1 / 控制台待办 Tab 实列 3」，修后「服务端 todo = 1 / 控制台待办 Tab 实列 1」；四张卡的徽标分别是「⚡待办 90%」与「✓ 无需行动 5% / 3% / 2%」。
+
+**计数.** `server/console_classify.js` 1028 / 961 → **1077 / 1007**（`TRUE_TOKENS` @969 · `safeBool` @971 · `needActionOf` @985 · `needActionChip` @999 · 导出块 @1011-1076）；`server/console_ui.py` 3990 / 3897 → **3997 / 3904**（`needActionOf` @1468 · `needActionChip` @1475 · `renderAnalysisBlock` @2956）；服务端用例 753 → **759**。
+
+**教训.** 「模型给了这个字段」和「这个字段的值为真」是两件事，`if (obj.field)` 判的是前者。本案的第二个缺陷（徽标全挂）比第一个更刺眼，却更简单：**判存在 ≠ 判真假**。凡是拿模型输出当布尔用的地方，都必须先过一遍与服务端同源的显式真值表，别让 JS 的隐式真值判断替业务做决定。
