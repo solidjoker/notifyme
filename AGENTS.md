@@ -167,10 +167,10 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
     Remove-Item Env:\GH_TOKEN   # 用完立刻清掉
     ```
     验证 scope：`gh api -i user | Select-String x-oauth-scopes`（fine-grained PAT 这行是空的）。
-  - **② 给该 PAT 加 `Contents: Read and write`**（范围由维护者定）。**③ 走浏览器点合并**（姿势见下一条）。
+  - **② 给该 PAT 加 `Contents: Read and write`**（范围由维护者定）。**③ 走浏览器点合并**。
 - **浏览器点合并（备选路径）**：合并方式选择器在主按钮旁 `[data-dd-action-name="pull_requests.merge.open_method"]`（选 `Squash and merge`）→ 点 `[data-dd-action-name="pull_requests.merge.open"]`；合并框本体里只有提交信息框。
-- **Android 单测里起不了 JDK 自带的 HTTP 服务**：单测编译 classpath = `android.jar` + 显式依赖，Kotlin 走 `-no-jdk`，`com.sun.net.httpserver` 编译期直接报 `Unresolved reference 'sun'`。想在纯 JVM 单测里起本地服务，只能用 `java.net.ServerSocket` 自己写 HTTP/1.1（见 `app/src/test/java/com/notifyme/android/HttpEndToEndFixture.kt`），或引入 okhttp mockwebserver（会多一条外部依赖解析，CI 上要权衡）。
-- **服务端要写「真实 HTTP 端到端」用例**：用 `werkzeug.serving.make_server("127.0.0.1", 0, app, threaded=True)` 起真实 HTTP/1.1，客户端用 `urllib.request`；数据隔离靠改模块属性 `app.DATA_DIR / DB_PATH / JSONL_PATH / ADVISOR_PATH` 指到临时目录。两个坑：
+- **Android 单测里起不了 JDK 自带的 HTTP 服务**：单测编译 classpath = `android.jar` + 显式依赖，Kotlin 走 `-no-jdk`，`com.sun.net.httpserver` 编译期直接报 `Unresolved reference 'sun'`。想在纯 JVM 单测里起本地服务，只能用 `java.net.ServerSocket` 自己写 HTTP/1.1（见 `app/src/test/java/com/notifyme/android/HttpEndToEndFixture.kt`）。
+- **服务端要写「真实 HTTP 端到端」用例**：用 `werkzeug.serving.make_server("127.0.0.1", 0, app)` 起真实 HTTP/1.1，客户端用 `urllib.request`；数据隔离靠改 `app.DATA_DIR / DB_PATH / JSONL_PATH / ADVISOR_PATH` 到临时目录。两个坑：
 ① 测 413 要把 `app.config["MAX_CONTENT_LENGTH"]` 调小（如 1024）再发几 KB —— 真按 8 MiB 阈值发，服务端读完 body 前就回 413 并断连，客户端 `sendall` 撞连接重置拿不到状态码；
 ② 404/413 是 JSON，但 **405 仍是 Flask 默认 HTML**。参考 `server/test_http_e2e.py`（34 例）。
 - **「HTTP 触发 + 后台线程执行」型接口的端到端写法**：`/admin/extract`（`server/routes.py:844` 触发，`server/storage.py:437` 执行）用 `_run_extract_bg` + `_probe_main_db_writable`，端点只回 202 + job_id；后台失败要能在 `/admin/extract/status` 读出 `error_kind=busy`。
@@ -180,7 +180,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **`lintOpenDebug` 只剩 3 条 warning，都是刻意保留的，别去“修”**：① `ObsoleteLintCustomCheck` —— 依赖库 `lifecycle-livedata-core-2.10.0` 自带的 lint.jar，改不了；② `OldTargetApi` —— `targetSdk 34` 是产品决定；③ `ChromeOsAbiSupport` —— release 只打 `arm64-v8a`，是体积取舍。
 - **改 `docs/architecture/diagrams/*.mmd` 必须重渲并回写尺寸表**：`mmdc -i X.mmd -o X.svg`，PNG 给 `-w <viewBox 宽 + 20> -H <viewBox 高 + 60>`；**脑图 06 的 viewBox 起点不是 `0 0`**，单独用 `-w 3200 -H 1600`（否则渲出 14×7 废图）；**`-h` 是 help 不是高度**；渲完量像素回写 `docs/architecture/README.md` 索引表。
 - **控制台归类规则只在 `server/console_classify.js`**（UMD：浏览器挂 `window.ConsoleClassify`、node 走 `module.exports`，无 DOM），别写进 `console_ui.py` 的 HTML；`app.py` 注入 `/*__CONSOLE_CLASSIFY_JS__*/`。改规则跑 `server/test_console_classify.py`（subprocess 调真 node，`REQUIRE_NODE=1` 时 node 缺失要 **fail 不是 skip**）；前端降级 `var CC = window.ConsoleClassify || null`。
-- **本机起浏览器调试实例的两个坑**：WinINET 代理指向 `127.0.0.1:18888`（Edge 报 `ERR_TUNNEL_CONNECTION_FAILED`），必须显式带 `--proxy-server=http://127.0.0.1:7890`；默认 user-data-dir 不允许 `--remote-debugging-port`（136+ 策略），要拷到独立目录再带 `--remote-debugging-port=9223` 启动。访问 token 页会撞 **sudo mode**（需 2FA）。
+- **本机起浏览器调试实例的坑**（走浏览器点合并时才需要）：WinINET 代理在 `127.0.0.1:18888` 会报隧道错，要显式 `--proxy-server=http://127.0.0.1:7890`；`--remote-debugging-port` 必须配独立 user-data-dir（136+ 策略）；token 页撞 sudo mode 需 2FA。
 - **排队通道 `/queue` 是 best-effort**：端上 `SyncWorker.pushQueue` 只认 2xx，失败不重试也不阻塞消息同步；服务端 `queue_tasks` 按 `(device_id, task_id)` 整份覆盖、保留 7 天，`stale` = `updated_at` 超 30 分钟。端侧 `task_id` 含原始会话名（与分析通道同口径）。
 - **控制台有 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）**：改 `console_ui.py` 的 HTML/CSS/JS 后自检三件事：① 内联脚本 `node --check`；② `pytest server/test_console_*.py -q`；③ 浏览器实跑看 `errs: []`。**`patchSections` 只追加 `.pane-sec`、不清理临时节点** —— 骨架屏残留就是这么来的。桌面 `.tabbar` 必须 `position:sticky`。
 - **端侧排队上报的 device_id 不能碰硬件标识**：`QueueStateCollector` 用 SharedPreferences("queue_state", "device_seed") 里的随机种子做 FNV-1a 派生（`android-` + 8 位 hex），**不要改用 ANDROID_ID / IMEI / 序列号**。
@@ -193,7 +193,8 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **会话卡内的「日期 / 发送者」两级分组**：规则在 `console_classify.groupMessages(msgs, dim, getTs, getSender)` —— **按 `getTs` 精确值分桶，不按天切**，调用方要传当天零点对齐的时间戳（`console_ui.dayStartMs()`），传原始毫秒会一条一桶。状态存 `wx_group_v1`；`setConvGroupDim` / `convDimBar` / `groupMsgsByDim` / `convGroupHtml` 四处一起改。
 - **排队 Tab 的「设备」维度有两套口径**：设备清单来自服务端 `GET /queue` 的 `devices` 聚合（`server/storage.py` 的 `queue_devices()`，`summary.devices` 是台数），控制台的设备 chip 用这一份；前端 `server/console_classify.js` 的 `groupQueueTasksByDevice` 是纯函数版本（对内存里的 task 列表分组），只在离线/单测场景用，两处别混算。
-- **端云字段有契约守卫**：① 排队通道 `server/test_queue_contract.py` 读 `QueueStateCore.kt` 的 `buildPayload` 与 `storage._normalize_queue_task` 比对字段名 / 顶层键 / `state`+`kind` 枚举 / 长度上限。② **消息 / 分析两条上报通道 `server/test_report_contract.py`**（25 条）：读端上 `toJson` + `SyncWorker` 的 remove/put 变换与服务端读的键（`REQUIRED_FIELDS` / 两个 receive / 建表列）比对 —— 客户端键集钉死、必填 ⊆ 客户端必写、客户端 ⊆ 服务端读 ∪ 白名单（`appLabel` 与三个端侧本地状态键刻意不消费）、白名单精确相等；另钉蛇形 `is_group`、`raw_json` 不上报、`s2` 恒在。端侧改字段忘改服务端 CI 直接红。坑：Kotlin 源 CRLF、Python 源 LF；Kotlin 键名是转义引号，切出的名字尾部带反斜杠记得 `rstrip`。
+- **端云字段有契约守卫**：① 排队通道 `server/test_queue_contract.py` 读 `QueueStateCore.kt` 的 `buildPayload` 与 `storage._normalize_queue_task` 比对字段名 / 顶层键 / `state`+`kind` 枚举 / 长度上限。② **消息 / 分析 / 顾问三条上报通道 `server/test_report_contract.py`**（39 条）：读端上 `toJson` + `SyncWorker` 的 remove/put 变换与服务端读的键（`REQUIRED_FIELDS` / 三个 receive / 建表列）比对 —— 客户端键集钉死、必填 ⊆ 客户端必写、客户端 ⊆ 服务端读 ∪ 白名单（`appLabel` 与三个端侧本地状态键不消费）、白名单精确相等；另钉蛇形 `is_group`、`raw_json` 不上报、`s2` 恒在、顾问上传 7 键且两条分支同一出口。端侧改字段忘改服务端 CI 直接红。坑：Kotlin 源 CRLF、Python 源 LF；Kotlin 键名是转义引号，尾部带反斜杠记得 `rstrip`。
+- **顾问报告的上传口径与截断留痕各只有一份**（`AdvisorPayloadCore` 84 行 + 11 条）。① 上传体唯一出口 `uploadJson()`：键集固定 7 个（`report_id`/`created_at`/`period_days`/`case_count`/`summary`/`suggestions`/`model_used`），`suggestions` 子键固定 `type`/`title`/`detail`；本地三个状态键永不上报；脱敏与不脱敏共用同一出口。② **长度裁剪只在服务端一处**（端上不裁），但收敛要留痕：`truncated_fields` + `truncated: true`，控制台走 `console_classify.advisorTruncation` 出「已截断 · 摘要」chip —— 静默截断会被当成模型原文。
 - **版本信息只有一份口径：`VersionInfoCore`**（internal object + 14 条）。控制台版本卡与 ☰ 菜单弹窗都调它。① `versionLine` 必须带 `versionCode`（debug 原地覆盖时 `versionName` 可能不变，只有 code 能证明装上新包）；② beta 的 `versionName` 自带 `-test`，`title()` 不再拼渠道后缀。改文案前看 `VersionInfoCoreTest.kt`。
 
 - **历史重复消息只能靠 `MessageDedupeCore` 归并，别在别处另写删行逻辑**：真机量化 78 组 / 271 行是「同一条通知被多次捕获」（微信正文形如 `[11条]发言人: 正文`，未读数一变正文就变，而入库去重键含正文原文）。
@@ -321,35 +322,35 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **采集诊断页的累计统计只有一份口径：`AllTimeStatsCore`**（+ 16 条）。① 累计不是 `readRecent(N)`（窗口一满就静默偏小），是 `scanAll`（`SCAN_LINES=50000`）；② 被截断要能报 `capped(totalLines, scannedLines)`；③ object 层 `allTimeStats` 必须 `internal`，`scanAll` 必须写在 Core 内。
 
-- **文本截断只有一份口径：`TextClipCore`**（+ 20 条）。`take(n)` 数 **UTF-16 unit**，emoji 被切成孤立代理、UTF-8 落成 `?`。① `clip`/`clipWithEllipsis` 走 `offsetByCodePoints`，未超限返同一实例、省略号不占预算；② ASCII 逐字节不变；③ 不切断代理对，不保证字素簇；④ 32 处已收口，hex 与列表 `take(n)` 刻意不套；⑤ 服务端同口径 `clipCodePoints` 守排队 title 256 / detail 512 / task_id 128，改上限要同时改端上 `QueueStateCore` 与 `storage._normalize_queue_task`。
+- **文本截断只有一份口径：`TextClipCore`**（+ 20 条）。`take(n)` 数 **UTF-16 unit**，emoji 被切成孤立代理、UTF-8 落成 `?`。① `clip`/`clipWithEllipsis` 走 `offsetByCodePoints`，未超限返同一实例、省略号不占预算；② ASCII 逐字节不变；③ 不切断代理对，不保证字素簇；④ 32 处已收口，hex 与列表 `take(n)` 刻意不套；⑤ 服务端同口径 `clipCodePoints` 守排队三处上限，改上限要同时改端上与 `storage._normalize_queue_task`。
 
 - **SharedPreferences 的 JSON 读写只有一份口径：`PrefsJsonCore`**（+ 29 条）。五处 Store 此前各抄一份 `try { JSONArray(raw) } catch { }`。① **读永不抛**且返回独立拷贝；② **只做形状裁剪不做领域过滤**（`ConvTag.fromCode` 留 Store 层）；③ 元素走 `optString`；④ **写不排序**（`sort = true` 才排）；⑤ 与 JSONL 无关。`strings` 只丢空串，纯空白要 `trim = true`。改前跑 `PrefsJsonCoreTest.kt`。
 
-- **模型通道请求体与状态行着色各一份口径**（`ChatRequestCore` + `StatusTintCore`）。① 三处 `postChatCompletions` 只留 `url(endpoint(url)).post(payload(model,sys,user).toRequestBody(JSON_MEDIA_TYPE))`：端点归一（trim→去尾斜杠→补 `/chat/completions`，不猜 `/v1`）、`MAX_TOKENS=4096`、键序全在 Core；HTTP / 鉴权 / 异常留各通道。② 状态行只走 `StatusTintCore.colorRes`：失败/鉴权先判、`已中断…完成` 判绿别改、只回资源 id。③ `AdvisorWorker.parseReport` 委托 `AnalysisParsing.extractJsonPayload`。
+- **模型通道请求体与状态行着色各一份口径**（`ChatRequestCore` + `StatusTintCore`）。① 三处 `postChatCompletions` 只留 `url(endpoint(url)).post(payload(...))`：端点归一（trim→去尾斜杠→补 `/chat/completions`，不猜 `/v1`）、`MAX_TOKENS=4096`、键序全在 Core；HTTP / 鉴权 / 异常留各通道。② 状态行只走 `StatusTintCore.colorRes`：失败/鉴权先判、`已中断…完成` 判绿别改、只回资源 id。③ `AdvisorWorker.parseReport` 委托 `AnalysisParsing.extractJsonPayload`。
 - **Intent extras→会话键、运行时权限各一份口径**（`ConvExtrasCore` + `PermissionGateCore`）。① 包名空白回落微信且**不 trim**，会话名空白=无会话返 **null**（`ConvKey("", pkg)` 永匹配不到消息）。② `needsPostNotifications` 同时看 sdkInt 与结果；`allGranted` 空结果 false。③ 权限名用 `PERM_POST_NOTIFICATIONS` 字面量（写 `Manifest.permission.POST_NOTIFICATIONS` 报 `InlinedApi`，lint 漂到 4 条）。
 - **服务端地址与鉴权头各一份口径：`SyncEndpointCore`**（73 行 / 18 条）。① `base()` 顺序是契约：trim → 去尾斜杠 → 剥尾部 `/weixin`（先剥斜杠才剥得掉 `http://h/weixin/`）；② 只拼接，不猜 `/v1`（`ChatRequestCore`），不补 `/chat/completions`；③ `authorized()` 用 `isNotBlank` 且返回同一 builder（可链式、不成双头）；`SyncConfig` setter 会 trim，纯空白令牌不可达。
 
 - **两条提取腿的共享内核只有一份口径：`server/extract_common.py`**（`android_db_extract.py` 1260→813 行、`pc_db_extract.py` 1122→673）。① 六个 env 常量必须继续在两侧脚本里定义（monkeypatch 要目标），common 内走 `_setting(name)`；
 ② `_setting` 判 `None` 不判真值（`COMMIT_INTERVAL = 0` 合法）；③ `activate(module)` 登记 `_HOST`，**import 尾部 + 每个入口函数开头都要再调**（只登记一次时后导入的 pde 顶掉 ade，表现 `commits=1` 且锁写进真实 `server/data/`）；
 ④ `_archive_path` / `_lock_path` 用 `_setting("MAIN_DB")` 调用时解析。改前跑 `test_extract_common.py` + `test_extract.py` + `test_extract_cursor.py`。
-- **游标分页只有一份解析口径：`server/util._parse_cursor`**（`query_messages`/`query_analysis` 共用，`EXPECTED_OWNER` 守归属）。① **两段都校验**：毫秒在 `MIN_TS_MS..MAX_TS_MS`、rowid 在 `0..MAX_ROWID` —— 只校验毫秒段时超 int64 的 rowid 抛 `OverflowError` 整页 500，负 rowid 恒空页。② 空值/纯空白返 `(None, None)`。③ `_` 多于两段 400。④ 只给毫秒时 rowid 取 `MAX_ROWID`。
+- **游标分页只有一份解析口径：`server/util._parse_cursor`**（`EXPECTED_OWNER` 守归属）。① **两段都校验**：毫秒在 `MIN_TS_MS..MAX_TS_MS`、rowid 在 `0..MAX_ROWID` —— 只校验毫秒段时超 int64 的 rowid 抛 `OverflowError` 整页 500，负 rowid 恒空页。② 空值/纯空白返 `(None, None)`。③ `_` 多于两段 400。④ 只给毫秒时 rowid 取 `MAX_ROWID`。
 - **提示词 / 报告里的绝对时间文本只有一份口径：`PromptTimeCore`**（+ 22 条，`PromptTimeCoreTest.kt`）。`DateKeyCore`/`DueTimeCore`/`LocaleTextCore` 之后同族第四代，差别是它输出**给模型看**。
-① **只走 `DateTimeFormatter` + `Instant.atZone(zone)`**：`SimpleDateFormat` 历法随**默认 Locale** 走，钉 `Locale.US`/`CHINESE` 只钉语言（安全来自映射表，是巧合）；th-TH 下 `Calendar.set(2026,9,25)` 是公历 **1483**。
+① **只走 `DateTimeFormatter` + `Instant.atZone(zone)`**：`SimpleDateFormat` 历法随**默认 Locale** 走，钉 `Locale.US`/`CHINESE` 只钉语言；th-TH 下 `Calendar.set(2026,9,25)` 是公历 **1483**。
 ② `zone` 可注入且单测必须钉。③ 「同年省略年份」用 `ZonedDateTime.year` 数值比较。④ 文案逐字保持。改前跑三个测试类 + `-Duser.language=th -Duser.country=TH` 全量。
 
-- **顾问报告的时间字段只有一份归一口径：`server/util._advisor_ts`**（`test_regression.py` + `test_stats_api.py` 守着）。① None/bool/空串/认不出 → 0；纯数字当毫秒，`1e9 <= n < 1e11` 视秒 ×1000；越界 → 0；文本走 `_local_ms`。② `routes.query_advisor` 排序键必须是 `(_advisor_ts(received_at), _advisor_ts(created_at))` —— 裸取遇字符串行 500。③ 新增 util 函数登记 `EXPECTED_OWNER`。
+- **顾问报告的时间字段只有一份归一口径：`server/util._advisor_ts`**（`test_stats_api.py` 守着）。① None/bool/空串/认不出 → 0；纯数字当毫秒，`1e9 <= n < 1e11` 视秒 ×1000；越界 → 0；文本走 `_local_ms`。② `routes.query_advisor` 排序键必须是 `(_advisor_ts(received_at), _advisor_ts(created_at))` —— 裸取遇字符串行 500。③ 新增 util 函数登记 `EXPECTED_OWNER`。
 - **`?date=YYYY-MM-DD` 的换算口径在 `server/util._day_bounds_ms`**（底座 `_utc_ms` / `_local_offset_min` / `_local_ms`；`/messages` 与 `/analysis` 共用）。① 按 **UTC 基准**换算再套时区偏移，别用 `datetime(...).timestamp()` —— 1970 前 / 9999 后 `OSError` 兜成 500。② 失败 400 `date must be YYYY-MM-DD`、越界 400 `date out of range`；**空串 `?date=` 等于不过滤**。③ 新增 util 函数要改进 `app.py` import。
 
-- **`GET /queue` 的 summary 是全库口径：`server/storage.queue_summary`**（`query_queue` 用它；`tasks` 才是当前页）。① 无 `LIMIT`，只受 `device_id` / `state` 过滤；过期行只计 `stale` 不再计四状态。② `state` 非法返全 0、表不存在返全 0。③ 前端 `queueActiveCount()` 必须优先读 summary（数列表会在超一页时停在 200）。④ 别把 `/stats` 的 `queue` 段与它写成两套过期口径。
+- **`GET /queue` 的 summary 是全库口径：`server/storage.queue_summary`**（`tasks` 才是当前页）。① 无 `LIMIT`，只受 `device_id` / `state` 过滤；过期行只计 `stale` 不再计四状态。② `state` 非法返全 0、表不存在返全 0。③ 前端 `queueActiveCount()` 必须优先读 summary（数列表会在超一页时停在 200）。④ 别把 `/stats` 的 `queue` 段与它写成两套过期口径。
 
 - **`/stats` 会话数的 SQL 口径：`stats_api.CONV_KEY_SQL`**（`= "pkg || char(1) || conversation"`，三处 `COUNT(DISTINCT ...)` 都引它）。① 会话身份是 `(pkg, conversation)`，与 `ckOf()` / `ConvKey` 同口径 —— 只数 `conversation` 会把「微信的王五」和「微博的王五」合并。② `conversation` 为 NULL 时整体 NULL、`COUNT(DISTINCT)` 跳过。③ 改这条 SQL 前跑 `test_stats_api.py` 三条跨 pkg 用例。
-- **`docs/scripts/static_check.py` 的 ktlint 缓存必须落在仓库外且是绝对路径**（`cache_dir()` / `_inside()`；`server/test_tooling_cache.py` 5 条守着）。① 缺 `USERPROFILE` 时 `expanduser(波浪号)` 原样返回 → 拼出相对路径 → 71 MB jar 进仓库、`git add -A` 带进提交（真实事故）；② `NOTIFYME_TOOLS_DIR` 指进仓库也要改道临时目录；③ 判「在仓库内」用 `os.path.commonpath`，别用 `startswith`。
+- **`docs/scripts/static_check.py` 的 ktlint 缓存必须落在仓库外且是绝对路径**（`server/test_tooling_cache.py` 5 条守着）。① 缺 `USERPROFILE` 时 `expanduser(波浪号)` 原样返回 → 拼出相对路径 → 71 MB jar 进仓库被 `git add -A` 带进提交（真实事故）；② `NOTIFYME_TOOLS_DIR` 指进仓库也要改道临时目录；③ 判「在仓库内」用 `os.path.commonpath`，别用 `startswith`。
 - **`/suggests/next` 的 `pkg` 是「真过滤」，不是回显**（`server/suggests.py`，`test_stats_api.py` 4 条守着）。
 ① 只作用于 `_todo_counts` / `_convs_without_analysis` 两族规则；**排队按设备、顾问是全局报告**，`_queue_state` / `_advisor_state` 必须保持全库口径。
 ② 前端 `fetchSuggests` 拼 `?pkg=`，`setAppFilter` / `clearAppFilter` 后要 `refreshSuggests()`；拉失败就清空 `SUGGESTS`，别拿上一份别的来源的数字冒充。
-③ 加参数别只改回显：既有 `test_suggests_echoes_pkg` 只断言回显，621 条全绿照样漏了这个缺陷 —— 新过滤逻辑必须补「带/不带 pkg 结果不同」的用例。
-- **数值列的脏行守卫：`server/stats_api.INT_ONLY_TS` / `MAX_TS`**（`test_stats_api.py` 4 条 + `test_queue.py` 2 条守着）。SQLite 列有 INTEGER 亲和但**能存字符串**，单行脏值就让整页 500 / 游标毒化。① 过滤用 `typeof(timestamp) IN ('integer','real')` 作**常驻条件**，聚合用 `MAX(CASE WHEN typeof(...) THEN x END)`；② **别换 CAST**（实测 typeof 仍走索引，CAST 退化全表 `SCAN`）；③ 出参走 `_safe_int(...)`。
-- **排队过期行的清理与设备维度过期口径：`storage.cleanup_queue_tasks` / `queue_devices`**（`test_queue.py` 6 条）。① 清理不能只挂上报路径（设备全停报后僵尸行永挂 devices），读取路径 `_ensure_db_ready` 也要调 `_maybe_cleanup_queue` 按 `QUEUE_CLEANUP_INTERVAL_MS`（1h）节流；② 设备 chip 的 `active` 只算未过 TTL 的 queued+running，另加第 4 键 `stale`；③ 用例 fixture 必须复位 `app_module._queue_cleanup_at`。
+③ 加参数别只改回显：既有 `test_suggests_echoes_pkg` 只断言回显，全绿照样漏检 —— 新过滤逻辑必须补「带/不带 pkg 结果不同」的用例。
+- **数值列的脏行守卫：`server/stats_api.INT_ONLY_TS` / `MAX_TS`**（`test_stats_api.py` 4 条 + `test_queue.py` 2 条守着）。SQLite 列有 INTEGER 亲和但**能存字符串**，单行脏值就让整页 500 / 游标毒化。① 过滤用 `typeof(timestamp) IN ('integer','real')` 作**常驻条件**，聚合用 `MAX(CASE WHEN typeof(...) THEN x END)`；② **别换 CAST**（CAST 退化全表 `SCAN`）；③ 出参走 `_safe_int(...)`。
+- **排队过期行的清理与设备维度过期口径：`storage.cleanup_queue_tasks` / `queue_devices`**（`test_queue.py` 6 条）。① 清理不能只挂上报路径（设备全停报后僵尸行永挂 devices），读取路径 `_ensure_db_ready` 也要调 `_maybe_cleanup_queue`（1h 节流）；② 设备 chip 的 `active` 只算未过 TTL 的 queued+running，另加第 4 键 `stale`；③ 用例 fixture 必须复位 `app_module._queue_cleanup_at`。
 - **排队 Tab 的状态 chip 与汇总同源**（`console_ui.queueStateTotal`；空态另见 `queueEmptyScope` 契约）。① chip 计数走 `queueStateTotal(st)`（优先 `QUEUE_SUMMARY[st]`）——数当前页会让 600 排队 + 20 已完成显示「已完成 0」；② 先加「chip 与 summary 一致」用例。
 - **顾问存档损坏不能冒充「没有报告」**（`suggests._advisor_state` 返三元组 + `ADVISORS_ERR`；`test_stats_api.py` 3 条守着）。
 ① 损坏时份数必须给 `None`（`return None, 0, True`），给 `0` 会让 priority 50 的「还没有顾问报告 / 顾问存档 0 份」规则命中 （存档坏但报告还在盘上）；
@@ -367,7 +368,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **顾问 Tab 的来源过滤说明必须跟事实走：`console_classify.advisorPkgScope`**（`test_console_classify.py` 6 条 + `test_console_ui.py` 1 条守着）。① `pkg` 可选（老报告与端上 `toUploadJson` 都不写）；② 四态 `all`/`untagged`/`mixed`/`exact`；③ UI 只挑措辞。
 - **列表「被截断」与「被筛选」必须各有独立标志：`console_classify.advisorListState`**（4 条规则层 + 1 条 UI 守着）。① `truncated = total > loaded`、`filtered = shown < loaded`；② `total` 缺失/0/负数/非小数/小于 loaded 一律回落 loaded；③ 降级路径保留旧口径（只报截断）且要可测。
-- **排队 Tab 的空态必须分三成因：`console_classify.queueEmptyScope`**（7 条规则层 + 1 条 UI）。① `scope` 三档 `device`/`state`/`all`，`mode` 四态 `loaded`/`none`/`elsewhere`/`unknown`；② 设备维度读 `devices[].total`、状态维度读 `summary[state]`，不许拿 `QUEUE.length` 顶替；③ 设备不在清单里 = 行已被保留期清理，写「已经没有任务了」；④ 「设备 × 状态」无已知口径 → `stateKnown=false`，只说「各状态合计」；⑤ 拿不到汇总回 `unknown`，写「不敢断言」，搜索仍是「本页里挑」。
+- **排队 Tab 的空态必须分三成因：`console_classify.queueEmptyScope`**（7 条规则层 + 1 条 UI）。① `scope` 三档 `device`/`state`/`all`，`mode` 四态 `loaded`/`none`/`elsewhere`/`unknown`；② 设备维度读 `devices[].total`、状态维度读 `summary[state]`，不许拿 `QUEUE.length` 顶替；③ 设备不在清单里 = 行已被保留期清理，写「已经没有任务了」；④ 「设备 × 状态」无已知口径 → `stateKnown=false`，只说「各状态合计」；⑤ 拿不到汇总回 `unknown`，写「不敢断言」。
 - **来源筛选下的空态必须分三成因：`console_classify.appEmptyScope`**（5 条规则层 + 1 条 UI）。① `mode` 四态 `loaded`/`none`/`elsewhere`/`unknown`，只有 `db === 0` 敢说「没有」；② `db` 与 `shown` 无大小关系（跨页 + 脏行 skip），`null` ≠ `0`；③ 键过 `normPkg` 与 `distPairs` 同口径；④ 只有会话 tab 传 `byPkg`。
 - **列表只画一部分时，标题与切片必须同源：`console_classify.statsListState`**（3 条规则层 + 1 条 UI）。① `capped` 与 `expanded` 两个正交标志；② 上限由 UI 传（`STATS_LIST_CAP=30`），脏值回落 `DEFAULT_STATS_LIST_CAP`；③ `shown` 由函数算、调用方不许传；④ 标题 / note / more 读同一 `listState`。
 
@@ -376,10 +377,10 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **每条建议的数字必须自带口径：`suggests._build` 的 `scope` + `console_classify.suggestScope`**（3+3+1 条守着）。① `scope` 由规则的 `pkg_scoped` 决定，不看请求参数；② `pkg` / `global` 两态，排队与顾问恒 `global`；③ 标题只在全部建议都按来源过滤时才标「仅 X」，每张卡另带一枚口径徽标。
 - **一个句子里的两个计数必须各带口径：`console_classify.syncCounters`**（4 条规则层 + 1 条 UI）。① 逐侧复用 `badgeState` 定档，返 `{msg, ana, mixed}`；② `null`（拿不到）≠ `0`（真的是 0）；③ `filtered` 一票否决两侧；④ UI 只给退化的那侧加「已加载」前缀。
 
-- **枚举的文案映射只在规则层：`console_classify.SOURCE_LABELS` / `sourceLabel` / `sourceBadge` / `queueKindLabel` / `queueStateLabel` / `pairText`**（9 条规则层 + 2 条 UI 守着）。① 认不出原码原样回显，空值折 `unknown`；② 查表走 `hasOwnProperty`，`constructor` / `__proto__` 不许命中原型链；③ `queueKindLabel` / `queueStateLabel` 未知返 `null` 让 UI 兜底；④ 新增采集通道只改 `SOURCE_LABELS` 一处（用例钉全集）。
+- **枚举的文案映射只在规则层：`console_classify.SOURCE_LABELS` / `sourceLabel` / `sourceBadge` / `queueKindLabel` / `queueStateLabel` / `pairText`**（9+2 条守着）。① 认不出原码原样回显，空值折 `unknown`；② 查表走 `hasOwnProperty`，`constructor` / `__proto__` 不许命中原型链；③ `queueKindLabel` / `queueStateLabel` 未知返 `null` 让 UI 兜底；④ 新增采集通道只改 `SOURCE_LABELS` 一处（用例钉全集）。
 
 - **控制台侧的 S1 码值→中文映射只在规则层**（`console_classify.TOPIC_LABELS` / `DUE_LABELS` + `topicLabel` / `dueLabel` / `importanceChip`）：认不出原码原样回显、空值才回落；`none` 整段不渲染；「截止」优先序 `todo_due → s2.due_time → s1.due_window`；数值重要度与服务端 `util._importance_label` 同源。
 - **同一段里的分布与标量必须能对上：`stats_api._queue_block.by_kind`、`console_classify.mergePairsBy`**（9 条用例）。① 类型计数必须在「过期 → `continue`」**之后**；② 契约 `sum(by_kind.count) == total - stale`；③ `by_pkg` 的 NULL / 空串各成分组而 `normPkg()` 都折成微信 → `mergePairsBy` 归并后**按次数降序、同次数键名升序重排**（`distPairs` 同口径）；④ 加分布字段先问该不该跟同段过期口径走。
-- **控制台「是否待办」只有一份口径：`console_classify.safeBool` / `needActionOf` / `needActionChip`**（三处测试守着）。① 真值表与服务端 `util._safe_bool` 逐条对齐（字符串只认 true/1/yes/on/y/t）—— JS 真值把 "false"/"no"/"0" 都当真，别再写 `!!na.value`；② `needActionOf` 优先取顶层 `a.need_action`（= `/stats` 的 todo 口径），缺失才退回 `s1.need_action.value`；③ 徽标两态：⚡待办 / ✓ 无需行动。
-- **悬浮层几何只有一份口径：`OverlayPlacementCore`**（纯函数 + 15 条）。① 写 `params.x/y` 前先过 `toContent()`：悬浮窗 `y` 是**内容区**坐标（绝对位置 = y + 状态栏 inset），状态栏只算一遍；② 悬浮窗 margin 不生效，宽度显式给（卡片 92%、面板 76%）；③ `CENTER` 按内容区居中，对齐整屏加 `panelCenterOffsetY(topInset, bottomInset)`；④ 屏尺寸用 `Display.getRealMetrics`；⑤ 卡片顺延按前张实测高度，球位 = 屏高 1/3。
+- **控制台「是否待办」只有一份口径：`console_classify.safeBool` / `needActionOf` / `needActionChip`**（三处测试守着）。① 真值表与服务端 `util._safe_bool` 逐条对齐（字符串只认 true/1/yes/on/y/t）—— 别再写 `!!na.value`；② `needActionOf` 优先取顶层 `a.need_action`（= `/stats` 的 todo 口径），缺失才退回 `s1.need_action.value`；③ 徽标两态：⚡待办 / ✓ 无需行动。
+- **悬浮层几何只有一份口径：`OverlayPlacementCore`**（纯函数 + 15 条）。① 写 `params.x/y` 前先过 `toContent()`：悬浮窗 `y` 是**内容区**坐标（绝对位置 = y + 状态栏 inset），状态栏只算一遍；② 悬浮窗 margin 不生效，宽度显式给（卡片 92%、面板 76%）；③ `CENTER` 按内容区居中，对齐整屏加 `panelCenterOffsetY`；④ 屏尺寸用 `Display.getRealMetrics`；⑤ 卡片顺延按前张实测高度，球位 = 屏高 1/3。
 - **库侧 0/1 flag 的读出口只有一份口径：`util._db_bool`（只有 1 / `1` 算真，与 SQL `col = 1` 同口径）+ `console_classify.dbBool` + `console_ui.dbBoolOf`**；写入口的 `_safe_bool` 是另一张表（认 true/yes），两者刻意不同 —— 别用 Python / JS 原生真值判库列。

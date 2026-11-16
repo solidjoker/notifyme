@@ -3090,3 +3090,64 @@ dumpsys 原文：悬浮卡 `mAttrs={(49,32)(1122xwrap)}` → `frame=[49,182][117
 **教训.**
 
 **「两端各自都有测试」不等于「两端之间有契约」**：消息通道与分析通道的行为测试只能证明「一包能通」，证明不了「字段集合没漂移」。跨端契约要么把两端源码放在一起比对（像排队通道那样），要么把发送端序列化抽成两端共用的可测组件，否则字段改名 / 新增 / 删除永远靠线上报错来发现。
+## E-81 顾问通道（/advisor）没有跨端字段守卫、端上写了两份上传 JSON、服务端还静默截断摘要
+
+**现象.**
+
+第 4 条端云通道（顾问复盘报告）比前三条多出两个问题：
+
+① **没有跨端字段守卫**。上一轮把 `/weixin`（消息）与 `/analysis`（会话分析）纳入 `server/test_report_contract.py` 后，顾问通道仍是裸的：端上 `AdvisorStore` 与 `SyncWorker` 决定上传哪些键，服务端 `storage._normalize_advisor_item` 决定消费哪些键，两边没有任何共同定义。
+
+② **端上有两份手写的同结构上传 JSON**。`SyncWorker.pushAdvisor` 里，脱敏分支与不脱敏分支**各写一份**上传结构：不脱敏分支走 `report.toUploadJson()`，脱敏分支就地拼一遍键（`report_id` / `created_at` / `period_days` / `case_count` / `summary` / `suggestions{type,title,detail}` / `model_used`）。两份键集没有任何测试钉住，任一处加字段就**静默漂移** —— 服务端只认自己那几把钥匙，多出的键直接丢掉，控制台上看不出任何异常。
+
+③ **服务端静默截断**。`_normalize_advisor_item` 的长度收敛（`summary` ≤ 4096、`detail` ≤ 2048、`title` ≤ 256、`model_used` ≤ 128、`created_at` ≤ 64、`suggestions` ≤ 200 条）不留任何痕迹：控制台只显示半截摘要，用户会以为模型就写了这么多。
+
+**根因.**
+
+顾问通道是后加的通道，历史上一直按「能用就行」实现，缺三样东西：
+
+- **上传口径没有唯一出口**：前三条通道的上报体都由单一序列化点产出（`ChatMessage.toJson` / `AnalysisCaseRecord.toJson`），顾问通道却在上报处现场拼装；一旦引入脱敏分支，「复制一份改几个字段」就成了最省事的写法。
+- **长度收敛只有一端做**：端上不裁、服务端裁，本意是「以服务端为准」，但收敛**不留痕**，于是「服务端裁的」和「模型只写了这么多」在控制台上长得一模一样。
+- **没有契约守卫**：前两条通道加守卫时只覆盖了 `/weixin` 与 `/analysis`，顾问通道被漏掉 —— 守卫的价值恰恰在于「新增通道时必须同时补契约」，而这条约束没有被写进任何地方。
+
+**修法.**
+
+三处一起改：
+
+① **端上新增 `AdvisorPayloadCore`（84 行，纯函数）作为上传口径唯一出口**：`uploadJson(report, redact)` 产出固定键序的 7 键 JSON（`report_id` / `created_at` / `period_days` / `case_count` / `summary` / `suggestions` / `model_used`），`suggestions` 子键固定 `type` / `title` / `detail`；`redact` 回调**只作用于正文**（`summary` 与建议的 `title` / `detail`），`type` / `model_used` / `report_id` / `created_at` 原样通过。`AdvisorStore.toUploadJson()` 改为委托它，`SyncWorker.pushAdvisor` 的脱敏分支改为「先 `copy` 出脱敏后的报告，再走同一个出口」—— **两份手写 JSON 收口成一份**。
+
+② **本地状态键永不上报**：`rejected_count` / `first_rejected_at` / `quarantined` 三个键描述的是设备内状态（本地拒收与隔离），只留在 `AdvisorStore.toJson()` 的本地存档形态里，不进入上传体。与分析通道同口径。
+
+③ **长度裁剪只在服务端一处，但收敛改为留痕**：`_normalize_advisor_item` 的 `_clip` 增加字段名参数，被裁的字段名进 `truncated_fields`，整条报告额外带 `truncated: true`；`suggestions` 条数超限记 `suggestions`。控制台新增规则层 `console_classify.advisorTruncation(report)`（返回 `{truncated, fields[], label}`，字段名走 `TRUNCATION_FIELD_LABELS` 中文标签、认不出的原样回显、无字段表时也照标「已截断」），顾问卡渲染「已截断 · 摘要、建议标题」chip。
+
+④ **补上第 4 条通道的契约守卫**：`server/test_report_contract.py` 增加顾问段（14 条），把「上传键集 / 子键 / 剥离键 / 服务端消费键 / 单一出口 / 裁剪只在服务端」钉死。
+
+**刻意取舍.**
+
+① **端上不裁长度**：两端各裁一遍就会出现「谁截的、截了多少」两套口径。裁剪留在服务端（它已经有全套上限常量），端上负责把「原文」发上去。
+② **裁剪留痕用两个键而不是一个**：`truncated: true` 只说「裁过」，`truncated_fields` 才说「裁了什么」—— 前者给徽标，后者给排查与文案。
+③ **端上不裁 ≠ 端上不保护**：上传体积仍受服务端 `ADVISOR_MAX_BYTES`（8 MiB）与 413 处置保护，与分析通道同款；本轮只统一「字段口径」，不动传输层。
+④ **`pkg` 继续不上报**：顾问报告是跨会话聚合的，没有单一来源；服务端允许透传，端上不发，语义是「无来源」而不是「未知来源」。
+⑤ **契约仍分源码级与运行级两层**：源码级比字段集合（看得见漂移），运行级打真实 POST（看得见行为），两层互补。
+
+**测试.**
+
+- 新增 `app/src/test/java/com/notifyme/android/AdvisorPayloadCoreTest.kt` **11 条**：上传键集恰好 7 个 / 三个本地状态键不出设备 / `suggestions` 子键钉死 / 值与报告一致 / 脱敏只改正文 / 无回调保留原文 / 空建议成空数组 / `created_at` 保持数字 / **超长摘要在端上不裁** / `toUploadJson` 委托核心 / 空报告仍七键。
+- `server/test_report_contract.py` **+14 条**（源码级 8 + 运行级 6）：上传键集钉死 / 子键钉死 / 上传 ⊆ 本地存档 / 本地三键不出设备 / 服务端消费 ⊆ 客户端 / 客户端键全被消费 / **单一出口**（`AdvisorStore` 委托 + `pushAdvisor` 无手写 `put`）/ **裁剪只在服务端**（端上无 `MAX_` 常量、服务端写 `truncated`）；运行级：客户端形状能 200 落库 / 缺 `report_id` 207 / 重复 `report_id` `duplicated=1` / 超长 `summary` 落库长度 4096 且 `truncated=True` / 205 条建议只留 200 且标记 / 没裁过不带标记。
+- `server/test_console_classify.py` **+4 条**（`advisorTruncation`：字段中文标签 / 无字段表仍标 / 无标记不标 / 脏输入去重且未知字段原样回显）；`server/test_console_ui.py` **+1 条**（顾问卡走规则层、旧写法已退场）。
+
+**验证.**
+
+`python -m pytest server/test_console_classify.py server/test_console_ui.py server/test_report_contract.py -q` → **250 passed**；`python -m pytest server/ -q` → **844 passed**（基线 825 + 本轮 19）；`node --check server/console_classify.js` 通过，控制台内联脚本 `node --check` 退出码 0；`python -m compileall -q server` 通过。
+
+**计数.**
+
+Android 用例 1384 → **1395 条**（`app/src/test` 86 → **87 个 .kt**）、主源码顶层 131 → **132**（全树 139）、Core 逻辑内核 50 → **51**；服务端用例 825 → **844**；`server/console_classify.js` 1095 / 1064 → **1137 / 1064**（`advisorTruncation` @979 · `TRUNCATION_FIELD_LABELS` @969 · 导出块 @1069-1136）；`server/console_ui.py` 4018 / 3924（`advisorTruncationOf` @1493）；`server/storage.py` 902 / 837（`_normalize_advisor_item` @351）；新增 `app/src/main/java/com/notifyme/android/AdvisorPayloadCore.kt` **84 行**；架构图 01 = **3962 × 1836**、02 = **15327 × 2070**、07 = **6960 × 5144**。
+
+**教训.**
+
+**「加一个分支」最容易长出「第二份实现」**：脱敏分支本来只是一次 `copy` + 三个字段替换，复制一份 JSON 反而更省事，于是两份手写结构就长期并存且互不知情 —— 只有当上传体由**单一出口**产出时，后加的分支才不会漂移。
+
+**裁剪不是问题，静默裁剪才是**：长度收敛本身是必要的（防脏数据撑爆控制台），但「被裁过」必须**留痕**，否则用户和排查者都只能猜是上游写少了还是中间截断了。收敛留痕的成本只有两个键。
+
+**契约守卫要覆盖「每一条通道」，而不是「已知的几条」**：第 4 条通道漏在守卫之外，恰恰说明守卫本身需要一条「新通道必须同时补契约」的约定 —— 否则每加一条通道就会再留一个盲区。
