@@ -69,7 +69,8 @@ internal object AnalysisParsing {
             val answer = payload?.optJSONObject("answer") ?: payload
             if (answer != null) {
                 prob = answer.optDouble("need_action_prob", 0.0).coerceIn(0.0, 1.0)
-                importance = answer.optDouble("importance", 0.0).coerceIn(0.0, 9.0)
+                // 重要度只夹取、不缩放：分制口径统一在 S1ScaleCore（0-9 十档）
+                importance = S1ScaleCore.onScale(answer.optDouble("importance", 0.0))
                 dueWindow = answer.optString("due_window", "none").ifEmpty { "none" }
                 topic = answer.optString("topic", "notice").ifEmpty { "notice" }
                 confidence = answer.optDouble("confidence", 1.0).coerceIn(0.0, 1.0)
@@ -79,6 +80,47 @@ internal object AnalysisParsing {
         }
         return AnalysisCase.Companion.S1Result(
             needActionProb = prob,
+            importance = importance,
+            dueWindow = dueWindow,
+            topic = topic,
+            confidence = confidence
+        )
+    }
+
+    /**
+     * systemone 协议的 S1 答案解析（防御式）。
+     *
+     * 协议形态：{"answers":{"need_action":{"noul":0.94,"confidence":...},
+     *   "importance":{"score":..., "legend":{...}, "probabilities":{...}, "confidence":...},
+     *   "due_window":{"choice":...}, "topic":{"choice":...}}}。
+     *
+     * 三条口径：
+     *  - importance 走 [S1ScaleCore]（score 题是 0-9 档，**不从数值猜分制**）；
+     *  - 整体置信度取各题 confidence 的最小值，任一题没把握就不许静默定案；
+     *  - 后端没给 confidence 时按 1.0 处理（不误触发升级），字段缺失一律兜底默认值。
+     */
+    fun parseSystemOneAnswers(answers: JSONObject?): AnalysisCase.Companion.S1Result {
+        val a = answers ?: JSONObject()
+        val needActionProb = a.optJSONObject("need_action")
+            ?.optDouble("noul", 0.0) ?: 0.0
+        val importance = S1ScaleCore.importanceOf(a.optJSONObject("importance"))
+        val dueWindow = a.optJSONObject("due_window")
+            ?.optString("choice", "none").orEmpty().ifEmpty { "none" }
+        val topic = a.optJSONObject("topic")
+            ?.optString("choice", "notice").orEmpty().ifEmpty { "notice" }
+        var confidence = 1.0
+        var hasConfidence = false
+        val keys = a.keys()
+        while (keys.hasNext()) {
+            val answer = a.optJSONObject(keys.next()) ?: continue
+            if (answer.has("confidence")) {
+                confidence = minOf(confidence, answer.optDouble("confidence", 1.0))
+                hasConfidence = true
+            }
+        }
+        if (!hasConfidence) confidence = 1.0 // 后端不给置信度时不误触发升级
+        return AnalysisCase.Companion.S1Result(
+            needActionProb = needActionProb,
             importance = importance,
             dueWindow = dueWindow,
             topic = topic,

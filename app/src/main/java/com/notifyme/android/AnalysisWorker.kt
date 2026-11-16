@@ -844,47 +844,15 @@ class AnalysisWorker(
         // 防御式解析：{"answers":{"need_action":{"noul":0.94,"confidence":...},
         //   "importance":{"score":..., 或 choice 概率档}, "due_window":{"choice":...},
         //   "topic":{"choice":...}}}，字段缺失/类型不符不崩溃。
+        // 口径全在 AnalysisParsing.parseSystemOneAnswers：importance 的分制见 S1ScaleCore
+        // （从答案自带的 legend / probabilities 读档位数，**不按数值猜**）。
         val obj = try {
             JSONObject(raw)
         } catch (e: Exception) {
             JSONObject()
         }
-        val answers = obj.optJSONObject("answers") ?: JSONObject()
-
-        val needActionProb = answers.optJSONObject("need_action")
-            ?.optDouble("noul", 0.0) ?: 0.0
-
-        // importance 是 0-9 的 score 题：score 归一化(0-1)时乘 9 还原档位
-        val importanceRaw = answers.optJSONObject("importance")
-            ?.optDouble("score", 0.0) ?: 0.0
-        val importance = if (importanceRaw <= 1.0) importanceRaw * 9.0
-        else importanceRaw.coerceAtMost(9.0)
-
-        val dueWindow = answers.optJSONObject("due_window")
-            ?.optString("choice", "none").orEmpty().ifEmpty { "none" }
-        val topic = answers.optJSONObject("topic")
-            ?.optString("choice", "notice").orEmpty().ifEmpty { "notice" }
-
-        // 整体置信度：各题 confidence 取最小（最没把握的题目决定整体可信度）
-        var confidence = 1.0
-        val keys = answers.keys()
-        var hasConfidence = false
-        while (keys.hasNext()) {
-            val answer = answers.optJSONObject(keys.next()) ?: continue
-            if (answer.has("confidence")) {
-                confidence = minOf(confidence, answer.optDouble("confidence", 1.0))
-                hasConfidence = true
-            }
-        }
-        if (!hasConfidence) confidence = 1.0 // 后端不给置信度时不误触发升级
-
-        return raw to AnalysisCase.Companion.S1Result(
-            needActionProb = needActionProb,
-            importance = importance,
-            dueWindow = dueWindow,
-            topic = topic,
-            confidence = confidence
-        )
+        val answers = obj.optJSONObject("answers")
+        return raw to AnalysisParsing.parseSystemOneAnswers(answers)
     }
 
     // ---------------- S1：openai 协议（glm/custom 槽位模拟判定题） ----------------
@@ -968,7 +936,8 @@ class AnalysisWorker(
         }
         val flat = JSONObject().apply {
             put("need_action_prob", (answers[0]["noul"] as? Number)?.toDouble() ?: 0.0)
-            put("importance", (answers[1]["score"] as? Number)?.toDouble() ?: 0.0)
+            // 重要度口径统一走 S1ScaleCore（端侧 decoder 给的 score 已是 0-9 档，只夹取）
+            put("importance", S1ScaleCore.importanceOf(answersJson.optJSONObject("importance")))
             put("due_window", answers[2]["choice"] as? String ?: "none")
             put("topic", answers[3]["choice"] as? String ?: "notice")
             put("confidence", minConfidence)

@@ -37,7 +37,7 @@ flowchart TB
         F2 -->|"local_model"| F2B
     end
 
-    F2A --> S1OUT["S1 判定结果（防御式解析，字段缺失不崩）<br/>need_action: noul → {value, prob}<br/>importance: score 0-9<br/>due_window: choice none/today/tomorrow/this_week/later<br/>topic: choice work_task/schedule/notice/smalltalk/risk<br/>confidence"]:::out
+    F2A --> S1OUT["S1 判定结果（防御式解析，字段缺失不崩）<br/>need_action: noul → {value, prob}<br/>importance: score 0-9（分制按答案声明的档位，只夹取不缩放）<br/>due_window: choice none/today/tomorrow/this_week/later<br/>topic: choice work_task/schedule/notice/smalltalk/risk<br/>confidence"]:::out
     F2B --> S1OUT
 
     S1OUT --> F2REC["forks += {fork:s1, prob:needActionProb,<br/>verdict: needAction ? split : sharp,<br/>note: s1.toInjectText()}<br/>logcat tag = AgentTree"]:::out
