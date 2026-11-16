@@ -48,7 +48,7 @@ Remove-Item -Recurse -Force app\build\test-results\testOpenDebugUnitTest -ErrorA
 ```
 
 **必须先删 test-results 再加 `--no-build-cache`**：否则 Gradle 判 UP-TO-DATE，评测根本不执行（改 properties 不算 task input，cleanTest 是 no-op）。
-**评测必须留着时间预算**（`S1EvalBudgetCore`）：properties 的 `CALL_TIMEOUT_MS`（默认 90000）与 `TOTAL_BUDGET_MS`（默认 900000 = 15min）到期即停发新调用，剩余样本写入报告「预算耗尽未测试」，别让构建无限等。2026-11-12 端点「TCP 通、chat 不回」+ 旧 readTimeout=180s × 40 次把 `testOpenDebugUnitTest` 挂死 40 分钟。**跑评测前先确认端点能出 chat 响应**。
+**评测必须留着时间预算**（`S1EvalBudgetCore`）：properties 的 `CALL_TIMEOUT_MS`（默认 90000）与 `TOTAL_BUDGET_MS`（默认 900000 = 15min）到期即停发新调用，剩余样本写入报告「预算耗尽未测试」，别让构建无限等。旧 readTimeout=180s 曾把 `testOpenDebugUnitTest` 挂死 40 分钟。**跑评测前先确认端点能出 chat 响应**。
 
 ### 一条命令自检（开 PR 前跑这个）
 
@@ -76,7 +76,7 @@ ABI 约定：debug/beta 打 `arm64-v8a` + `x86_64`（真机 + 模拟器），**r
 ./gradlew --stacktrace testOpenDebugUnitTest assembleOpenDebug assembleBetaDebug
 ```
 
-CI 额外跑：Android Lint（`lintOpenDebug`，**退出码直接参与判定**，不再被管道吞掉）、Python 语法检查（`compileall server`）、pytest（`server/` 目录级）、**隐私守卫**（`docs/scripts/privacy_guard.py --forbid-local-secrets`，见 §4）、版本号校验（`docs/scripts/version_check.py`）。
+CI 额外跑：Android Lint（`lintOpenDebug`，**退出码直接参与判定**）、Python 语法检查（`compileall server`）、pytest（`server/` 目录级）、**隐私守卫**（`docs/scripts/privacy_guard.py --forbid-local-secrets`，见 §4）、版本号校验（`docs/scripts/version_check.py`）。
 CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60 / 发布 30）、`concurrency`（PR 上重复推送自动取消上一次）。CI 不签名。
 
 ### 发布
@@ -171,9 +171,9 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 ① 测 413 要把 `app.config["MAX_CONTENT_LENGTH"]` 调小（如 1024）再发几 KB —— 真按 8 MiB 阈值发，服务端读完 body 前就回 413 并断连，客户端 `sendall` 撞连接重置拿不到状态码；
 ② 404/413 是 JSON，但 **405 仍是 Flask 默认 HTML**。参考 `server/test_http_e2e.py`（34 例）。
 - **「HTTP 触发 + 后台线程执行」型接口的端到端写法**：`/admin/extract` 用 `_run_extract_bg` + `_probe_main_db_writable`，端点只回 202 + job_id；后台失败要能在 `/admin/extract/status` 读出 `error_kind=busy`。
-- **提醒三级降级链的口径只有一份：`ReminderChainCore`（179 行 / 20 条）**：决策全在 Core 的 `decide()`，`runReminderChain` 只采集事实与副作用。**L1 分两段写**（事件行 + 提醒行）：提醒行缺失 → 不算 L1 成功、跳过 L2、降级 L3 闹钟（文案 `NOTE_CALENDAR_NO_ALERT` 带「App内提醒」→ 老记录推成 alarm）；闹钟也没设上 → `failed(dropEventId)`，调用方删掉孤儿事件（否则下一轮去重被它挡住，提醒永久钉死）。note 文案契约六条锁在单测里，改链路先跑它。
-- **S1 重要度的分制只有一份口径：`S1ScaleCore`（109 行 / 18 条）**：importance 是 **0-9 十档** score 题，score 就是档位。① 分制从答案自带的 legend / probabilities 条目数读（读不到回落 10 档）；② **只夹取、不缩放** —— 旧实现「score ≤ 1 就 ×9」把闲聊档抬到 6.3~9.0，越过升级闸 `ESCALATE_IMPORTANCE = 6.0`；③ 缺 score 按各档概率算期望，都没有则 0.0。systemone 解析抽成 `AnalysisParsing.parseSystemOneAnswers`（此前零单测）。改前跑 `S1ScaleCoreTest.kt`。
-- **通知抽取口径只有一份：`NotificationTextCore` + `NotificationShapeEvidenceTest`**（+19 条）：真机取证证实微信正文是 `[11条]发言人: 正文`；`hasUnreadPrefix` / `splitSender` / `isPlausibleSender` 是唯一口径，别再各写一套。改 `PrefixImParser` / `GenericNotificationParser` / `NotifyMeListener.toRawNotification` 任一都要跑 `NotificationShapeEvidenceTest`（它固化「某家 App 的通知 → 入库字段」的映射）。
+- **提醒三级降级链的口径只有一份：`ReminderChainCore`（179 行 / 20 条）**：决策全在 `decide()`，`runReminderChain` 只采集事实。**L1 分两段写**（事件行 + 提醒行）：提醒行缺失 → 不算 L1 成功、跳过 L2、降级 L3 闹钟（文案 `NOTE_CALENDAR_NO_ALERT` 带「App内提醒」→ 老记录推成 alarm）；闹钟也没设上 → `failed(dropEventId)`，调用方删掉孤儿事件（否则下一轮去重挡住，提醒永久钉死）。note 文案契约六条锁在单测里。
+- **S1 重要度的分制只有一份口径：`S1ScaleCore`（109 行 / 18 条）**：importance 是 **0-9 十档** score 题，score 就是档位。① 分制从答案自带的 legend / probabilities 条目数读（读不到回落 10 档）；② **只夹取、不缩放** —— 旧实现「score ≤ 1 就 ×9」把闲聊档抬到 6.3~9.0，越过升级闸 `ESCALATE_IMPORTANCE = 6.0`；③ 缺 score 按各档概率算期望，都没有则 0.0。systemone 解析抽成 `AnalysisParsing.parseSystemOneAnswers`。改前跑 `S1ScaleCoreTest.kt`。
+- **通知抽取口径只有一份：`NotificationTextCore` + `NotificationShapeEvidenceTest`**（+19 条）：真机取证证实微信正文是 `[11条]发言人: 正文`；`hasUnreadPrefix` / `splitSender` / `isPlausibleSender` 是唯一口径。改 `PrefixImParser` / `GenericNotificationParser` / `NotifyMeListener.toRawNotification` 任一都要跑 `NotificationShapeEvidenceTest`（它固化「某家 App 的通知 → 入库字段」的映射）。
 - **`lintOpenDebug` 只剩 3 条 warning，都是刻意保留的，别去“修”**：① `ObsoleteLintCustomCheck`（依赖库自带 lint.jar，改不了）；② `OldTargetApi`（`targetSdk 34` 是产品决定）；③ `ChromeOsAbiSupport`（release 只打 `arm64-v8a`，体积取舍）。
 - **改 `docs/architecture/diagrams/*.mmd` 必须重渲并回写尺寸表**：`mmdc -i X.mmd -o X.svg`，PNG 给 `-w <viewBox 宽 + 20> -H <viewBox 高 + 60>`；**脑图 06 的 viewBox 起点不是 `0 0`**，单独用 `-w 3200 -H 1600`（否则渲出 14×7 废图）；**`-h` 是 help 不是高度**；渲完量像素回写 `docs/architecture/README.md` 索引表。
 - **控制台归类规则只在 `server/console_classify.js`**（UMD，无 DOM），别写进 `console_ui.py` 的 HTML；`app.py` 注入 `/*__CONSOLE_CLASSIFY_JS__*/`。改规则跑 `server/test_console_classify.py`（`REQUIRE_NODE=1` 时 node 缺失要 **fail 不是 skip**）；前端降级 `var CC = window.ConsoleClassify || null`。
@@ -187,12 +187,12 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 两个坑：① `/stats` 的 `by_pkg` / `by_source` / `by_kind` 是**对象数组** `[{pkg|source|kind, count}]`，而前端本地算法生成的是 `{键: 次数}` —— 必须走 `pairList()` 归一化再渲染，
 直接 `Object.keys()` 会打印成 `[object Object]`；② 分析侧的 `redacted` / `redaction_rules` / `redaction_hits` 字段服务端一直返回，
 但前端要显式渲染（`redactBadge` / `redactDetail`）并纳入 `analysisSearchText` 搜索，否则看不到「哪些内容被替换成占位符」。
-- **周期分析任务按 tag 反查不到就不上报**：`AnalysisScheduler` 的周期任务（unique 名 `wechat_analysis` / `conv_analysis_<id>`）不带 tag，`QueueStateCollector.collect()` 只按 tag `analysis_on_demand` / `analysis_conv:<id>` 采集，所以控制台「排队」Tab 里看不到周期任务——这是已知取舍，不是 bug。
+- **周期分析任务按 tag 反查不到就不上报**：`AnalysisScheduler` 的周期任务（`wechat_analysis` / `conv_analysis_<id>`）不带 tag，`QueueStateCollector.collect()` 只按 tag `analysis_on_demand` / `analysis_conv:<id>` 采集，控制台「排队」Tab 看不到周期任务——已知取舍，不是 bug。
 
 - **会话卡内的「日期 / 发送者」两级分组**：规则在 `console_classify.groupMessages(msgs, dim, getTs, getSender)` —— **按 `getTs` 精确值分桶**，调用方要传当天零点对齐的时间戳（`console_ui.dayStartMs()`）。状态存 `wx_group_v1`；`setConvGroupDim` / `convDimBar` / `groupMsgsByDim` / `convGroupHtml` 一起改。
-- **排队 Tab 的「设备」维度有两套口径**：设备清单来自 `GET /queue` 的 `devices` 聚合（`storage.queue_devices()`，`summary.devices` 是台数），控制台的设备 chip 用这一份；前端 `console_classify.groupQueueTasksByDevice` 是纯函数版（只对内存 task 列表分组，离线/单测用），两处别混算。
-- **端云字段有契约守卫**：① 排队通道 `server/test_queue_contract.py` 比对 `QueueStateCore.kt` 的 `buildPayload` 与 `storage._normalize_queue_task`（字段名 / 顶层键 / 枚举 / 长度上限）。② **消息 / 分析 / 顾问三条上报通道 `server/test_report_contract.py`**（39 条）：读端上 `toJson` + `SyncWorker` 的 remove/put 与服务端读的键比对 —— 客户端键集钉死、必填 ⊆ 客户端必写、客户端 ⊆ 服务端读 ∪ 白名单（`appLabel` 与三个本地状态键不消费）、白名单精确相等。端侧改字段忘改服务端 CI 直接红（Kotlin 源 CRLF、Python 源 LF）。
-- **顾问通道的口径只有一份**（`AdvisorPayloadCore` 84 行 + 11 条；存档侧 `server/test_advisor_archive.py` 14 条）。① 上传体唯一出口 `uploadJson()`：键集固定 7 个（`report_id`/`created_at`/`period_days`/`case_count`/`summary`/`suggestions`/`model_used`），本地三状态键不上报，脱敏与不脱敏同一出口。② **长度裁剪只在服务端一处**，但收敛要留痕：`truncated_fields` + `truncated: true`，控制台出「已截断 · 摘要」chip。③ **存档只有一种形状**：读取跨两段（`_advisor_jsonl_paths` 老→新，同 id 留最后那条），追加不再轮转，容量上限由 `_trim_advisor_jsonl` 收敛（条数 1000 / 字节 8 MiB，丢最旧的、至少留一条），裁掉的份数写 sidecar 并随 `GET /advisor` 的 `dropped` + `limits` 下发，控制台走 `advisorDroppedNotice`。
+- **排队 Tab 的「设备」维度有两套口径**：设备清单来自 `GET /queue` 的 `devices` 聚合（`storage.queue_devices()`，`summary.devices` 是台数），控制台设备 chip 用这一份；前端 `console_classify.groupQueueTasksByDevice` 是纯函数版（离线/单测用），两处别混算。
+- **端云与跨层字段有契约守卫**：① 排队通道 `server/test_queue_contract.py` 比对 `QueueStateCore.kt` 的 `buildPayload` 与 `storage._normalize_queue_task`（字段名 / 顶层键 / 枚举 / 长度上限）。② **消息 / 分析 / 顾问三条上报通道 `server/test_report_contract.py`**（39 条）：读端上 `toJson` + `SyncWorker` 的 remove/put 与服务端读的键比对 —— 客户端键集钉死、必填 ⊆ 客户端必写、客户端 ⊆ 服务端读 ∪ 白名单（`appLabel` 与三个本地状态键不消费）、白名单精确相等。③ **topic / due 码值↔中文映射 `server/test_label_contract.py`**（15 条）：端上 `TopicLabelCore.kt` 与控制台 `console_classify.js` 的码值 / 中文文案（`strings.xml`）/ 别名表逐条一致，`TOPIC_CODES` 不含 `filtered`、`DUE_CODES` 不含 `none`，运行时归一与显示函数与静态表相等、未知值原样回显。端侧改一端忘另一端 CI 直接红（Kotlin 源 CRLF、Python 源 LF）。
+- **顾问通道的口径只有一份**（`AdvisorPayloadCore` 84 行 + 11 条；存档侧 `server/test_advisor_archive.py` 14 条）。① 上传体唯一出口 `uploadJson()`：键集固定 7 个（`report_id`/`created_at`/`period_days`/`case_count`/`summary`/`suggestions`/`model_used`），本地三状态键不上报。② **长度裁剪只在服务端一处**且留痕：`truncated_fields` + `truncated: true`，控制台出「已截断 · 摘要」chip。③ **存档只有一种形状**：读取跨两段（同 id 留最后那条），追加不再轮转，上限由 `_trim_advisor_jsonl` 收敛（1000 条 / 8 MiB，丢最旧、至少留一条），裁掉的份数写 sidecar 并随 `GET /advisor` 的 `dropped` + `limits` 下发。
 - **版本信息只有一份口径：`VersionInfoCore`**（internal object + 14 条）。控制台版本卡与 ☰ 菜单弹窗都调它。① `versionLine` 必须带 `versionCode`（debug 原地覆盖时 `versionName` 可能不变，只有 code 能证明装上新包）；② beta 的 `versionName` 自带 `-test`，`title()` 不再拼渠道后缀。改文案前看 `VersionInfoCoreTest.kt`。
 
 - **历史重复消息只能靠 `MessageDedupeCore` 归并，别在别处另写删行逻辑**：真机量化 78 组 / 271 行是「同一条通知被多次捕获」（微信正文形如 `[11条]发言人: 正文`，未读数一变正文就变，而入库去重键含正文原文）。

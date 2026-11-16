@@ -3258,3 +3258,35 @@ Android 用例 1384 → **1395 条**（`app/src/test` 86 → **87 个 .kt**）�
 ① **「归一化」是模型接口的约定，不是题面的事实**：score 题的分数就是档位，看到 0-1 就乘 9 是把接口约定当成了数据语义。
 ② **阈值闸门要跟被测量的量同一个量纲**：升级闸是 6.0（0-9 档位），量纲一旦被抬高，闸门就形同虚设 —— 闲聊（0.7 档）被当成危机（6.3 档）升级。
 ③ **零单测覆盖的解析路径最危险**：systemone 通道的整段解析此前没有任何用例，正是它藏了 ×9；抽成纯函数后一次改码就补上了 26 条。
+## E-86 topic / due_window 的「码值 ↔ 中文」映射跨端无守卫：改一端就出现「App 显示中文、控制台显示原始码」（test/label-contract）
+
+**现象.** 端上 `TopicLabelCore` 与控制台 `console_classify` 各自维护一套 topic / due_window 的「码值 ↔ 中文」映射与别名表，两份内容当前一致，但没有任何测试把两端钉在一起 —— 任何一端新增 / 改名 / 删别名，另一端不会变，于是同一条分析记录在 App 里显示「工作任务」，在控制台里显示原始码 `work_task`（第 53 / 55 轮已把布尔与字段名收成契约，这一层漏了）。
+
+**根因.** 三处真值各写各的，且都只有单端单测：
+① 端上 `app/src/main/java/com/notifyme/android/TopicLabelCore.kt`（230 行 / 11715 B）把 6 个 topic 码（`work_task` / `schedule` / `notice` / `smalltalk` / `risk` / `filtered`）与 5 个 due 码（`none` / `today` / `tomorrow` / `this_week` / `later`）映射到 `app/src/main/res/values/strings.xml` 的 `topic_*` / `due_*` 资源，并各带一张别名表（`when` 分支）；`TOPIC_CODES` 五码不含 `filtered`、`DUE_CODES` 四码不含 `none`；
+② 控制台 `server/console_classify.js` 维护同一批码值与中文：`TOPIC_LABELS`（6 条）/ `TOPIC_ALIASES`（10 条）/ `DUE_LABELS`（5 条）/ `DUE_ALIASES`（14 条）；
+③ 两端此前**都没有**跨层测试 —— 端上 `TopicLabelCoreTest`（33 条）只验 App 侧、控制台 `test_console_classify.py` 只验控制台侧，「两端一致」这件事全靠人工记忆维持。
+
+**修法.** 新增 `server/test_label_contract.py`（318 行 / 15 条），把「码值 ↔ 中文 ↔ 别名」当成跨端契约来守：
+① **静态提取三处真值**：Kotlin 端 `TopicLabelCore.kt` 的 `when` 分支与别名表、`strings.xml` 的 `topic_*` / `due_*` 资源、控制台 `console_classify.js` 的四张表（按花括号深度配对截出 `var NAME = {…}`），任一提取失败即测试失败，不允许静默跳过；
+② **集合相等**：两端 topic 码集合、due 码集合必须逐一相等；每个码值都必须出现在端上的归一分支里；`TOPIC_CODES` 不含 `filtered`（预筛结案的第六种取值单独映射）、`DUE_CODES` 不含 `none`（空值回落项不进码值表）；
+③ **文案相等**：每个码值在 `strings.xml` 的中文与控制台表里的中文必须逐字相等；别名表（端上 `when` 分支 ↔ 控制台 `*_ALIASES`）必须逐条相等，别名目标码值必须都存在；
+④ **资源不许有孤儿**：`strings.xml` 里出现任何一个两端都没有的 `topic_*` / `due_*` 资源即失败（防「只改了一端的资源文件」）；
+⑤ **运行时再比一次**：不止比静态表，还要经 `server/test_console_classify_runner.js` 调真 node 函数（`normalizeTopic` / `normalizeDue` / `topicLabel` / `dueLabel`），断言运行时归一与显示结果与静态表相等，未知值原样回显。
+
+**刻意取舍.**
+① **只守「两端一致」，不自动改另一端**：测试发现漂移就红，由人决定改哪边 —— 自动同步会把「这一端写错了」也一起抹平。
+② **静态提取 + 运行时双跑**：静态提取能覆盖「表里写了但运行时没走到」，运行时调用能覆盖「表里没写但函数里有硬编码」，两头都要。
+③ **不引入跨端运行框架**：这是纯 JVM + 纯 node 的源码级契约，不需要起真机也不需要模拟服务端，改一处 Kotlin 标签 CI 直接红。
+④ **别名表逐条比，不比「包含关系」**：别名表最容易出现「一端多一条」这种漂移，比包含关系会漏。
+
+**测试.** 新增 `server/test_label_contract.py` **15 条**（码值集合两端一致 / 每码值出现在归一分支 / 中文文案两端一致 / 别名表两端一致 / 桶名本身在两侧别名表 / `strings.xml` 无孤立 `topic_*` / `due_*` 资源 / `TOPIC_CODES` 不含 `filtered` / `DUE_CODES` 不含 `none` / 别名目标码值都存在 / 运行时 `normalizeTopic` `normalizeDue` 与静态表一致 / 运行时 `topicLabel` `dueLabel` 与 `strings.xml` 逐条相等 / 未知值原样回显 …）；**负控制已验证**：在内存里改掉一端的文案 / 别名 / 码值集合，三种漂移分别被用例抓到（不是「恒绿」的假守卫）。
+
+**验证.** `python -m pytest server/test_label_contract.py -q` → **15 passed in 11.10s**；全量 `python -m pytest server/ -q` → **895 passed in 129.18s**（基线 880 + 15）。
+
+**计数.** 新增 `server/test_label_contract.py` **318 行**（253 非空 / 13560 B / CRLF）；服务端用例 880 → **895 条**；Android 侧不变（顶层 133 个 .kt / 全树 140 / `app/src/test` 88 个 .kt / 1429 条 / Core 逻辑内核 52）。
+
+**教训.**
+① **「两边内容一样」不等于「两边被钉住」**：第 53 / 55 轮把布尔与字段名收成契约后，码值 ↔ 中文这一层仍靠人记 —— 跨层契约要按层补，不能只补一次。
+② **文案漂移比字段名漂移更隐蔽**：字段名漂移会直接报错，码值漂移只是「某处显示成英文」，没人会注意到，直到用户截图问「为什么控制台显示 work_task」。
+③ **守卫必须证明自己会红**：负控制（故意改坏一端 → 用例必须红）是这类静态契约测试唯一有效的验收方式。
