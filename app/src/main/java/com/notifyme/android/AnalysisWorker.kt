@@ -934,13 +934,18 @@ class AnalysisWorker(
                 (answer["confidence"] as? Number)?.toDouble() ?: 0.0
             )
         }
+        // need_action 概率走 S1NeedActionCore：读不出来不静默当 0（下方 confidence 归 0 → 升级闸接手）
+        val needActionProbRaw = S1NeedActionCore.readProb(answers[0]["noul"])
         val flat = JSONObject().apply {
-            put("need_action_prob", (answers[0]["noul"] as? Number)?.toDouble() ?: 0.0)
+            put("need_action_prob", S1NeedActionCore.clampProb(needActionProbRaw) ?: 0.0)
             // 重要度口径统一走 S1ScaleCore（端侧 decoder 给的 score 已是 0-9 档，只夹取）
             put("importance", S1ScaleCore.importanceOf(answersJson.optJSONObject("importance")))
             put("due_window", answers[2]["choice"] as? String ?: "none")
             put("topic", answers[3]["choice"] as? String ?: "notice")
-            put("confidence", minConfidence)
+            put(
+                "confidence",
+                if (needActionProbRaw == null) S1NeedActionCore.UNREADABLE_CONFIDENCE else minConfidence
+            )
             put("action", answers[0]["action"] as? String ?: "")
         }
         val raw = JSONObject().put("answers", answersJson).put("flat", flat).toString()

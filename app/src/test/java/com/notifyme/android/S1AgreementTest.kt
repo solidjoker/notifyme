@@ -233,11 +233,11 @@ class S1AgreementTest {
         val fromPlaceholder = AnalysisParsing.parseS1Result(placeholder, "local")
         assertEquals(0.0, fromPlaceholder.needActionProb, 1e-9)
         assertEquals(0.0, fromPlaceholder.importance, 1e-9)
-        // 占位符里没有 confidence 字段：读不到就退回 1.0（「不影响升级」的那一档），
-        // 所以这条样本靠 prob=0 与云端 0.9 拉开差距，而不是靠升级闸。
-        assertEquals(1.0, fromPlaceholder.confidence, 1e-9)
-        // confidence 缺失时退回 1.0，prob=0、importance=0 → 三个升级条件都不命中
-        assertFalse("这条不该触发升级", fromPlaceholder.shouldEscalate())
+        // 占位符里的 need_action_prob 是字符串「0.0-1.0」→ 概率**读不出来**
+        // → 置信度归 0（S1NeedActionCore 口径：读不出来 ≠ 无需行动）→ 进升级闸，
+        // 这条样本靠 prob=0 与云端 0.9 拉开差距，升级闸两侧也都命中。
+        assertEquals(0.0, fromPlaceholder.confidence, 1e-9)
+        assertTrue("概率读不出来必须触发升级，交给 S2 / 云端重判", fromPlaceholder.shouldEscalate())
         assertTrue("云端 need_action、端侧不需要，这条必须判不一致",
             S1Agreement.compare(pair(cloud, fromPlaceholder)).needActionAgree.not()
         )

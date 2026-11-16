@@ -112,8 +112,35 @@ class AnalysisParsingTest {
         assertEquals(8.0, r.importance, delta)
         assertEquals("数值型 due_window 会被字符串化保留", "42", r.dueWindow)
         assertEquals("risk", r.topic)
-        assertEquals("非数值置信度应回落 1.0", 1.0, r.confidence, delta)
+        assertEquals("概率读不出来 → 置信度归 0（不可信，交给升级闸）", 0.0, r.confidence, delta)
         assertTrue("importance 8 仍应触发升级", r.shouldEscalate())
+    }
+    @Test
+    fun `need_action 概率读不出来时置信度归零并升级`() {
+        val r = AnalysisParsing.parseS1Result(
+            JSONObject("""{"confidence":0.9,"importance":1,"topic":"risk"}"""), "openai"
+        )
+        assertEquals(0.0, r.needActionProb, delta)
+        assertEquals("概率缺失 → 该题不可信 → 置信度归 0", 0.0, r.confidence, delta)
+        assertTrue("置信度 0 应触发升级", r.shouldEscalate())
+    }
+
+    @Test
+    fun `need_action 概率是数字字符串也能读`() {
+        val r = AnalysisParsing.parseS1Result(
+            JSONObject("""{"need_action_prob":"0.8","confidence":0.9}"""), "openai"
+        )
+        assertEquals(0.8, r.needActionProb, delta)
+        assertEquals(0.9, r.confidence, delta)
+    }
+
+    @Test
+    fun `need_action 概率越界先夹取`() {
+        val r = AnalysisParsing.parseS1Result(
+            JSONObject("""{"need_action_prob":1.5,"confidence":0.9}"""), "openai"
+        )
+        assertEquals(1.0, r.needActionProb, delta)
+        assertEquals(0.9, r.confidence, delta)
     }
 
     @Test
@@ -154,7 +181,7 @@ class AnalysisParsingTest {
         assertEquals(9.0, r.importance, delta)
         assertEquals(0.0, r.needActionProb, delta)
         assertEquals("none", r.dueWindow)
-        assertEquals(1.0, r.confidence, delta)
+        assertEquals("缺 need_action 概率 → 置信度归 0", 0.0, r.confidence, delta)
         assertTrue(r.shouldEscalate())
     }
 
@@ -446,7 +473,22 @@ class AnalysisParsingTest {
         assertEquals(0.0, r.importance, delta)
         assertEquals("none", r.dueWindow)
         assertEquals("notice", r.topic)
-        assertEquals(1.0, r.confidence, delta)
+        assertEquals("answers 为 null → need_action 读不出来 → 置信度归 0", 0.0, r.confidence, delta)
+        assertTrue("置信度 0 应触发升级（交给 S2 / 云端重判）", r.shouldEscalate())
+    }
+    @Test
+    fun `systemone 的 need_action 直接给数字也能读`() {
+        val r = AnalysisParsing.parseSystemOneAnswers(JSONObject("""{"need_action":0.7}"""))
+        assertEquals(0.7, r.needActionProb, delta)
+        assertEquals("能读出来就不归零", 1.0, r.confidence, delta)
+    }
+
+    @Test
+    fun `systemone 缺 noul 时不可信并升级`() {
+        val r = AnalysisParsing.parseSystemOneAnswers(JSONObject("""{"need_action":{}}"""))
+        assertEquals(0.0, r.needActionProb, delta)
+        assertEquals("读不出来 → 置信度归 0", 0.0, r.confidence, delta)
+        assertTrue("应触发升级", r.shouldEscalate())
     }
 
     @Test
