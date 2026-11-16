@@ -357,6 +357,8 @@ def _normalize_advisor_item(item):
     浮点，控制台 parseInt 后显示 undefined；summary / suggestions 里的文本
     长度不设上限，一份几 MB 的报告就能把存档撑爆。这里统一成
     「数值字段收敛成 int、字符串字段截断、suggestions 只留 dict 且条数有上限」。
+    截断会留痕：落库时带 truncated=True 与 truncated_fields（被裁的字段名），
+    控制台据此显示「已截断」——裁剪是静默的话，用户会以为模型就写了这么多。
     """
     import app as app_module
     if not isinstance(item, dict):
@@ -369,20 +371,29 @@ def _normalize_advisor_item(item):
         return None, "report_id too long"
     out = {"report_id": rid}
 
-    def _clip(value, limit):
+    # 截断留痕：被裁掉的字段名记进 truncated_fields，落库时一并写 truncated。
+    # 以前裁剪是**静默**的 —— 控制台只看到半截摘要，用户会以为模型就写了这么多。
+    # 标记由服务端打（端上不裁：两端各裁一遍就出现「谁截的、截了多少」两套口径）。
+    truncated_fields = []
+
+    def _clip(value, limit, field=None):
         if value is None:
             return None
         if not isinstance(value, str):
             value = str(value)
-        return value[:limit]
+        if len(value) > limit:
+            if field:
+                truncated_fields.append(field)
+            return value[:limit]
+        return value
 
-    created_at = _clip(item.get("created_at"), app_module.ADVISOR_MAX_CREATED_LEN)
+    created_at = _clip(item.get("created_at"), app_module.ADVISOR_MAX_CREATED_LEN, "created_at")
     if created_at is not None:
         out["created_at"] = created_at
-    summary = _clip(item.get("summary"), app_module.ADVISOR_MAX_SUMMARY_LEN)
+    summary = _clip(item.get("summary"), app_module.ADVISOR_MAX_SUMMARY_LEN, "summary")
     if summary is not None:
         out["summary"] = summary
-    model_used = _clip(item.get("model_used"), app_module.ADVISOR_MAX_MODEL_LEN)
+    model_used = _clip(item.get("model_used"), app_module.ADVISOR_MAX_MODEL_LEN, "model_used")
     if model_used is not None:
         out["model_used"] = model_used
     # 数值字段统一成 int（脏值/越界回落到 0），控制台不用再 parseInt 兜底
@@ -393,6 +404,8 @@ def _normalize_advisor_item(item):
     sug = item.get("suggestions")
     norm_sug = []
     if isinstance(sug, list):
+        if len(sug) > app_module.ADVISOR_MAX_SUGGESTIONS:
+            truncated_fields.append("suggestions")
         for s in sug[:app_module.ADVISOR_MAX_SUGGESTIONS]:
             if not isinstance(s, dict):
                 continue
@@ -400,7 +413,7 @@ def _normalize_advisor_item(item):
             for key, limit in (("type", app_module.ADVISOR_MAX_TITLE_LEN),
                                ("title", app_module.ADVISOR_MAX_TITLE_LEN),
                                ("detail", app_module.ADVISOR_MAX_DETAIL_LEN)):
-                v = _clip(s.get(key), limit)
+                v = _clip(s.get(key), limit, "suggestions." + key)
                 if v is not None:
                     ns[key] = v
             norm_sug.append(ns)
@@ -410,6 +423,10 @@ def _normalize_advisor_item(item):
     apkg = item.get("pkg")
     if isinstance(apkg, str) and apkg.strip():
         out["pkg"] = apkg.strip()[:app_module.MAX_NAME_LEN]
+    # 截断标记：只在真的裁过时才写（没裁过就不带这两个键）
+    if truncated_fields:
+        out["truncated"] = True
+        out["truncated_fields"] = sorted(set(truncated_fields))
     return out, None
 
 def _import_extract_module(leg):

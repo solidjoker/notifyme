@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 86 个 `.kt` / 1384 条（`app/src/test`）+ 服务端 `server/test_*.py`（825 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 87 个 `.kt` / 1395 条（`app/src/test`）+ 服务端 `server/test_*.py`（844 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -692,6 +692,11 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 测试：源码级 17 条（键集钉死 / REQUIRED ⊆ 客户端 / 客户端 ⊆ 服务端∪白名单 / 白名单精确相等 / 蛇形 is_group / 建表列 / raw_json / s2 / s1 子键 / need_action 子键 / 必填归属）+ 运行级 8 条（客户端形状的消息与分析记录都能 200 落库；`isGroup` 驼峰 207 `invalid=1`；缺必填字段 207；带三个本地状态键仍 accepted；多余未知键两条通道都接受）。
   - 计数：新增 `server/test_report_contract.py` **509 行 / 20070 B**（CRLF）；服务端用例 800 → **825**。
 
+- **顾问通道（`/advisor`）既没有跨端字段契约、端上又写了两份上传 JSON、服务端还静默截断摘要（feat/advisor-report-contract）**
+  - 问题：第 4 条端云通道（顾问报告）此前没有契约守卫；`SyncWorker.pushAdvisor` 里**脱敏与不脱敏两条分支各手写一份同结构上传 JSON**（一份走 `AdvisorStore.toUploadJson()`、一份就地拼键），两份键集无任何测试钉住，任一处加字段就**静默漂移**（服务端只认自己那几把钥匙，多出的键直接丢掉）；服务端 `_normalize_advisor_item` 的长度收敛又**静默截断**（summary 4096 / detail 2048 / title 256 / model 128 / created 64 / suggestions 200 条），控制台只看到半截摘要，用户会以为模型就写了这么多。
+  - 修法：端上新增纯函数内核 `AdvisorPayloadCore`（84 行）作为**上传口径唯一出口** —— 上传键集固定 7 个（`report_id` / `created_at` / `period_days` / `case_count` / `summary` / `suggestions` / `model_used`），`suggestions` 子键固定 `type` / `title` / `detail`，本地存档的 `rejected_count` / `first_rejected_at` / `quarantined` 三个状态键永不上报；`AdvisorStore.toUploadJson()` 与 `pushAdvisor` 的脱敏分支**共用同一出口**（两份手写 JSON 收口成一份）。长度裁剪**只在服务端一处**（端上不裁 —— 两端各裁一遍就出现「谁截的、截了多少」两套口径），但收敛不再静默：被裁字段名写进 `truncated_fields`、整条报告加 `truncated: true`；控制台新增规则层 `console_classify.advisorTruncation`（`{truncated, fields[], label}`，字段名走 `TRUNCATION_FIELD_LABELS` 中文标签、认不出的原样回显），顾问卡渲染「已截断 · 摘要」chip。
+  - 测试：新增 `app/src/test/java/com/notifyme/android/AdvisorPayloadCoreTest.kt` 11 条（上传键集恰好 7 个 / 三个本地状态键不出设备 / 子键钉死 / 值与报告一致 / 脱敏只改正文 / 无回调保留原文 / 空建议成空数组 / created_at 保持数字 / **超长摘要在端上不裁** / `toUploadJson` 委托核心 / 空报告仍七键）；`server/test_report_contract.py` +14 条（上传键集钉死 / 子键钉死 / 上传 ⊆ 本地存档 / 本地三键不出设备 / 服务端消费 ⊆ 客户端 / 客户端键全被消费 / **单一出口**（`AdvisorStore` 委托 + `pushAdvisor` 无手写 put）/ **裁剪只在服务端**（端上无 `MAX_` 常量、服务端写 `truncated`）+ 运行级 6 条（客户端形状能落库 / 缺 `report_id` 207 / 重复 `report_id` duplicated / 超长 summary 落库 4096 且 `truncated=True` / 205 条建议只留 200 且标记 / 没裁过不带标记））；`server/test_console_classify.py` +4 条、`server/test_console_ui.py` +1 条。
+  - 计数：Android 用例 1384 → **1395 条**（`app/src/test` 86 → **87 个 .kt**）、主源码顶层 131 → **132**（全树 139）；服务端用例 825 → **844**；`server/console_classify.js` 1095 / 1064 → **1137 / 1064**（`advisorTruncation` @979 · `TRUNCATION_FIELD_LABELS` @969 · 导出块 @1069-1136）；`server/console_ui.py` 4018 / 3924（`advisorTruncationOf` @1493）；`server/storage.py` 902 / 837；架构图 01 = **3962 × 1836**、02 = **15327 × 2070**、07 = **6960 × 5144**。
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：

@@ -13,7 +13,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -626,31 +625,26 @@ class SyncWorker(
         val url = SyncEndpointCore.url(serverUrl, "advisor")
 
         // 批次条目：report_id 是服务端去重键，createdAt 供水位使用
+        //
+        // 脱敏 / 不脱敏两条分支现在共用**同一个上传出口**
+        // `AdvisorPayloadCore.uploadJson`：以前脱敏分支手写了第二份同结构 JSON，
+        // 两份键集各写各的，任一处加字段就静默漂移（服务端多出来的键直接丢掉，
+        // 控制台看不出来）。顺序固定为「先脱敏成一份新 report，再由唯一出口出 JSON」。
         val entries = reports.map { report ->
-            val json = if (reportCore == null) {
-                // 不脱敏分支同样走「上传口径」：本地存档才带 rejected_count /
-                // first_rejected_at / quarantined 三个内部字段，服务端不需要，
-                // 写进云端库只会污染服务端 schema。
-                report.toUploadJson()
+            val payloadReport = if (reportCore == null) {
+                report
             } else {
-                JSONObject().apply {
-                    put("report_id", report.reportId)
-                    put("created_at", report.createdAt)
-                    put("period_days", report.periodDays)
-                    put("case_count", report.caseCount)
-                    put("summary", reportCore.redact(report.summary).text)
-                    put("suggestions", JSONArray().apply {
-                        report.suggestions.forEach { s ->
-                            put(JSONObject().apply {
-                                put("type", s.type)
-                                put("title", reportCore.redact(s.title).text)
-                                put("detail", reportCore.redact(s.detail).text)
-                            })
-                        }
-                    })
-                    put("model_used", report.modelUsed)
-                }
+                report.copy(
+                    summary = reportCore.redact(report.summary).text,
+                    suggestions = report.suggestions.map { s ->
+                        s.copy(
+                            title = reportCore.redact(s.title).text,
+                            detail = reportCore.redact(s.detail).text
+                        )
+                    }
+                )
             }
+            val json = AdvisorPayloadCore.uploadJson(payloadReport)
             AdvisorSyncCore.Entry(report.reportId, report.createdAt, json.toString())
         }
         val batches = AdvisorSyncCore.splitBatches(entries)

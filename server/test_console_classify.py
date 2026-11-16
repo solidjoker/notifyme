@@ -2048,3 +2048,44 @@ def test_queue_stale_flag_is_not_js_truthy(call):
     assert summary["stale"] == 1, summary
     assert summary["queued"] == 1, summary
     assert summary["total"] == 2, summary
+
+# --------------------------------------------------------------------------
+# 顾问报告的服务端截断留痕（storage._normalize_advisor_item 裁过长字段时落标记）
+# --------------------------------------------------------------------------
+
+def test_advisor_truncation_marks_the_clipped_fields(call):
+    """服务端裁过长字段的报告，控制台要能看出「被裁了、裁了哪几个」。"""
+    got = call("advisorTruncation", {"truncated": True,
+                                     "truncated_fields": ["summary", "suggestions.title"]})
+    assert got["truncated"] is True, got
+    assert got["fields"] == ["summary", "suggestions.title"], got
+    assert got["label"] == "已截断 · 摘要、建议标题", got
+
+
+def test_advisor_truncation_without_fields_still_marks(call):
+    """老服务端只给 truncated 不给字段名时也要标出来（只是标不出裁了哪几个）。"""
+    got = call("advisorTruncation", {"truncated": True})
+    assert got["truncated"] is True, got
+    assert got["fields"] == [], got
+    assert got["label"] == "已截断", got
+
+
+def test_advisor_truncation_is_false_without_the_marker(call):
+    """没裁过就不标（别让每张卡都挂「已截断」）。"""
+    got = call("advisorTruncation", {"truncated": False, "truncated_fields": ["summary"]})
+    assert got["truncated"] is False, got
+    assert got["label"] == "", got
+    got = call("advisorTruncation", None)
+    assert got["truncated"] is False, got
+    assert got["label"] == "", got
+
+
+def test_advisor_truncation_tolerates_bad_input(call):
+    """脏字段名（空串 / 非字符串 / 重复）不炸，未知字段名原样回显。"""
+    got = call("advisorTruncation", {
+        "truncated": "true",
+        "truncated_fields": ["  ", None, 3, "summary", "summary", "weird.field"],
+    })
+    assert got["truncated"] is True, got
+    assert got["fields"] == ["summary", "weird.field"], got
+    assert got["label"] == "已截断 · 摘要、weird.field", got

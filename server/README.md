@@ -17,7 +17,7 @@
 | `console_ui.py` | 内嵌 PWA 控制台前端（HTML/CSS/JS，无外部依赖） |
 | `extract_common.py` | 两个抽取脚本的共享内核：结构化日志、原文 JSONL 存档与轮转、跨进程写锁、五列去重、分批提交、主库结构兜底；配置由 `activate(module)` 注入宿主模块，`_setting()` 每次调用时读取 |
 | `android_db_extract.py` / `pc_db_extract.py` / `gen_icons.py` | 安卓 / PC 本地库解密提取与图标生成脚本 |
-| `test_*.py` | pytest 用例（`python -m pytest server/` 全量跑）；含端云字段契约守卫：`test_queue_contract.py`（排队通道）与 `test_report_contract.py`（消息 / 分析两条上报通道） |
+| `test_*.py` | pytest 用例（`python -m pytest server/` 全量跑）；含端云字段契约守卫：`test_queue_contract.py`（排队通道）与 `test_report_contract.py`（消息 / 分析 / 顾问三条上报通道） |
 
 运行期配置（`WEIXIN_TOKEN`、数据目录、各项限额）只在 `app.py` 一处定义，其余模块在函数体内动态读取，因此测试里的 `monkeypatch` 立即生效。
 
@@ -343,8 +343,19 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 | --- | --- |
 | `report_id` | 必需、非空字符串、长度上限 512；超限/缺失计入 `invalid` |
 | `period_days` / `case_count` | 收敛成整数并夹到区间（`period_days` ≤ 3650，`case_count` ≤ 1000000） |
-| `summary` / `model_used` / `created_at` | 字符串，超长截断 |
-| `suggestions` | 只保留对象元素，非对象丢弃；`title` ≤ 256、`detail` ≤ 2048，最多保留 200 条 |
+| `summary` / `model_used` / `created_at` | 字符串，超长截断（**截断留痕**：命中字段写进 `truncated_fields`，整条报告加 `truncated: true`） |
+| `suggestions` | 只保留对象元素，非对象丢弃；`title` ≤ 256、`detail` ≤ 2048，最多保留 200 条（超限同样留痕） |
+
+**截断必须留痕，不能静默**：长度收敛只发生在服务端一处（端上不裁 —— 两端各裁一遍就会出现「谁截的、截了多少」两套口径），
+但收敛不再静默：任何被裁的字段名都会写进该条报告的 `truncated_fields`（如 `["summary", "suggestions.title"]`），
+整条报告额外带 `truncated: true`。控制台顾问卡据此渲染「已截断 · 摘要、建议标题」chip（规则层 `console_classify.advisorTruncation`），
+用户不会把半截摘要误当成模型的完整输出。
+
+**端上上传口径只有一处**：端侧 `AdvisorPayloadCore.uploadJson()` 是唯一出口，上传键集固定 7 个
+（`report_id` / `created_at` / `period_days` / `case_count` / `summary` / `suggestions` / `model_used`），
+`suggestions` 子键固定 `type` / `title` / `detail`；本地存档里的 `rejected_count` / `first_rejected_at` / `quarantined` 三个状态键**永不上报**。
+脱敏与不脱敏两条上传分支共用同一出口（此前各写一份同结构 JSON，任一处加字段就静默漂移）。
+跨层契约（上传键集 / 子键 / 剥离键 / 服务端消费键 / 长度常量归属）由 `server/test_report_contract.py` 钉住。
 
 **存档损坏时拒绝写入**：如果 `server/data/advisor_reports.jsonl`（或旧版 `.json`）损坏，`POST /advisor` 返回
 500 `{"ok": false, "inserted": 0, "error": "advisor archive is corrupted, refusing to overwrite it"}`，

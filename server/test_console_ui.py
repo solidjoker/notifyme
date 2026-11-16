@@ -897,3 +897,21 @@ def test_db_flags_use_the_shared_readout_truth_table():
     assert "function dbBool(v)" in src, "规则层缺少 dbBool"
     assert "dbBool: dbBool" in src, "规则层没有导出 dbBool"
     assert "stale: dbBool(t.stale)" in src, "排队归一化没有走 dbBool"
+
+def test_advisor_card_marks_server_side_truncation():
+    """服务端截断过的顾问报告，卡上必须挂「已截断」chip。
+
+    以前 storage._normalize_advisor_item 静默截断（摘要 4096 / 建议 200 条），
+    控制台只显示半截摘要，用户会以为模型就写了这么多。
+    """
+    html = _ui().CONSOLE_HTML
+    assert "function advisorTruncationOf(r)" in html, "顾问卡没有取截断标记"
+    assert "CC.advisorTruncation" in html, "截断判定没有走规则层"
+    assert "var trunc = advisorTruncationOf(r);" in html
+    assert "trunc.truncated ? '<span class=\"chip warn\">'" in html, (
+        "顾问卡没有渲染「已截断」chip")
+    classify = os.path.join(ROOT, "server", "console_classify.js")
+    with open(classify, "r", encoding="utf-8") as fh:
+        src = fh.read()
+    assert "function advisorTruncation(report)" in src, "规则层缺少 advisorTruncation"
+    assert "advisorTruncation: advisorTruncation" in src, "规则层没有导出 advisorTruncation"
