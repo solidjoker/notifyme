@@ -455,7 +455,7 @@ def _import_console_ui_module():
         spec.loader.exec_module(module)
     except Exception as exc:
         raise RuntimeError("failed to load console_ui.py: %s" % exc)
-    for name in ("CONSOLE_HTML", "CONSOLE_MANIFEST", "CONSOLE_SW"):
+    for name in ("CONSOLE_HTML", "CONSOLE_MANIFEST", "CONSOLE_SW", "CONSOLE_ICON_SVG"):
         if not hasattr(module, name):
             raise RuntimeError("console_ui.py is missing %s" % name)
     return module
@@ -468,6 +468,7 @@ _CONSOLE_UI = _import_console_ui_module()
 CONSOLE_HTML = _CONSOLE_UI.CONSOLE_HTML
 CONSOLE_MANIFEST = _CONSOLE_UI.CONSOLE_MANIFEST
 CONSOLE_SW = _CONSOLE_UI.CONSOLE_SW
+CONSOLE_ICON_SVG = _CONSOLE_UI.CONSOLE_ICON_SVG
 
 # 归类规则的占位标记：必须与 console_ui.py 里的字面量完全一致。
 # console_ui.py 只留标记，规则正文在 console_classify.js（单一事实源）。
@@ -500,10 +501,8 @@ CONSOLE_HTML_READY = CONSOLE_HTML.replace(CONSOLE_CLASSIFY_MARKER, CONSOLE_CLASS
 # （/console/manifest.json -> /console/icons/...；
 #  /mmonitor/console/manifest.json -> /mmonitor/console/icons/...），
 # 两种挂载方式都正确。SVG data URI 保留作兜底（Android Chrome 可用）。
-_ICON_SVG = ('data:image/svg+xml,%3Csvg xmlns=' + chr(39) + 'http://www.w3.org/2000/svg' + chr(39) + ' '
-             'width=' + chr(39) + '512' + chr(39) + ' height=' + chr(39) + '512' + chr(39) + '%3E%3Crect width=' + chr(39) + '512' + chr(39) + ' height=' + chr(39) + '512' + chr(39) + ' '
-             'rx=' + chr(39) + '100' + chr(39) + ' fill=' + chr(39) + '%2307C160' + chr(39) + '/%3E%3Ctext x=' + chr(39) + '256' + chr(39) + ' y=' + chr(39) + '330' + chr(39) + ' '
-             'font-size=' + chr(39) + '260' + chr(39) + ' text-anchor=' + chr(39) + 'middle' + chr(39) + '%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E')
+# manifest 图标 SVG 兜底：与 console_ui.py 的 CONSOLE_ICON_SVG 同一份。
+# app.py 不再自带副本 —— 两份各写一份颜色就会出现「PNG 绿 / SVG 蓝」两种图标。
 
 PWA_ICON_DIR = os.path.join(BASE_DIR, 'pwa_icons')
 
@@ -520,7 +519,7 @@ if 'icons/icon-512-maskable.png' not in _mc_have:
     _mc_icons.append({'src': 'icons/icon-512-maskable.png', 'sizes': '512x512',
                      'type': 'image/png', 'purpose': 'maskable'})
 if not any(str(it.get('type', '')).startswith('image/svg') for it in _mc_icons):
-    _mc_icons.append({'src': _ICON_SVG, 'sizes': 'any',
+    _mc_icons.append({'src': CONSOLE_ICON_SVG, 'sizes': 'any',
                      'type': 'image/svg+xml', 'purpose': 'any'})
 CONSOLE_MANIFEST['icons'] = _mc_icons
 

@@ -10,11 +10,26 @@
   pwa_icons/icon-512.png  manifest 512
   pwa_icons/icon-512-maskable.png  maskable（满幅出血，气泡收在 80% 安全区内）
 """
+import importlib.util
 import os
 
 from PIL import Image, ImageDraw
 
-GREEN = (7, 193, 96, 255)        # #07C160 微信绿
+
+def _icon_bg():
+    """图标底色取自 console_ui.ICON_BG —— 图标颜色只有一份来源。
+
+    之前 PNG 图标在这里写死微信绿，而 manifest 里的 SVG 兜底图标另写了一份
+    （还是 aura 重设计前的旧蓝），于是同一个 PWA 出现两种图标颜色。
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "console_ui.py")
+    spec = importlib.util.spec_from_file_location("notifyme_console_ui", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return tuple(int(module.ICON_BG[i:i + 2], 16) for i in (1, 3, 5)) + (255,)
+
+
+GREEN = _icon_bg()                # 微信绿（与 manifest 的 SVG 兜底图标同色）
 GREEN_DARK = (5, 160, 80, 255)
 WHITE = (255, 255, 255, 255)
 
