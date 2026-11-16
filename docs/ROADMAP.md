@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 89 个 `.kt` / 1455 条（`app/src/test`）+ 服务端 `server/test_*.py`（905 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 90 个 `.kt` / 1482 条（`app/src/test`）+ 服务端 `server/test_*.py`（905 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -737,6 +737,12 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 修法：新增 `S1NeedActionCore`（82 行）把三处读点归一到一个出口，**读不出来返 `null` 而不是 0.0**；概率读不出来时置信度归 0（`UNREADABLE_CONFIDENCE`），交给既有升级闸 `confidence < 0.5` 交给 S2 / 云端重判；可读形态收成 `noul`/`prob`/`value` + 数字字符串，越界先夹取，对象形态不猜。
   - 测试：新增 `S1NeedActionCoreTest.kt` **21 条**；`AnalysisParsingTest.kt` 改 3 处「把缺陷写成期望」的断言并补 5 条（读不出来即升级 / 数字字符串 / 越界夹取 / systemone 裸数字 / systemone 缺 noul）。Android 单测 1429 → **1455 条**。
   - 计数：新增 `S1NeedActionCore.kt` **82 行**（21 条单测）；Android 顶层 .kt 133 → **134**（全树 141）、`app/src/test` 88 → **89 个 .kt**、Core 内核 52 → **53**；服务端仍 905 条。
+- **「什么时候要完成」照抄原文：用户看到「明天15:00」「本周内」还得自己换算是哪天（feat/due-absolute-display）**
+  - 问题：截止时间有四处显示（首页待办卡 / 会话卡分析行 / 分析列表 / 会话详情 chip），各写一份：有的直接印原始文本（「明天15:00」），有的印桶名（「本周内」「今天」）。用户要自己判断那是哪天，隔天再看「明天」还漂；S1 的 `this_week` 桶根本没有绝对日期可言。
+  - 修法：新增 `DueDisplayCore`（188 行）把「截止」的显示收成**一份口径**：① 文本→毫秒**只委托 `DueTimeCore.parse`**（不另写解析器，保证显示日期与提醒链落点一致）；② 相对词锚点 = 「说话那一刻」（手动覆盖用新增的编辑时刻 `todoDueAt`、模型结论用 `analyzedAt`、缺失回落现在）；③ 桶码值也展开（`this_week` → 周一到周日区间，`later` 无锚点原样保留）；④ 时刻只在文本写了才显示（新增 `DueTimeCore.hasExplicitTime`，不印解析兜底的 09:00）；⑤ 解析不出原样显示不猜不吞；结果形态 = 今天 / 明天 / M月d日（跨年带年份）。四处调用点全部改走它；提醒链入参仍保持原始码值（`TopicLabelCore.displayDueCode`）。
+  - 测试：新增 `DueDisplayCoreTest.kt` **27 条**（桶码值 / 绝对日期 / 跨年带年份 / 时刻保留与不保留 / 下午 +12 / 锚点是编辑时刻而不是现在 / 三级优先级 / 解析不出原样显示）。Android 单测 1455 → **1482 条**。
+  - 计数：新增 `DueDisplayCore.kt` **188 行**（27 条单测）；Android 顶层 .kt 134 → **135**（全树 142）、`app/src/test` 89 → **90 个 .kt**、Core 内核 53 → **54**；`server/test_report_contract.py` 补 `todo_due_at`（端侧锚点时刻**刻意不入库**，服务端存文本就够）；服务端仍 905 条。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：

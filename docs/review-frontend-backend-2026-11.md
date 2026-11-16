@@ -3384,3 +3384,57 @@ Android 用例 1384 → **1395 条**（`app/src/test` 86 → **87 个 .kt**）�
 1. **「读不出来」的兜底值必须有方向性**：数值兜底 0.0 在布尔语义里不是「未知」而是「否」。凡是布尔 / 概率类字段，兜底应该走 `null`，让下游显式处理「未知」。
 2. **「整体失败要降置信度」的约定要覆盖到单题**：仓库里已经写下了这条约定（`AnalysisParsing` 的注释），但只实现了一半（整体失败降级、单题失败不降级）—— 约定要落到每个读点，否则就只是半条规则。
 3. **把缺陷写成期望的断言会长期保护缺陷**：`AnalysisParsingTest` 里三处 `assertEquals(1.0, r.confidence, delta)` 把「概率读不出来仍给高置信度」当成正确行为，改断言时才发现问题比预想的大 —— 写测试时要问「这是产品想要的行为吗」。
+
+## E-89 「什么时候要完成」照抄原文：「明天15:00」「本周内」用户看不出那是哪天（feat/due-absolute-display）
+
+**现象.**
+
+首页待办卡、会话卡分析行、分析列表、会话详情 chip —— 四处「截止」都显示原始文本或桶名：模型说「明天15:00」就印「明天15:00」，S1 判成 `this_week` 就印「本周内」。用户得自己换算那是哪天，隔天再看「明天」还漂；`本周内` 更是根本没有绝对日期。
+
+**根因.**
+
+截止时间的**显示**没有收口：
+
+- `MainActivity` 首页待办卡 meta 行走 `TopicLabelCore.displayDueLabel(...)`，会话卡分析行走 `analysis_due_prefix` + 同一个函数；
+- `AnalysisListActivity` 走 `record.s2DueTime.ifEmpty { TopicLabelCore.dueLabel(ctx, record.s1DueWindow) }`（文本优先，桶名兜底）；
+- `ConversationActivity` 的 chip 走 `TopicLabelCore.dueLabel(this, record.s1DueWindow)`，S2 摘要行直接印 `record.s2DueTime`。
+
+四处各写一份，都只会「把文本原样搬上屏」。而「明天」「今天」这类相对词的含义取决于**什么时候说的** —— 记录里根本没有这个锚点（`AnalysisCaseRecord` 只有 `todoText` / `todoDue`，没有「用户编辑时刻」），所以就算想换算也算不出来。
+
+**修法.**
+
+1. 新增 `DueDisplayCore`（188 行，纯 Kotlin）：`resolve(raw, anchorMs, nowMs, zone)` 与 `resolveOf(todoDue, todoDueAt, s2DueTime, s1DueWindow, analyzedAt, nowMs, zone)`，输出 `Display(kind, dateText, timeText, rawText)`，kind ∈ today / tomorrow / date / later / text / none。
+2. **文本→毫秒只委托 `DueTimeCore.parse`**（不另写解析器）—— 显示日期与提醒链落点必须一致，否则卡上写「11月20日」、日历里却落在 11月21日。
+3. **相对词锚点 = 说话那一刻**：手动覆盖用新增的 `todoDueAt`（编辑时刻），模型结论用 `analyzedAt`，都没有才回落「现在」；于是昨天写的「明天」今天看就是「今天」。
+4. **桶码值也展开**：`this_week` → 周一到周日区间文本，`later` 无锚点原样保留，`today` / `tomorrow` → 绝对日期。
+5. **时刻只在文本写了才显示**：新增 `DueTimeCore.hasExplicitTime`（与 `parse` 里 hasTime 判定同源的一条正则），不印解析兜底的 09:00。
+6. `AnalysisCaseRecord` 新增 `todoDueAt: Long = 0L`（0 = 老记录 / 未编辑），`toJson` / `fromJson` 同步；四处调用点全部改走 `DueDisplayCore`。
+
+**刻意取舍.**
+
+1. **不另写解析器**：文本→毫秒只有 `DueTimeCore.parse` 一个出口，显示与落点不可能漂。
+2. **锚点用「说话那一刻」而不是「现在」**：不然今天看一条三天前的记录，「明天」永远是明天。
+3. **桶码值不硬编码日期**：`this_week` 按锚点所在周展开区间，而不是按今天展开。
+4. **服务端不消费锚点时刻**：`todo_due_at` 进了 `server/test_report_contract.py` 的 `ANALYSIS_DROPPED` 白名单 —— 服务端存文本就够，锚点是端侧显示用的。
+5. **提醒链入参不动**：`MainActivity` 给提醒链的仍是 `TopicLabelCore.displayDueCode(...)`（原始码值），避免把「今天09:00」喂给 `tryParseDueTime`。
+
+**测试.**
+
+- 新增 `app/src/test/java/com/notifyme/android/DueDisplayCoreTest.kt` **27 条**：空值 / `none` 桶 = none；today / tomorrow / later / this_week 桶；「11月20日」；「11月20日 15:00」带时刻；「2027年1月5日」跨年带年份；「明天15:00」保时刻；「今天下午3点」→ 15:00；桶不带时刻则时刻为空；「尽快」原样（text）；锚点是编辑时刻（昨天写「明天」→今天）；模型结论用 `analyzedAt` 锚点；手动覆盖 > 模型 > S1 桶三级优先级；老记录 `todoDueAt=0` 回落 `analyzedAt`；`compose` / `labelRes` / `joinDateTime`。
+- 定向：`gradlew --no-build-cache testOpenDebugUnitTest --tests DueDisplayCoreTest --tests DueTimeCoreTest --tests TopicLabelCoreTest --tests AnalysisParsingTest` → `DueDisplayCoreTest` 27 条、`DueTimeCoreTest` 31 条、`TopicLabelCoreTest` 33 条，failures=0 errors=0，`TEST_EXIT=0`。
+
+**验证.**
+
+- 全量：`docs/scripts/local_check.ps1` 七步全绿（server-tests / python-syntax / privacy-guard / version-check / android-test-assemble-lint / lint-summary issues=3 errors=0 baseline-drift=0 / static-check issues=0 enabled=5）。
+- 单测总数 1455 → **1482** 条。
+
+**计数.**
+
+- 新增 `app/src/main/java/com/notifyme/android/DueDisplayCore.kt` **188 行**、新增 `app/src/test/java/com/notifyme/android/DueDisplayCoreTest.kt` **264 行**；改 `DueTimeCore.kt`（+8）、`AnalysisStore.kt`（+1）、`MainActivity.kt`（+5）、`AnalysisListActivity.kt`（+1）、`ConversationActivity.kt`（+3）、`TopicLabelCore.kt`（+6，KDoc）、`server/test_report_contract.py`（+1）。
+- Android 顶层 .kt 134 → **135**（全树 141 → **142**）、`app/src/test` 89 → **90 个 .kt**、单测 1455 → **1482 条**、Core 逻辑内核 53 → **54**；服务端仍 905 条；版本 0.3.19 / versionCode 25。
+
+**教训.**
+
+1. **相对词必须有锚点**：任何「明天 / 本周内」的显示都要回答「相对谁」，记录里没存这个时刻，就只能显示原文 —— 数据模型缺字段时，先补字段再谈显示。
+2. **显示口径要复用解析口径**：另写一个日期解析器，迟早和提醒链的落点漂一天；让显示层委托同一个 `parse`。
+3. **几处显示要收成一处**：同一语义（截止）在四个界面出现，就是四次漂移的机会；抽成 `DueDisplayCore` 后，四处调用点只剩「取哪几个字段」的区别。
