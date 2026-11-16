@@ -2948,13 +2948,31 @@ function applyNodeState(ek, open) {
 }
 
 // ---------- 分析结果块：S1 chips + S2 区 ----------
+// 重要度归一：**只有一份口径** —— 委托规则层 console_classify.importanceKey。
+// 旧实现是 UI 自己抄的第二份，只认整数（/^[0-9]+$/），于是字符串形态
+// （'6.0' / '-1'）走不通：chip 显示「高 / 低」（走规则层），待办分区却落进
+// 「未标重要度」、排序排到最后、样式不加 warn —— 同一张卡片自相矛盾。
+// 降级（规则脚本没加载）时用与服务端 util._importance_label 同口径的本地实现。
 function impLabel(v) {
-  // S1 重要度可能是 0-9 数值（端上）或 high/mid/low（旧格式），统一成标签。
   if (v === null || v === undefined || v === '') return '';
-  var n = (typeof v === 'number') ? v :
-    (/^[0-9]+$/.test(String(v).trim()) ? parseInt(String(v).trim(), 10) : NaN);
-  if (!isNaN(n)) return n >= 6 ? 'high' : (n >= 3 ? 'mid' : 'low');
-  return String(v).trim().toLowerCase();
+  if (CC && CC.importanceKey) {
+    try {
+      return CC.importanceKey(v) || '';
+    } catch (e) {
+      // 规则层异常：走下面的降级实现
+    }
+  }
+  if (typeof v === 'number') {
+    if (!isFinite(v)) return '';
+    return v >= 6 ? 'high' : (v >= 3 ? 'mid' : 'low');
+  }
+  var s = String(v).trim().toLowerCase();
+  if (/^-?\d+(\.\d+)?$/.test(s)) {
+    var n = parseFloat(s);
+    if (isFinite(n)) return n >= 6 ? 'high' : (n >= 3 ? 'mid' : 'low');
+  }
+  if (s === 'high' || s === 'mid' || s === 'low') return s;
+  return '';
 }
 function impCls(v) {
   var i = impLabel(v);

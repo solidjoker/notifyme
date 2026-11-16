@@ -10,6 +10,7 @@
 """
 
 import json
+import math
 import re
 import time
 from datetime import datetime, timezone
@@ -22,25 +23,42 @@ def pkg_label(pkg):
     import app as app_module
     return app_module.PKG_LABELS.get(pkg, pkg or app_module.DEFAULT_PKG)
 
+# 重要度的数值只认「十进制写法」：可选负号 + 整数 + 可选小数。
+# 与控制台规则层 console_classify.importanceKey 的正则逐字一致 ——
+# 宽松的 float() 解析会把 'nan' 判成 low、'1e3' / '+6' 判成 high、'.5' 判成 low，
+# 与规则层「认不出就是未标」的口径正好相反。
+_IMPORTANCE_NUM_RE = re.compile(r"^-?\d+(\.\d+)?$")
+
+
 def _importance_label(value):
-    """把 S1 重要度统一成 high/mid/low 标签。
+    """把 S1 重要度统一成 high/mid/low 标签；认不出的一律 None（未标）。
 
     端上实际发的是 0-9 数值（>=6 high / >=3 mid / 其余 low），而旧文档与
     控制台 JS 只认 high/mid/low 字符串；两种都要归一，否则数值重要度会在
     控制台里被当成未知值退化为最低优先级。
+
+    三条口径（服务端 / 控制台规则层 / 控制台 UI 的 impLabel 必须逐条一致）：
+    ① 数值型（int/float）直接按阈值走；NaN / inf 不算有效分数；
+    ② 文本型必须是十进制写法才按数值走（'6.0' → high，'-1' → low）；
+    ③ 'high' / 'mid' / 'low'（忽略大小写与首尾空白）原样返回；
+       其余文本一律 None —— 顶层字段因此永远是 high/mid/low/None，
+       不再被任意客户端文本污染（控制台仍从 s1 原值回显，见 importanceChip）。
     """
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
         num = float(value)
+        if not math.isfinite(num):
+            return None
     else:
         text = str(value).strip().lower()
         if not text:
             return None
-        try:
-            num = float(text)
-        except ValueError:
+        if text in ("high", "mid", "low"):
             return text
+        if not _IMPORTANCE_NUM_RE.match(text):
+            return None
+        num = float(text)
     if num >= 6:
         return "high"
     if num >= 3:

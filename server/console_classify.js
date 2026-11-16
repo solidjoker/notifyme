@@ -434,8 +434,23 @@
   // 认不出返回 ''（与 importanceRank 的「未知与空串同档」一致），UI 据此决定要不要出 chip。
   // 数值口径与服务端 util._importance_label 同源：>=6 high / >=3 mid / 其余 low，
   // 小数与负数也按数值走（只认整数会把 2.9 判成「认不出」，与服务端归一结果相反）。
+  // 端上两种形态都见过：0-9 数值（S1 题面）与 high/mid/low（接口已归一）。
+  // 认不出返回 ''（与 importanceRank 的「未知与空串同档」一致），UI 据此决定要不要出 chip。
+  // 数值口径与服务端 util._importance_label 同源：>=6 high / >=3 mid / 其余 low，
+  // 小数与负数也按数值走（只认整数会把 2.9 判成「认不出」，与服务端归一结果相反）。
+  // 三处必须逐条一致（服务端 util._importance_label / 本函数 / 控制台 UI 的 impLabel）：
+  // ① 数值型直接按阈值走（NaN / inf 不算有效分数）；
+  // ② 文本型必须是十进制写法（可选负号 + 整数 + 可选小数），
+  //    '1e3' / '+6' / '.5' / '5.' / 'nan' / 'inf' 一律未标；
+  // ③ high/mid/low 忽略大小写与首尾空白原样返回；其余文本未标。
   function importanceKey(v) {
-    var s = (v == null) ? '' : String(v).trim().toLowerCase();
+    if (v === null || v === undefined) { return ''; }
+    if (typeof v === 'boolean') { return ''; }
+    if (typeof v === 'number') {
+      if (!isFinite(v)) { return ''; }
+      return v >= 6 ? 'high' : (v >= 3 ? 'mid' : 'low');
+    }
+    var s = String(v).trim().toLowerCase();
     if (!s) { return ''; }
     if (/^-?\d+(\.\d+)?$/.test(s)) {
       var n = parseFloat(s);
