@@ -962,6 +962,47 @@
     }
     return { scope: 'global', label: '全库' };
   }
+  // 顾问报告的服务端截断留痕：storage._normalize_advisor_item 裁剪超长字段时
+  // 会落 truncated=true + truncated_fields（被裁的字段名）。裁剪以前是**静默**的，
+  // 控制台只看到半截摘要，用户会以为模型就写了这么多。
+  // 规则层只负责判定与措辞：字段名翻中文，不认识的原样回显。
+  var TRUNCATION_FIELD_LABELS = {
+    summary: '摘要',
+    created_at: '时间',
+    model_used: '模型',
+    suggestions: '建议条数',
+    'suggestions.type': '建议类型',
+    'suggestions.title': '建议标题',
+    'suggestions.detail': '建议详情'
+  };
+
+  function advisorTruncation(report) {
+    var res = { truncated: false, fields: [], label: '' };
+    if (!report || typeof report !== 'object') return res;
+    if (!safeBool(report.truncated)) return res;
+    var raw = report.truncated_fields;
+    var fields = [];
+    if (Array.isArray(raw)) {
+      for (var i = 0; i < raw.length; i++) {
+        if (typeof raw[i] !== 'string') continue;
+        var t = raw[i].replace(/^\s+|\s+$/g, '');
+        if (!t) continue;
+        if (fields.indexOf(t) >= 0) continue;
+        fields.push(t);
+      }
+    }
+    res.truncated = true;
+    res.fields = fields;
+    var labels = [];
+    for (var j = 0; j < fields.length; j++) {
+      var f = fields[j];
+      labels.push(Object.prototype.hasOwnProperty.call(TRUNCATION_FIELD_LABELS, f)
+        ? TRUNCATION_FIELD_LABELS[f] : f);
+    }
+    res.label = labels.length ? ('已截断 · ' + labels.join('、')) : '已截断';
+    return res;
+  }
+
   // 「是否需要行动」的真值表：与服务端 util._safe_bool 逐条对齐。
   // （布尔直接用；数字按 != 0；字符串只认 true/1/yes/on/y/t，
   //   false/0/no/off/n/f/空串与认不出的一律 false ——
@@ -1057,6 +1098,7 @@
     queueDeviceSummary: queueDeviceSummary,
     advisorPkgScope: advisorPkgScope,
     advisorListState: advisorListState,
+    advisorTruncation: advisorTruncation,
     pkgCount: pkgCount,
     appEmptyScope: appEmptyScope,
     DEFAULT_STATS_LIST_CAP: DEFAULT_STATS_LIST_CAP,

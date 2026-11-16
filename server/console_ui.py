@@ -1486,6 +1486,17 @@ function dbBoolOf(v) {
   if (CC && CC.dbBool) return CC.dbBool(v);
   return v === true;
 }
+// 顾问报告的服务端截断留痕：storage._normalize_advisor_item 裁超长字段时落
+// truncated=true + truncated_fields（被裁的字段名）。裁剪以前是**静默**的，
+// 用户看到半截摘要会以为模型就写了这么多 —— 现在卡上挂一枚「已截断」chip。
+// 判定收在规则层（CC.advisorTruncation）；规则脚本缺失时降级读 r.truncated === true。
+function advisorTruncationOf(r) {
+  if (CC && CC.advisorTruncation) {
+    try { return CC.advisorTruncation(r); } catch (e) { /* 降级到本地判定 */ }
+  }
+  var t = !!(r && r.truncated === true);
+  return { truncated: t, fields: [], label: t ? '已截断' : '' };
+}
 // 重要度：优先 s1.importance，缺失时退回接口顶层 importance
 function importanceOf(a) {
   if (!a) return '';
@@ -3431,8 +3442,9 @@ function renderAdvisor() {
         groups.push({ type: t, items: localGroups[t] });
       });
     }
-    html += '<div class="card">' +
-      '<div class="conv-row"><div class="conv-head">' +
+    // 服务端裁过字段的报告要标出来（摘要 / 建议被截断 → 卡片挂「已截断」chip）
+    var trunc = advisorTruncationOf(r);
+    html += '<div class="card">' +      '<div class="conv-row"><div class="conv-head">' +
       '<span class="conv-main"><span class="conv-title-row">' +
       '<span class="conv-name">🧭 复盘报告</span></span></span>' +
       '<span class="conv-count">' + esc(stampText(r.created_at)) + '</span>' +
@@ -3444,6 +3456,7 @@ function renderAdvisor() {
       (parseInt(r.period_days, 10) > 0
         ? '<span class="chip">近 ' + esc(String(parseInt(r.period_days, 10))) + ' 天</span>'
         : '') +
+      (trunc.truncated ? '<span class="chip warn">' + esc(trunc.label) + '</span>' : '') +
       '</div>';
     if (r.summary) {
       html += '<div class="s2"><div class="row"><span class="label">复盘摘要</span><br>' +

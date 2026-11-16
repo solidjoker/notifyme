@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2026 solidjoker
 # SPDX-License-Identifier: MIT
-"""端云上报通道的字段契约守卫：/weixin（消息）与 /analysis（会话分析）。
+"""端云上报通道的字段契约守卫：/weixin（消息）、/analysis（会话分析）、/advisor（顾问报告）。
 
 排队通道早就有 server/test_queue_contract.py 守着（读 QueueStateCore.kt 与
-storage._normalize_queue_task 做静态比对），这两条上报通道一直没人守：
+storage._normalize_queue_task 做静态比对），这三条上报通道一直没人守：
 
   - 端上多写一个字段 -> 服务端静默丢弃 -> 数据对不上，控制台看不出来；
   - 服务端多要一个字段 -> 端侧没写 -> 整条被拒（逐条拒收）-> 通道堵死；
@@ -512,3 +512,194 @@ def test_message_payload_with_unknown_extra_key_is_accepted(api):
     body = resp.get_json()
     assert resp.status_code == 200
     assert body["received"] == 1
+
+# ---- 顾问通道（/advisor）----
+#
+# 第四条端云通道：顾问复盘报告。它以前有两个静默漂移的口子：
+#   1. 端上把上传 JSON 写了两遍（AdvisorReport.toUploadJson 与
+#      SyncWorker.pushAdvisor 的脱敏分支），两份各写各的键名 ——
+#      任一处加字段就漂移，服务端多出来的键直接丢掉，控制台看不出来；
+#   2. 服务端把超长字段**静默**截断，用户看到半截摘要会以为模型就写了这么多。
+# 这里把两端钉死：
+#   1. 上传口径只有一份出口（AdvisorPayloadCore）；
+#   2. 上传键集 = 服务端认识的键集（+ 可选透传的 pkg）；
+#   3. 本地存档的三个内部字段绝不出设备；
+#   4. 截断必须留痕（truncated / truncated_fields），控制台据此显示「已截断」。
+
+ADVISOR_STORE = os.path.join(ANDROID, "AdvisorStore.kt")
+ADVISOR_PAYLOAD_CORE = os.path.join(ANDROID, "AdvisorPayloadCore.kt")
+STORAGE_PY = os.path.join(HERE, "storage.py")
+
+ADV_STORE_LINES = _lines(ADVISOR_STORE)
+ADV_CORE_TEXT = _read(ADVISOR_PAYLOAD_CORE)
+STORAGE_TEXT = _read(STORAGE_PY)
+
+
+def _kotlin_region(lines, marker):
+    """取一个 Kotlin 函数的整段函数体（签名可能跨多行）。"""
+    i = _find(lines, marker)
+    base = _indent(lines[i])
+    j = i
+    while "{" not in lines[j]:
+        j += 1
+    k = j
+    while k < len(lines):
+        if lines[k].strip() == "}" and _indent(lines[k]) == base:
+            break
+        k += 1
+    return chr(10).join(lines[j:k])
+
+
+def _kotlin_list_of(text, name):
+    """抠出 Kotlin 里 val XXX = listOf(...) 的字符串集合。"""
+    m = re.search(r"val\s+" + name + r"[^=]*=\s*listOf\((.*?)\)", text, re.S)
+    assert m, "找不到 Kotlin 常量: " + name
+    return set(re.findall(r'"([A-Za-z0-9_]+)"', m.group(1)))
+
+
+# 端上：上传口径的唯一出口（键集常量写在这里，不在别处手写）
+ADV_UPLOAD_KEYS = _kotlin_list_of(ADV_CORE_TEXT, "UPLOAD_KEYS")
+ADV_SUGGESTION_KEYS = _kotlin_list_of(ADV_CORE_TEXT, "SUGGESTION_KEYS")
+# 端上：本地存档（AdvisorReport.toJson）的顶层键
+ADV_STORE_KEYS, ADV_STORE_CHILDREN, _ = _client_record_keys(ADV_STORE_LINES, 'put("report_id"')
+# 服务端：存档归一（storage._normalize_advisor_item）真正读到的键
+ADV_SERVER_READ = set(re.findall(ITEM_KEY_RE, _fn_body(STORAGE_TEXT, "_normalize_advisor_item")))
+# 端上不写、服务端可选透传的键（聚合报告没有单一来源）
+ADV_OPTIONAL_PASSTHROUGH = {"pkg"}
+# 本地存档有、上传时必须剥掉的键（端侧自己的账）
+ADV_LOCAL_ONLY = {"rejected_count", "first_rejected_at", "quarantined"}
+
+
+def test_advisor_upload_keys_are_pinned():
+    assert ADV_UPLOAD_KEYS == {
+        "report_id", "created_at", "period_days", "case_count",
+        "summary", "suggestions", "model_used",
+    }, "顾问上传键集变了: " + ", ".join(sorted(ADV_UPLOAD_KEYS))
+
+
+def test_advisor_suggestion_keys_are_pinned():
+    assert ADV_SUGGESTION_KEYS == {"type", "title", "detail"}, (
+        "suggestion 子键变了: " + ", ".join(sorted(ADV_SUGGESTION_KEYS)))
+
+
+def test_advisor_upload_keys_are_a_subset_of_local_archive():
+    assert ADV_UPLOAD_KEYS <= ADV_STORE_KEYS, (
+        "上传键集必须是本地存档的子集: " + ", ".join(sorted(ADV_UPLOAD_KEYS - ADV_STORE_KEYS)))
+
+
+def test_advisor_local_state_keys_never_leave_the_device():
+    """本地存档的三个内部字段（拒收计数 / 首次被拒时间 / 隔离标记）绝不上报。"""
+    assert ADV_STORE_KEYS - ADV_UPLOAD_KEYS == ADV_LOCAL_ONLY, (
+        "本地存档与上传体之差变了: " + ", ".join(sorted(ADV_STORE_KEYS - ADV_UPLOAD_KEYS)))
+    for key in sorted(ADV_LOCAL_ONLY):
+        assert key not in ADV_UPLOAD_KEYS
+
+
+def test_advisor_server_consumed_keys_are_written_by_client():
+    missing = sorted(ADV_SERVER_READ - ADV_UPLOAD_KEYS - ADV_OPTIONAL_PASSTHROUGH)
+    assert not missing, ("服务端要但端上没写（那条会被拒）: " + ", ".join(missing))
+
+
+def test_advisor_uploaded_keys_are_all_consumed_by_server():
+    unknown = sorted(ADV_UPLOAD_KEYS - ADV_SERVER_READ)
+    assert not unknown, ("端上写了服务端不读的字段（会被静默丢弃）: " + ", ".join(unknown))
+
+
+def test_advisor_upload_has_a_single_source():
+    """两条上传分支共用 AdvisorPayloadCore：端上不得再手写第二份上传 JSON。"""
+    assert "AdvisorPayloadCore.uploadJson(this)" in _read(ADVISOR_STORE), (
+        "toUploadJson 又自己手写键集了")
+    push_text = _kotlin_region(SYNC, "fun pushAdvisor")
+    assert "AdvisorPayloadCore.uploadJson" in push_text, (
+        "pushAdvisor 没走唯一出口")
+    for key in sorted(ADV_UPLOAD_KEYS):
+        assert 'put("' + key + '"' not in push_text, (
+            "pushAdvisor 又手写了上传键: " + key)
+
+
+def test_advisor_length_clipping_lives_only_on_the_server():
+    """裁剪只在服务端一处（存档保护）：端上不裁，服务端截断时留痕。"""
+    assert "MAX_" not in ADV_CORE_TEXT, (
+        "端上又自己裁了一遍长度（会出现两套截断口径）")
+    norm_body = _fn_body(STORAGE_TEXT, "_normalize_advisor_item")
+    assert 'out["truncated"] = True' in norm_body, "服务端截断不留痕（控制台会误以为模型就写了这么多）"
+    assert 'out["truncated_fields"]' in norm_body
+
+
+# 运行级：客户端形状的顾问报告真的能被服务端收下
+
+CLIENT_ADVISOR = {
+    "report_id": "adv-1",
+    "created_at": "2026-11-16T10:00:00",
+    "period_days": 7,
+    "case_count": 12,
+    "summary": "本周共 12 个用例，其中 3 个需要行动。",
+    "suggestions": [
+        {"type": "prompt", "title": "把催办写得更具体", "detail": "带上交付物与日期"},
+        {"type": "watchlist", "title": "关注测试群", "detail": ""},
+    ],
+    "model_used": "qwen",
+}
+
+
+def test_advisor_payload_in_client_shape_is_accepted(api):
+    resp = api.post("/advisor", json=[dict(CLIENT_ADVISOR)])
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["ok"] is True
+    assert body["inserted"] == 1
+    assert body["invalid"] == 0
+
+
+def test_advisor_payload_missing_report_id_is_rejected(api):
+    item = dict(CLIENT_ADVISOR)
+    item.pop("report_id")
+    resp = api.post("/advisor", json=[item])
+    body = resp.get_json()
+    assert resp.status_code == 207
+    assert body["inserted"] == 0
+    assert body["invalid"] == 1
+    assert body["rejected"] == [0]
+
+
+def test_advisor_duplicate_report_id_is_counted(api):
+    api.post("/advisor", json=[dict(CLIENT_ADVISOR)])
+    resp = api.post("/advisor", json=[dict(CLIENT_ADVISOR)])
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["inserted"] == 0
+    assert body["duplicated"] == 1
+
+
+def test_advisor_long_summary_is_truncated_and_marked(api):
+    item = dict(CLIENT_ADVISOR)
+    item["summary"] = "长" * (app_module.ADVISOR_MAX_SUMMARY_LEN + 500)
+    resp = api.post("/advisor", json=[item])
+    assert resp.status_code == 200
+    reports = api.get("/advisor").get_json()["reports"]
+    rep = [r for r in reports if r["report_id"] == item["report_id"]][0]
+    assert len(rep["summary"]) == app_module.ADVISOR_MAX_SUMMARY_LEN
+    assert rep["truncated"] is True
+    assert "summary" in rep["truncated_fields"]
+
+
+def test_advisor_too_many_suggestions_are_truncated_and_marked(api):
+    item = dict(CLIENT_ADVISOR)
+    item["suggestions"] = [
+        {"type": "other", "title": "t" + str(i), "detail": "d"}
+        for i in range(app_module.ADVISOR_MAX_SUGGESTIONS + 5)
+    ]
+    resp = api.post("/advisor", json=[item])
+    assert resp.status_code == 200
+    rep = api.get("/advisor").get_json()["reports"][0]
+    assert len(rep["suggestions"]) == app_module.ADVISOR_MAX_SUGGESTIONS
+    assert rep["truncated"] is True
+    assert "suggestions" in rep["truncated_fields"]
+
+
+def test_advisor_report_without_truncation_has_no_marker(api):
+    """没裁过就不带标记（别让每张卡都挂「已截断」）。"""
+    api.post("/advisor", json=[dict(CLIENT_ADVISOR)])
+    rep = api.get("/advisor").get_json()["reports"][0]
+    assert "truncated" not in rep
+    assert "truncated_fields" not in rep

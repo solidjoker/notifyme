@@ -74,16 +74,11 @@ data class AdvisorReport(
      * 本地存档（[toJson]）带 rejected_count / first_rejected_at / quarantined
      * 三个内部字段，服务端并不需要 —— 上传时用这个方法剥离，避免把内部
      * 计数写进云端库里（污染服务端 schema）。
+     *
+     * 键集与构造口径只有一份：`AdvisorPayloadCore.uploadJson`（脱敏分支也走它，
+     * 两条分支不再各写一份 JSON —— 以前脱敏分支手写第二份，任一处加字段就静默漂移）。
      */
-    fun toUploadJson(): JSONObject = JSONObject().apply {
-        put("report_id", reportId)
-        put("created_at", createdAt)
-        put("period_days", periodDays)
-        put("case_count", caseCount)
-        put("summary", summary)
-        put("suggestions", JSONArray().apply { suggestions.forEach { put(it.toJson()) } })
-        put("model_used", modelUsed)
-    }
+    fun toUploadJson(): JSONObject = AdvisorPayloadCore.uploadJson(this)
 
     companion object {
         fun fromJson(obj: JSONObject): AdvisorReport? {
