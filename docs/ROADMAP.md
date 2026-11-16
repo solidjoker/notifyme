@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 87 个 `.kt` / 1395 条（`app/src/test`）+ 服务端 `server/test_*.py`（872 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 87 个 `.kt` / 1395 条（`app/src/test`）+ 服务端 `server/test_*.py`（880 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -704,6 +704,11 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 测试：新增 `server/test_advisor_archive.py` 14 条（两段一起读 / 同 id 去重 / 轮转后不丢历史 / 重复 id 算 duplicated / 条数上限丢最旧并留痕 / 字节上限收敛且至少留一条 / 裁剪合并删 `.1` / 追加不再轮转 / 未超限不重写 / 接口回 limits / 损坏拒绝写入 / 三个单测）+ `test_console_classify.py` 3 条 + `test_console_ui.py` 1 条；`EXPECTED_OWNER` 登记 10 个新函数（参数化各算一条用例）。
   - 计数：服务端用例 844 → **872**；`server/storage.py` 902 → **1034** 行、`routes.py` 1095 → **1113**、`app.py` 742 → **745**、`console_ui.py` 4018 → **4047**、`console_classify.js` 1137 → **1176**；新增 `server/test_advisor_archive.py` 215 行 / 9225 B（CRLF）。
 
+- **PWA 外壳配色还是 aura 重设计前的旧蓝：manifest 蓝底、PNG 图标绿底、离线兜底页旧灰蓝（feat/pwa-shell-palette）**
+  - 问题：控制台正文早已换成 aura 设计语言，但 PWA 外壳还停在重设计前 —— manifest 的 `theme_color` / `background_color` 是旧蓝 `#1d4ed8` / 旧灰 `#f4f6f8`，manifest 内置的 SVG 兜底图标填 `#1d4ed8`，而桌面真正显示的 `pwa_icons/*.png` 是微信绿 `#07C160`（同一个 PWA 两种图标颜色）；service worker 内置的离线兜底页整套 CSS 还是旧蓝旧灰、变量名还是 `--border`；`app.py` 还自带第三份绿色 `_ICON_SVG` 副本，谁后写谁生效。
+  - 修法：配色收成一套 aura 令牌并只留一份出处 —— `console_ui.py` 顶部纯常量 `AURA_BG` / `AURA_ACCENT` / `AURA_GOLD` / `AURA_DARK_BG` / `ICON_BG`，manifest 的 theme / background 与新增的 `CONSOLE_ICON_SVG`（底色取 `ICON_BG`）都从这里取；`app.py` 删本地副本改复用；`gen_icons.py` 改从 `ICON_BG` 生成 PNG（产物像素不变）；离线兜底页换成同一套令牌（明暗两版），`--border` 并入 `--line`。
+  - 测试：`server/test_console_ui.py` 新增 8 条（manifest 用 aura 令牌 / 主体与 manifest 同源 / SVG 兜底图标与 PNG 同底色 / app.py 不再自带副本 / 图标生成器只认 ICON_BG / 离线页用 aura 令牌 / 离线页明暗对比度 >= 4.5 / 外壳无旧蓝残留）；服务端用例 872 → **880**。
+  - 计数：`server/console_ui.py` 4047 → **4063 行**、`app.py` 745 → **744**、`gen_icons.py` 85 → **100**、`test_console_ui.py` 930 → **1039**；07 架构图重渲后 6960 × 5407 → **6960 × 5575**。
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：

@@ -702,11 +702,23 @@ iOS 的系统限制决定了它做不了采集端：没有类似安卓 Notificat
 | 路由 | 说明 |
 | --- | --- |
 | `GET /console` | 控制台单页应用（**外壳免鉴权**，不含用户数据；数据接口仍需 token） |
-| `GET /console/manifest.json` | PWA manifest（name 微信分析助手、theme_color #07C160、display standalone、SVG 图标） |
+| `GET /console/manifest.json` | PWA manifest（name 微信分析助手、theme_color #1a1a1a、background_color #fafaf7、display standalone、SVG 图标） |
 | `GET /sw.js` | service worker，scope `/`；导航网络优先、只缓存 `/console` 外壳，API 请求（/messages、/analysis 等）与落地页一律走网络不缓存 |
 
 > 提示：iOS 的 PWA 图标实际用的是 apple-touch-icon（截图兜底），manifest 图标主要给 Android Chrome 用；**数据永远不缓存**，只缓存不含用户数据的控制台外壳。
 
+### PWA 外壳配色只有一套 aura 令牌
+
+控制台是 PWA，外壳颜色散在四处，必须同源（改配色只改 `console_ui.py` 顶部那组常量）：
+
+| 位置 | 取值来源 |
+| --- | --- |
+| `GET /console/manifest.json` 的 `theme_color` / `background_color` | `console_ui.AURA_ACCENT` / `AURA_BG` |
+| manifest 内置的 SVG 兜底图标 | `console_ui.CONSOLE_ICON_SVG`（底色 `ICON_BG` = `#07C160`，与下面的 PNG 同色） |
+| `pwa_icons/*.png` | `gen_icons.py` 的 `GREEN`（从 `ICON_BG` 读，不再写死字面量） |
+| `GET /sw.js` 内置的离线兜底页 | `console_ui.CONSOLE_SW` 里的 aura 令牌（明暗两版，`--border` 已并入 `--line`） |
+
+`app.py` 不再自带 SVG 副本（曾经一份绿一份蓝，谁后写谁生效）；图标颜色只有 `ICON_BG` 一个出处。`server/test_console_ui.py` 有 8 条用例钉住「四处同源 + 明暗对比度 >= 4.5 + 外壳无旧蓝残留」。
 ## 数据文件
 
 运行后在 `server/data/` 下生成：
