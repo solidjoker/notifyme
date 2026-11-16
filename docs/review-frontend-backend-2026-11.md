@@ -3151,3 +3151,23 @@ Android 用例 1384 → **1395 条**（`app/src/test` 86 → **87 个 .kt**）�
 **裁剪不是问题，静默裁剪才是**：长度收敛本身是必要的（防脏数据撑爆控制台），但「被裁过」必须**留痕**，否则用户和排查者都只能猜是上游写少了还是中间截断了。收敛留痕的成本只有两个键。
 
 **契约守卫要覆盖「每一条通道」，而不是「已知的几条」**：第 4 条通道漏在守卫之外，恰恰说明守卫本身需要一条「新通道必须同时补契约」的约定 —— 否则每加一条通道就会再留一个盲区。
+
+## E-82 顾问存档轮转后老报告整体消失，同一 report_id 还会重复入库（fix/advisor-archive-rotation）
+
+**现象.** 顾问报告存档超过 8 MiB 时，服务端把主段 `advisor_reports.jsonl` 轮转成 `advisor_reports.jsonl.1`。但读取侧只读主段，于是：① 轮转一旦发生，轮转段里的历史报告在控制台**整体消失**（`GET /advisor` 的 `count` / `total` 一并变小）；② `POST /advisor` 的去重集合 `seen` 只扫主段，同一个 `report_id` 会被**当成新报告重复入库**；③ `/suggests/next` 的顾问份数同样偏小。
+
+复现（把 `ADVISOR_MAX_BYTES` 调到 400）：POST r1 → POST r2（触发轮转）→ `GET /advisor` 返回 `count=1 total=1 ids=[r2]`（r1 消失）；再 POST r1 → `duplicated=0 inserted=1`（重复入库）。
+
+**根因.** 轮转（`_append_advisor_reports` 里的 `os.replace`）只做了一半：写侧轮转、读侧不读。容量上限同时有两份口径（条数 1000 与字节 8 MiB），条数口径写在 `_trim_advisor_jsonl`、字节口径写在轮转分支，两条路都能改存档形状，读侧却只认主段。
+
+**修法.** ① 读取口跨两段：`storage._advisor_jsonl_paths()` 返回 `[主段 + ".1", 主段]`（老 → 新），`_load_advisor_reports()` 两段一起读并用 `_dedupe_advisor_records()` 按 `report_id` 去重（同 id 留最后写入的那条，落在它最后写入的位置；缺 `report_id` 的记录原样保留）；两段都不存在才走旧 JSON 数组迁移。② 追加路径不再轮转：`_append_advisor_reports` 删掉 `os.replace`，容量上限统一由 `_trim_advisor_jsonl` 收敛（同时算条数与字节，从最新往回装，至少留一条），裁剪后把两段合并回主段并删除 `.1` 段。③ 触发判定 O(1)：`_advisor_needs_trim()` = 条数超限 或 两段合计字节超限 或 存在 `.1` 段；平时追加仍是 O(1)，只有命中才整份重写。④ 裁剪留痕：`_note_advisor_dropped()` 累计写 sidecar `advisor_reports.meta.json`（`dropped` / `dropped_at`），`GET /advisor` 回 `dropped` + `dropped_at` + `limits{max_reports, max_bytes}`（上限数字只有服务端 `routes._advisor_limits()` 一处，前端不写死）；控制台顾问 Tab 出「已裁掉 N 份」提示（规则层 `console_classify.advisorDroppedNotice` 负责措辞，`console_ui.advisorDroppedNote()` 只取文案）。
+
+**刻意取舍.** ① **删掉轮转语义**而不是补读轮转段：轮转的价值只在「省一次整份重写」，而它制造了「写侧轮转、读侧不读」的隐患；统一裁剪同样是整份重写，但触发条件可判定、可留痕。② 至少留一条：单条报告就超字节上限时不清空存档（清空等于又一次静默丢历史），代价是最老的一份可能超限。③ 去重按「最后写入」而不是「最早」：同一 `report_id` 被重报时以新内容为准。④ 损坏语义不变：任一段损坏都拒绝写入并回 500，绝不拿空列表覆盖存档。
+
+**测试.** 新增 `server/test_advisor_archive.py` 14 条（轮转段一起读 / 同 id 只算一份且留最后那条 / 轮转后再上报老报告不丢（total=3）/ 轮转段 id 再报算 duplicated / 条数上限丢最旧并写 meta（dropped=2、dropped_at>0）/ 字节上限收敛且至少留一条 / 裁剪合并删 `.1` / 追加不再轮转 / 未超限不重写 / 接口回 limits 与 dropped=0 / 轮转段损坏拒绝写入（500 且不写主段）/ `_dedupe_advisor_records` 单测 / `_fit_advisor_bytes` 至少留一条 / `_advisor_needs_trim` 触发条件）；`server/test_console_classify.py` +3 条（`advisorDroppedNotice` 报数并带上限 / 0、None、-1、"x" 不说话 / 缺 limits 仍报数）；`server/test_console_ui.py` +1 条（前端走 `advisorDroppedNote()` + 规则层 `advisorDroppedNotice`，上限数字不写死）；`server/test_module_split.py` 的 `EXPECTED_OWNER` 登记 10 个新函数（9 个 `storage.py` + `_advisor_limits` → `routes.py`），该表是参数化的，每条登记各算一条用例。
+
+**验证.** `python -m pytest server/ -q` → **872 passed**（基线 844，本轮 +28 = 新文件 14 + 3 + 1 + 参数化归属 10）。`node --check server/console_classify.js` 与控制台内联脚本抽取后 `node --check` 均退出 0。
+
+**计数.** `server/storage.py` 902 → **1034** 行（非空 837 → 954）；`server/routes.py` 1095 → **1113** 行（非空 1033 → 1050）；`server/app.py` 742 → **745** 行（非空 627 → 630）；`server/console_ui.py` 4018 → **4047** 行（非空 3924 → 3953）；`server/console_classify.js` 1137 → **1176** 行（非空 1064 → 1101）；新增 `server/test_advisor_archive.py` **215 行 / 9225 B**（CRLF）；服务端用例 844 → **872**。
+
+**教训.** ① **存档的「写侧轮转」必须配「读侧跨段」**，只做一半就是静默丢数据（比不轮转更坏：不轮转至少上限还在）。② 容量上限要有**唯一收敛点**（条数与字节两条口径分散在两个函数里，就会出现两套存档形状）。③ 上限收敛必须**留痕**（丢了多少份、什么时候丢的），否则用户只会看到「报告变少了」，与「端上没跑复盘」无法区分。④ 上限数字只留在服务端（`limits` 随响应下发），前端写死一份就会跟着服务端改上限而失真。

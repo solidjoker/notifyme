@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 最近一次公开 Release = `v0.3.8`（2026-10-13）；`versionName` 一路到 `0.3.19` 但 `0.3.9`–`0.3.19` 都没打 tag → **这些版本未发布**。发版只需 `git tag v0.3.19 && git push origin v0.3.19`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 87 个 `.kt` / 1395 条（`app/src/test`）+ 服务端 `server/test_*.py`（844 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 87 个 `.kt` / 1395 条（`app/src/test`）+ 服务端 `server/test_*.py`（872 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -697,6 +697,13 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 修法：端上新增纯函数内核 `AdvisorPayloadCore`（84 行）作为**上传口径唯一出口** —— 上传键集固定 7 个（`report_id` / `created_at` / `period_days` / `case_count` / `summary` / `suggestions` / `model_used`），`suggestions` 子键固定 `type` / `title` / `detail`，本地存档的 `rejected_count` / `first_rejected_at` / `quarantined` 三个状态键永不上报；`AdvisorStore.toUploadJson()` 与 `pushAdvisor` 的脱敏分支**共用同一出口**（两份手写 JSON 收口成一份）。长度裁剪**只在服务端一处**（端上不裁 —— 两端各裁一遍就出现「谁截的、截了多少」两套口径），但收敛不再静默：被裁字段名写进 `truncated_fields`、整条报告加 `truncated: true`；控制台新增规则层 `console_classify.advisorTruncation`（`{truncated, fields[], label}`，字段名走 `TRUNCATION_FIELD_LABELS` 中文标签、认不出的原样回显），顾问卡渲染「已截断 · 摘要」chip。
   - 测试：新增 `app/src/test/java/com/notifyme/android/AdvisorPayloadCoreTest.kt` 11 条（上传键集恰好 7 个 / 三个本地状态键不出设备 / 子键钉死 / 值与报告一致 / 脱敏只改正文 / 无回调保留原文 / 空建议成空数组 / created_at 保持数字 / **超长摘要在端上不裁** / `toUploadJson` 委托核心 / 空报告仍七键）；`server/test_report_contract.py` +14 条（上传键集钉死 / 子键钉死 / 上传 ⊆ 本地存档 / 本地三键不出设备 / 服务端消费 ⊆ 客户端 / 客户端键全被消费 / **单一出口**（`AdvisorStore` 委托 + `pushAdvisor` 无手写 put）/ **裁剪只在服务端**（端上无 `MAX_` 常量、服务端写 `truncated`）+ 运行级 6 条（客户端形状能落库 / 缺 `report_id` 207 / 重复 `report_id` duplicated / 超长 summary 落库 4096 且 `truncated=True` / 205 条建议只留 200 且标记 / 没裁过不带标记））；`server/test_console_classify.py` +4 条、`server/test_console_ui.py` +1 条。
   - 计数：Android 用例 1384 → **1395 条**（`app/src/test` 86 → **87 个 .kt**）、主源码顶层 131 → **132**（全树 139）；服务端用例 825 → **844**；`server/console_classify.js` 1095 / 1064 → **1137 / 1064**（`advisorTruncation` @979 · `TRUNCATION_FIELD_LABELS` @969 · 导出块 @1069-1136）；`server/console_ui.py` 4018 / 3924（`advisorTruncationOf` @1493）；`server/storage.py` 902 / 837；架构图 01 = **3962 × 1836**、02 = **15327 × 2070**、07 = **6960 × 5144**。
+
+- **顾问存档轮转后老报告整体消失，同一 report_id 还会重复入库（fix/advisor-archive-rotation）**
+  - 问题：存档超 8 MiB 时写侧把主段轮转成 `.jsonl.1`，但读侧只读主段 —— 老报告在控制台整体消失、`POST /advisor` 的 `seen` 去重集合漏掉轮转段（同一 `report_id` 重复入库）、`GET /advisor` 的 `total` 与 `/suggests/next` 的顾问份数全偏小。条数上限与字节上限分散在两个函数里，存档形状有两套。
+  - 修法：读取口跨两段（`_advisor_jsonl_paths` 老→新 + `_dedupe_advisor_records` 同 id 留最后那条）；追加路径删掉轮转，容量上限统一由 `_trim_advisor_jsonl` 收敛（条数 1000 + 字节 8 MiB，从最新往回装、至少留一条，裁剪后合并回主段并删 `.1`）；触发判定 O(1)（`_advisor_needs_trim`）；裁剪留痕写 sidecar `advisor_reports.meta.json`，`GET /advisor` 回 `dropped` + `dropped_at` + `limits`（上限数字唯一出处是服务端 `routes._advisor_limits()`），控制台顾问 Tab 出「已裁掉 N 份」（规则层 `console_classify.advisorDroppedNotice`）。
+  - 测试：新增 `server/test_advisor_archive.py` 14 条（两段一起读 / 同 id 去重 / 轮转后不丢历史 / 重复 id 算 duplicated / 条数上限丢最旧并留痕 / 字节上限收敛且至少留一条 / 裁剪合并删 `.1` / 追加不再轮转 / 未超限不重写 / 接口回 limits / 损坏拒绝写入 / 三个单测）+ `test_console_classify.py` 3 条 + `test_console_ui.py` 1 条；`EXPECTED_OWNER` 登记 10 个新函数（参数化各算一条用例）。
+  - 计数：服务端用例 844 → **872**；`server/storage.py` 902 → **1034** 行、`routes.py` 1095 → **1113**、`app.py` 742 → **745**、`console_ui.py` 4018 → **4047**、`console_classify.js` 1137 → **1176**；新增 `server/test_advisor_archive.py` 215 行 / 9225 B（CRLF）。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：
