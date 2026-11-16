@@ -53,12 +53,14 @@ from util import (
     _safe_int, _safe_json, _validate_item, logger, pkg_label,
 )
 from storage import (
-    AdvisorArchiveError, _advisor_jsonl_path, _append_advisor_reports, _append_jsonl,
-    _connect, _ensure_index, _import_extract_module, _load_advisor_reports,
-    _normalize_advisor_item, _probe_main_db_writable, _run_extract_bg,
-    _save_advisor_reports, _trim_advisor_jsonl, _write_advisor_jsonl,
-    _write_advisor_snapshot, QUEUE_CLEANUP_INTERVAL_MS, cleanup_queue_tasks,
-    init_db,
+    AdvisorArchiveError, _advisor_bytes, _advisor_jsonl_path, _advisor_jsonl_paths,
+    _advisor_meta_path, _advisor_needs_trim, _append_advisor_reports, _append_jsonl,
+    _connect, _dedupe_advisor_records, _ensure_index, _fit_advisor_bytes,
+    _import_extract_module, _load_advisor_reports, _normalize_advisor_item,
+    _note_advisor_dropped, _probe_main_db_writable, _read_advisor_jsonl,
+    _read_advisor_meta, _run_extract_bg, _save_advisor_reports, _trim_advisor_jsonl,
+    _write_advisor_jsonl, _write_advisor_snapshot, QUEUE_CLEANUP_INTERVAL_MS,
+    cleanup_queue_tasks, init_db,
 )
 from routes import (
     admin_extract, admin_extract_status, query_advisor, query_analysis, query_messages,
@@ -394,7 +396,8 @@ def health():
 # （条数有上限，且只在内容有变化时写）。
 
 ADVISOR_MAX_REPORTS = 1000           # 存档条数上限（超出丢最旧的）
-ADVISOR_MAX_BYTES = 8 * 1024 * 1024  # JSONL 字节上限（超出轮转一份）
+ADVISOR_MAX_BYTES = 8 * 1024 * 1024  # JSONL 字节上限（超出丢最旧的）
+ADVISOR_ROTATED_SUFFIX = ".1"        # 老版本轮转段后缀（仍要读，不能丢）
 
 
 ADVISOR_MAX_SUGGESTIONS = 200    # 单份报告的 suggestions 条数上限

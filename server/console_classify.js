@@ -1003,6 +1003,43 @@
     return res;
   }
 
+  // 顾问存档因容量上限被裁掉时必须说出来：服务端 storage._trim_advisor_jsonl
+  // 裁掉的份数写进 meta sidecar，GET /advisor 把它回成 dropped（+ limits 上限值，
+  // 上限数字以服务端为准，前端不写死）。静默裁剪会被用户当成「端上没跑复盘」。
+  function advisorDroppedNotice(dropped, limits) {
+    var n = Number(dropped);
+    if (!isFinite(n) || n <= 0) return { show: false, dropped: 0, label: '' };
+    var d = Math.floor(n);
+    var bits = [];
+    if (limits && limits.max_reports) bits.push(String(limits.max_reports) + ' 份');
+    if (limits && limits.max_bytes) {
+      var b = Number(limits.max_bytes);
+      if (isFinite(b) && b > 0) {
+        var label = bytesLabel(b);
+        if (label) bits.push(label);
+      }
+    }
+    return {
+      show: true,
+      dropped: d,
+      label: '存档已裁掉 ' + d + ' 份' +
+        (bits.length ? '（容量上限 ' + bits.join(' / ') + '）' : '')
+    };
+  }
+
+  // 字节数的整数口径（不依赖 toLocaleString，避免不同浏览器数字形态不同）
+  function bytesLabel(n) {
+    var v = Number(n);
+    if (!isFinite(v) || v <= 0) return '';
+    var units = [[1073741824, 'GB'], [1048576, 'MB'], [1024, 'KB']];
+    for (var i = 0; i < units.length; i++) {
+      if (v >= units[i][0] && v % units[i][0] === 0) {
+        return (v / units[i][0]) + ' ' + units[i][1];
+      }
+    }
+    return v + ' B';
+  }
+
   // 「是否需要行动」的真值表：与服务端 util._safe_bool 逐条对齐。
   // （布尔直接用；数字按 != 0；字符串只认 true/1/yes/on/y/t，
   //   false/0/no/off/n/f/空串与认不出的一律 false ——
@@ -1099,6 +1136,8 @@
     advisorPkgScope: advisorPkgScope,
     advisorListState: advisorListState,
     advisorTruncation: advisorTruncation,
+    advisorDroppedNotice: advisorDroppedNotice,
+    bytesLabel: bytesLabel,
     pkgCount: pkgCount,
     appEmptyScope: appEmptyScope,
     DEFAULT_STATS_LIST_CAP: DEFAULT_STATS_LIST_CAP,

@@ -237,45 +237,187 @@ def _write_advisor_jsonl(reports):
         f.flush()
     os.replace(tmp, path)
 
+def _advisor_jsonl_paths():
+    """存档的全部分段路径（老 → 新）。
+
+    历史版本在主段超过字节上限时把主段轮转成 advisor_reports.jsonl.1，
+    而读取侧只读主段 —— 轮转后老报告在控制台整体消失（GET /advisor 只剩最新那几份），
+    去重集合 seen 也漏掉轮转段（同一个 report_id 会被重复入库）。
+    读取必须两段一起看（老 → 新），容量收敛由 _trim_advisor_jsonl 统一做。
+    """
+    import app as app_module
+    main = app_module._advisor_jsonl_path()
+    return [main + app_module.ADVISOR_ROTATED_SUFFIX, main]
+
+def _dedupe_advisor_records(items):
+    """按 report_id 去重：同一份报告只留**最后写入**的那条。
+
+    轮转段与主段可能各存一份同一个 report_id（修复前的重复入库也会留下这种存档），
+    计数 / 去重集合 / 列表都必须按去重后的口径走。缺 report_id 的记录原样保留。
+    """
+    last_pos = {}
+    for i, it in enumerate(items):
+        rid = it.get("report_id") if isinstance(it, dict) else None
+        if isinstance(rid, str) and rid.strip():
+            last_pos[rid.strip()] = i
+    out = []
+    for i, it in enumerate(items):
+        rid = it.get("report_id") if isinstance(it, dict) else None
+        if isinstance(rid, str) and rid.strip() and last_pos[rid.strip()] != i:
+            continue
+        out.append(it)
+    return out
+
+def _read_advisor_jsonl(path):
+    """读一个 JSONL 分段；损坏时抛 AdvisorArchiveError（拒绝写入）。"""
+    import app as app_module
+    items = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                if isinstance(obj, dict):
+                    items.append(obj)
+    except (json.JSONDecodeError, OSError, ValueError) as e:
+        logger.error("顾问存档损坏，拒绝写入: %s（原因: %s）", path, e)
+        raise app_module.AdvisorArchiveError(
+            f"advisor archive is corrupted: {path}") from e
+    return items
+
+def _advisor_meta_path():
+    """裁剪留痕 sidecar 路径（跟主存储同目录）。"""
+    import app as app_module
+    return os.path.join(app_module.DATA_DIR, "advisor_reports.meta.json")
+
+def _read_advisor_meta():
+    """读裁剪留痕 sidecar（读不到就当没裁过）。"""
+    import app as app_module
+    try:
+        with open(app_module._advisor_meta_path(), encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+def _note_advisor_dropped(count):
+    """累计「因容量上限被裁掉」的份数（留痕，不是静默丢弃）。"""
+    import app as app_module
+    if not count or count <= 0:
+        return 0
+    meta = app_module._read_advisor_meta()
+    dropped = meta.get("dropped")
+    dropped = dropped if isinstance(dropped, int) and dropped > 0 else 0
+    dropped += int(count)
+    payload = {"dropped": dropped, "dropped_at": int(time.time() * 1000)}
+    path = app_module._advisor_meta_path()
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+            f.flush()
+        os.replace(tmp, path)
+    except OSError as e:
+        logger.warning("顾问裁剪留痕写入失败（原因: %s）", e)
+    return dropped
+
+def _advisor_bytes():
+    """存档当前占用的字节数（两段合计）。"""
+    import app as app_module
+    total = 0
+    for p in app_module._advisor_jsonl_paths():
+        try:
+            if os.path.exists(p):
+                total += os.path.getsize(p)
+        except OSError:
+            pass
+    return total
+
+def _advisor_needs_trim(reports):
+    """是否需要整份重写（O(1) 判定，不读文件内容）。
+
+    三个触发条件：条数超上限 / 字节超上限 / 存在历史轮转段（要合并回主段）。
+    """
+    import app as app_module
+    if reports is not None and len(reports) > app_module.ADVISOR_MAX_REPORTS:
+        return True
+    if app_module._advisor_bytes() > app_module.ADVISOR_MAX_BYTES:
+        return True
+    for p in app_module._advisor_jsonl_paths()[:-1]:
+        if os.path.exists(p):
+            return True
+    return False
+
+def _fit_advisor_bytes(records):
+    """按字节上限从最新往回装记录（返回老 → 新）。
+
+    至少保留一条：单条就超限时也不把存档清空（清空等于又一次静默丢历史）。
+    """
+    import app as app_module
+    budget = app_module.ADVISOR_MAX_BYTES
+    kept = []
+    size = 0
+    for r in reversed(records):
+        try:
+            n = len(json.dumps(r, ensure_ascii=False).encode("utf-8")) + 1
+        except (TypeError, ValueError):
+            n = 0
+        if kept and size + n > budget:
+            break
+        kept.append(r)
+        size += n
+    kept.reverse()
+    return kept
+
 def _append_advisor_reports(items):
-    """追加写入 JSONL 主存储：O(1) 追加，不再整份重写。"""
+    """追加写入 JSONL 主存储：O(1) 追加，不再整份重写。
+
+    容量上限（条数 / 字节）统一由 _trim_advisor_jsonl 收敛 —— 这里**不再轮转**：
+    轮转会把老报告挪进 .1 段，读取侧一旦漏读那一段就是一次静默丢历史。
+    """
     import app as app_module
     if not items:
         return
     path = app_module._advisor_jsonl_path()
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    # 容量上限：文件超阈值就轮转一份（只保留最近一份历史），避免无界增长
-    try:
-        if (os.path.exists(path)
-                and os.path.getsize(path) > app_module.ADVISOR_MAX_BYTES):
-            os.replace(path, path + ".1")
-    except OSError:
-        pass
     with open(path, "a", encoding="utf-8") as f:
         for item in items:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
         f.flush()
 
 def _trim_advisor_jsonl(keep=None):
-    """有界裁剪：JSONL 条数超上限时只保留最近 keep 条。"""
+    """有界裁剪：条数与字节两个上限一起算，只保留最近的记录。
+
+    返回裁剪后保留的记录（老 → 新）。两段存档（历史轮转段 + 主段）在这里
+    合并回主段并删掉轮转段；被裁掉的份数写进 meta sidecar 留痕
+    （控制台要能说出「存档里少了 N 份」，否则会被当成端上没跑复盘）。
+    """
     import app as app_module
     if keep is None:
         keep = app_module.ADVISOR_MAX_REPORTS
-    path = app_module._advisor_jsonl_path()
-    try:
-        with open(path, encoding="utf-8") as f:
-            lines = [ln for ln in f if ln.strip()]
-    except OSError:
-        return
-    if len(lines) <= keep:
-        return
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.writelines(lines[-keep:])
-    os.replace(tmp, path)
+    all_records = app_module._load_advisor_reports()
+    records = list(all_records)
+    if len(records) > keep:
+        records = records[-keep:]
+    records = app_module._fit_advisor_bytes(records)
+    rotated = [p for p in app_module._advisor_jsonl_paths()[:-1] if os.path.exists(p)]
+    dropped = len(all_records) - len(records)
+    if dropped > 0 or rotated:
+        app_module._write_advisor_jsonl(records)
+        for p in rotated:
+            try:
+                os.remove(p)
+            except OSError as e:
+                logger.warning("顾问存档轮转段删除失败: %s（原因: %s）", p, e)
+    if dropped > 0:
+        app_module._note_advisor_dropped(dropped)
+    return records
 
 def _load_advisor_reports():
-    """读取顾问报告存档（主存储 JSONL；兼容旧的 JSON 数组并自动迁移）。
+    """读取顾问报告存档（历史轮转段 + 主段 JSONL；兼容旧的 JSON 数组并自动迁移）。
 
     存档损坏时抛 AdvisorArchiveError，**拒绝写入**：
     原来的实现在这里直接返回空列表，下一条上报就会拿「空列表 + 新条目」
@@ -283,23 +425,13 @@ def _load_advisor_reports():
     写入路径直接回 5xx，等人工修复（修好或删掉损坏文件后自动恢复）。
     """
     import app as app_module
-    jsonl_path = app_module._advisor_jsonl_path()
-    if os.path.exists(jsonl_path):
+    # 两段都要读：老版本轮转出来的 .1 段里还有历史报告，漏读就是静默丢历史
+    paths = [p for p in app_module._advisor_jsonl_paths() if os.path.exists(p)]
+    if paths:
         items = []
-        try:
-            with open(jsonl_path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    obj = json.loads(line)
-                    if isinstance(obj, dict):
-                        items.append(obj)
-        except (json.JSONDecodeError, OSError, ValueError) as e:
-            logger.error("顾问存档损坏，拒绝写入: %s（原因: %s）", jsonl_path, e)
-            raise app_module.AdvisorArchiveError(
-                f"advisor archive is corrupted: {jsonl_path}") from e
-        return items
+        for p in paths:
+            items.extend(app_module._read_advisor_jsonl(p))
+        return app_module._dedupe_advisor_records(items)
     # 没有 JSONL：读旧格式（JSON 数组）；读通就迁移成 JSONL
     if not os.path.exists(app_module.ADVISOR_PATH):
         return []

@@ -848,6 +848,19 @@ def test_suggestion_cards_carry_their_own_scope():
     assert "var allPkg = true;" in html
     assert "SUGGESTS[i].scope !== 'pkg'" in html
     # 旧的一刀切写法不能再出现（会把全库数字罩成「仅 X」）
+
+
+def test_advisor_dropped_note_is_rendered_when_archive_was_trimmed():
+    """存档被裁过：顾问 tab 必须先说这件事，再谈列表；上限数字以服务端为准。"""
+    html = _ui().CONSOLE_HTML
+    assert "function advisorDroppedNote()" in html
+    assert "CC.advisorDroppedNotice" in html
+    assert "var ADVISOR_DROPPED = 0;" in html
+    assert "res[2].dropped" in html
+    assert "res[2].limits" in html
+    assert "key: 'adv-dropped'" in html
+    # 上限数字不能写死在前端（服务端 limits 是唯一真值）
+    assert "8388608" not in html, "前端写死了字节上限"
     assert "var scope = APP_FILTER ? (' · 仅 ' + pkgLabel(APP_FILTER)) : '';" not in html
 
 

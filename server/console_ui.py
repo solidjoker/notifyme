@@ -1383,6 +1383,11 @@ var ADVISORS_ERR = '';
 // 存档上限 1000 份。只按已加载条数显示角标时，有 400 份也只写「100」，
 // 用户会以为更早的报告丢了 —— 角标与截断说明都读这个总数。
 var ADVISOR_TOTAL = 0;
+// 顾问存档因容量上限被裁掉的份数（GET /advisor 的 dropped）：服务端裁剪时留痕后回传。
+// 静默裁剪会被当成「端上没跑复盘」，顾问 tab 必须把这句话说出来。
+var ADVISOR_DROPPED = 0;
+// 容量上限（max_reports / max_bytes）：服务端给的真值，前端只用来拼文案。
+var ADVISOR_LIMITS = null;
 // App 过滤：'' = 全部；否则只看该包名（四个 tab 共用同一口径）
 var APP_FILTER = '';
 // 全局搜索关键词（跨四个 tab）
@@ -1496,6 +1501,22 @@ function advisorTruncationOf(r) {
   }
   var t = !!(r && r.truncated === true);
   return { truncated: t, fields: [], label: t ? '已截断' : '' };
+}
+// 顾问存档被容量上限裁掉时的提示：判定收在规则层（CC.advisorDroppedNotice），
+// 规则脚本缺失时降级成只报份数。上限数字以服务端 limits 为准。
+function advisorDroppedNote() {
+  var n = Number(ADVISOR_DROPPED);
+  if (!isFinite(n) || n <= 0) return '';
+  var notice = null;
+  if (CC && CC.advisorDroppedNotice) {
+    try { notice = CC.advisorDroppedNotice(ADVISOR_DROPPED, ADVISOR_LIMITS); }
+    catch (e) { notice = null; }
+  }
+  if (!notice || !notice.show) {
+    notice = { show: true, dropped: Math.floor(n), label: '存档已裁掉 ' + Math.floor(n) + ' 份' };
+  }
+  return '<div class="note">' + esc(notice.label) +
+    '（裁掉的是最早的报告；端上仍会保留未同步的那份）。</div>';
 }
 // 重要度：优先 s1.importance，缺失时退回接口顶层 importance
 function importanceOf(a) {
@@ -2153,6 +2174,9 @@ async function load(reason) {
       ? res[2].total : ADVISORS.length;
     ADVISORS_ERR = (res[2] && res[2].ok === false)
       ? ((res[2].detail || res[2].error) || '顾问存档不可读') : '';
+    ADVISOR_DROPPED = (res[2] && typeof res[2].dropped === 'number' && res[2].dropped > 0)
+      ? res[2].dropped : 0;
+    ADVISOR_LIMITS = (res[2] && res[2].limits) ? res[2].limits : null;
     QUEUE = (res[3] && res[3].items) || [];
     QUEUE_SUMMARY = (res[3] && res[3].summary) || null;
     QUEUE_ERR = (res[3] && res[3].err) || '';
@@ -3390,6 +3414,11 @@ function renderAdvisor() {
     });
     out.push({ key: 'adv-note', html: refreshNote(), full: true });
     return out;
+  }
+  // 存档被容量上限裁掉过：先说清楚这件事，再谈列表（否则用户以为端上没跑复盘）
+  var droppedNote = advisorDroppedNote();
+  if (droppedNote) {
+    out.push({ key: 'adv-dropped', html: droppedNote, full: true });
   }
   if (!reports.length) {
     out.push({ key: 'adv-empty', html: emptyStateFor('adv'), full: true });

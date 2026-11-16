@@ -756,6 +756,12 @@ def query_analysis():
         "tz_offset_minutes": tz_offset_min,
     })
 
+def _advisor_limits():
+    """顾问存档的容量上限（回给前端做提示文案，前端不自己写死数字）。"""
+    import app as app_module
+    return {"max_reports": app_module.ADVISOR_MAX_REPORTS,
+            "max_bytes": app_module.ADVISOR_MAX_BYTES}
+
 def receive_advisor():
     """
     接收 App 侧的 AI 顾问复盘报告（JSON 数组），每条结构：
@@ -827,10 +833,10 @@ def receive_advisor():
             # 追加写主存储（O(1)），不再整份重写整个数组（B9）
             app_module._append_advisor_reports(new_items)
             reports.extend(new_items)
-            # 有界裁剪：条数超上限时只保留最近的
-            if len(reports) > app_module.ADVISOR_MAX_REPORTS:
-                reports = reports[-app_module.ADVISOR_MAX_REPORTS:]
-                app_module._trim_advisor_jsonl(app_module.ADVISOR_MAX_REPORTS)
+            # 容量收敛（条数 / 字节 / 历史轮转段合并）统一在 _trim_advisor_jsonl：
+            # 平时追加是 O(1)，只有真超限时才整份重写一次。
+            if app_module._advisor_needs_trim(reports):
+                reports = app_module._trim_advisor_jsonl(app_module.ADVISOR_MAX_REPORTS)
             # 兼容快照（JSON 数组）：只在有变化时写
             app_module._write_advisor_snapshot(reports)
 
@@ -876,6 +882,9 @@ def query_advisor():
             "total": 0,
             "has_more": False,
             "reports": [],
+            "dropped": 0,
+            "dropped_at": 0,
+            "limits": _advisor_limits(),
             "error": "advisor archive is corrupted",
             "detail": str(e),
         })
@@ -894,8 +903,17 @@ def query_advisor():
     # 这里把存档总数与「还有更多」一并回给前端，由控制台显式标注截断。
     total = len(reports)
     reports = reports[:limit]
+    # 容量上限裁掉的份数要一起回给前端（留痕）：控制台必须能说出
+    # 「存档里少了 N 份」，否则用户会当成端上没跑复盘。
+    meta = app_module._read_advisor_meta()
+    dropped = meta.get("dropped")
+    dropped = dropped if isinstance(dropped, int) and dropped > 0 else 0
+    dropped_at = meta.get("dropped_at")
+    dropped_at = dropped_at if isinstance(dropped_at, int) else 0
     return jsonify({"ok": True, "count": len(reports), "total": total,
-                    "has_more": total > len(reports), "reports": reports})
+                    "has_more": total > len(reports), "reports": reports,
+                    "dropped": dropped, "dropped_at": dropped_at,
+                    "limits": _advisor_limits()})
 
 def admin_extract():
     """
