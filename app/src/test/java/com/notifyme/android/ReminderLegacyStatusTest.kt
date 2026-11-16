@@ -75,4 +75,14 @@ class ReminderLegacyStatusTest {
         )
         assertEquals(ReminderRecord.STATUS_ALARM, ReminderRecord.fromJson(original.toJson()).status)
     }
+
+    @Test
+    fun `降级文案推断为闹钟而不是日历`() {
+        // L1 事件建了但提醒行缺失 → 降级到 App 内闹钟；
+        // 文案里的「App内提醒」必须与 NOTE_ALARM 同形（不带空格），否则会被推成 calendar。
+        assertEquals(
+            ReminderRecord.STATUS_ALARM,
+            legacy("降级：日历事件已建但提醒行缺失，已改用App内提醒").status
+        )
+    }
 }
