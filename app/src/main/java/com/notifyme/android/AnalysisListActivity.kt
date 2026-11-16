@@ -238,13 +238,15 @@ class AnalysisListActivity : Activity() {
             // 摘要：S2 深分析摘要优先，否则给 S1 判定概率
             holder.tvSummary.text = if (record.escalated) record.s2Summary
             else ctx.templateText(R.string.analysis_prob_fmt, record.s1NeedActionProb * 100)
-            // 截止：S2 具体时间优先，其次 S1 截止桶（none 不显示）
-            val dueText = record.s2DueTime.ifEmpty {
-                TopicLabelCore.dueLabel(ctx, record.s1DueWindow)
-            }
-            // 「有没有截止」只能问 TopicLabelCore：旧实现拿码值比中文串（none != 无明确时间）永远不等，
-            // 于是未编辑过的卡片会显示成「截止：无明确时间」
-            val showDue = record.s2DueTime.isNotEmpty() || !TopicLabelCore.isNoDue(record.s1DueWindow)
+            // 截止：手动覆盖 > S2 具体时间 > S1 截止桶；统一换算成**绝对日期**再显示
+            //（今天 / 明天 / 某月某日），而不是把「本周内」这种桶名原样印出来
+            val dueDisplay = DueDisplayCore.resolveOf(
+                record.todoDue, record.todoDueAt, record.s2DueTime, record.s1DueWindow,
+                record.analyzedAt, System.currentTimeMillis()
+            )
+            val dueText = DueDisplayCore.compose(ctx, dueDisplay)
+            // 「有没有截止」看解析结果：none / 空都算没有（桶码值 none 也要算没有）
+            val showDue = dueDisplay.kind != DueDisplayCore.KIND_NONE
             if (showDue) {
                 holder.tvDue.visibility = View.VISIBLE
                 holder.tvDue.text = ctx.getString(

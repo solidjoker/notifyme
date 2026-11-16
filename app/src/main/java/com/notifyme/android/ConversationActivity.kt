@@ -633,7 +633,16 @@ class ConversationActivity : Activity() {
             normalColor = getColor(R.color.text_secondary)
         )
         addChip(
-            text = getString(R.string.chip_due_window, TopicLabelCore.dueLabel(this, record.s1DueWindow)),
+            // 截止 chip 显示绝对日期（今天 / 明天 / 某月某日），不是「本周内」这种桶名
+            text = getString(
+                R.string.chip_due_window,
+                DueDisplayCore.compose(
+                    this,
+                    DueDisplayCore.resolve(
+                        record.s1DueWindow, record.analyzedAt, System.currentTimeMillis()
+                    )
+                )
+            ),
             highlight = false,
             highlightColor = getColor(R.color.accent_orange),
             normalColor = getColor(R.color.text_secondary)
@@ -662,7 +671,14 @@ class ConversationActivity : Activity() {
                 record.s2Summary
             )
             if (record.s2DueTime.isNotEmpty()) {
-                tvS2Summary.append("　" + getString(R.string.analysis_due_prefix) + record.s2DueTime)
+                tvS2Summary.append(
+                    "　" + getString(R.string.analysis_due_prefix) + DueDisplayCore.compose(
+                        this,
+                        DueDisplayCore.resolve(
+                            record.s2DueTime, record.analyzedAt, System.currentTimeMillis()
+                        )
+                    )
+                )
             }
             tvS2Action.text = getString(
                 R.string.s2_action_line,

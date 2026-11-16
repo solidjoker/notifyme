@@ -173,7 +173,12 @@ internal object TopicLabelCore {
     fun hasDisplayDue(todoDue: String?, s2DueTime: String?, s1DueWindow: String?): Boolean =
         !isNoDue(displayDueCode(todoDue, s2DueTime, s1DueWindow))
 
-    /** 「截止」展示文案：桶名 -> 中文，具体时间与未知自由文本原样。 */
+    /**
+     * 「截止」展示文案：桶名 -> 中文，具体时间与未知自由文本原样。
+     *
+     * **卡上的展示已改走 [DueDisplayCore]**（换算成绝对日期：今天 / 明天 / 某月某日）；
+     * 本函数保留给「桶名 -> 中文」的兜底场景（例如提醒链入参仍是原始码值）。
+     */
     fun displayDueLabel(
         context: Context,
         todoDue: String?,
