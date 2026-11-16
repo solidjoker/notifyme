@@ -86,7 +86,8 @@ internal object DueDisplayCore {
         return when (display.kind) {
             KIND_DATE -> joinDateTime(display.dateText, display.timeText)
             KIND_TEXT -> display.rawText
-            else -> if (res != null) label(res) else ""
+            // 「今天 / 明天」这类标签也要带时刻：文本里写了 15:00 就不该只剩一个「今天」
+            else -> joinDateTime(if (res != null) label(res) else "", display.timeText)
         }
     }
 
