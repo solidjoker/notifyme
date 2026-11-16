@@ -154,9 +154,9 @@ object CalendarHelper {
             )
         )
         // created：L1 真实插入（eventId 非空）或 L3 闹钟成功才算本次创建了提醒；
-        // L1 去重跳过（CALENDAR 但无 eventId）与 L2 待手动保存均不算
-        val created = (result.status == ReminderRecord.STATUS_CALENDAR && result.eventId != null) ||
-            result.status == ReminderRecord.STATUS_ALARM
+        // L1 去重跳过（CALENDAR 但无 eventId）与 L2 待手动保存均不算。
+        // 口径只有一份（ReminderChainCore.countsAsCreated），别在这里再抄一遍。
+        val created = ReminderChainCore.countsAsCreated(result.status, result.eventId)
         return ReminderOutcome(result.note, created = created, status = result.status)
     }
 
@@ -196,20 +196,28 @@ object CalendarHelper {
             hasWritableCalendar = calendarId != null,
             eventAlreadyExists = duplicate
         )
+        // L1 写入结果：事件行 + 提醒行两段分开报（提醒行缺失时只拿得到 eventId）
+        var write = ReminderChainCore.CalendarWrite()
         when (ReminderChainCore.calendarAction(env)) {
             ReminderChainCore.CalendarAction.SKIP_DUPLICATE -> {
                 Log.i(TAG, "L1 跳过：系统日历已存在相同事件")
                 return chain(ReminderChainCore.duplicateSkip())
             }
             ReminderChainCore.CalendarAction.INSERT -> {
-                val eventId = insertEvent(
+                write = insertEvent(
                     context, calendarId!!, title, description, eventTime, leadMinutes
                 )
-                if (eventId != null) {
-                    Log.i(TAG, "L1 日历事件已创建: id=$eventId title=$title")
-                    return chain(ReminderChainCore.calendarSuccess(eventId))
+                if (write.eventId != null && write.alertInserted) {
+                    Log.i(TAG, "L1 日历事件已创建: id=${write.eventId} title=$title")
+                    return chain(ReminderChainCore.calendarSuccess(write.eventId))
                 }
-                Log.w(TAG, "L1 插入失败，降级 L2")
+                if (write.eventId != null) {
+                    // 事件行建出来了、提醒行没建出来：这条日历事件到点不会弹提醒，
+                    // 绝不能算 L1 成功（旧实现会把提醒行的失败连同事件 id 一起吞掉）。
+                    Log.w(TAG, "L1 日历事件已建但提醒行缺失: id=${write.eventId}，降级 L3")
+                } else {
+                    Log.w(TAG, "L1 插入失败，降级 L2")
+                }
             }
             ReminderChainCore.CalendarAction.UNAVAILABLE -> {
                 if (hasPermission) Log.i(TAG, "L1 跳过：无可写日历账户，降级 L2")
@@ -223,7 +231,11 @@ object CalendarHelper {
         // openCalendarInsert 内部先 resolveActivity 再 startActivity，"能否唤起" 直接取它的返回值，
         // 不再单独做一次包查询（重复查询没有额外信息，只会让 L2 多一次 IPC）。
         val inForeground = MainApplication.isInForeground
-        val intentShown = inForeground && openCalendarInsert(context, title, description, eventTime)
+        // 半成品事件（事件建了、提醒行缺失）时不再唤起日历 App：
+        // 用户会再存一条同名的重复事件，而日历里那条又没有提醒 —— 两个问题叠在一起。
+        val halfBuilt = write.eventId != null && !write.alertInserted
+        val intentShown = !halfBuilt &&
+            inForeground && openCalendarInsert(context, title, description, eventTime)
         val envL2 = env.copy(inForeground = inForeground, canOpenCalendar = intentShown)
         if (intentShown) {
             Log.i(TAG, "L2 已唤起日历 App: title=$title")
@@ -236,9 +248,18 @@ object CalendarHelper {
             context, dedupKey, title, summary, pkg, conversation, eventTime, leadMinutes
         )
         val outcome = ReminderChainCore.decide(
-            envL2, insertedEventId = null, intentShown = intentShown, alarmSet = alarmSet
+            envL2,
+            insertedEventId = write.eventId,
+            intentShown = intentShown,
+            alarmSet = alarmSet,
+            alertInserted = write.alertInserted
         )
         if (alarmSet) Log.i(TAG, "L3 已设 App 内闹钟") else Log.w(TAG, "L3 闹钟设置失败")
+        // 连闹钟都没设上：刚建的那条日历事件没有提醒行，留着会骗下一轮去重 → 删掉
+        outcome.dropEventId?.let { dropId ->
+            val deleted = deleteEvent(context, dropId)
+            Log.w(TAG, "删除没有提醒行的孤儿日历事件: id=$dropId deleted=$deleted")
+        }
         return chain(outcome)
     }
 
@@ -363,7 +384,16 @@ object CalendarHelper {
         }
     }
 
-    /** 插入日历事件与提前提醒（Reminders 行含提前量 + METHOD_ALERT），返回事件 id；失败返回 null。 */
+    /**
+     * 插入日历事件 + 提前提醒（Reminders 行含提前量 + METHOD_ALERT），两段分开报结果。
+     *
+     * 为什么分段：**事件行建了、提醒行没建出来**，这条日历事件到点不会弹提醒。
+     * 旧实现把两段当一段（提醒行插入返回的 Uri 被丢弃、抛异常时连事件 id 一起吞掉），
+     * 于是链路记「成功：已写入系统日历」→ 去重把这条半成品挡住 → 用户永远收不到提醒。
+     *
+     * 返回 [ReminderChainCore.CalendarWrite]：eventId = 事件行 id（没有则 null），
+     * alertInserted = 提醒行是否写入成功。
+     */
     private fun insertEvent(
         context: Context,
         calendarId: Long,
@@ -371,8 +401,8 @@ object CalendarHelper {
         description: String,
         dtstart: Long,
         leadMinutes: Long
-    ): Long? {
-        return try {
+    ): ReminderChainCore.CalendarWrite {
+        val eventId = try {
             val values = ContentValues().apply {
                 put(CalendarContract.Events.CALENDAR_ID, calendarId)
                 put(CalendarContract.Events.TITLE, title)
@@ -383,20 +413,27 @@ object CalendarHelper {
                 put(CalendarContract.Events.EVENT_TIMEZONE, java.util.TimeZone.getDefault().id)
             }
             val uri = context.contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)
-            val eventId = uri?.lastPathSegment?.toLongOrNull() ?: return null
+            uri?.lastPathSegment?.toLongOrNull()
+        } catch (e: Exception) {
+            Log.w(TAG, "插入日历事件失败", e)
+            null
+        }
+        if (eventId == null) return ReminderChainCore.CalendarWrite()
 
-            // 提前提醒（通知方式）：用户配置的提前量，决定日历时能否真正弹提醒
+        // 提前提醒（通知方式）：用户配置的提前量，决定日历时能否真正弹提醒
+        val alertInserted = try {
             val reminderValues = ContentValues().apply {
                 put(CalendarContract.Reminders.EVENT_ID, eventId)
                 put(CalendarContract.Reminders.MINUTES, leadMinutes)
                 put(CalendarContract.Reminders.METHOD, CalendarContract.Reminders.METHOD_ALERT)
             }
-            context.contentResolver.insert(CalendarContract.Reminders.CONTENT_URI, reminderValues)
-            eventId
+            context.contentResolver.insert(CalendarContract.Reminders.CONTENT_URI, reminderValues) != null
         } catch (e: Exception) {
-            Log.w(TAG, "插入日历事件失败", e)
-            null
+            // 提醒行没建出来：事件留着但到点不响 → 交给 Core 决定降级（并回收孤儿事件）
+            Log.w(TAG, "插入日历提醒行失败（事件已建，到点不会弹提醒）: eventId=$eventId", e)
+            false
         }
+        return ReminderChainCore.CalendarWrite(eventId = eventId, alertInserted = alertInserted)
     }
 
     /**

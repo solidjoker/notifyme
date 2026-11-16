@@ -214,4 +214,88 @@ class ReminderChainCoreTest {
         assertEquals(ReminderRecord.STATUS_FAILED, ReminderChainCore.failed().status)
         assertEquals(ReminderRecord.STATUS_CALENDAR, ReminderChainCore.duplicateSkip().status)
     }
+
+    // ── L1 两段写入：提醒行缺失不能算 L1 成功 ───────────────────────────────
+
+    @Test
+    fun `提醒行缺失时不算 L1 成功并降级到闹钟`() {
+        // 事件行建出来了、提醒行没建出来：这条日历事件到点不会弹提醒
+        val outcome = ReminderChainCore.decide(
+            fullCalendar(), insertedEventId = 777L, alarmSet = true, alertInserted = false
+        )
+        assertEquals(ReminderRecord.STATUS_ALARM, outcome.status)
+        assertEquals(ReminderChainCore.NOTE_CALENDAR_NO_ALERT, outcome.note)
+        // eventId 保留下来：删除待办时才能把这条没有提醒的日历事件一并清掉
+        assertEquals(777L, outcome.eventId)
+        assertNull(outcome.dropEventId)
+        assertTrue(ReminderChainCore.countsAsCreated(outcome))
+    }
+
+    @Test
+    fun `提醒行缺失时不再唤起日历 App`() {
+        // 前台 + 能唤起日历，但已经有半成品事件：
+        // 唤起会让用户再存一条同名的重复事件，而日历里那条又没有提醒。
+        val env = fullCalendar().copy(inForeground = true, canOpenCalendar = true)
+        val outcome = ReminderChainCore.decide(
+            env, insertedEventId = 777L, intentShown = true, alarmSet = true, alertInserted = false
+        )
+        assertEquals(ReminderRecord.STATUS_ALARM, outcome.status)
+        assertEquals(ReminderChainCore.NOTE_CALENDAR_NO_ALERT, outcome.note)
+    }
+
+    @Test
+    fun `提醒行缺失且闹钟也没设上时落 failed 并交回孤儿事件 id`() {
+        val outcome = ReminderChainCore.decide(
+            fullCalendar(), insertedEventId = 777L, alarmSet = false, alertInserted = false
+        )
+        assertEquals(ReminderRecord.STATUS_FAILED, outcome.status)
+        assertEquals(ReminderChainCore.NOTE_FAILED, outcome.note)
+        assertNull(outcome.eventId)
+        // 交回调用方删掉这条没有提醒行的日历事件，否则下一轮去重会被它挡住
+        assertEquals(777L, outcome.dropEventId)
+        assertFalse(ReminderChainCore.countsAsCreated(outcome))
+    }
+
+    @Test
+    fun `提醒行写入成功时行为不变`() {
+        val outcome = ReminderChainCore.decide(
+            fullCalendar(), insertedEventId = 42L, alarmSet = true, alertInserted = true
+        )
+        assertEquals(ReminderRecord.STATUS_CALENDAR, outcome.status)
+        assertEquals(ReminderChainCore.NOTE_CALENDAR_OK, outcome.note)
+        assertEquals(42L, outcome.eventId)
+        assertNull(outcome.dropEventId)
+    }
+
+    @Test
+    fun `去重跳过优先于提醒行缺失`() {
+        // 系统日历里已经有同名事件：无论传什么都停在「跳过」，不许再建第二条
+        val env = fullCalendar().copy(eventAlreadyExists = true)
+        val outcome = ReminderChainCore.decide(
+            env, insertedEventId = 777L, alarmSet = true, alertInserted = false
+        )
+        assertEquals(ReminderRecord.STATUS_CALENDAR, outcome.status)
+        assertEquals(ReminderChainCore.NOTE_DUPLICATE, outcome.note)
+        assertNull(outcome.dropEventId)
+    }
+
+    @Test
+    fun `降级文案能被老记录的级别推断认成闹钟`() {
+        assertEquals(
+            ReminderRecord.STATUS_ALARM,
+            ReminderRecord.fromJson(
+                org.json.JSONObject().put("note", ReminderChainCore.NOTE_CALENDAR_NO_ALERT)
+            ).status
+        )
+    }
+
+    @Test
+    fun `created 的两参口径与 Outcome 形式一致`() {
+        val outcome = ReminderChainCore.decide(fullCalendar(), insertedEventId = 5L)
+        assertTrue(ReminderChainCore.countsAsCreated(outcome.status, outcome.eventId))
+        // 去重跳过（CALENDAR 但无 eventId）与 L2（INTENT）都不算创建
+        assertFalse(ReminderChainCore.countsAsCreated(ReminderRecord.STATUS_CALENDAR, null))
+        assertFalse(ReminderChainCore.countsAsCreated(ReminderRecord.STATUS_INTENT, null))
+        assertTrue(ReminderChainCore.countsAsCreated(ReminderRecord.STATUS_ALARM, null))
+    }
 }

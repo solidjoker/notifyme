@@ -53,7 +53,28 @@ internal object ReminderChainCore {
         val status: String,
         val note: String,
         /** 仅 L1 真实插入成功时有值；其余级别为 null。 */
-        val eventId: Long? = null
+        val eventId: Long? = null,
+        /**
+         * 需要调用方删掉的「孤儿日历事件」id。
+         *
+         * 事件行建了但提醒行没建成、连 App 内闹钟也没设上时，这条日历事件到点不会响，
+         * 留着还会骗下一轮去重（同名同起始时间 → 直接跳过）→ 提醒被永久钉死。
+         */
+        val dropEventId: Long? = null
+    )
+
+    /**
+     * L1 写入结果：日历事件行 + 提醒行（提前量 + METHOD_ALERT）两段分开报。
+     *
+     * 为什么要分开：提醒行插不进去时，事件行往往已经建出来了。这种日历事件**到点不会弹提醒**，
+     * 却在旧实现里被当成 L1 成功（Reminders 插入返回的 Uri 被丢弃、抛异常时又把事件 id 一起吞掉），
+     * 用户永远收不到提醒，日历里还留着一条没有提醒的孤儿事件。
+     */
+    data class CalendarWrite(
+        /** 事件行 id；null = 事件没建成（未尝试或插入失败）。 */
+        val eventId: Long? = null,
+        /** 提醒行是否写入成功。 */
+        val alertInserted: Boolean = false
     )
 
     // ── note 文案（与历史记录兼容的契约，改动会让老记录的级别推断变化）────────────
@@ -61,6 +82,15 @@ internal object ReminderChainCore {
     const val NOTE_CALENDAR_OK = "成功：已写入系统日历"
     const val NOTE_INTENT = "已唤起日历，待手动保存"
     const val NOTE_ALARM = "已设App内提醒"
+
+    /**
+     * L1 事件建了但提醒行没建成 → 降级到 L3 闹钟。
+     *
+     * 文案里必须带「App内提醒」（不带空格，与 `NOTE_ALARM` 同形）：
+     * `ReminderRecord.fromJson` 对无 status 的老记录按文案推断级别，
+     * 带上它才能被推成 alarm，而不是被「未知文案按生效处理」推成 calendar。
+     */
+    const val NOTE_CALENDAR_NO_ALERT = "降级：日历事件已建但提醒行缺失，已改用App内提醒"
     const val NOTE_FAILED = "失败：无日历账户、无日历App、闹钟设置异常"
 
     /** L1 该不该真去碰 ContentResolver（只有 INSERT 才该）。 */
@@ -86,8 +116,21 @@ internal object ReminderChainCore {
     /** L3 已设 App 内闹钟（算本次创建了提醒）。 */
     fun alarmScheduled(): Outcome = Outcome(ReminderRecord.STATUS_ALARM, NOTE_ALARM)
 
-    /** 三级全不可用。 */
-    fun failed(): Outcome = Outcome(ReminderRecord.STATUS_FAILED, NOTE_FAILED)
+    /**
+     * L1 事件建了但提醒行没建成：不算 L1 成功，降级到 L3；
+     * eventId 保留下来，删除待办时才能把这条没有提醒的日历事件一并清掉。
+     */
+    fun calendarWithoutAlert(eventId: Long): Outcome =
+        Outcome(ReminderRecord.STATUS_ALARM, NOTE_CALENDAR_NO_ALERT, eventId = eventId)
+
+    /**
+     * 三级全不可用。
+     *
+     * [dropEventId] 非空 =「刚建的那条日历事件没有提醒行」→ 调用方应把它删掉，
+     * 别留残骸骗下一轮去重。
+     */
+    fun failed(dropEventId: Long? = null): Outcome =
+        Outcome(ReminderRecord.STATUS_FAILED, NOTE_FAILED, eventId = null, dropEventId = dropEventId)
 
     /**
      * 整条链的终态：按 L1 → L2 → L3 顺序取第一个成立的级别。
@@ -96,26 +139,41 @@ internal object ReminderChainCore {
      * @param insertedEventId L1 真实插入返回的事件 id（未尝试或插入失败传 null）
      * @param intentShown     L2 是否真的成功唤起了日历 App
      * @param alarmSet        L3 是否真的设上了闹钟
+     * @param alertInserted   L1 的提醒行是否写入成功（false = 事件建了但到点不会弹提醒）
      */
     fun decide(
         env: Env,
         insertedEventId: Long? = null,
         intentShown: Boolean = false,
-        alarmSet: Boolean = false
+        alarmSet: Boolean = false,
+        alertInserted: Boolean = true
     ): Outcome {
         when (calendarAction(env)) {
             CalendarAction.SKIP_DUPLICATE -> return duplicateSkip()
             CalendarAction.INSERT ->
-                if (insertedEventId != null) return calendarSuccess(insertedEventId)
+                if (insertedEventId != null && alertInserted) return calendarSuccess(insertedEventId)
             CalendarAction.UNAVAILABLE -> Unit
         }
-        if (shouldTryIntent(env) && intentShown) return intentOpened()
-        if (alarmSet) return alarmScheduled()
-        return failed()
+        // 事件建了、提醒行没建成：这条日历事件到点不会弹提醒，不能算 L1 成功；
+        // 也不再唤起日历 App（用户会再存一条同名的重复事件），直接落到 L3 闹钟兜底。
+        val eventWithoutAlert = insertedEventId != null && !alertInserted
+        if (!eventWithoutAlert && shouldTryIntent(env) && intentShown) return intentOpened()
+        if (alarmSet) {
+            return if (eventWithoutAlert) {
+                calendarWithoutAlert(requireNotNull(insertedEventId))
+            } else {
+                alarmScheduled()
+            }
+        }
+        // 连闹钟都没设上：这条没有提醒行的日历事件留着只会骗下一轮去重 → 交回调用方删掉。
+        return failed(dropEventId = if (eventWithoutAlert) insertedEventId else null)
     }
 
     /** 这次结果是否算「本次真正创建了提醒」（L1 真插入 / L3 闹钟）；去重跳过与 L2 均不算。 */
-    fun countsAsCreated(outcome: Outcome): Boolean =
-        (outcome.status == ReminderRecord.STATUS_CALENDAR && outcome.eventId != null) ||
-            outcome.status == ReminderRecord.STATUS_ALARM
+    fun countsAsCreated(outcome: Outcome): Boolean = countsAsCreated(outcome.status, outcome.eventId)
+
+    /** [countsAsCreated] 的两参形式：调用方手上只有 status 与 eventId 时用（口径只有这一份）。 */
+    fun countsAsCreated(status: String, eventId: Long?): Boolean =
+        (status == ReminderRecord.STATUS_CALENDAR && eventId != null) ||
+            status == ReminderRecord.STATUS_ALARM
 }
