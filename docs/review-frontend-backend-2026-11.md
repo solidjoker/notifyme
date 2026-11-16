@@ -3290,3 +3290,45 @@ Android 用例 1384 → **1395 条**（`app/src/test` 86 → **87 个 .kt**）�
 ① **「两边内容一样」不等于「两边被钉住」**：第 53 / 55 轮把布尔与字段名收成契约后，码值 ↔ 中文这一层仍靠人记 —— 跨层契约要按层补，不能只补一次。
 ② **文案漂移比字段名漂移更隐蔽**：字段名漂移会直接报错，码值漂移只是「某处显示成英文」，没人会注意到，直到用户截图问「为什么控制台显示 work_task」。
 ③ **守卫必须证明自己会红**：负控制（故意改坏一端 → 用例必须红）是这类静态契约测试唯一有效的验收方式。
+
+## E-87 重要度口径三处漂移：控制台 chip 显示「高」但分区落进「未标重要度」（fix/importance-label-contract）
+
+**现象.** 同一条分析记录在控制台「待办」Tab 里，chip 写着「重要度 高」，但它被分到「未标重要度」分区、排序排在最后、也不带高危样式 —— 同一张卡片自相矛盾。服务端 `/analysis` 返回的顶层 `importance` 与控制台 chip 的档位也对不上。
+
+**根因.** 重要度有三份实现，改动前彼此不等价：
+① 服务端 `server/util.py` 的 `_importance_label` 用 `float(text)` 宽松解析：文本 `'6.0'` 能解析 → 判 high；`'nan'` → low（float NaN 不抛）；`'1e3'` → high；`'+6'` → high；`'.5'` → low；`'5.'` → mid；**认不出的文本 `'bogus'` 原样回显**，并被写进 `analyses.importance` 列；
+② 规则层 `server/console_classify.js` 的 `importanceKey` 用严格十进制正则 `/^-?\d+(\.\d+)?$/` + 阈值 → 认不出返 `''`（未标）；
+③ 控制台 `server/console_ui.py` 的 `impLabel` **自带第二份副本**，字符串分支只认 `/^[0-9]+$/`（整数）→ `'6.0'` / `'-1'` 匹配不上就 `return String(v).trim().toLowerCase()` 原码回显。
+
+三份实现分别喂给不同地方：chip 文案走规则层（`impChipText` → `CC.importanceChip`），而 **分区（`groupTodosByImportance` 的 getImportance）、排序（`impRank`）、样式类（`impCls`）走 UI 自己那份** —— 于是字符串形态的 `s1.importance` 会让 chip 与分区分家。
+
+**修法.** 把「重要度的数值 → 档位」收成一份口径，三处改为同源：
+① 服务端 `util._importance_label` 重写为三条分支：数值型（int/float）走阈值，`math.isfinite` 拦 NaN / Infinity（判未标）；文本型必须匹配模块级常量 `_IMPORTANCE_NUM_RE = re.compile(r"^-?\d+(\.\d+)?$")` 才按数值解析（`'6.0'` → high、`'-1'` → low）；`'high'`/`'mid'`/`'low'`（忽略大小写与空白）原样返回；**其余文本一律返回 None（未标），不再原样回显**；
+② 规则层 `importanceKey` 补 typeof 分支：`null` / `undefined` / `boolean` → `''`，`number` 先 `isFinite` 再按阈值（修掉 `1e21` 这类指数写法的分歧），文本分支保持同一条正则；
+③ 控制台 `impLabel` 改为**委托 `CC.importanceKey`**（try/catch 兜住规则层异常），规则脚本没加载时的降级实现按服务端同一张表写（number 分支 + 同一正则 + high/mid/low + 其它 `''`），旧的整数专用正则 `/^[0-9]+$/` 退场。
+
+**刻意取舍.**
+① **未知文本不再原样回显**：顶层 `importance` 只允许 `high`/`mid`/`low`/未标四种状态。回显原码会把「模型没给重要度」伪装成「重要度叫 bogus」，控制台分档时它必然落进未标桶。
+② **chip 仍按 s1 原值回显**（`importanceChip` 的既有语义有单测钉住）：chip 面向「模型原话」，档位面向「分桶」，分工不同 —— 本次只保证「同一份数值，档位在三处一致」。
+③ **端侧不改**：Android 上报的是 Double（`AnalysisStore` 写 `finiteOrZero(s1Importance)`），字符串形态只来自老数据或手写库行，所以只收服务端与控制台两侧，不动端上协议。
+④ **不新增「重要度码值」跨端契约条目**：端侧是数值、服务端是档位标签，两端不共享码值集合，没有可比对的映射（与 topic / due 的跨端码值表不同）。
+
+**测试.** 新增 `server/test_importance_contract.py`（339 行 / 10 条）：
+① 31 项形态矩阵（`None` / `True` / `False` / `6.3` / `6` / `3` / `2.9` / `0` / `-1` / `"6.3"` / `"6"` / `"3"` / `"2.9"` / `"0"` / `"-1"` / `"6.0"` / `"  6.0  "` / `"high"` / `"HIGH"` / `" mid "` / `"low"` / `"+6"` / `".5"` / `"5."` / `"1e3"` / `"nan"` / `"inf"` / `"-inf"` / `"bogus"` / `"urgent"` / `""` / `"   "`）逐条比对**四处**实现：服务端 `util._importance_label`、规则层 `CC.importanceKey`、控制台 `impLabel`（带规则层）、控制台 `impLabel`（降级路径）；
+② 静态断言服务端与规则层**共用同一条十进制正则**（抠出 `_IMPORTANCE_NUM_RE` 的模式串与 `importanceKey` 的正则字面量逐字比对）；
+③ 端到端：上报 10 种形态 → `GET /analysis` 顶层 `importance` 与规则层判定一致，未知文本不再入库当标签；
+④ chip 文案与档位不分家（有档位时 chip 必须是 高 / 中 / 低）。
+
+**验证.**
+- `python -m pytest server/test_importance_contract.py -q` → 10 passed；
+- `python -m pytest server/ -q` → **905 passed**（基线 895 + 10）；
+- `node --check server/console_classify.js` 退出码 0；控制台内联 4 段 script 导出后 `node --check` 退出码 0；
+- 端到端矩阵探针（`POST /analysis` 10 条 → `GET /analysis` + `GET /stats` → node 端逐条比对）：**MISMATCH_TOTAL 0**（修前 1 条：`'bogus'` 服务端回显 `bogus` vs 规则层 `''`）；`/stats` 的待办数 8 与控制台待办数 8 一致，未受影响。
+
+**计数.** `server/util.py` 468 → **486 行**（431 非空 / 21394 B）；`server/console_classify.js` 1176 → **1191 行**（1116 非空 / 54951 B）；`server/console_ui.py` 4063 → **4081 行**（3987 非空 / 171604 B）；新增 `server/test_importance_contract.py` **339 行**（285 非空 / 13822 B / CRLF）；服务端用例 895 → **905 条**；Android 侧不变（顶层 133 个 .kt / 全树 140 / `app/src/test` 88 个 .kt / 1429 条 / Core 内核 52）。
+
+**教训.**
+① **同一张卡片上的两种呈现必须同源**：chip 走规则层、分区走 UI 本地副本 —— 只要有一个数据点绕过规则层，界面就会自相矛盾。
+② **「宽松解析」在展示层是 bug 源**：`float()` 能把 `'1e3'`、`'nan'`、`' 6.0 '` 都变成数字，于是「以为的数值」与「实际判出的档位」之间没有任何提示；写入口要归一，读出口要承认「认不出就是认不出」。
+③ **降级路径也是口径**：前端降级实现往往只在规则脚本没加载时才跑，恰是最容易没人测的分支 —— 本次把降级路径也拉进同一张矩阵。
+④ **跨层一致要钉在同一处**：矩阵式比对（多处实现 × 多种形态）比「各端各测各的」更能挡住漂移。

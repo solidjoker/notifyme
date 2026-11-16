@@ -17,7 +17,7 @@
 | `console_ui.py` | 内嵌 PWA 控制台前端（HTML/CSS/JS，无外部依赖） |
 | `extract_common.py` | 两个抽取脚本的共享内核：结构化日志、原文 JSONL 存档与轮转、跨进程写锁、五列去重、分批提交、主库结构兜底；配置由 `activate(module)` 注入宿主模块，`_setting()` 每次调用时读取 |
 | `android_db_extract.py` / `pc_db_extract.py` / `gen_icons.py` | 安卓 / PC 本地库解密提取与图标生成脚本 |
-| `test_*.py` | pytest 用例（`python -m pytest server/` 全量跑）；含端云与跨层契约守卫：`test_queue_contract.py`（排队通道）、`test_report_contract.py`（消息 / 分析 / 顾问三条上报通道）与 `test_label_contract.py`（topic / due 码值↔中文映射跨端一致） |
+| `test_*.py` | pytest 用例（`python -m pytest server/` 全量跑）；含端云与跨层契约守卫：`test_queue_contract.py`（排队通道）、`test_report_contract.py`（消息 / 分析 / 顾问三条上报通道）、`test_label_contract.py`（topic / due 码值↔中文映射跨端一致）与 `test_importance_contract.py`（重要度档位：服务端 / 规则层 / 控制台三处同源） |
 
 运行期配置（`WEIXIN_TOKEN`、数据目录、各项限额）只在 `app.py` 一处定义，其余模块在函数体内动态读取，因此测试里的 `monkeypatch` 立即生效。
 
@@ -476,11 +476,13 @@ UI 侧只挑措辞：`console_ui.queueEmptyHtml()` 在 `scope.scope === 'device'
 规则层（`server/console_classify.js`）新增一段「S1 主题 / 截止 / 重要度：码值 → 中文」：`TOPIC_LABELS` / `TOPIC_ALIASES` / `DUE_LABELS` / `DUE_ALIASES` 四张表 + `normalizeTopic()` / `normalizeDue()`（码值与中文桶名双向归一）+ `topicLabel()` / `dueLabel()` + `isNoDue()` + `displayDueCode()` / `hasDisplayDue()` / `displayDueLabel()` + `IMPORTANCE_CHIPS` / `importanceKey()` / `importanceChip()` + `analysisCodeParts()`（搜索面用）。
 五条约定：① **认不出的原码原样回显，只有空值才回落**（「通知公告」/「无明确时间」）—— 编一个中文会与端上不一致，用户也没法回溯它对应哪个码；
 ② **`none` 整段不渲染**（`hasDisplayDue` 为假），不是渲染成「截止 无明确时间」；③ **「截止」的优先序固定 `todo_due → s2.due_time → s1.due_window`**（与端上 `displayDueCode` / `AnalysisStore.displayDue` 同序，手填的截止最权威）；
-④ **数值重要度的口径与服务端 `util._importance_label` 同源**（`>=6 high` / `>=3 mid` / 其余 `low`，小数与负数也按数值走）—— 只认整数会把 `2.9` 判成「认不出」，与接口归一结果相反；
+④ **数值重要度的口径与服务端 `util._importance_label` 同源**（`>=6 high` / `>=3 mid` / 其余 `low`，小数与负数也按数值走）—— 只认整数会把 `2.9` 判成「认不出」，与接口归一结果相反；服务端只认**十进制写法**（`_IMPORTANCE_NUM_RE`）与 `high` / `mid` / `low`，`'+6'` / `'.5'` / `'1e3'` / `'nan'` 与认不出的文本一律判**未标**（不再原样回显进库）；
 ⑤ **搜索面同时收码值与中文标签，但排除 `none`**（否则搜 `none` 命中全部记录，与端上 `SearchCore` 同口径）。
 
 UI 侧只挑措辞：`console_ui.impChipText()` / `topicChipText()` / `displayDueText()` 三个 helper 走规则层（缺失时降级为「原码原样 + none 不出」），
 `renderAnalysisBlock()` 的截止 chip 与主题 chip 都由它们产出，S2 段里单独的「截止时间」行删掉（与截止 chip 重复，且会把桶名原样贴在正文里）。
+**重要度的分区 / 排序 / 样式也走规则层**：`console_ui.impLabel()` 此前**自带第二份副本**（字符串分支只认整数正则 `/^[0-9]+$/`，匹配不上就原码回显），而 chip 文案走规则层 —— 于是字符串形态的 `s1.importance`（如 `"6.0"` / `"-1"`）会让同一张卡片「chip 写高、分区却落进未标重要度、排序排最后」。
+现在 `impLabel` 改为委托 `CC.importanceKey`，规则脚本没加载时的降级实现按服务端同一张表写；`server/test_importance_contract.py`（10 条）把**服务端 / 规则层 / 控制台 / 控制台降级**四处拉进同一张 31 项形态矩阵比对，并静态断言服务端与规则层共用同一条十进制正则。
 **「是否待办」的真值表只有一份，与服务端 `_safe_bool` 逐条对齐**：控制台曾用 JS 的 `!!` 判 `s1.need_action.value` —— 任何非空字符串都是真，于是端上把 `false` 上报成 `"false"` / `"no"` 的记录在控制台全成了待办（服务端 `_safe_bool` 只认 `true` / `1` / `yes` / `on` / `y` / `t`，认不出的**一律假**）；徽标更糟：`renderAnalysisBlock()` 原来判 `if (s1.need_action)`（对象存不存在），而端上**每条**记录都写 `s1.need_action = {value, prob}`，于是每张卡都挂「⚡待办」。
 
 判定收进 `console_classify.safeBool(v)`（与服务端 `util._safe_bool` 同一张表，`test_safe_bool_agrees_with_server_util` 跨层钉死）+ `console_classify.needActionOf(a)`（**优先**顶层 `a.need_action` = 服务端归一后的列 = `/stats` 的口径；顶层缺失才退回 `s1.need_action.value`，且必须是对象）+ `console_classify.needActionChip(a)`（两态：待办 →「⚡待办」/ warn，非待办 →「✓ 无需行动」，没有 `s1.need_action` 就不出徽标 —— **没有信息 ≠ 无需行动**）。
