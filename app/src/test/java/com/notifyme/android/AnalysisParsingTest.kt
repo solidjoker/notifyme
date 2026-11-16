@@ -379,4 +379,130 @@ class AnalysisParsingTest {
     fun `括号内容非法时返回 null 而不是抛异常`() {
         assertNull(AnalysisParsing.extractJsonFromText("{这不是 JSON}"))
     }
+
+    // ---------------- parseSystemOneAnswers ----------------
+
+    /** 造 systemone 协议的 answers 段（score = null 表示协议里没有那题）。 */
+    private fun systemOneAnswers(
+        noul: Double = 0.1,
+        score: Double? = null,
+        levels: Int = 10,
+        due: String = "none",
+        topic: String = "notice",
+        confidences: Map<String, Double> = emptyMap()
+    ): JSONObject {
+        val answers = JSONObject()
+        answers.put("need_action", JSONObject().put("noul", noul))
+        if (score != null) {
+            val legend = JSONObject()
+            val probs = JSONObject()
+            for (i in 0 until levels) {
+                legend.put(i.toString(), "$i: level $i")
+                probs.put(i.toString(), if (i == 0) 1.0 else 0.0)
+            }
+            answers.put(
+                "importance",
+                JSONObject()
+                    .put("type", "score")
+                    .put("score", score)
+                    .put("legend", legend)
+                    .put("probabilities", probs)
+            )
+        }
+        answers.put("due_window", JSONObject().put("choice", due))
+        answers.put("topic", JSONObject().put("choice", topic))
+        for ((k, v) in confidences) {
+            val obj = answers.optJSONObject(k) ?: JSONObject()
+            obj.put("confidence", v)
+            answers.put(k, obj)
+        }
+        return answers
+    }
+
+    @Test
+    fun `systemone 答案能解析出各题`() {
+        val r = AnalysisParsing.parseSystemOneAnswers(
+            systemOneAnswers(
+                noul = 0.94,
+                score = 0.7,
+                due = "tomorrow",
+                topic = "work_task",
+                confidences = mapOf("need_action" to 0.9, "importance" to 0.8)
+            )
+        )
+
+        assertEquals(0.94, r.needActionProb, delta)
+        assertEquals(0.7, r.importance, delta)
+        assertEquals("tomorrow", r.dueWindow)
+        assertEquals("work_task", r.topic)
+        assertEquals("置信度取各题最小", 0.8, r.confidence, delta)
+    }
+
+    @Test
+    fun `answers 为 null 时全部兜底`() {
+        val r = AnalysisParsing.parseSystemOneAnswers(null)
+
+        assertEquals(0.0, r.needActionProb, delta)
+        assertEquals(0.0, r.importance, delta)
+        assertEquals("none", r.dueWindow)
+        assertEquals("notice", r.topic)
+        assertEquals(1.0, r.confidence, delta)
+    }
+
+    @Test
+    fun `importance 缺 score 时是 0`() {
+        val r = AnalysisParsing.parseSystemOneAnswers(systemOneAnswers(score = null))
+        assertEquals(0.0, r.importance, delta)
+    }
+
+    @Test
+    fun `闲聊档不再被抬到升级闸之上`() {
+        val r = AnalysisParsing.parseSystemOneAnswers(systemOneAnswers(noul = 0.1, score = 0.7))
+
+        assertEquals(0.7, r.importance, delta)
+        assertFalse("闲聊不该触发 S2 深分析", r.shouldEscalate())
+    }
+
+    @Test
+    fun `旧实现会把闲聊档乘 9 抬到升级闸之上`() {
+        // 对照实验：旧公式 score ≤ 1 → ×9
+        val oldScaled = 0.7 * 9.0
+        val r = AnalysisParsing.parseSystemOneAnswers(systemOneAnswers(noul = 0.1, score = 0.7))
+
+        assertTrue("旧公式确实会越过 6.0 的升级闸", oldScaled >= 6.0)
+        assertTrue(
+            "旧公式会触发升级",
+            AnalysisCase.Companion.S1Result(0.1, oldScaled, "none", "smalltalk", 1.0).shouldEscalate()
+        )
+        assertFalse("新口径不再触发升级", r.shouldEscalate())
+    }
+
+    @Test
+    fun `没有 confidence 字段时按 1_0 处理`() {
+        val r = AnalysisParsing.parseSystemOneAnswers(systemOneAnswers(score = 0.7))
+        assertEquals(1.0, r.confidence, delta)
+    }
+
+    @Test
+    fun `topic 与 due_window 空串回落默认值`() {
+        val r = AnalysisParsing.parseSystemOneAnswers(systemOneAnswers(due = "", topic = ""))
+        assertEquals("none", r.dueWindow)
+        assertEquals("notice", r.topic)
+    }
+
+    @Test
+    fun `置信度取各题最小`() {
+        val r = AnalysisParsing.parseSystemOneAnswers(
+            systemOneAnswers(
+                score = 0.7,
+                confidences = mapOf(
+                    "need_action" to 0.95,
+                    "importance" to 0.62,
+                    "due_window" to 0.8,
+                    "topic" to 0.71
+                )
+            )
+        )
+        assertEquals(0.62, r.confidence, delta)
+    }
 }
