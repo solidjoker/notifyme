@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **133 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 140 个，`app/src/test` 88 个 / 1429 条），服务端已拆成 **8+1 模块**（`app.py` 629 / `util.py` 416 / `storage.py` 954 / `routes.py` 1050 / `console_ui.py` 3969 / `stats_api.py` 201 / `suggests.py` 312 / `extract_common.py` 474 + `console_classify.js` 1064），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **134 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 141 个，`app/src/test` 89 个 / 1455 条），服务端已拆成 **8+1 模块**（`app.py` 629 / `util.py` 416 / `storage.py` 954 / `routes.py` 1050 / `console_ui.py` 3969 / `stats_api.py` 201 / `suggests.py` 312 / `extract_common.py` 474 + `console_classify.js` 1064），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -15,7 +15,7 @@
 | # | 图 | 回答的问题 | 尺寸 (px) |
 |---|---|---|---|
 | 01 | [系统上下文](#01-系统上下文) | 这个系统和谁说话？数据往哪流？ | 3962 × 1836 |
-| 02 | [Android 分层架构](#02-android-分层架构) | 133 个顶层 Kotlin 文件各自属于哪一层？ | 15601 × 2070 |
+| 02 | [Android 分层架构](#02-android-分层架构) | 134 个顶层 Kotlin 文件各自属于哪一层？ | 15911 × 2091 |
 | 03 | [三条采集通道](#03-三条采集通道) | 消息是怎么进来的？为什么需要三条路？ | 3386 × 1048 |
 | 04 | [分析决策流水线](#04-分析决策流水线) | 一条消息如何变成一条待办？ | 2510 × 5378 |
 | 05 | [三级降级提醒链](#05-三级降级提醒链) | 提醒为什么不会丢？ | 1973 × 3290 |
@@ -50,7 +50,7 @@
 
 五层 + Application 入口。**刻意不引 Compose**：全部传统 View + RecyclerView，运行时依赖只有 5 个（core-ktx / recyclerview / work-runtime-ktx / okhttp / **litert-api**——`com.google.ai.edge.litert:litert:2.2.0`，端侧 LiteRT 推理用），把首次构建失败风险降到最低。JSON 用平台内置 `org.json`，不引 Gson/Moshi。
 
-源码规模：`app/src/main/java/com/notifyme/android/` **顶层 133 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 140 个；`app/src/test` 88 个 .kt / 1429 条（纯 JVM 单测）。
+源码规模：`app/src/main/java/com/notifyme/android/` **顶层 134 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 141 个；`app/src/test` 89 个 .kt / 1455 条（纯 JVM 单测）。
 
 ![Android 分层架构图](diagrams/02-android-layers.png)
 
@@ -59,10 +59,10 @@
 | ① UI 层 | **18 个 Activity**：Main（首页）· Console（控制台 8 卡）· Conversation（会话详情+分析面板）· AnalysisList · **AnalysisSettings（S1/S2 槽位）** · Watchlist · Sources（通知来源）· ReminderList · **ReminderSettings** · PromptEdit · ModelList · Onboarding · **Capture** · **CaptureDiagnostics** · **EngineSmoke** · **OverlaySettings** · **PrivacySettings** · **RedactorPreview** |
 | ② 采集与常驻层 | `NotifyMeListener`（通知监听）· `A11yExtractService`（无障碍直读，仅微信）· `KeepAliveService`（60s 看门狗 requestRebind）· `BootReceiver` · `ReminderReceiver` · **`OverlayService`**（悬浮窗）· **`OverlayActionReceiver`** |
 | ③ 后台任务层 | 4 个 Worker：Sync（三通道上报）· Analysis（逐会话窗口 case）· Advisor（近 7 天复盘）· ModelDownload（.part 断点续传）；3 个 Scheduler 全部 `enqueueUniquePeriodicWork` + UPDATE 策略 |
-| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 52 个 Core 逻辑内核**（见下表） |
+| ④ 领域 / 决策层 | 既有内核：`AnalysisCase` · `ForkPrefilter` · `CalendarHelper` · `AlarmHelper` · `MessageReplier` · `HistorySync` · `LocalLlmEngine` / `LayaTfliteEngine`；**本轮新增 53 个 Core 逻辑内核**（见下表） |
 | ⑤ 存储层 | 5 个 JSONL + `files/models/` 目录 + **22 个** SharedPreferences 文件（见下方存储清单） |
 
-**④ 层本轮新增的 52 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
+**④ 层本轮新增的 53 个 Core 逻辑内核**（纯 Kotlin、无 Android 依赖，因此能进纯 JVM 单测；图中按主题分组，括号内为文件行数）
 
 | 主题 | 类 | 职责 |
 |---|---|---|
@@ -88,6 +88,7 @@
 | 偏好存储 | `PrefsJsonCore`（135） | SharedPreferences 里「存 JSON 字符串」的读写口径：五处站点（`WatchlistStore` 的会话名单、`AppSourceStore` 的白名单/禁用/已观察、`ConvTagStore` 的标签映射、`ConvAnalysisScheduleStore` 的排期表、`AnalysisScopeCore` 的 Worker 会话 id 列表）此前各抄一份 `try { ... } catch (e: Exception) { }`，「损坏按空」只写在注释里、一条单测都没有。五条契约：① **读永不抛异常**且返回独立拷贝；② **只做形状裁剪、不做领域过滤**（`ConvTag.fromCode(v) != NONE` 这类语义判断留在 Store 层）；③ 元素走 `optString`（数字按文本取出，匹配不到任何包名等价于被忽略）；④ **写不做排序**（名单保持写入顺序，需要稳定输出显式 `sort = true`）；⑤ 与 `MessageStore` 的 JSONL 无关（那边逐行流式文件、这边单键整表）。`objects(raw, project)` 让单条坏数据只丢自己不牵连整表；29 条单测里有 3 条是与旧内联实现逐字对照的实验 |
 | 模型通道 | `ChatRequestCore`（61） | OpenAI 兼容 `chat/completions` 的**请求体构造口径**：`AnalysisWorker`（S1/S2 分析）、`AdvisorWorker`（顾问复盘）、`S1EvalRunner`（S1 评测）三处此前各抄一份同构的 ~20 行，URL 归一与 `max_tokens` 逐字相同，但注释里的实测值已经分叉（1024 / 1500 / 4096）、异常类型也不一致（前两处抛 `HttpException`、评测处抛 `IllegalStateException`）。三条契约：① **端点归一只有一个方向**（`trim` → 去尾斜杠 → 已带 `/chat/completions` 原样返回，否则追加），**不猜 provider 前缀**（不补 `/v1`，用户填到 `/v4` 就补在 `/v4` 后面）；② **`max_tokens` 只有一个默认值** `MAX_TOKENS = 4096`（推理模型的思考段计入额度，1024 被吃满后 `content` 是空串），要更小必须显式传参；③ **请求体键集合是契约**（`model` / `messages` / `response_format` / `max_tokens` / `stream`，`messages` 恒 `system` → `user` 两条），`payload()` 返回已序列化字符串。刻意不接管 HTTP、`Authorization` 与异常分类 —— 那是各通道的重试语义 |
 | 判定分制 | `S1ScaleCore`（109） | S1「重要度」的分制唯一口径：importance 是 **0-9 十档**的 score 题（题面 10 档 criteria），score 本身就是档位（官方 schema 给的是「Σ 档位序号 × 该档概率」的期望）。① **分制从答案自带的 `legend` / `probabilities` 条目数读**（条目数 < 2 视为不可信，回落题面 10 档，上限 10 档）；② **只夹取、不缩放** —— 旧实现按「score ≤ 1 就 ×9」猜分制，把闲聊档（0-1）的期望抬到 6.3~9.0，**恰好越过 S2 升级闸 `ESCALATE_IMPORTANCE = 6.0`**（闲聊被判成危机级：多一次云端深分析 + UI 显示「重要度 9.0」）；③ 缺 score 时按各档概率算期望，都没有则 0.0（未知即最低，不误触发升级）。systemone 通道的整段解析抽成可测纯函数 `AnalysisParsing.parseSystemOneAnswers`（该路径此前零单测） |
+| need_action 概率 | `S1NeedActionCore`（82） | S1「要不要行动」的概率读取唯一口径：`parseS1Result`（`need_action_prob`）/ `parseSystemOneAnswers`（`need_action.noul`）/ `runS1LayaTflite`（`noul`）三处各读一遍、形态还不同，任一处读不出来就兜底 **0.0** —— 而 0.0 的含义是「明确无需行动」，于是「模型没给答案」被当成「不用行动」定了案，置信度还留 1.0，会话既不升级深分析也不进待办。四条契约：① **读不出来 ≠ 无需行动**（`readAnswerProb` 返 `null` 而不是 0.0）；② **读不出来就把置信度归 0**（`UNREADABLE_CONFIDENCE = 0.0`），交给升级闸 `confidence < 0.5` 重判；③ 可读形态 = `noul`/`prob`/`value` 三键序 + 数字字符串，数值越界先夹取；④ 对象形态不猜（只认那三个键） |
 | 状态着色 | `StatusTintCore`（31） | 状态行文字的着色判定：`AnalysisSettingsActivity` 与 `CaptureActivity` 各有一份**逐字相同**的 `private fun tintStatus(view, result)`（11 行、连注释都一样，共 9 个调用点），改措辞判定必须两处同改，漏一处就是同一句「失败：…」在一页红、在另一页灰。四条契约：① **错误优先于成功**（`失败`/`鉴权` 先判，`成功`/`完成` 后判 —— `成功：轮询 3 次 + 鉴权失败(401)` 这类半成功文本取红更符合「有事要处理」）；② **判定面只有四个词**（UI 层已核实 `未成功`/`未完成` 在真实文案里 0 命中，不做正则、不加否定词表）；③ `跳过`/`已中断`/空串一律灰，其中 `已中断：完成 N 个会话…` 含「完成」故判绿是**索引前的既有行为，刻意保持不变**；④ **只回资源 id**（`getColor`/`setTextColor` 留在 Activity —— 纯 JVM 单测没有 `Context`）。不接管「待办数 0 才灰、有值才橙」这类语义化着色 |
 | 同步地址 | `SyncEndpointCore`（73） | 服务端 URL 与鉴权头的唯一口径（此前五处各拼一份、`X-Token` 头抄三遍且 `isNotBlank`/`isNotEmpty` 不一致）：`base(serverUrl)` = trim → 去尾斜杠 → 去尾部 `/weixin`（**顺序是契约**，`http://h/weixin/` 必须先去掉斜杠才剥得掉）；`url` / `adminUrl` 只做拼接，不猜 `/v1`、不补 `/chat/completions`（那是 `ChatRequestCore`）；`token(raw)` 用 `isNotBlank` 转 `null`，`authorized(builder, raw)` 只在非空时加 `X-Token` 并**返回同一 builder**（链式、且不重复成双）；`SyncConfig` 的 setter 会 trim 落盘，纯空白令牌不可达 —— 这是把两套判定合成一套的依据 |
 | 意图与权限 | `ConvExtrasCore`（43）· `PermissionGateCore`（78） | Intent extras → 会话键与运行时权限判定的唯一口径。`ConvExtrasCore`：六处 `getStringExtra(EXTRA_CONVERSATION/EXTRA_PKG)` 的 `takeIf { isNotBlank() } ?: 微信` 收口 —— 包名空白回落微信且**不 trim**（包名无空白语义）；会话名空白 = **无会话**返 `null`，不要构造空串键（`ConvKey("", pkg)` 永远匹配不到任何消息，详情页会静默空窗）。`PermissionGateCore`：POST_NOTIFICATIONS 必须**同时**看 `Build.VERSION.SDK_INT` 与授权结果（API < 33 该权限恒授予，只看结果会弹无效请求）；`allGranted(IntArray)` 对空结果返 false（别把「没申请」当「已授予」）；权限名用 `PERM_POST_NOTIFICATIONS` 字面量常量 —— 直接写 `Manifest.permission.POST_NOTIFICATIONS` 会触发 lint `InlinedApi`（编译期内联的 API 33 符号），基线从 3 条漂到 4 条 |
