@@ -3332,3 +3332,55 @@ Android 用例 1384 → **1395 条**（`app/src/test` 86 → **87 个 .kt**）�
 ② **「宽松解析」在展示层是 bug 源**：`float()` 能把 `'1e3'`、`'nan'`、`' 6.0 '` 都变成数字，于是「以为的数值」与「实际判出的档位」之间没有任何提示；写入口要归一，读出口要承认「认不出就是认不出」。
 ③ **降级路径也是口径**：前端降级实现往往只在规则脚本没加载时才跑，恰是最容易没人测的分支 —— 本次把降级路径也拉进同一张矩阵。
 ④ **跨层一致要钉在同一处**：矩阵式比对（多处实现 × 多种形态）比「各端各测各的」更能挡住漂移。
+## E-88 S1 need_action 概率「读不出来」被当成「明确无需行动」，置信度还留 1.0（fix/s1-need-action-core）
+
+**现象.**
+
+同一个待分析会话，S1 判定给出的结论是「无需行动」、置信度 100%，会话既不进待办、也不升级深分析、也不会出现在「需要处理」里。模型实际上根本没给出 need_action 的概率（响应里没有 `need_action_prob`，或者给的是 `"很高"` 这种非数值），端上却把它当成「概率 0.0 = 明确不需要行动」定了案。
+
+**根因.**
+
+三处读点各读一遍，形态还不一样：
+
+- `AnalysisParsing.parseS1Result` 读 `answer.optDouble("need_action_prob", 0.0)`；
+- `AnalysisParsing.parseSystemOneAnswers` 读 `a.optJSONObject("need_action")?.optDouble("noul", 0.0)`（这条路径**不夹取**越界值）；
+- `AnalysisWorker.runS1LayaTflite` 读 `(answers[0]["noul"] as? Number)?.toDouble() ?: 0.0`。
+
+三处的兜底都是 **0.0**，而 0.0 在这套判定里的含义是「明确无需行动」（`AnalysisCase.S1.needAction = needActionProb >= 0.5`）。于是「读不出来」与「明确不需要」被混成同一件事。更糟的是置信度：仓库里早就写下了约定 —— 整体解析不出 JSON 不能兜底成「高置信度无需行动」，要归 0 让升级闸重判；但这条约定**只守住了整体失败，单题读不出来没守住**，置信度照旧取 `confidence` 字段（缺省 1.0），于是得到「高置信度 + 无需行动」的定案。
+
+**修法.**
+
+1. 新增 `S1NeedActionCore`（82 行，纯 Kotlin、无 Android 依赖）：`readAnswerProb` / `readNeedActionAnswer` / `readProb` / `clampProb` 四个纯函数，把三处读点归一到一个出口；**读不出来返回 `null`，不再回落 0.0**。
+2. 概率读不出来时把置信度归 0（`UNREADABLE_CONFIDENCE = 0.0`），交给既有升级闸 `shouldEscalate()`（`confidence < ESCALATE_MIN_CONFIDENCE = 0.5`）交给 S2 / 云端重判。
+3. 可读形态收成三种键序（`noul` → `prob` → `value`）+ 数字字符串（`"0.8"` 也能读）；数值越界先夹取到 [0,1]；对象形态不猜（`need_action` 是对象时只认上面三个键）。
+4. `parseS1Result` / `parseSystemOneAnswers` / `runS1LayaTflite` 三处改调 `S1NeedActionCore`，不再各自兜底。
+
+**刻意取舍.**
+
+1. **不猜概率**：模型没给就不给，绝不用 0.5 / 0.0 之类默认值糊过去 —— 猜出来的数字会被当成模型的判断写进存档。
+2. **不用「未知」当结论**：置信度归 0 而不是保留 1.0，等于明确告诉下游「这条判定不可信」，让升级闸接手，而不是让 UI 显示一个笃定的「无需行动」。
+3. **不追溯改老记录**：已入库记录里的 confidence 仍是旧值；本次只修判定链，不做数据迁移（存档可重新分析覆盖）。
+4. **不碰提醒链入参**：`AnalysisWorker` 里给提醒链的 `dueTimeText` 保持原样，与本条无关。
+
+**测试.**
+
+- 新增 `app/src/test/java/com/notifyme/android/S1NeedActionCoreTest.kt` **21 条**：数字 / 数字字符串可读；非数值串 / 布尔 / null / NaN / Inf / 对象读不出来；`readAnswerProb` 缺键与对象形态不猜；`readNeedActionAnswer` 按 `noul`/`prob`/`value`/裸标量四种形态取值；越界先夹取；`UNREADABLE_CONFIDENCE = 0.0` 且 `< 0.5`。
+- `AnalysisParsingTest.kt` 改 3 处断言（原断言把「置信度回落 1.0」写成了期望，等于把缺陷钉成契约），并补 5 条：概率读不出来 → 置信度归 0 且 `shouldEscalate()` 为真；数字字符串可读；越界夹取；systemone 的 `need_action` 直接给数字可读；systemone 缺 `noul` → 不可信并升级。
+- `S1AgreementTest.kt` 改 1 处：0.5B 跑飞吐占位串 `{"need_action_prob": 0.0-1.0}` 时该值被 org.json 解析成**字符串** → 概率读不出来 → 置信度归 0 并进升级闸；原断言写的「置信度 1.0 + 不升级」同样是缺陷被写成期望。
+
+**验证.**
+
+- 定向：`gradlew --no-build-cache testOpenDebugUnitTest --tests S1NeedActionCoreTest --tests AnalysisParsingTest --tests S1AgreementTest` → `S1NeedActionCoreTest` 21 条、`AnalysisParsingTest` 44 条、`S1AgreementTest` 14 条，failures=0 errors=0，`TEST_EXIT=0`。
+- 全量：`docs/scripts/local_check.ps1` 七步全绿（server-tests / python-syntax / privacy-guard / version-check / android-test-assemble-lint / lint-summary issues=3 errors=0 baseline-drift=0 / static-check issues=0 enabled=5）。
+- 单测总数 1429 → **1455** 条。
+
+**计数.**
+
+- 新增 `app/src/main/java/com/notifyme/android/S1NeedActionCore.kt` **82 行**、新增 `app/src/test/java/com/notifyme/android/S1NeedActionCoreTest.kt` **150 行**；改 `AnalysisParsing.kt`（5 处）、`AnalysisWorker.kt`（2 处）、`AnalysisParsingTest.kt`（3 处断言 + 5 条用例）。
+- Android 顶层 .kt 133 → **134**（全树 140 → **141**）、`app/src/test` 88 → **89 个 .kt**、单测 1429 → **1455 条**、Core 逻辑内核 52 → **53**；服务端仍 905 条；版本 0.3.19 / versionCode 25。
+
+**教训.**
+
+1. **「读不出来」的兜底值必须有方向性**：数值兜底 0.0 在布尔语义里不是「未知」而是「否」。凡是布尔 / 概率类字段，兜底应该走 `null`，让下游显式处理「未知」。
+2. **「整体失败要降置信度」的约定要覆盖到单题**：仓库里已经写下了这条约定（`AnalysisParsing` 的注释），但只实现了一半（整体失败降级、单题失败不降级）—— 约定要落到每个读点，否则就只是半条规则。
+3. **把缺陷写成期望的断言会长期保护缺陷**：`AnalysisParsingTest` 里三处 `assertEquals(1.0, r.confidence, delta)` 把「概率读不出来仍给高置信度」当成正确行为，改断言时才发现问题比预想的大 —— 写测试时要问「这是产品想要的行为吗」。

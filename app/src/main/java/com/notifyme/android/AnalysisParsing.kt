@@ -68,12 +68,19 @@ internal object AnalysisParsing {
             // 模型输出形态不稳定：字段可能在顶层，也可能包一层 {"answer": {...}}，两种都接
             val answer = payload?.optJSONObject("answer") ?: payload
             if (answer != null) {
-                prob = answer.optDouble("need_action_prob", 0.0).coerceIn(0.0, 1.0)
+                // need_action 概率口径走 S1NeedActionCore：读不出来 ≠ 判定为「无需行动」
+                val probRaw = S1NeedActionCore.readAnswerProb(answer)
+                prob = S1NeedActionCore.clampProb(probRaw) ?: 0.0
                 // 重要度只夹取、不缩放：分制口径统一在 S1ScaleCore（0-9 十档）
                 importance = S1ScaleCore.onScale(answer.optDouble("importance", 0.0))
                 dueWindow = answer.optString("due_window", "none").ifEmpty { "none" }
                 topic = answer.optString("topic", "notice").ifEmpty { "notice" }
-                confidence = answer.optDouble("confidence", 1.0).coerceIn(0.0, 1.0)
+                // 概率读不出来 → 该题不可信 → 置信度归 0，交给升级闸（confidence < 0.5）重判
+                confidence = if (probRaw == null) {
+                    S1NeedActionCore.UNREADABLE_CONFIDENCE
+                } else {
+                    answer.optDouble("confidence", 1.0).coerceIn(0.0, 1.0)
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "S1($channel) 响应解析失败，已保留 raw_json", e)
@@ -94,15 +101,18 @@ internal object AnalysisParsing {
      *   "importance":{"score":..., "legend":{...}, "probabilities":{...}, "confidence":...},
      *   "due_window":{"choice":...}, "topic":{"choice":...}}}。
      *
-     * 三条口径：
+     * 四条口径：
      *  - importance 走 [S1ScaleCore]（score 题是 0-9 档，**不从数值猜分制**）；
      *  - 整体置信度取各题 confidence 的最小值，任一题没把握就不许静默定案；
-     *  - 后端没给 confidence 时按 1.0 处理（不误触发升级），字段缺失一律兜底默认值。
+     *  - 后端没给 confidence 时按 1.0 处理（不误触发升级），字段缺失一律兜底默认值；
+     *  - need_action 概率走 [S1NeedActionCore]：读不出来**不是** 0.0（0.0 等于「明确无需行动」），
+     *    该题置信度归 0，交给升级闸重判。
      */
     fun parseSystemOneAnswers(answers: JSONObject?): AnalysisCase.Companion.S1Result {
         val a = answers ?: JSONObject()
-        val needActionProb = a.optJSONObject("need_action")
-            ?.optDouble("noul", 0.0) ?: 0.0
+        // need_action 题的概率：对象取 noul / prob / value，也认直接给标量的形态；读不出来返 null
+        val needActionProbRaw = S1NeedActionCore.readNeedActionAnswer(a.opt("need_action"))
+        val needActionProb = S1NeedActionCore.clampProb(needActionProbRaw) ?: 0.0
         val importance = S1ScaleCore.importanceOf(a.optJSONObject("importance"))
         val dueWindow = a.optJSONObject("due_window")
             ?.optString("choice", "none").orEmpty().ifEmpty { "none" }
@@ -119,6 +129,8 @@ internal object AnalysisParsing {
             }
         }
         if (!hasConfidence) confidence = 1.0 // 后端不给置信度时不误触发升级
+        // need_action 读不出来 → 该题不可信 → 置信度归 0，交给升级闸重判（别静默定案）
+        if (needActionProbRaw == null) confidence = S1NeedActionCore.UNREADABLE_CONFIDENCE
         return AnalysisCase.Companion.S1Result(
             needActionProb = needActionProb,
             importance = importance,
