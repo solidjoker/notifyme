@@ -3438,3 +3438,44 @@ Android 用例 1384 → **1395 条**（`app/src/test` 86 → **87 个 .kt**）�
 1. **相对词必须有锚点**：任何「明天 / 本周内」的显示都要回答「相对谁」，记录里没存这个时刻，就只能显示原文 —— 数据模型缺字段时，先补字段再谈显示。
 2. **显示口径要复用解析口径**：另写一个日期解析器，迟早和提醒链的落点漂一天；让显示层委托同一个 `parse`。
 3. **几处显示要收成一处**：同一语义（截止）在四个界面出现，就是四次漂移的机会；抽成 `DueDisplayCore` 后，四处调用点只剩「取哪几个字段」的区别。
+## E-90 绝对日期做对了，「今天 / 明天」却把时刻吞了：「明天15:00」显示成「明天」（fix/due-display-time-label）
+
+**现象.**
+
+第 65 轮把「截止时间」改成绝对日期后，云手机夹具复测：分析列表里「演示-绝对日期」（`s2.due_time = "2026-12-01 09:00"`）显示 `截止：12月1日 09:00` ✓；「演示-本周内」（`s1.due_window = this_week`）显示 `截止：11月16日-11月22日` ✓（旧版是桶名「本周内」）；种子记录（`analyzed_at = 2026-11-12`，`s2.due_time = "今天 15:00"`）显示 `截止：11月12日 15:00` ✓（旧版显示会漂移的「今天 15:00」）。唯独「演示-明天」（`s2.due_time = "明天15:00"`）显示成 `截止：明天` —— **时刻 15:00 没了**，比旧版的「明天15:00」还少了信息。
+
+**根因.**
+
+`DueDisplayCore.compose(display, label)` 的分支里，`KIND_DATE` 走 `joinDateTime(dateText, timeText)`（日期 + 时刻），`KIND_TEXT` 原样返回，而 `else` 分支（today / tomorrow / later / none）直接 `if (res != null) label(res) else ""` —— **只回标签，`display.timeText` 被整段丢掉**。解析侧其实是对的：`DueTimeCore.parse("明天15:00")` 解析出次日 15:00，`hasExplicitTime` 判 true，`timeText = "15:00"`，只是 compose 没把它拼上去。凡是「今天 / 明天」这类标签形态，时刻一律丢失 —— 解析修对了，拼接漏了一半。
+
+**修法.**
+
+1. `DueDisplayCore.compose` 的 `else` 分支改成 `joinDateTime(if (res != null) label(res) else "", display.timeText)` —— 标签形态也把时刻拼上；`KIND_DATE` / `KIND_TEXT` 两条分支语义不变（自由文本不追加时刻）。
+2. **只改一处**：`compose` 是四个展示点的唯一出口（首页待办卡 / 会话卡分析行 / 分析列表 / 会话详情 chip 全走它），所以这一行改动同时修好四处，不在调用点各写一遍拼接。
+3. 解析侧零改动：锚点、`DueTimeCore.parse`、桶展开、跨年带年份都保持第 65 轮的实现 —— 丢时刻是**展示层**的问题，不去动已经正确的解析层。
+
+**刻意取舍.**
+
+1. **没有时刻就不硬凑一个**：文本没写时刻时仍然只显示「今天」（`timeText` 为空串 → `joinDateTime` 不加分隔符），不印解析兜底的 09:00。
+2. **自由文本不追加时刻**：`KIND_TEXT`（如「尽快给我结论」）保持原样 —— 那段文本本身可能是完整语义，拼接反而是噪声。
+3. **不在调用点补拼接**：四个展示点里不写 `dueText + " " + time`，避免第二份口径（下次加第五个展示点又漏一次）。
+
+**测试.**
+
+- `DueDisplayCoreTest.kt` 新增 **5 条**（27 → 32）：`compose` 对 today + 时刻 → 「今天 15:00」；tomorrow + 时刻 → 「明天 15:00」；today 无时刻 → 「今天」；自由文本带 timeText 也不追加；端到端 `resolveOf("明天15:00")` → `kind=tomorrow` / `timeText="15:00"` / `compose` → 「明天 15:00」。
+- 定向：`gradlew --no-build-cache testOpenDebugUnitTest --tests DueDisplayCoreTest --tests DueTimeCoreTest --tests TopicLabelCoreTest` → 32 / 31 / 33 条，failures=0 errors=0，`TEST_EXIT=0`（XML 3 个 suite / 96 条 / 0 失败）。
+
+**验证.**
+
+- 全量：`docs/scripts/local_check.ps1` 七步全绿（server-tests / python-syntax / privacy-guard / version-check / android-test-assemble-lint / lint-summary issues=3 errors=0 baseline-drift=0 / static-check issues=0 enabled=5）。
+- Android 单测 1482 → **1487 条**；装机后云手机复测「演示-明天」显示 `截止：明天 15:00`。
+
+**计数.**
+
+- 改 `app/src/main/java/com/notifyme/android/DueDisplayCore.kt`（188 行 / 9223 B，+1 行注释与拼接）、`app/src/test/java/com/notifyme/android/DueDisplayCoreTest.kt`（264 → **297 行**）；Android 顶层 .kt 仍 135（全树 142）、`app/src/test` 仍 90 个 .kt、单测 1482 → **1487 条**、Core 逻辑内核仍 54；服务端仍 905 条；版本 0.3.19 / versionCode 25。
+
+**教训.**
+
+1. **解析对、拼接漏，是最容易漏检的一层**：单测只断言 `d.timeText == "15:00"`（解析层）不会发现「时刻没上屏」，必须再断言 `compose` 的**最终文本**。
+2. **兜底分支最容易被当成「标签分支」**：`else -> label(res)` 看着对，其实把 `timeText` 吞了 —— 写 `when` 时每个分支都要问「这个 Display 的哪些字段用上了」。
+3. **真机夹具比单测更容易暴露问题**：这轮是云手机 dump 里「截止：明天」少了「15:00」才发现的，纯 JVM 单测当时全绿。
