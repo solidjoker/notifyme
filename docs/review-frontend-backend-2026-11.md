@@ -3194,3 +3194,36 @@ Android 用例 1384 → **1395 条**（`app/src/test` 86 → **87 个 .kt**）�
 ① **重设计要连外壳一起改**：控制台正文换配色时，manifest / 图标 / service worker 离线页是同一次改动的三个尾巴，漏一个就出现「两种图标颜色」。
 ② **同一语义的颜色只能有一个出处**：图标底色曾有 `gen_icons.py` / `console_ui.py` / `app.py` 三份字面量，改一处必然漂移 —— 收成 `ICON_BG` 一个常量后，「图标为什么是绿的」才变成可回答的问题。
 ③ **没法共享常量的地方要钉测试**：service worker 的离线页是独立字符串，引用不到 Python 常量，只能用用例把「明暗两版令牌 = manifest 令牌」钉死。
+
+## E-84 提醒链 L1「成功」只看事件行、不看提醒行 → 提醒被静默吞掉（fix/reminder-alert-row）
+
+**现象.** 提醒列表里显示「成功：已写入系统日历」，但到点**不会弹提醒**；更糟的是下一轮再排同一条提醒时直接被判成「跳过：系统日历已存在相同事件（去重）」，提醒被永久钉死。
+
+**根因.** `CalendarHelper.insertEvent()` 先插 Events 行（标题 + 起始时间），再插 Reminders 行（提前量 + `METHOD_ALERT`），但**提醒行的返回 Uri 被丢弃**；提醒行抛异常时，**外层 catch 把事件 id 一起吞掉**（返回 null）。于是有三条坏结局：
+① 提醒行插入返 null（不抛）→ 事件建了但到点不弹提醒 → 链路仍记「成功：已写入系统日历」→ `ReminderStore.containsActive` 生效去重 → 用户永远收不到提醒；
+② 提醒行插入抛异常 → 事件成孤儿留在日历里 → 下一轮 `eventExists`（同名 + 同起始时间）命中 → `SKIP_DUPLICATE`（status=CALENDAR 生效）→ 提醒被永久钉死；
+③ 降级 L3 后闹钟也失败（Android 12+ 无精确闹钟权限）→ 记 FAILED，但孤儿事件仍在 → 下一轮又被去重挡住。
+
+**修法.** 把 L1 拆成**两段写**，让「事件行」和「提醒行」各自有明确的成败：
+① `ReminderChainCore` 新增 `data class CalendarWrite(eventId: Long? = null, alertInserted: Boolean = false)`，`insertEvent()` 返回它 —— 事件行 try 一段拿 id，提醒行 try 一段拿 `alertInserted`，提醒行失败只 `Log.w` **不吞事件 id**；
+② `decide(env, insertedEventId, intentShown, alarmSet, alertInserted = true)`：L1 只有 `eventId != null && alertInserted` 才算成功；
+③ 提醒行缺失（`eventId != null && !alertInserted`）→ **不算 L1 成功**、**跳过 L2**（不再唤起日历 App，否则用户会再存一条同名事件）、降级 L3 闹钟；闹钟成功落 `calendarWithoutAlert(eventId)`（status=ALARM 且保留 eventId，日历事件仍可被删除）；
+④ 闹钟也没设上 → `failed(dropEventId = eventId)`，由 `runReminderChain` 调 `deleteEvent` **删掉孤儿事件**（`Outcome` 增第 4 字段 `dropEventId`，Core 保持纯函数、不碰 ContentResolver）；
+⑤ `createReminderResult` 的 created 判定改为委托 `ReminderChainCore.countsAsCreated(status, eventId)`，消掉第二份口径。
+
+**刻意取舍.**
+① **不做「补一行提醒」的自愈**：系统日历里已存在同名事件但没有提醒行 → 补一行（REPAIR），会碰到用户自己手动建的同名事件，可能给用户加一条并不想要的提醒 —— 本轮不做，改为「我们自己建的半成品、闹钟也没设上时删掉它」，不残骸骗下一轮去重。
+② **半成品事件不唤起日历 App**：L2 的语义是「唤起日历插入 Intent 让用户手动保存」，事件已经建了一半再唤一次，用户会存下第二条同名事件。
+③ **降级文案必须能被老记录推断认出来**：`NOTE_CALENDAR_NO_ALERT` 含「App内提醒」且**不带空格** —— `ReminderRecord.fromJson` 认不出就推成 CALENDAR，等于又回到「成功但没提醒」。
+④ **孤儿删除交给调用方**：Core 只把 id 交回（`dropEventId`），不引入 ContentResolver 依赖，保持纯 JVM 可测。
+
+**测试.** `ReminderChainCoreTest` 13 → **20 条**（新增：提醒行缺失不算 L1 成功并降级闹钟 / 不再唤起日历 App / 闹钟也没设上落 failed 并交回孤儿 id / 提醒行成功时行为不变 / 去重跳过优先 / 降级文案能被老记录推成闹钟 / created 两参口径一致）；`ReminderLegacyStatusTest` 7 → **8 条**（降级文案 → STATUS_ALARM）。
+
+**验证.** 定向跑 `ReminderChainCoreTest` + `ReminderLegacyStatusTest`：**20 + 8 条全 PASSED**，`BUILD SUCCESSFUL`，`TEST_EXIT=0`；全量 Android 单测 1395 → **1403 条**。
+
+**计数.** `ReminderChainCore.kt` 121 → **179 行**（160 非空）；`CalendarHelper.kt` 419 → **456 行**（430 非空）；`ReminderChainCoreTest.kt` 217 → **301 行**（271 非空）；`ReminderLegacyStatusTest.kt` 78 → **88 行**（76 非空）；`app/src/test` 仍是 87 个 .kt / **1403 条**；Core 逻辑内核仍是 51 个（无新增文件，只是既有内核变厚）。
+
+**教训.**
+① **一次写入里，「成功」得定义清楚是几段写**：事件行成功 + 提醒行失败 ≠ 成功。旧实现把两段写当成一段，丢掉的 Uri 就是丢掉的提醒。
+② **失败要留下可执行的线索，而不是留残骸**：孤儿事件留在日历里比不建更糟 —— 它会被下一轮的去重当成「已处理」，把失败变成永久静默。失败路径必须自带清理动作。
+③ **降级链的每一级都要能独立判定**：L1 只看事件行时，整条链的「三级降级」其实从来没真的降级过 —— 每级都要有自己的成败信号与终态文案。

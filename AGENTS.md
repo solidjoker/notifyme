@@ -164,20 +164,20 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
     $cred = "protocol=https`nhost=github.com`n`n" | git credential fill 2>$null
     $env:GH_TOKEN = (($cred | Select-String '^password=' | Select-Object -First 1).ToString() -replace '^password=','')
     gh pr merge 8 --squash --delete-branch
-    Remove-Item Env:\GH_TOKEN   # 用完立刻清掉
+    Remove-Item Env:\GH_TOKEN
     ```
     验证 scope：`gh api -i user | Select-String x-oauth-scopes`（fine-grained PAT 这行是空的）。
   - **② 给该 PAT 加 `Contents: Read and write`**（范围由维护者定）。**③ 走浏览器点合并**。
-- **浏览器点合并（备选路径）**：合并方式选择器在主按钮旁 `[data-dd-action-name="pull_requests.merge.open_method"]`（选 `Squash and merge`）→ 点 `[data-dd-action-name="pull_requests.merge.open"]`；合并框本体里只有提交信息框。
-- **Android 单测里起不了 JDK 自带的 HTTP 服务**：单测编译 classpath = `android.jar` + 显式依赖，Kotlin 走 `-no-jdk`，`com.sun.net.httpserver` 编译期直接报 `Unresolved reference 'sun'`。想在纯 JVM 单测里起本地服务，只能用 `java.net.ServerSocket` 自己写 HTTP/1.1（见 `app/src/test/java/com/notifyme/android/HttpEndToEndFixture.kt`）。
+- **浏览器点合并（备选路径）**：方式选择器在主按钮旁 `[data-dd-action-name="pull_requests.merge.open_method"]`（选 `Squash and merge`）→ 点 `[data-dd-action-name="pull_requests.merge.open"]`；合并框里只有提交信息框。
+- **Android 单测里起不了 JDK 自带的 HTTP 服务**：单测 classpath = `android.jar` + 显式依赖，Kotlin 走 `-no-jdk`，`com.sun.net.httpserver` 编译期报 `Unresolved reference 'sun'`；纯 JVM 单测起本地服务只能用 `java.net.ServerSocket` 自己写 HTTP/1.1（见 `HttpEndToEndFixture.kt`）。
 - **服务端要写「真实 HTTP 端到端」用例**：用 `werkzeug.serving.make_server("127.0.0.1", 0, app)` 起真实 HTTP/1.1，客户端用 `urllib.request`；数据隔离靠改 `app.DATA_DIR / DB_PATH / JSONL_PATH / ADVISOR_PATH` 到临时目录。两个坑：
 ① 测 413 要把 `app.config["MAX_CONTENT_LENGTH"]` 调小（如 1024）再发几 KB —— 真按 8 MiB 阈值发，服务端读完 body 前就回 413 并断连，客户端 `sendall` 撞连接重置拿不到状态码；
 ② 404/413 是 JSON，但 **405 仍是 Flask 默认 HTML**。参考 `server/test_http_e2e.py`（34 例）。
-- **「HTTP 触发 + 后台线程执行」型接口的端到端写法**：`/admin/extract`（`server/routes.py:844` 触发，`server/storage.py:437` 执行）用 `_run_extract_bg` + `_probe_main_db_writable`，端点只回 202 + job_id；后台失败要能在 `/admin/extract/status` 读出 `error_kind=busy`。
-- **提醒三级降级链的决策在 `ReminderChainCore`，不在 `CalendarHelper`**：`runReminderChain` 只采集环境事实，决策全在 Core 的 `decide()`；终态 note 契约五条锁在单测里，改链路先跑它。
+- **「HTTP 触发 + 后台线程执行」型接口的端到端写法**：`/admin/extract` 用 `_run_extract_bg` + `_probe_main_db_writable`，端点只回 202 + job_id；后台失败要能在 `/admin/extract/status` 读出 `error_kind=busy`。
+- **提醒三级降级链的口径只有一份：`ReminderChainCore`（179 行 / 20 条）**：决策全在 Core 的 `decide()`，`runReminderChain` 只采集事实与副作用。**L1 分两段写**（事件行 + 提醒行）：提醒行缺失 → 不算 L1 成功、跳过 L2、降级 L3 闹钟（文案 `NOTE_CALENDAR_NO_ALERT` 带「App内提醒」→ 老记录推成 alarm）；闹钟也没设上 → `failed(dropEventId)`，调用方删掉孤儿事件（否则下一轮去重被它挡住，提醒永久钉死）。note 文案契约六条锁在单测里，改链路先跑它。
 - **通知形状 / 解析口径改动先被 `NotificationShapeEvidenceTest` 拦下**：它固化「某家 App 的通知 → 入库字段」的映射，与 `NotificationParserTest` 分工不同。改 `PrefixImParser` / `GenericNotificationParser` / `NotifyMeListener.toRawNotification` 任一都要同步看它。
 - **三个解析器的抽取口径统一在 `NotificationTextCore`**（+19 条）：真机取证证实微信正文是 `[11条]发言人: 正文`、不带 MessagingStyle；`hasUnreadPrefix` / `splitSender` / `isPlausibleSender` 是唯一口径，别再各写一套。
-- **`lintOpenDebug` 只剩 3 条 warning，都是刻意保留的，别去“修”**：① `ObsoleteLintCustomCheck` —— 依赖库 `lifecycle-livedata-core-2.10.0` 自带的 lint.jar，改不了；② `OldTargetApi` —— `targetSdk 34` 是产品决定；③ `ChromeOsAbiSupport` —— release 只打 `arm64-v8a`，是体积取舍。
+- **`lintOpenDebug` 只剩 3 条 warning，都是刻意保留的，别去“修”**：① `ObsoleteLintCustomCheck`（依赖库自带 lint.jar，改不了）；② `OldTargetApi`（`targetSdk 34` 是产品决定）；③ `ChromeOsAbiSupport`（release 只打 `arm64-v8a`，体积取舍）。
 - **改 `docs/architecture/diagrams/*.mmd` 必须重渲并回写尺寸表**：`mmdc -i X.mmd -o X.svg`，PNG 给 `-w <viewBox 宽 + 20> -H <viewBox 高 + 60>`；**脑图 06 的 viewBox 起点不是 `0 0`**，单独用 `-w 3200 -H 1600`（否则渲出 14×7 废图）；**`-h` 是 help 不是高度**；渲完量像素回写 `docs/architecture/README.md` 索引表。
 - **控制台归类规则只在 `server/console_classify.js`**（UMD，无 DOM），别写进 `console_ui.py` 的 HTML；`app.py` 注入 `/*__CONSOLE_CLASSIFY_JS__*/`。改规则跑 `server/test_console_classify.py`（`REQUIRE_NODE=1` 时 node 缺失要 **fail 不是 skip**）；前端降级 `var CC = window.ConsoleClassify || null`。
 - **本机起浏览器调试实例的坑**（走浏览器点合并时才需要）：WinINET 代理在 `127.0.0.1:18888` 会报隧道错，要显式 `--proxy-server=http://127.0.0.1:7890`；`--remote-debugging-port` 必须配独立 user-data-dir（136+ 策略）；token 页撞 sudo mode 需 2FA。
@@ -194,8 +194,8 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **会话卡内的「日期 / 发送者」两级分组**：规则在 `console_classify.groupMessages(msgs, dim, getTs, getSender)` —— **按 `getTs` 精确值分桶**，调用方要传当天零点对齐的时间戳（`console_ui.dayStartMs()`）。状态存 `wx_group_v1`；`setConvGroupDim` / `convDimBar` / `groupMsgsByDim` / `convGroupHtml` 一起改。
 - **排队 Tab 的「设备」维度有两套口径**：设备清单来自 `GET /queue` 的 `devices` 聚合（`storage.queue_devices()`，`summary.devices` 是台数），控制台的设备 chip 用这一份；前端 `console_classify.groupQueueTasksByDevice` 是纯函数版（只对内存 task 列表分组，离线/单测用），两处别混算。
-- **端云字段有契约守卫**：① 排队通道 `server/test_queue_contract.py` 比对 `QueueStateCore.kt` 的 `buildPayload` 与 `storage._normalize_queue_task`（字段名 / 顶层键 / 枚举 / 长度上限）。② **消息 / 分析 / 顾问三条上报通道 `server/test_report_contract.py`**（39 条）：读端上 `toJson` + `SyncWorker` 的 remove/put 与服务端读的键比对 —— 客户端键集钉死、必填 ⊆ 客户端必写、客户端 ⊆ 服务端读 ∪ 白名单（`appLabel` 与三个端侧本地状态键不消费）、白名单精确相等；另钉蛇形 `is_group`、`raw_json` 不上报、`s2` 恒在、顾问上传 7 键且同一出口。端侧改字段忘改服务端 CI 直接红。坑：Kotlin 源 CRLF、Python 源 LF。
-- **顾问通道的口径只有一份**（`AdvisorPayloadCore` 84 行 + 11 条；存档侧 `server/test_advisor_archive.py` 14 条）。① 上传体唯一出口 `uploadJson()`：键集固定 7 个（`report_id`/`created_at`/`period_days`/`case_count`/`summary`/`suggestions`/`model_used`），本地三状态键不上报，脱敏与不脱敏同一出口。② **长度裁剪只在服务端一处**，但收敛要留痕：`truncated_fields` + `truncated: true`，控制台走 `advisorTruncation` 出「已截断 · 摘要」chip。③ **存档只有一种形状**：读取跨两段（`_advisor_jsonl_paths` 老→新，同 id 留最后那条），追加不再轮转，容量上限统一由 `_trim_advisor_jsonl` 收敛（条数 1000 / 字节 8 MiB，丢最旧的、至少留一条），裁掉的份数写 sidecar 并随 `GET /advisor` 的 `dropped` + `limits` 下发（上限数字只有服务端 `routes._advisor_limits()` 一处），控制台走 `advisorDroppedNotice` 出「已裁掉 N 份」。
+- **端云字段有契约守卫**：① 排队通道 `server/test_queue_contract.py` 比对 `QueueStateCore.kt` 的 `buildPayload` 与 `storage._normalize_queue_task`（字段名 / 顶层键 / 枚举 / 长度上限）。② **消息 / 分析 / 顾问三条上报通道 `server/test_report_contract.py`**（39 条）：读端上 `toJson` + `SyncWorker` 的 remove/put 与服务端读的键比对 —— 客户端键集钉死、必填 ⊆ 客户端必写、客户端 ⊆ 服务端读 ∪ 白名单（`appLabel` 与三个本地状态键不消费）、白名单精确相等。端侧改字段忘改服务端 CI 直接红。坑：Kotlin 源 CRLF、Python 源 LF。
+- **顾问通道的口径只有一份**（`AdvisorPayloadCore` 84 行 + 11 条；存档侧 `server/test_advisor_archive.py` 14 条）。① 上传体唯一出口 `uploadJson()`：键集固定 7 个（`report_id`/`created_at`/`period_days`/`case_count`/`summary`/`suggestions`/`model_used`），本地三状态键不上报，脱敏与不脱敏同一出口。② **长度裁剪只在服务端一处**，但收敛要留痕：`truncated_fields` + `truncated: true`，控制台出「已截断 · 摘要」chip。③ **存档只有一种形状**：读取跨两段（`_advisor_jsonl_paths` 老→新，同 id 留最后那条），追加不再轮转，容量上限统一由 `_trim_advisor_jsonl` 收敛（条数 1000 / 字节 8 MiB，丢最旧的、至少留一条），裁掉的份数写 sidecar 并随 `GET /advisor` 的 `dropped` + `limits` 下发，控制台走 `advisorDroppedNotice` 出「已裁掉 N 份」。
 - **版本信息只有一份口径：`VersionInfoCore`**（internal object + 14 条）。控制台版本卡与 ☰ 菜单弹窗都调它。① `versionLine` 必须带 `versionCode`（debug 原地覆盖时 `versionName` 可能不变，只有 code 能证明装上新包）；② beta 的 `versionName` 自带 `-test`，`title()` 不再拼渠道后缀。改文案前看 `VersionInfoCoreTest.kt`。
 
 - **历史重复消息只能靠 `MessageDedupeCore` 归并，别在别处另写删行逻辑**：真机量化 78 组 / 271 行是「同一条通知被多次捕获」（微信正文形如 `[11条]发言人: 正文`，未读数一变正文就变，而入库去重键含正文原文）。

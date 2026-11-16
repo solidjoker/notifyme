@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **132 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 139 个，`app/src/test` 87 个 / 1395 条），服务端已拆成 **8+1 模块**（`app.py` 629 / `util.py` 416 / `storage.py` 954 / `routes.py` 1050 / `console_ui.py` 3969 / `stats_api.py` 201 / `suggests.py` 312 / `extract_common.py` 474 + `console_classify.js` 1064），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **132 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 139 个，`app/src/test` 87 个 / 1403 条），服务端已拆成 **8+1 模块**（`app.py` 629 / `util.py` 416 / `storage.py` 954 / `routes.py` 1050 / `console_ui.py` 3969 / `stats_api.py` 201 / `suggests.py` 312 / `extract_common.py` 474 + `console_classify.js` 1064），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -50,7 +50,7 @@
 
 五层 + Application 入口。**刻意不引 Compose**：全部传统 View + RecyclerView，运行时依赖只有 5 个（core-ktx / recyclerview / work-runtime-ktx / okhttp / **litert-api**——`com.google.ai.edge.litert:litert:2.2.0`，端侧 LiteRT 推理用），把首次构建失败风险降到最低。JSON 用平台内置 `org.json`，不引 Gson/Moshi。
 
-源码规模：`app/src/main/java/com/notifyme/android/` **顶层 132 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 139 个；`app/src/test` 87 个 .kt / 1395 条（纯 JVM 单测）。
+源码规模：`app/src/main/java/com/notifyme/android/` **顶层 132 个 .kt** + `laya/` 子包 7 个（LiteRT 移植）= 全树 139 个；`app/src/test` 87 个 .kt / 1403 条（纯 JVM 单测）。
 
 ![Android 分层架构图](diagrams/02-android-layers.png)
 
@@ -99,7 +99,7 @@
 | 首页窗口 | `FeedWindowCore`（191） | 首页信息流的取样口径：此前是 `readRecent(500)` —— 跨所有会话的最近 500 条，几个群刷满窗口后安静但有内容的会话在首页一条都不出现，首页「最近待办」的可见集（`todoVisibleKeys`）随之看不到它（同源隐患第五处）。改成按会话各留一窗：`perConvFor(convCount)` 按会话数把 `TOTAL_BUDGET = 6000` 摊薄，单会话夹在 `[MIN_PER_CONV = 20, PER_CONV = 200]` 之间（20 = 2 倍 `AnalysisCase.WINDOW_SIZE`，保证每会话至少凑一个分析窗口）；`group()` 会话间按最近一条倒序（稳定排序 → 可复现）、组内升序、`ts <= 0` 归 0 排最前、超限保最近；`Bucket.truncated` 在「已读到文件头」时用 `size > keep`、否则 `size >= keep`，首页据此把条数写成 `N+ 条`（下限而非确数）。`sample(result, limit)` 另有按会话轮流取样：逐条列表（脱敏预览）要的是每个会话都有代表，recent 式的全表最近 N 条在活跃会话刷屏时仍会把安静会话挤掉（这条是先被测试探测出失败才改对的）。接线：首页信息流、悬浮面板窗口键、控制台折叠作用域、关注名单会话键、分析范围会话多选器都走 `MessageStore.feedGroups()`，脱敏预览走 `sample()` |
 | 可见性 | `ConvVisibilityCore`（123） | 「这个会话在主页/悬浮面板/分析门禁里可不可见」的唯一口径：四层门槛按序判定（关注名单 → 自身/系统源 → 启用集合 → 首页来源筛选），`why()` 回拦截原因码 `unwatched`/`blocked`/`disabled`/`filtered`、`isVisible()` 是布尔形态、`visibleKeys()` 供首页「最近待办」与悬浮面板共用；`forced` 只放宽「启用集合」一层，自身/系统源任何情况都拦；首页筛选只影响展示，分析门禁传 `ALL`。顺带修掉悬浮面板没接首页筛选（首页筛飞书时面板仍列微信待办）的缺口 |
 | 悬浮层几何 | `OverlayPlacementCore`（98） | 悬浮球 / 悬浮卡 / 待办面板的位置口径：`WindowManager.LayoutParams` 的 `y` 是**内容区坐标**（绝对位置 = `y` + 状态栏 inset），人说的「在屏幕哪儿」是绝对坐标 —— 混用一次就整整错一个状态栏，`toAbsolute` / `toContent` 负责换算；窗口 margin 在部分 ROM 上不生效（`MATCH_PARENT` 仍满屏、`gravity=CENTER` + `verticalMargin` 整体下推），面板改显式宽度（76% 屏宽）+ 按 systemBars inset 反向偏移做**整屏**居中；屏高只认 `Display.getRealMetrics`（`Resources.getSystem()` 在不同 ROM 上口径不一，球会漂）；卡片纵向按前一张**实测高度**顺延，球初始落屏高 1/3、拖拽夹在系统栏之间、抬手贴边吸附 |
-| 交互与提醒 | `ManualReminderCore`（128）· `ReminderChainCore`（106）· `TodoPanelCore`（27） | 手动提醒**先解析成功再落库** · 三级降级决策（L1 日历 → L2 唤起 → L3 闹钟，13 条单测） · 待办面板（DEFAULT_LIMIT=8）与首页联动 |
+| 交互与提醒 | `ManualReminderCore`（128）· `ReminderChainCore`（179）· `TodoPanelCore`（27） | 手动提醒**先解析成功再落库** · 三级降级决策（L1 日历 → L2 唤起 → L3 闹钟；**L1 分两段写：事件行 + 提醒行**，20 条单测） · 待办面板（DEFAULT_LIMIT=8）与首页联动 |
 
 **本地存储全清单**
 
@@ -206,7 +206,7 @@ prefs queue_state               QueueStateCollector.kt  排队上报的 device_s
 
 **手动提醒**（不经过分析链路）：用户在会话页手填提醒时间，走 `ManualReminderCore`（128 行）。`EVENT_TIME_PATTERN = yyyy-MM-dd HH:mm`，**先解析成功再落库**——解析失败就不写 `reminders.jsonl`，提示格式错误，不产生「僵尸记录」；解析成功才写记录并进入同一条三级降级链。
 
-**三级链的决策现在是纯函数**：`ReminderChainCore`（106 行，`internal object`）把「该走哪一级」抽成 `calendarAction(env)` / `shouldTryIntent(env)` / `decide(env, …)` 三个纯判定，输入是 `Env(hasCalendarPermission, hasWritableCalendar, eventAlreadyExists, inForeground, canOpenCalendar)` 五个布尔。`CalendarHelper.runReminderChain` 退化成「采集环境事实 → 执行副作用 → 把 `Outcome` 翻回 `ChainResult`」，因此这条链第一次有了 13 条纯 JVM 单测（`ReminderChainCoreTest.kt`）覆盖：L1 插入成功 / 插入失败降级 / 无权限降级 / 无可写账户降级 / L2 必须前台 / 后台直接落 L3 / L3 成功 / 三级全失败 / 日历已有同事件跳过且不越级 / 五条终态文案仍能被 `ReminderRecord.fromJson` 的旧记录推断认出来。
+**三级链的决策现在是纯函数**：`ReminderChainCore`（179 行，`internal object`）把「该走哪一级」抽成 `calendarAction(env)` / `shouldTryIntent(env)` / `decide(env, …)` 三个纯判定，输入是 `Env(hasCalendarPermission, hasWritableCalendar, eventAlreadyExists, inForeground, canOpenCalendar)` 五个布尔。`CalendarHelper.runReminderChain` 退化成「采集环境事实 → 执行副作用 → 把 `Outcome` 翻回 `ChainResult`」，因此这条链有了 20 条纯 JVM 单测（`ReminderChainCoreTest.kt`）覆盖：L1 插入成功 / **提醒行缺失不算 L1 成功（降级 L3，不再唤起日历 App）** / 闹钟也没设上时交回孤儿事件 id 让调用方删除 / 插入失败降级 / 无权限降级 / 无可写账户降级 / L2 必须前台 / 后台直接落 L3 / L3 成功 / 三级全失败 / 日历已有同事件跳过且不越级 / 终态文案仍能被 `ReminderRecord.fromJson` 的旧记录推断认出来。**L1 分两段写**（事件行 + 提醒行）后，提醒行缺失不会再被当成「成功」——旧实现里提醒行的 Uri 被丢弃、异常又与事件 id 一起被吞，提醒被静默吞掉，下一轮还会被同名事件去重钉死。
 
 ---
 
