@@ -3171,3 +3171,26 @@ Android 用例 1384 → **1395 条**（`app/src/test` 86 → **87 个 .kt**）�
 **计数.** `server/storage.py` 902 → **1034** 行（非空 837 → 954）；`server/routes.py` 1095 → **1113** 行（非空 1033 → 1050）；`server/app.py` 742 → **745** 行（非空 627 → 630）；`server/console_ui.py` 4018 → **4047** 行（非空 3924 → 3953）；`server/console_classify.js` 1137 → **1176** 行（非空 1064 → 1101）；新增 `server/test_advisor_archive.py` **215 行 / 9225 B**（CRLF）；服务端用例 844 → **872**。
 
 **教训.** ① **存档的「写侧轮转」必须配「读侧跨段」**，只做一半就是静默丢数据（比不轮转更坏：不轮转至少上限还在）。② 容量上限要有**唯一收敛点**（条数与字节两条口径分散在两个函数里，就会出现两套存档形状）。③ 上限收敛必须**留痕**（丢了多少份、什么时候丢的），否则用户只会看到「报告变少了」，与「端上没跑复盘」无法区分。④ 上限数字只留在服务端（`limits` 随响应下发），前端写死一份就会跟着服务端改上限而失真。
+## E-83 PWA 外壳配色还是 aura 重设计前的旧蓝：manifest 蓝底、PNG 图标绿底、离线兜底页旧灰蓝（feat/pwa-shell-palette）
+
+**现象.** 控制台正文早已整体换成 aura 设计语言（`--bg #fafaf7` / `--accent #1a1a1a` / `--gold #c9a227`），但 **PWA 外壳**（装到桌面后的图标、标题栏颜色、断网兜底页）还停在重设计之前：`GET /console/manifest.json` 的 `theme_color` 是旧蓝 `#1d4ed8`、`background_color` 是旧灰 `#f4f6f8`；manifest 内置的 SVG 兜底图标也填 `#1d4ed8`，而真正显示在桌面上的 `pwa_icons/*.png` 是微信绿 `#07C160` —— **同一个 PWA 两种图标颜色**；`GET /sw.js` 里内置的离线兜底页整套 CSS 还是旧蓝旧灰（`#f2f4f5` / `#1f2328` / `#5b6570` / `#d8dee3`，暗色 `#0f1317` / `#171c22` / `#2a323b` / `#60a5fa`），变量名还是 `--border`（控制台正文早已改 `--line`）。
+
+**根因.** 配色是「重设计时改了控制台 HTML，没改 PWA 外壳」：manifest 的两个颜色字段与 SVG 兜底图标是 `console_ui.py` 里的字面量，`pwa_icons/*.png` 由 `gen_icons.py` 另一份字面量生成，`app.py` 还自带第三份 `_ICON_SVG`（绿色）作为 manifest 缺 SVG 时的兜底 —— 谁后写谁生效，于是 SVG 是蓝的、PNG 是绿的。四处颜色没有任何一处能对齐。
+
+**修法.** 配色收敛成一套 aura 令牌并只留一份出处：① `console_ui.py` 顶部加纯常量 `AURA_BG` / `AURA_ACCENT` / `AURA_GOLD` / `AURA_DARK_BG` / `ICON_BG`，manifest 的 `theme_color` / `background_color` 改走常量，新增 `CONSOLE_ICON_SVG`（底色取 `ICON_BG`）作为 manifest 里的 SVG 图标条目；② `app.py` 删掉本地 `_ICON_SVG` 副本，改为复用 `CONSOLE_ICON_SVG`（必需名元组同步加它）；③ `gen_icons.py` 改从 `console_ui.ICON_BG` 读颜色生成 PNG（产物像素不变，仍是 `#07C160`）；④ `CONSOLE_SW` 内置的离线兜底页换成同一套令牌（明暗两版），`var(--border)` 统一为 `var(--line)`。
+
+**刻意取舍.**
+① **PNG 产物刻意不动**：图标底色仍是微信绿 `#07C160`，本轮只把「这个颜色写在哪」收成一处 —— 换绿换蓝都是改 `ICON_BG` 一个常量，不重新生成图标资源。
+② **离线兜底页在 service worker 里，没法插值**，所以它的令牌只能靠 `test_console_ui.py` 钉住与 manifest 同值，不靠运行时共享常量。
+③ **SVG 兜底图标只做「同一底色」，不追求与 PNG 逐像素一致**：SVG 是 manifest 缺 PNG 时的兜底，形状可以不同但颜色必须同源，否则又是一套图标。
+
+**测试.** `server/test_console_ui.py` 新增 8 条：manifest 用 aura 令牌 / 主体与 manifest 同源 / SVG 兜底图标与 PNG 同底色 / `app.py` 不再自带副本 / 图标生成器只认 `ICON_BG` / 离线页用 aura 令牌 / 离线页明暗对比度 >= 4.5 / 外壳无旧蓝残留。
+
+**验证.** `python -m pytest server/ -q` → **880 passed**（基线 872，本轮 +8）；`python -m compileall -q server` 通过；`node --check server/console_classify.js` 与控制台内联脚本、`sw.js` 源码均退出 0；manifest 实测 `theme_color=#1a1a1a`、`background_color=#fafaf7`，`gen_icons.GREEN=(7,193,96,255)`。
+
+**计数.** `server/console_ui.py` 4047 → **4063 行**（非空 3953 → **3969**）；`server/app.py` 745 → **744 行**（非空 630 → **629**）；`server/gen_icons.py` 85 → **100 行**（非空 72 → **83**）；`server/test_console_ui.py` 930 → **1039 行**（非空 773 → **859**）；服务端用例 872 → **880**；07 架构图重渲后 6960 × 5407 → **6960 × 5575**。
+
+**教训.**
+① **重设计要连外壳一起改**：控制台正文换配色时，manifest / 图标 / service worker 离线页是同一次改动的三个尾巴，漏一个就出现「两种图标颜色」。
+② **同一语义的颜色只能有一个出处**：图标底色曾有 `gen_icons.py` / `console_ui.py` / `app.py` 三份字面量，改一处必然漂移 —— 收成 `ICON_BG` 一个常量后，「图标为什么是绿的」才变成可回答的问题。
+③ **没法共享常量的地方要钉测试**：service worker 的离线页是独立字符串，引用不到 Python 常量，只能用用例把「明暗两版令牌 = manifest 令牌」钉死。

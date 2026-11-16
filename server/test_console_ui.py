@@ -15,6 +15,7 @@
 这些用例只读文件内容做结构断言，不起服务、不访问网络。
 """
 import ast
+import json
 import os
 import re
 
@@ -928,3 +929,111 @@ def test_advisor_card_marks_server_side_truncation():
         src = fh.read()
     assert "function advisorTruncation(report)" in src, "规则层缺少 advisorTruncation"
     assert "advisorTruncation: advisorTruncation" in src, "规则层没有导出 advisorTruncation"
+
+
+# ------------------------------------------------- PWA 外壳配色（aura 单一来源）
+
+LEGACY_SHELL_HEXES = ("#1d4ed8", "#f4f6f8", "#f2f4f5", "#1f2328", "#5b6570",
+                      "#d8dee3", "#60a5fa", "#0f1317", "#171c22", "#2a323b",
+                      "#e9edf1", "#a9b4c0", "#06130b")
+
+
+def _offline_css():
+    """取 service worker 里内置离线兜底页的 HTML 与 CSS。"""
+    sw = _ui().CONSOLE_SW
+    m = re.search(r"var OFFLINE_HTML = '(.*?)';\n", sw, re.S)
+    assert m, "service worker 里必须内置离线兜底页"
+    html = m.group(1)
+    c = re.search(r"<style>(.*?)</style>", html, re.S)
+    assert c, "离线兜底页必须内联样式"
+    return html, c.group(1)
+
+
+def _offline_dark_vars(css):
+    """取离线兜底页深色分支的变量表。"""
+    dm = re.search(r"@media \(prefers-color-scheme:dark\)\{(:root\{.*?\})\}", css, re.S)
+    assert dm, "离线兜底页必须带深色分支"
+    out = {}
+    for mm in re.finditer(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", dm.group(1)):
+        out[mm.group(1)] = mm.group(2).strip()
+    return out
+
+
+def test_pwa_manifest_uses_the_aura_palette():
+    """manifest 的主题色 / 背景色必须取控制台主体的 aura 令牌，不能留旧蓝。"""
+    mod = _ui()
+    assert mod.CONSOLE_MANIFEST["theme_color"] == mod.AURA_ACCENT
+    assert mod.CONSOLE_MANIFEST["background_color"] == mod.AURA_BG
+
+
+def test_console_shell_and_manifest_share_one_palette():
+    """控制台主体、manifest、外壳令牌三者同源。"""
+    mod = _ui()
+    css = _css(mod.CONSOLE_HTML)
+    light = _vars(css, ":root")
+    dark = _vars(css, '[data-theme="dark"]')
+    assert light["--bg"] == mod.AURA_BG
+    assert light["--accent"] == mod.AURA_ACCENT
+    assert light["--gold"] == mod.AURA_GOLD
+    assert dark["--bg"] == mod.AURA_DARK_BG
+
+
+def test_icon_fallback_matches_the_png_icons():
+    """SVG 兜底图标与 pwa_icons/*.png 同底色，且 manifest 里用的是同一份。"""
+    mod = _ui()
+    assert mod.ICON_BG.lower() == "#07c160"
+    assert "%2307c160" in mod.CONSOLE_ICON_SVG.lower()
+    assert "%231d4ed8" not in mod.CONSOLE_ICON_SVG.lower()
+    srcs = [str(it.get("src", "")) for it in mod.CONSOLE_MANIFEST["icons"]]
+    assert mod.CONSOLE_ICON_SVG in srcs
+
+
+def test_app_module_reuses_the_shared_icon_svg():
+    """app.py 不再自带第二份 SVG 兜底图标。"""
+    with open(os.path.join(ROOT, "server", "app.py"), "r", encoding="utf-8") as fh:
+        src = fh.read()
+    assert "_ICON_SVG = (" not in src, "app.py 不该再自带一份 SVG 兜底图标"
+    assert "CONSOLE_ICON_SVG" in src
+
+
+def test_icon_generator_reads_the_shared_color():
+    """gen_icons.py 的图标底色只能来自 console_ui.ICON_BG。"""
+    with open(os.path.join(ROOT, "server", "gen_icons.py"), "r", encoding="utf-8") as fh:
+        src = fh.read()
+    assert "ICON_BG" in src
+    assert "07c160" not in src.lower(), "图标底色只能来自 console_ui.ICON_BG"
+
+
+def test_offline_page_uses_the_aura_palette():
+    """离线兜底页（service worker 内置）必须与控制台同一套 aura 令牌。"""
+    mod = _ui()
+    html, css = _offline_css()
+    light = _vars(css, ":root")
+    assert light["--bg"] == mod.AURA_BG
+    assert light["--accent"] == mod.AURA_ACCENT
+    assert light["--gold"] == mod.AURA_GOLD
+    assert "--line" in light and "--border" not in light
+    dark = _offline_dark_vars(css)
+    assert dark["--bg"] == mod.AURA_DARK_BG
+    assert "var(--line)" in html and "var(--border)" not in html
+
+
+def test_offline_page_text_contrast_is_readable():
+    """离线兜底页的正文 / 次要文字 / 按钮在明暗两套下都要 >= 4.5:1。"""
+    _, css = _offline_css()
+    light = _vars(css, ":root")
+    dark = _offline_dark_vars(css)
+    pairs = (("--text", "--bg"), ("--muted", "--surface"), ("--on-accent", "--accent"))
+    for name, tokens in (("浅色", light), ("深色", dark)):
+        for fg, bg in pairs:
+            ratio = _ratio(tokens[fg], tokens[bg])
+            assert ratio >= 4.5, "离线页%s %s/%s 对比度 %.2f < 4.5" % (name, fg, bg, ratio)
+
+
+def test_no_legacy_blue_remains_in_the_console_shell():
+    """aura 重设计前的旧配色不得残留在 PWA 外壳任何一处。"""
+    mod = _ui()
+    blob = (mod.CONSOLE_HTML + mod.CONSOLE_SW +
+            json.dumps(mod.CONSOLE_MANIFEST, ensure_ascii=False))
+    for hx in LEGACY_SHELL_HEXES:
+        assert hx.lower() not in blob.lower(), "PWA 外壳仍留着旧配色 %s" % hx

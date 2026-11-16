@@ -10,6 +10,16 @@
 #   CONSOLE_HTML      —— 完整单页 HTML（内联 CSS + JS），控制台外壳
 #   CONSOLE_MANIFEST  —— PWA manifest dict
 #   CONSOLE_SW        —— service worker 源码（字符串）
+#   CONSOLE_ICON_SVG —— SVG data URI 兜底图标（与 pwa_icons/*.png 同底色）
+#
+# PWA 外壳的设计令牌（aura）：AURA_BG / AURA_ACCENT / AURA_GOLD / AURA_DARK_BG / ICON_BG。
+# manifest 的 theme/background 与 SVG 兜底图标都从这里取值；离线兜底页的 CSS 变量
+# 由 test_console_ui.py 钉住必须与这里一致（离线页在 service worker 里，没法直接插值）。
+AURA_BG = "#fafaf7"        # --bg（浅色主题底色）
+AURA_ACCENT = "#1a1a1a"    # --accent / --theme-color（浅色主题）
+AURA_GOLD = "#c9a227"      # --gold（古铜金）
+AURA_DARK_BG = "#181819"   # --bg（暗色主题底色）
+ICON_BG = "#07C160"        # 微信绿：PNG 图标（gen_icons.py）与 SVG 兜底图标共用
 CONSOLE_HTML = r"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -3860,6 +3870,15 @@ if ('serviceWorker' in navigator) {
 </body>
 </html>"""
 
+# SVG 兜底图标：与 pwa_icons/*.png（gen_icons.py 生成，底色取自 ICON_BG）同底色。
+# 之前 app.py 与这里各写一份，manifest 里那份还是 aura 重设计前的旧蓝，
+# 于是同一个 PWA 出现「PNG 绿 / SVG 蓝」两种图标。现在只有这一份。
+CONSOLE_ICON_SVG = (
+    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' "
+    "width='512' height='512'%3E%3Crect width='512' height='512' "
+    "rx='100' fill='%23" + ICON_BG[1:] + "'/%3E%3Ctext x='256' y='330' "
+    "font-size='260' text-anchor='middle'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E"
+)
 CONSOLE_MANIFEST = {
     "name": "微信分析助手",
     "short_name": "微信分析助手",
@@ -3875,8 +3894,8 @@ CONSOLE_MANIFEST = {
     # 锁竖屏会和 DESIGN-11 的宽屏两栏布局冲突，所以用 any
     "orientation": "any",
     "categories": ["productivity", "utilities"],
-    "background_color": "#f4f6f8",
-    "theme_color": "#1d4ed8",
+    "background_color": AURA_BG,
+    "theme_color": AURA_ACCENT,
     "icons": [
         {"src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png",
          "purpose": "any"},
@@ -3886,10 +3905,7 @@ CONSOLE_MANIFEST = {
          "type": "image/png", "purpose": "maskable"},
         # SVG data URI 兜底（Android Chrome 可用；iOS apple-touch-icon 只认 PNG，
         # 见 CONSOLE_HTML 注入的 link）
-        {"src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' "
-                "width='512' height='512'%3E%3Crect width='512' height='512' "
-                "rx='100' fill='%231d4ed8'/%3E%3Ctext x='256' y='330' "
-                "font-size='260' text-anchor='middle'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E",
+        {"src": CONSOLE_ICON_SVG,
          "sizes": "any", "type": "image/svg+xml", "purpose": "any"},
     ],
     # 快捷方式：直接落到对应 tab（页面读 ?tab= 切换视图）
@@ -3925,20 +3941,20 @@ function cacheable(resp) {
 var OFFLINE_HTML = '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">' +
   '<meta name="viewport" content="width=device-width,initial-scale=1">' +
   '<title>离线 - 微信分析助手</title>' +
-  '<style>:root{--bg:#f2f4f5;--surface:#ffffff;--text:#1f2328;--muted:#5b6570;' +
-  '--border:#d8dee3;--accent:#1d4ed8;--on-accent:#ffffff}' +
+  '<style>:root{--bg:#fafaf7;--surface:#ffffff;--text:#202020;--muted:#65655f;' +
+  '--line:#e4e4df;--accent:#1a1a1a;--on-accent:#fffdf7;--gold:#c9a227;--focus:#c9a227}' +
   'body{margin:0;padding:24px;min-height:100vh;display:flex;align-items:center;' +
   'justify-content:center;background:var(--bg);color:var(--text);' +
   'font-family:-apple-system,BlinkMacSystemFont,sans-serif}' +
-  '.box{max-width:360px;background:var(--surface);border:1px solid var(--border);' +
+  '.box{max-width:360px;background:var(--surface);border:1px solid var(--line);' +
   'border-radius:12px;padding:20px;text-align:center}' +
   'h1{font-size:20px;margin:0 0 8px}' +
   'p{font-size:14px;line-height:1.6;color:var(--muted);margin:0 0 16px}' +
   'button{min-height:44px;padding:0 20px;font-size:16px;border:0;border-radius:8px;' +
   'background:var(--accent);color:var(--on-accent)}' +
-  '@media (prefers-color-scheme:dark){:root{--bg:#0f1317;--surface:#171c22;' +
-  '--text:#e9edf1;--muted:#a9b4c0;--border:#2a323b;--accent:#60a5fa;' +
-  '--on-accent:#06130b}}</style>' +
+  '@media (prefers-color-scheme:dark){:root{--bg:#181819;--surface:#222223;' +
+  '--text:#f4f4f2;--muted:#b6b6b0;--line:#3c3c3e;--accent:#ededeb;--on-accent:#161616;' +
+  '--gold:#d8b64a}}</style>' +
   '</head><body><div class="box"><h1>离线中</h1>' +
   '<p>没有网络连接，且本地还没有缓存控制台页面。恢复网络后重试。</p>' +
   '<button onclick="location.reload()">重试</button></div></body></html>';
