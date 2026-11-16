@@ -375,7 +375,11 @@ curl "http://127.0.0.1:8000/messages?limit=100&before=1735000000000_42" -H "X-To
 | --- | --- |
 | `limit` | 默认 20，**上限 100**（存档上限 `ADVISOR_MAX_REPORTS`=1000 不等于接口一次能给 1000 份） |
 
-返回 `{"ok": true, "count": n, "total": m, "has_more": bool, "reports": [...]}`，按接收时间倒序（最新在前）。数据存 `server/data/advisor_reports.jsonl`（追加写的主存储）+ `server/data/advisor_reports.json`（快照）。
+返回 `{"ok": true, "count": n, "total": m, "has_more": bool, "dropped": d, "dropped_at": ts, "limits": {"max_reports": 1000, "max_bytes": 8388608}, "reports": [...]}`，按接收时间倒序（最新在前）。数据存 `server/data/advisor_reports.jsonl`（追加写的主存储）+ `server/data/advisor_reports.json`（快照）。
+
+**存档跨段读取**：老版本在主段超 8 MiB 时会把它轮转成 `advisor_reports.jsonl.1`，而读侧只读主段 —— 轮转一旦发生，轮转段里的历史报告在控制台整体消失，`POST /advisor` 的去重集合也漏掉那一段（同一个 `report_id` 会被当成新报告重复入库）。现在读取口跨两段（`storage._advisor_jsonl_paths()` 返回 `[主段 + ".1", 主段]`，老 → 新），同一 `report_id` 落在两段时只算一份（保留最后写入的那条）。追加路径不再轮转，容量上限统一由 `storage._trim_advisor_jsonl()` 收敛（条数上限 `ADVISOR_MAX_REPORTS`=1000 + 字节上限 `ADVISOR_MAX_BYTES`=8 MiB，从最新往回装、**至少留一条**），裁剪后把两段合并回主段并删除 `.1` 段。
+
+**裁剪要留痕**：被上限裁掉的份数累计写 sidecar `advisor_reports.meta.json`（`dropped` / `dropped_at`），并随 `GET /advisor` 的 `dropped` / `dropped_at` 字段下发；控制台顾问 Tab 据此显示「已裁掉 N 份」提示（规则层 `console_classify.advisorDroppedNotice`）。容量上限数字只由服务端 `routes._advisor_limits()` 一处产出并随 `limits` 字段下发 —— 前端不写死，改上限只改服务端。
 
 **`total` / `has_more` 为什么必须有**：存档能存 1000 份，而本接口单次最多给 100 份。只回 `count` 时调用方
 无法区分「存档只有 100 份」与「存档有 400 份、只拿到最新 100 份」—— 控制台顾问 Tab 会静默只渲染 100 张卡、
@@ -713,8 +717,9 @@ iOS 的系统限制决定了它做不了采集端：没有类似安卓 Notificat
 | `messages.db` | SQLite 数据库，表 `messages`（含 `source` 列区分来源）+ 表 `analyses`（分析结果，case_id 唯一），查询接口读这里 |
 | `android_db/EnMicroMsg.db` | 从模拟器拉取的加密库原件（保留便于排查，已 gitignore） |
 | `android_db/state.json` | 提取增量游标与最近运行时间 |
-| `advisor_reports.jsonl` | AI 顾问复盘报告存档（**主存储**，一行一条，追加写；超过 8 MiB 轮转为 `.jsonl.1`，条数上限 1000） |
+| `advisor_reports.jsonl` | AI 顾问复盘报告存档（**主存储**，一行一条，追加写；条数上限 1000 / 字节上限 8 MiB，超限时由 `_trim_advisor_jsonl` 统一裁掉最旧的并合并回单文件） |
 | `advisor_reports.json` | 同一份存档的 JSON 快照（仅在内容变化时写），兼容旧格式与既有工具 |
+| `advisor_reports.meta.json` | 顾问存档的裁剪留痕（`dropped` 累计份数 + `dropped_at` 裁剪时间），供 `GET /advisor` 与控制台说明「已裁掉 N 份」 |
 
 备份直接拷贝这些文件即可。
 

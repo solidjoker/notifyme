@@ -1909,6 +1909,32 @@ def test_analysis_code_parts_lift_codes_and_labels_into_search(call):
     assert call("analysisCodeParts", None) == []
     assert call("analysisCodeParts", {"s1": None}) == []
 
+
+
+def test_advisor_dropped_notice_states_how_many_were_cut(call):
+    """存档被容量上限裁掉时必须说出来（否则被当成端上没跑复盘）。"""
+    got = call("advisorDroppedNotice", 12, {"max_reports": 1000, "max_bytes": 8388608})
+    assert got["show"] is True, got
+    assert got["dropped"] == 12, got
+    assert "12" in got["label"], got
+    assert "1000" in got["label"], got
+    assert "8 MB" in got["label"], got
+
+
+def test_advisor_dropped_notice_is_silent_when_nothing_cut(call):
+    """没裁过就不说话（别永远挂一条提示）。"""
+    for value in (0, None, -1, "x"):
+        got = call("advisorDroppedNotice", value, {"max_reports": 1000})
+        assert got["show"] is False, got
+        assert got["label"] == "", got
+
+
+def test_advisor_dropped_notice_tolerates_missing_limits(call):
+    """上限拿不到时也要能报数（不能因为缺 limits 就闭嘴）。"""
+    got = call("advisorDroppedNotice", 3, None)
+    assert got["show"] is True, got
+    assert "3" in got["label"], got
+
 def test_suggest_scope_marks_source_dependent_cards(call):
     """按来源过滤的卡片标「仅 X」，全库口径的标「全库」。"""
     labels = {"com.tencent.mm": "微信"}
