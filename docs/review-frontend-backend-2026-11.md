@@ -3227,3 +3227,34 @@ Android 用例 1384 → **1395 条**（`app/src/test` 86 → **87 个 .kt**）�
 ① **一次写入里，「成功」得定义清楚是几段写**：事件行成功 + 提醒行失败 ≠ 成功。旧实现把两段写当成一段，丢掉的 Uri 就是丢掉的提醒。
 ② **失败要留下可执行的线索，而不是留残骸**：孤儿事件留在日历里比不建更糟 —— 它会被下一轮的去重当成「已处理」，把失败变成永久静默。失败路径必须自带清理动作。
 ③ **降级链的每一级都要能独立判定**：L1 只看事件行时，整条链的「三级降级」其实从来没真的降级过 —— 每级都要有自己的成败信号与终态文案。
+
+## E-85 S1 重要度按「score ≤ 1 就 ×9」猜分制 → 闲聊档被抬到 6.3~9.0、越过升级闸（fix/s1-scale-core）
+
+**现象.** 纯闲聊的会话，分析结论里的「重要度」显示成 6.3 / 9.0 之类的数字，并且被判成「危机级」触发 S2 升级（多跑一次云端深分析）；旧的 S1 评测报告里云端一侧的重要度分数也偏高。
+
+**根因.** `AnalysisWorker.runS1SystemOne` 里有一段「分制还原」：
+`val importance = if (importanceRaw <= 1.0) importanceRaw * 9.0 else importanceRaw.coerceAtMost(9.0)`
+注释写「importance 是 0-9 的 score 题：score 归一化(0-1)时乘 9 还原档位」。但 importance 本来就是 **0-9 十档** 的 score 题：题面 `AnalysisCase` 给的是 10 档有序 criteria（`0: pure smalltalk` … `9: crisis level`），官方 answer schema 的 score 就是「Σ 档位序号 × 该档概率」的期望（`laya/LayaDecoder.kt:126-140`）—— **score 本身就是档位**，不存在「0-1 归一化」这回事。于是闲聊档（0-1）的期望被乘 9：0.7 → 6.3、1.0 → 9.0，**恰好越过 S2 升级闸 `ESCALATE_IMPORTANCE = 6.0`**（`AnalysisCase.kt:353-384` 的 `shouldEscalate()`）。旧 S1 评测报告里的云端 importance 走的是同一条通道，也带着这处抬高（`S1Accuracy.kt` 的 ±1.5 容差假设就是 0-9 十档）。
+
+**修法.** ① 新增纯函数内核 `S1ScaleCore`（109 行）：**分制从答案自己声明的档位读** —— `levelsOf(answer)` 依次看 `legend` 条目数 → `probabilities` 对象条数 → `probabilities` 数组长度，条目数 < 2 视为不可信、回落题面 10 档，上限 10 档；**只夹取、不缩放** —— `onScale(raw, levels)` 把分数夹到 `0..(levels-1)`，NaN → 0.0；
+② `importanceOf(answer)`：有 score 直接 `onScale`，没有 score 就按各档概率算期望再夹取（`expectationOf`），都没有则 0.0（未知即最低，不误触发升级）；
+③ `AnalysisParsing.parseS1Result` 的 importance 改走 `onScale`；
+④ systemone 通道的整段解析抽成可测纯函数 `AnalysisParsing.parseSystemOneAnswers`（need_action / importance / due_window / topic / confidence 五题统一解析，confidence 取各题最小、没有 confidence 按 1.0）；
+⑤ laya 通道 flat map 的 importance 也改走 `importanceOf`（行为不变，decoder 已经给的是 0-9 + legend 10 档）。
+
+**刻意取舍.**
+① **不按数值猜分制**：看见 0.7 就乘 9 是启发式，改题面档位数时它会静默失效；分制必须来自答案自己声明的档位。
+② **不可信就回落题面 10 档，不回落 0**：答案里没有 legend / probabilities 时只能按题面口径（0-9）夹取，回落 0 会把「读不出」变成「不重要」，正好掩盖问题。
+③ **只夹取、不缩放**：模型给 0-1 归一化分数时也按 0-1 夹取（不抬），宁可低估不可高估 —— 高估会直接越过升级闸。
+④ **老通道的解析一并收口**：laya 通道此前写的是原始分数（不乘 9），行为本就正确，但两处口径必须走同一个 Core，否则下次有人只改一处又会漂移。
+
+**测试.** 新增 `S1ScaleCoreTest` **18 条**（闲聊档 0.7 不被抬 / score=1 保持 1 不是 9 / 0 保持 0 / 超上限夹 9 / 负数夹 0 / 缺 score 按概率算期望 / 概率数组按下标当档位 / 声明 5 档时上限是 4 / 档位声明不可信回落 10 档 / 无 legend 无 probabilities 按 10 档 / 答案为 null 是 0 / NaN 夹 0 / 档位数上限 10 / expectationOf 忽略非数字键 / 期望值只夹取不缩放 / 重要度 7 仍触发升级 / 闲聊档不再触发升级 / 常量与题面一致）；`AnalysisParsingTest` +8 条（systemone 五题解析 / answers 为 null 全兜底 / importance 缺 score 是 0 / 闲聊档不触发升级 / **旧公式 ×9 会越过 6.0 闸的对照实验** / 没 confidence 按 1.0 / topic 与 due_window 空串回落 / 置信度取各题最小）。
+
+**验证.** 定向跑 `S1ScaleCoreTest` + `AnalysisParsingTest`：**18 + 39 条全 PASSED**（failures=0 errors=0），`TEST_EXIT=0`；全量 Android 单测 1403 → **1429 条**。
+
+**计数.** 新增 `S1ScaleCore.kt` **109 行**（4598 B）；`AnalysisParsing.kt` 197 → **239 行**（11143 B）；`AnalysisWorker.kt` 1112 → **1082 行**（54750 B）；新增 `S1ScaleCoreTest.kt` **170 行**（5722 B）；`AnalysisParsingTest.kt` 382 → **509 行**；`app/src/test` 87 → **88 个 .kt** / 1403 → **1429 条**；主源码顶层 132 → **133**（全树 139 → 140）；Core 逻辑内核 51 → **52**；04 分析流水线图补「分制按答案声明的档位，只夹取不缩放」。
+
+**教训.**
+① **「归一化」是模型接口的约定，不是题面的事实**：score 题的分数就是档位，看到 0-1 就乘 9 是把接口约定当成了数据语义。
+② **阈值闸门要跟被测量的量同一个量纲**：升级闸是 6.0（0-9 档位），量纲一旦被抬高，闸门就形同虚设 —— 闲聊（0.7 档）被当成危机（6.3 档）升级。
+③ **零单测覆盖的解析路径最危险**：systemone 通道的整段解析此前没有任何用例，正是它藏了 ×9；抽成纯函数后一次改码就补上了 26 条。

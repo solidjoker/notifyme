@@ -59,7 +59,7 @@ flowchart TB
         ENGINE2["LocalLlmEngine · LayaTfliteEngine<br/>端侧推理抽象 · LiteRT 2.2.0"]:::dom
     end
 
-    subgraph L4B["④-2 本轮新增 Core 逻辑内核 ×51（纯 JVM · 无 Android 依赖 · app/src/test 87 个 .kt / 1403 条覆盖）"]
+    subgraph L4B["④-2 本轮新增 Core 逻辑内核 ×52（纯 JVM · 无 Android 依赖 · app/src/test 88 个 .kt / 1429 条覆盖）"]
         direction LR
         C1["同步与上报<br/>SyncOutcome.kt 192（207 先于 2xx）<br/>SyncBatchCore.kt 84（200 条 / 1 MiB · 二分）<br/>SyncWatermarkCore.kt 57（已结算前缀）<br/>AnalysisSyncCore.kt 60 · AdvisorSyncCore.kt 44<br/>HistorySyncCore.kt 62（隐私门控 · MAX_PAGES=20）"]:::dom
         C2["拒绝与隔离<br/>AnalysisRejectCore.kt 201（被拒计数 + 隔离）<br/>AdvisorRejectCore.kt 183（复用 AnalysisRejectCore）<br/>PendingRejectCore.kt 66（被拒计数 + 丢弃上限）"]:::dom
@@ -95,6 +95,7 @@ flowchart TB
         C32["悬浮层几何
 OverlayPlacementCore.kt 98（LayoutParams 的 y 是内容区坐标，绝对位置 = y + 状态栏 inset · toAbsolute / toContent 换算 · 卡片按前一张实测高度顺延 · 面板宽 76% 屏宽且按 systemBars 反向偏移做整屏居中 · 球初始屏高 1/3、拖拽夹取 + 贴边吸附）"]:::dom
         C33["顾问报告上传口径<br/>AdvisorPayloadCore.kt 84（上传键集固定 7 个 + suggestions 子键 type/title/detail · 本地存档三个状态键永不上报 · 脱敏与不脱敏分支共用同一出口，两份手写 JSON 已收口 · 长度裁剪只在服务端一处）"]:::dom
+        C34["判定分制<br/>S1ScaleCore.kt 109（importance 是 0-9 十档 score 题 · 分制从答案自带的 legend / probabilities 条目数读 · 只夹取不缩放 · 旧实现「score ≤ 1 就 ×9」把闲聊档抬到 6.3~9.0、越过升级闸 6.0）"]:::dom
     end
 
     subgraph L5["⑤ 存储层 · app 私有目录（卸载即删）"]
@@ -169,3 +170,4 @@ OverlayPlacementCore.kt 98（LayoutParams 的 y 是内容区坐标，绝对位�
     C5 -.->|"手动提醒 + 待办面板"| CONSOLE
     C32 -.->|"悬浮球 / 卡片 / 面板几何"| OVS
     C33 -.->|"顾问报告上传口径（唯一出口）"| SYNCW
+    C34 -.->|"S1 重要度分制（唯一口径）"| ANAW
