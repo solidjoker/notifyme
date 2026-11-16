@@ -56,6 +56,9 @@ ANALYSIS_DROPPED = {
     "rejected_count",
     "first_rejected_at",
     "quarantined",
+    # 手动覆盖的锚点时刻（用户编辑那一刻）：只用于端上把「明天」换算成绝对日期，
+    # 服务端存的是文本本身，不需要这个时刻。
+    "todo_due_at",
 }
 
 PUT_RE = r'put\("([A-Za-z0-9_]+)"'
@@ -219,6 +222,7 @@ ANA_ALWAYS = {
 MSG_OPTIONAL = {"source", "appLabel"}
 ANA_OPTIONAL = {
     "redacted", "redaction_rules", "redaction_hits", "todo_text", "todo_due",
+    "todo_due_at",
     "rejected_count", "first_rejected_at", "quarantined",
 }
 
@@ -287,7 +291,7 @@ def test_analysis_client_keys_are_pinned():
         "case_id", "conversation", "window_end", "message_count",
         "analyzed_at", "protocol", "pkg", "s1", "escalated", "s2",
         "forks", "filtered", "redacted", "redaction_rules", "redaction_hits",
-        "todo_text", "todo_due", "rejected_count", "first_rejected_at",
+        "todo_text", "todo_due", "todo_due_at", "rejected_count", "first_rejected_at",
         "quarantined",
     }, "端上分析上报的键集合变了: " + ", ".join(sorted(ANA_CLIENT_KEYS))
 

@@ -76,6 +76,11 @@ data class AnalysisCaseRecord(
     val todoText: String = "",
     /** 用户编辑的截止时间文本；非空时日历解析优先用它 */
     val todoDue: String = "",
+    /**
+     * 用户编辑截止时间的那一刻（毫秒）：相对词「明天」的锚点。
+     * 0 = 未知（老记录 / 没编辑过），显示时退回分析时刻。
+     */
+    val todoDueAt: Long = 0L,
     // ---- 第四轮：被拒计数与隔离（分析通道防饥饿） ----
     /** 累计被服务端拒绝次数（207 部分被拒）；0 = 从未被拒 */
     val rejectedCount: Int = 0,
@@ -185,6 +190,8 @@ data class AnalysisCaseRecord(
         // M12 手动覆盖字段仅在非空时写出，老记录格式不变（缺键即未编辑）
         if (todoText.isNotEmpty()) put("todo_text", todoText)
         if (todoDue.isNotEmpty()) put("todo_due", todoDue)
+        // 手动覆盖的锚点时刻：只用于「明天」这类相对词的换算，服务端不消费（见白名单）
+        if (todoDueAt > 0L) put("todo_due_at", todoDueAt)
         // 第四轮：被拒计数与隔离（仅非默认值时写出，老记录格式完全不变）
         if (rejectedCount > 0) put("rejected_count", rejectedCount)
         if (firstRejectedAt > 0L) put("first_rejected_at", firstRejectedAt)
@@ -247,6 +254,8 @@ data class AnalysisCaseRecord(
                 redactionHits = obj.optInt("redaction_hits"),
                 todoText = obj.optString("todo_text"),
                 todoDue = obj.optString("todo_due"),
+                // 老记录没有这个键：缺省 0（相对词锚点退回分析时刻）
+                todoDueAt = obj.optLong("todo_due_at", 0L),
                 // 老记录没有这三个键：缺省 0 / 0 / false（读写兼容）
                 rejectedCount = obj.optInt("rejected_count", 0),
                 firstRejectedAt = obj.optLong("first_rejected_at", 0L),

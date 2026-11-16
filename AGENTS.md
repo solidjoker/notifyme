@@ -165,21 +165,21 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
     Remove-Item Env:\GH_TOKEN
     ```
     验证 scope：`gh api -i user | Select-String x-oauth-scopes`（fine-grained PAT 这行是空的）。
-  - **② 给该 PAT 加 `Contents: Read and write`**（范围由维护者定）。**③ 走浏览器点合并**：主按钮旁 `[data-dd-action-name="pull_requests.merge.open_method"]`（选 `Squash and merge`）→ 点 `[data-dd-action-name="pull_requests.merge.open"]`。
+  - **② 给该 PAT 加 `Contents: Read and write`**（范围由维护者定）。**③ 走浏览器点合并**：`[data-dd-action-name="pull_requests.merge.open_method"]` 选 Squash → 点同前缀的 `.merge.open`。
 - **Android 单测里起不了 JDK 自带的 HTTP 服务**：单测 classpath = `android.jar` + 显式依赖，Kotlin 走 `-no-jdk`，`com.sun.net.httpserver` 编译期报 `Unresolved reference 'sun'`；纯 JVM 单测起本地服务只能用 `java.net.ServerSocket` 自己写 HTTP/1.1（见 `HttpEndToEndFixture.kt`）。
 - **服务端要写「真实 HTTP 端到端」用例**：用 `werkzeug.serving.make_server("127.0.0.1", 0, app)` 起真实 HTTP/1.1，客户端用 `urllib.request`；数据隔离靠改 `app.DATA_DIR / DB_PATH / JSONL_PATH / ADVISOR_PATH` 到临时目录。两个坑：
 ① 测 413 要把 `app.config["MAX_CONTENT_LENGTH"]` 调小（如 1024）再发几 KB —— 真按 8 MiB 阈值发，服务端读完 body 前就回 413 并断连，客户端 `sendall` 撞连接重置拿不到状态码；
 ② 404/413 是 JSON，但 **405 仍是 Flask 默认 HTML**。参考 `server/test_http_e2e.py`（34 例）。
-- **「HTTP 触发 + 后台线程执行」型接口的端到端写法**：`/admin/extract` 用 `_run_extract_bg` + `_probe_main_db_writable`，端点只回 202 + job_id；后台失败要能在 `/admin/extract/status` 读出 `error_kind=busy`。
+- **「HTTP 触发 + 后台线程执行」型接口的端到端写法**：`/admin/extract` 用 `_run_extract_bg` + `_probe_main_db_writable`，端点只回 202 + job_id；后台失败要在 `/admin/extract/status` 读出 `error_kind=busy`。
 - **提醒三级降级链的口径只有一份：`ReminderChainCore`（20 条）**：决策全在 `decide()`，`runReminderChain` 只采集事实。**L1 分两段写**（事件行 + 提醒行）：提醒行缺失 → 不算 L1 成功、跳过 L2、降级 L3 闹钟（文案 `NOTE_CALENDAR_NO_ALERT` 带「App内提醒」→ 老记录推成 alarm）；闹钟也没设上 → `failed(dropEventId)`，调用方删掉孤儿事件。note 文案契约六条锁在单测里。
 - **S1 判定有两处口径：`S1ScaleCore`（18 条）+ `S1NeedActionCore`（21 条）**。① 重要度分制：importance 是 **0-9 十档** score 题，score 就是档位；分制从答案的 legend / probabilities 条目数读（读不到回落 10 档）；**只夹取、不缩放**（旧实现「score ≤ 1 就 ×9」把闲聊档抬到 6.3~9.0，越过升级闸 `ESCALATE_IMPORTANCE = 6.0`）；缺 score 按各档概率算期望，都没有则 0.0。② need_action 概率：三处读点（`need_action_prob` / `need_action.noul` / `noul`）归一到 `readAnswerProb`，**读不出来返 `null` 而不是 0.0**（0.0 = 明确无需行动）→ 置信度归 0 交给升级闸 `confidence < 0.5` 重判；可读形态 `noul`/`prob`/`value` + 数字字符串，越界先夹取；对象形态不猜。systemone 解析抽成 `AnalysisParsing.parseSystemOneAnswers`。改前跑 `S1ScaleCoreTest.kt` / `S1NeedActionCoreTest.kt`。
 - **通知抽取口径只有一份：`NotificationTextCore` + `NotificationShapeEvidenceTest`**（+19 条）：真机取证证实微信正文是 `[11条]发言人: 正文`；`hasUnreadPrefix` / `splitSender` / `isPlausibleSender` 是唯一口径。改 `PrefixImParser` / `GenericNotificationParser` / `NotifyMeListener.toRawNotification` 任一都要跑 `NotificationShapeEvidenceTest`（它固化「某家 App 的通知 → 入库字段」的映射）。
-- **`lintOpenDebug` 只剩 3 条 warning，都是刻意保留的，别去“修”**：① `ObsoleteLintCustomCheck`（依赖库自带 lint.jar，改不了）；② `OldTargetApi`（`targetSdk 34` 是产品决定）；③ `ChromeOsAbiSupport`（release 只打 `arm64-v8a`，体积取舍）。
-- **改 `docs/architecture/diagrams/*.mmd` 必须重渲并回写尺寸表**：`mmdc -i X.mmd -o X.svg`，PNG 给 `-w <viewBox 宽 + 20> -H <viewBox 高 + 60>`；**脑图 06 的 viewBox 起点不是 `0 0`**，单独用 `-w 3200 -H 1600`（否则渲出 14×7 废图）；**`-h` 是 help 不是高度**；渲完量像素回写 `docs/architecture/README.md` 索引表。
+- **`lintOpenDebug` 只剩 3 条 warning，刻意保留别去“修”**：① `ObsoleteLintCustomCheck`（依赖库自带 lint.jar）；② `OldTargetApi`（`targetSdk 34` 是产品决定）；③ `ChromeOsAbiSupport`（release 只打 `arm64-v8a`）。
+- **改 `docs/architecture/diagrams/*.mmd` 必须重渲并回写尺寸表**：`mmdc -i X.mmd -o X.svg`，PNG 给 `-w <viewBox 宽 + 20> -H <viewBox 高 + 60>`；脑图 06 的 viewBox 起点不是 `0 0`（单独 `-w 3200 -H 1600`）；`-h` 是 help 不是高度；渲完量像素回写 README 索引表。
 - **控制台归类规则只在 `server/console_classify.js`**（UMD，无 DOM），别写进 `console_ui.py` 的 HTML；`app.py` 注入 `/*__CONSOLE_CLASSIFY_JS__*/`。改规则跑 `server/test_console_classify.py`（`REQUIRE_NODE=1` 时 node 缺失要 **fail 不是 skip**）；前端降级 `var CC = window.ConsoleClassify || null`。
 - **本机起浏览器调试实例的坑**（走浏览器点合并时才需要）：WinINET 代理在 `127.0.0.1:18888` 会报隧道错，要显式 `--proxy-server=http://127.0.0.1:7890`；`--remote-debugging-port` 必须配独立 user-data-dir（136+ 策略）；token 页撞 sudo mode 需 2FA。
-- **排队通道 `/queue` 是 best-effort**：端上 `SyncWorker.pushQueue` 只认 2xx，失败不重试也不阻塞消息同步；服务端 `queue_tasks` 按 `(device_id, task_id)` 整份覆盖、保留 7 天，`stale` = `updated_at` 超 30 分钟。端侧 `task_id` 含原始会话名（与分析通道同口径）。
-- **控制台有 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）**：改 `console_ui.py` 的 HTML/CSS/JS 后自检三件事：① 内联脚本 `node --check`；② `pytest server/test_console_*.py -q`；③ 浏览器实跑看 `errs: []`。**`patchSections` 只追加 `.pane-sec` 不清理临时节点**（骨架屏残留来源）。桌面 `.tabbar` 必须 `position:sticky`。
+- **排队通道 `/queue` 是 best-effort**：端上 `SyncWorker.pushQueue` 只认 2xx，失败不重试也不阻塞消息同步；服务端 `queue_tasks` 按 `(device_id, task_id)` 整份覆盖、保留 7 天，`stale` = `updated_at` 超 30 分钟。
+- **控制台有 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）**：改 `console_ui.py` 后自检三件事：① 内联脚本 `node --check`；② `pytest server/test_console_*.py -q`；③ 浏览器实跑看 `errs: []`。**`patchSections` 只追加 `.pane-sec` 不清理临时节点**。
 - **PWA 外壳配色只有一套 aura 令牌**（`console_ui` 顶部常量 `AURA_BG` / `AURA_ACCENT` / `AURA_GOLD` / `ICON_BG`）：manifest 的 theme / background 与 `CONSOLE_ICON_SVG` 兜底图标、`pwa_icons/*.png`（`gen_icons.py` 读 `ICON_BG`）、SW 离线兜底页四处同源；`app.py` 不再自带 SVG 副本。离线页没法插值，靠 `test_console_ui.py` 8 条钉住。
 - **端侧排队上报的 device_id 不能碰硬件标识**：`QueueStateCollector` 用 SharedPreferences("queue_state", "device_seed") 里的随机种子做 FNV-1a 派生（`android-` + 8 位 hex），**不要改用 ANDROID_ID / IMEI / 序列号**。
 - **控制台统计口径＝服务端全库真值，不是前端已加载页**：控制台概览条与统计 Tab 的数据来自 `GET /stats`（server/stats_api.py 聚合全库），
@@ -187,16 +187,17 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 两个坑：① `/stats` 的 `by_pkg` / `by_source` / `by_kind` 是**对象数组** `[{pkg|source|kind, count}]`，而前端本地算法生成的是 `{键: 次数}` —— 必须走 `pairList()` 归一化再渲染，
 直接 `Object.keys()` 会打印成 `[object Object]`；② 分析侧的 `redacted` / `redaction_rules` / `redaction_hits` 字段服务端一直返回，
 但前端要显式渲染（`redactBadge` / `redactDetail`）并纳入 `analysisSearchText` 搜索，否则看不到「哪些内容被替换成占位符」。
-- **周期分析任务按 tag 反查不到就不上报**：`AnalysisScheduler` 的周期任务（`wechat_analysis` / `conv_analysis_<id>`）不带 tag，`QueueStateCollector.collect()` 只按 tag `analysis_on_demand` / `analysis_conv:<id>` 采集，控制台「排队」Tab 看不到周期任务——已知取舍，不是 bug。
+- **周期分析任务按 tag 反查不到就不上报**：`AnalysisScheduler` 的周期任务（`wechat_analysis` / `conv_analysis_<id>`）不带 tag，而 `QueueStateCollector.collect()` 只按 tag `analysis_on_demand` / `analysis_conv:<id>` 采集 —— 控制台「排队」Tab 看不到周期任务，已知取舍不是 bug。
 
-- **会话卡内的「日期 / 发送者」两级分组**：规则在 `console_classify.groupMessages(msgs, dim, getTs, getSender)` —— **按 `getTs` 精确值分桶**，调用方要传当天零点对齐的时间戳（`console_ui.dayStartMs()`）。状态存 `wx_group_v1`；`setConvGroupDim` / `convDimBar` / `groupMsgsByDim` / `convGroupHtml` 一起改。
+- **会话卡内的「日期 / 发送者」两级分组**：规则在 `console_classify.groupMessages(msgs, dim, getTs, getSender)` —— **按 `getTs` 精确值分桶**，调用方要传当天零点对齐的时间戳（`console_ui.dayStartMs()`）。状态存 `wx_group_v1`，`setConvGroupDim` / `convDimBar` / `groupMsgsByDim` / `convGroupHtml` 一起改。
 - **排队 Tab 的「设备」维度有两套口径**：设备清单来自 `GET /queue` 的 `devices` 聚合（`storage.queue_devices()`，`summary.devices` 是台数），控制台设备 chip 用这一份；前端 `console_classify.groupQueueTasksByDevice` 是纯函数版（离线/单测用），两处别混算。
-- **端云与跨层字段有契约守卫**：① 排队通道 `server/test_queue_contract.py` 比对 `QueueStateCore.kt` 的 `buildPayload` 与 `storage._normalize_queue_task`（字段名 / 键 / 枚举 / 长度上限）。② **消息 / 分析 / 顾问三条上报通道 `server/test_report_contract.py`**（39 条）：读端上 `toJson` + `SyncWorker` 的 remove/put 与服务端读的键比对 —— 客户端键集钉死、必填 ⊆ 客户端必写、客户端 ⊆ 服务端读 ∪ 白名单（`appLabel` 与三个本地状态键不消费）。③ **topic / due 码值↔中文映射 `server/test_label_contract.py`**（15 条）：端上 `TopicLabelCore.kt` 与控制台 `console_classify.js` 的码值 / 文案（`strings.xml`）/ 别名表逐条一致，运行时归一等于静态表。改一端忘另一端 CI 直接红。④ **重要度档位 `server/test_importance_contract.py`**：服务端 `util._importance_label`、规则层 `importanceKey`、控制台 `impLabel` 四处同源；只认十进制与 high/mid/low。
-- **顾问通道的口径只有一份**（`AdvisorPayloadCore` 84 行 + 11 条；存档侧 `server/test_advisor_archive.py` 14 条）。① 上传体唯一出口 `uploadJson()`：键集固定 7 个，本地三状态键不上报。② **长度裁剪只在服务端一处**且留痕：`truncated_fields` + `truncated: true`，控制台出「已截断 · 摘要」chip。③ **存档只有一种形状**：读取跨两段（同 id 留最后那条），上限由 `_trim_advisor_jsonl` 收敛（1000 条 / 8 MiB），裁掉的份数写 sidecar 并随 `GET /advisor` 下发。
-- **版本信息只有一份口径：`VersionInfoCore`**（internal object + 14 条）。控制台版本卡与 ☰ 菜单弹窗都调它。① `versionLine` 必须带 `versionCode`（debug 原地覆盖时 `versionName` 可能不变，只有 code 能证明装上新包）；② beta 的 `versionName` 自带 `-test`，`title()` 不再拼渠道后缀。改文案前看 `VersionInfoCoreTest.kt`。
+- **端云与跨层字段有契约守卫**：① 排队通道 `server/test_queue_contract.py` 比对 `QueueStateCore.kt` 的 `buildPayload` 与 `storage._normalize_queue_task`（字段名 / 键 / 枚举 / 长度上限）。② **消息 / 分析 / 顾问三条上报通道 `server/test_report_contract.py`**（39 条）：端上 `toJson` + `SyncWorker` 与服务端读的键比对 —— 客户端键集钉死、必填 ⊆ 客户端、客户端 ⊆ 服务端读 ∪ 白名单（`appLabel` 与三个本地状态键不消费）。③ **topic / due 码值↔中文 `server/test_label_contract.py`**（15 条）：端上 `TopicLabelCore.kt` 与 `console_classify.js` 的码值 / 文案 / 别名表逐条一致。④ **重要度档位 `server/test_importance_contract.py`**：服务端 `util._importance_label`、规则层 `importanceKey`、控制台 `impLabel` 四处同源。改一端忘另一端 CI 直接红。
+- **顾问通道的口径只有一份**（`AdvisorPayloadCore` 84 行 + 11 条；存档侧 `server/test_advisor_archive.py` 14 条）。① 上传体唯一出口 `uploadJson()`：键集固定 7 个，本地三状态键不上报。② **长度裁剪只在服务端一处**且留痕：`truncated_fields` + `truncated: true`。③ **存档只有一种形状**：读取跨两段（同 id 留最后那条），上限由 `_trim_advisor_jsonl` 收敛，裁掉的份数写 sidecar 随 `GET /advisor` 下发。
+- **版本信息只有一份口径：`VersionInfoCore`**（14 条）。控制台版本卡与 ☰ 菜单弹窗都调它。① `versionLine` 必须带 `versionCode`（debug 原地覆盖时 `versionName` 可能不变）；② beta 的 `versionName` 自带 `-test`，`title()` 不再拼渠道后缀。
+- **「截止时间」的显示只有一份口径：`DueDisplayCore`（188 行 / 27 条）**：四处显示（首页待办卡 / 会话卡分析行 / 分析列表 / 会话详情 chip）都走它，把「明天15:00」「本周内」换算成**今天 / 明天 / M月d日**（跨年带年份）。① 文本→毫秒**只委托 `DueTimeCore.parse`**（不另写解析器，显示日期与提醒链落点必须一致）；② 相对词锚点 = 「说话那一刻」（手动覆盖用编辑时刻 `todoDueAt`、模型结论用 `analyzedAt`）；③ 桶码值也展开（`this_week` → 周一~周日区间）；④ 时刻只在文本写了才显示（`DueTimeCore.hasExplicitTime`，不印兜底 09:00）；⑤ 解析不出原样显示。
 
-- **历史重复消息只能靠 `MessageDedupeCore` 归并，别在别处另写删行逻辑**：真机量化 78 组 / 271 行是「同一条通知被多次捕获」（微信正文形如 `[11条]发言人: 正文`，未读数一变正文就变，而入库去重键含正文原文）。
-口径保守：同 App + 同会话 + 同发送者 + 剥掉未读前缀后正文相同，**且组内至少一行带 `[N条]` 前缀**才归并；裸正文相同（用户真连发）不动，损坏行 / 空正文原位保留。两个坑：① 老行 `sender == conversation`，必须先 `NotificationTextCore.splitSender` 还原再算键；② 正文两侧都要剥前缀。`dedupeRepeated` 在 `removed == 0` 时不碰文件。
+- **历史重复消息只能靠 `MessageDedupeCore` 归并，别在别处另写删行逻辑**：真机量化 78 组 / 271 行是「同一条通知被多次捕获」（微信正文形如 `[11条]发言人: 正文`，未读数一变正文就变，去重键含正文原文）。
+口径保守：同 App + 同会话 + 同发送者 + 剥掉未读前缀后正文相同，**且组内至少一行带 `[N条]` 前缀**才归并；裸正文相同（用户真连发）不动，损坏行 / 空正文原位保留。老行 `sender == conversation` 必须先 `NotificationTextCore.splitSender` 还原再算键；正文两侧都要剥前缀。`dedupeRepeated` 在 `removed == 0` 时不碰文件。
 
 - **首页「按来源 App」筛选 chips 的口径在 `AppFilterCore`**（+ 16 条；`AppFilterStore` 只存 `app_filter` / `selected_pkg`）。四条：
 ① chip 只列当前窗口内真出现过的来源（`MessageStore.readRecent(500)` 口径），不列 `AppSourceRegistry` 全集 —— 点了必然空白的 chip 比不给更差；
@@ -214,7 +215,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   改别名形态、改盐长度或改摘要输入前先跑 `app/src/test/java/com/notifyme/android/AliasSaltCoreTest.kt` 与 `RedactorCoreTest.kt`（后者有 6 条窗口级用例）。
 - **`res/` 下的 XML 是 CRLF、`.kt` 是 LF**：用 Python 脚本按字面量替换时先 `.replace("\r\n","\n")` 再匹配，写回用 `newline="\r\n"`；否则 count=0 报 MISS 会让你以为文案不存在。
 
-- **顾问摘要与窗口级姓名映射全在 `AdvisorDigestCore`**（+ 36 条，窗口来源 8 条在 `AdvisorWindowSourceTest.kt`）。① 三元组只能从窗口反推（`windows()` 按 `(pkg, conversation.trim())` 聚合，群聊取任一条标为群聊者）；
+- **顾问摘要与窗口级姓名映射全在 `AdvisorDigestCore`**（+ 36 条，窗口来源 8 条在 `AdvisorWindowSourceTest.kt`）。① 三元组只能从窗口反推（按 `(pkg, conversation.trim())` 聚合，群聊取任一条标为群聊者）；
 ② 查不到窗口 → `nameMapFor()` 返空表、只走七类规则，是**下限不是漏洞**；③ 摘要正文是顾问模型输入，**改文案等于改模型输入**，`MAX_CASES_IN_PROMPT=50` / `SUMMARY_TRUNCATE=30` / `CONVERSATION_TRUNCATE=20` 只在 Core 留一份；
 ④ 盐只在 `privacy.cloudRedact` 时取；⑤ 两条通道统一 `windowsOf(MessageStore.feedGroups(context))`（别走 `readRecent(500)`）。改前跑这两个测试类。
 
@@ -320,7 +321,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **采集诊断页的累计统计只有一份口径：`AllTimeStatsCore`**（+ 16 条）。① 累计不是 `readRecent(N)`（窗口一满就静默偏小），是 `scanAll`（`SCAN_LINES=50000`）；② 被截断要能报 `capped(totalLines, scannedLines)`；③ object 层 `allTimeStats` 必须 `internal`，`scanAll` 必须写在 Core 内。
 
-- **文本截断只有一份口径：`TextClipCore`**（+ 20 条）。`take(n)` 数 **UTF-16 unit**，emoji 被切成孤立代理、UTF-8 落成 `?`。① `clip`/`clipWithEllipsis` 走 `offsetByCodePoints`，未超限返同一实例、省略号不占预算；② ASCII 逐字节不变；③ 不切断代理对，不保证字素簇；④ hex 与列表 `take(n)` 刻意不套；⑤ 服务端同口径 `clipCodePoints` 守排队三处上限，改上限要同时改端上与 `storage._normalize_queue_task`。
+- **文本截断只有一份口径：`TextClipCore`**（+ 20 条）。`take(n)` 数 **UTF-16 unit**，emoji 被切成孤立代理、UTF-8 落成 `?`。① `clip`/`clipWithEllipsis` 走 `offsetByCodePoints`，未超限返同一实例；② 不切断代理对，不保证字素簇；③ hex 与列表 `take(n)` 刻意不套；④ 服务端同口径 `clipCodePoints` 守排队三处上限，改上限要同时改端上与 `storage._normalize_queue_task`。
 
 - **SharedPreferences 的 JSON 读写只有一份口径：`PrefsJsonCore`**（+ 29 条）。五处 Store 此前各抄一份 `try { JSONArray(raw) } catch { }`。① **读永不抛**且返回独立拷贝；② **只做形状裁剪不做领域过滤**（`ConvTag.fromCode` 留 Store 层）；③ 元素走 `optString`；④ **写不排序**（`sort = true` 才排）；⑤ 与 JSONL 无关。`strings` 只丢空串，纯空白要 `trim = true`。改前跑 `PrefsJsonCoreTest.kt`。
 
@@ -364,7 +365,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **`/messages` 与 `/analysis` 必须回报被脏值守卫挡掉的行数：`skipped`**。① 只数 Python 侧 `except` 恒 0（脏行早在 `typeof` 守卫被挡），须发独立 `SELECT COUNT(*) WHERE NOT (guard) [AND 过滤段]`；② 无过滤也照算，`count + skipped == /stats`；③ 前端只能覆盖（`Math.max`）。
 - **列表接口夹了上限就必须回「总数 / 是否截断」**（`routes.query_advisor`：`min(limit, 100)`）。① 响应体补 `total`（截断前条数）与 `has_more = total > count`，损坏分支也回 `0 / false`；② 角标读 `ADVISOR_TOTAL`（缺省退回已加载条数）；③ 截断用例别钉末位（三批可落同一毫秒），只钉首位最新 + 长度。
 
-- **顾问 Tab 的来源过滤说明必须跟事实走：`console_classify.advisorPkgScope`**（`test_console_classify.py` 6 条 + `test_console_ui.py` 1 条守着）。① `pkg` 可选（老报告与端上 `toUploadJson` 都不写）；② 四态 `all`/`untagged`/`mixed`/`exact`；③ UI 只挑措辞。
+- **顾问 Tab 的来源过滤说明必须跟事实走：`console_classify.advisorPkgScope`**（6+1 条守着）。① `pkg` 可选（老报告与端上 `toUploadJson` 都不写）；② 四态 `all`/`untagged`/`mixed`/`exact`；③ UI 只挑措辞。
 - **列表「被截断」与「被筛选」必须各有独立标志：`console_classify.advisorListState`**（4 条规则层 + 1 条 UI 守着）。① `truncated = total > loaded`、`filtered = shown < loaded`；② `total` 缺失/0/负数/非小数/小于 loaded 一律回落 loaded；③ 降级路径保留旧口径（只报截断）且要可测。
 - **排队 Tab 的空态必须分三成因：`console_classify.queueEmptyScope`**（8 条）。① `scope` 三档 `device`/`state`/`all`，`mode` 四态 `loaded`/`none`/`elsewhere`/`unknown`；② 设备维度读 `devices[].total`、状态维度读 `summary[state]`，不许拿 `QUEUE.length` 顶替；③ 设备不在清单里 = 行已被保留期清理，写「已经没有任务了」；④ 「设备 × 状态」无已知口径 → `stateKnown=false`；⑤ 拿不到汇总回 `unknown`。
 - **来源筛选下的空态必须分三成因：`console_classify.appEmptyScope`**（5 条规则层 + 1 条 UI）。① `mode` 四态 `loaded`/`none`/`elsewhere`/`unknown`，只有 `db === 0` 敢说「没有」；② `db` 与 `shown` 无大小关系（跨页 + 脏行 skip），`null` ≠ `0`；③ 键过 `normPkg` 与 `distPairs` 同口径；④ 只有会话 tab 传 `byPkg`。

@@ -1046,7 +1046,13 @@ class MainActivity : Activity() {
             val row = layoutInflater.inflate(R.layout.item_home_todo, rows, false)
             row.findViewById<TextView>(R.id.tvHomeTodoText).text =
                 TopicLabelCore.todoLabel(this@MainActivity, rec.todoText, rec.s2Summary, rec.s1Topic)
-            val hasDue = TopicLabelCore.hasDisplayDue(rec.todoDue, rec.s2DueTime, rec.s1DueWindow)
+            // 截止显示走 DueDisplayCore：把「明天15:00」「本周内」换算成**绝对日期**
+            //（今天 / 明天 / 某月某日），用户不用自己换算那是哪天
+            val dueDisplay = DueDisplayCore.resolveOf(
+                rec.todoDue, rec.todoDueAt, rec.s2DueTime, rec.s1DueWindow,
+                rec.analyzedAt, System.currentTimeMillis()
+            )
+            val hasDue = dueDisplay.kind != DueDisplayCore.KIND_NONE
             row.findViewById<TextView>(R.id.tvHomeTodoMeta).text = if (!hasDue) {
                 rec.conversation
             } else {
@@ -1055,7 +1061,7 @@ class MainActivity : Activity() {
                     rec.conversation,
                     getString(
                         R.string.todo_due_prefix,
-                        TopicLabelCore.displayDueLabel(this@MainActivity, rec.todoDue, rec.s2DueTime, rec.s1DueWindow)
+                        DueDisplayCore.compose(this@MainActivity, dueDisplay)
                     )
                 )
             }
@@ -1118,8 +1124,15 @@ class MainActivity : Activity() {
             dialog.dismiss()
             val caseId = rec.caseId
             Thread {
+                // 记下「编辑那一刻」：相对词（「明天」）要按说话时刻换算，
+                // 不能按「现在」—— 否则今天写明天、明天看又变成后天
+                val editedAt = System.currentTimeMillis()
                 val ok = AnalysisStore.updateRecord(this, caseId) {
-                    it.copy(todoText = text, todoDue = due)
+                    it.copy(
+                        todoText = text,
+                        todoDue = due,
+                        todoDueAt = if (due.isNotEmpty()) editedAt else 0L
+                    )
                 }
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
@@ -1612,13 +1625,14 @@ class MainActivity : Activity() {
                     }
                     // 旧实现拿 displayDue() 的原始码值去比中文串（none != 无明确时间 永远成立），
                     // 未编辑过的待办卡会显示成「· 截止：none」；现在统一问 TopicLabelCore
-                    val due = if (TopicLabelCore.hasDisplayDue(
-                            analysis.todoDue, analysis.s2DueTime, analysis.s1DueWindow
-                        )
-                    ) {
-                        " · " + ctx.getString(R.string.analysis_due_prefix) + TopicLabelCore.displayDueLabel(
-                            ctx, analysis.todoDue, analysis.s2DueTime, analysis.s1DueWindow
-                        )
+                    // 截止也走 DueDisplayCore：绝对日期（今天 / 明天 / 某月某日）
+                    val dueDisplay = DueDisplayCore.resolveOf(
+                        analysis.todoDue, analysis.todoDueAt, analysis.s2DueTime, analysis.s1DueWindow,
+                        analysis.analyzedAt, System.currentTimeMillis()
+                    )
+                    val due = if (dueDisplay.kind != DueDisplayCore.KIND_NONE) {
+                        " · " + ctx.getString(R.string.analysis_due_prefix) +
+                            DueDisplayCore.compose(ctx, dueDisplay)
                     } else ""
                     holder.tvAnalysis.text = ctx.getString(
                         R.string.analysis_label_todo_item,

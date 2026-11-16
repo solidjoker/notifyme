@@ -170,6 +170,14 @@ internal object DueTimeCore {
     }
 
     /**
+     * 文本里有没有**显式时刻**（HH:mm / H点 / 下午H点）。
+     *
+     * 展示口径用它决定「要不要带时刻」：parse 对没写时刻的文本会兜底成 09:00，
+     * 那是解析兜底、不是用户的意思 —— 卡片上不能凭空印出 09:00。
+     */
+    fun hasExplicitTime(text: String): Boolean = TIME_PATTERN.matcher(text.trim()).find()
+
+    /**
      * 系统 DatePicker 回传的年份按默认 Locale 的历法显示（泰语 widget 上 [shownYear]=2569），
      * 换算成公历年：**用「widget 年份 − widget 当时的年份」的平移量**，加到基准公历年上。
      *
