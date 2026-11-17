@@ -260,4 +260,38 @@ class DueDisplayCoreTest {
         assertEquals("11月20日", DueDisplayCore.joinDateTime("11月20日", ""));
         assertEquals("11月20日 15:00", DueDisplayCore.joinDateTime("11月20日", "15:00"))
     }
+
+    // ---- 标签也要带时刻（真机回归：「明天15:00」曾被显示成光秃秃的「明天」） ----
+
+    @Test
+    fun composeJoinsTheTimeOnTopOfTodayLabel() {
+        val d = DueDisplayCore.Display(DueDisplayCore.KIND_TODAY, timeText = "15:00")
+        assertEquals("今天 15:00", DueDisplayCore.compose(d, ::labels))
+    }
+
+    @Test
+    fun composeJoinsTheTimeOnTopOfTomorrowLabel() {
+        val d = DueDisplayCore.Display(DueDisplayCore.KIND_TOMORROW, timeText = "15:00")
+        assertEquals("明天 15:00", DueDisplayCore.compose(d, ::labels))
+    }
+
+    @Test
+    fun composeKeepsTheLabelAloneWhenThereIsNoTime() {
+        val d = DueDisplayCore.Display(DueDisplayCore.KIND_TODAY)
+        assertEquals("今天", DueDisplayCore.compose(d, ::labels))
+    }
+
+    @Test
+    fun composeDoesNotAppendTimeToVerbatimText() {
+        val d = DueDisplayCore.Display(DueDisplayCore.KIND_TEXT, timeText = "15:00", rawText = "尽快")
+        assertEquals("尽快", DueDisplayCore.compose(d, ::labels))
+    }
+
+    @Test
+    fun tomorrowWithTimeShowsLabelAndTimeTogether() {
+        val d = DueDisplayCore.resolveOf("", 0L, "明天15:00", "", now, now, zone)
+        assertEquals(DueDisplayCore.KIND_TOMORROW, d.kind)
+        assertEquals("15:00", d.timeText)
+        assertEquals("明天 15:00", DueDisplayCore.compose(d, ::labels))
+    }
 }

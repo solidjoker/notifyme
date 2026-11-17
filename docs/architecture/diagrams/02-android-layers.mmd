@@ -59,7 +59,7 @@ flowchart TB
         ENGINE2["LocalLlmEngine · LayaTfliteEngine<br/>端侧推理抽象 · LiteRT 2.2.0"]:::dom
     end
 
-    subgraph L4B["④-2 本轮新增 Core 逻辑内核 ×54（纯 JVM · 无 Android 依赖 · app/src/test 90 个 .kt / 1482 条覆盖）"]
+    subgraph L4B["④-2 本轮新增 Core 逻辑内核 ×54（纯 JVM · 无 Android 依赖 · app/src/test 90 个 .kt / 1487 条覆盖）"]
         direction LR
         C1["同步与上报<br/>SyncOutcome.kt 192（207 先于 2xx）<br/>SyncBatchCore.kt 84（200 条 / 1 MiB · 二分）<br/>SyncWatermarkCore.kt 57（已结算前缀）<br/>AnalysisSyncCore.kt 60 · AdvisorSyncCore.kt 44<br/>HistorySyncCore.kt 62（隐私门控 · MAX_PAGES=20）"]:::dom
         C2["拒绝与隔离<br/>AnalysisRejectCore.kt 201（被拒计数 + 隔离）<br/>AdvisorRejectCore.kt 183（复用 AnalysisRejectCore）<br/>PendingRejectCore.kt 66（被拒计数 + 丢弃上限）"]:::dom
@@ -97,7 +97,7 @@ OverlayPlacementCore.kt 98（LayoutParams 的 y 是内容区坐标，绝对位�
         C33["顾问报告上传口径<br/>AdvisorPayloadCore.kt 84（上传键集固定 7 个 + suggestions 子键 type/title/detail · 本地存档三个状态键永不上报 · 脱敏与不脱敏分支共用同一出口，两份手写 JSON 已收口 · 长度裁剪只在服务端一处）"]:::dom
         C34["判定分制<br/>S1ScaleCore.kt 109（importance 是 0-9 十档 score 题 · 分制从答案自带的 legend / probabilities 条目数读 · 只夹取不缩放 · 旧实现「score ≤ 1 就 ×9」把闲聊档抬到 6.3~9.0、越过升级闸 6.0）"]:::dom
         C35["need_action 概率读取<br/>S1NeedActionCore.kt 82（读不出来 ≠ 无需行动 · 三处读点归一到一个出口，读不到返 null 而不是 0.0 · 置信度归 0 交给升级闸重判 · noul / prob / value 三键序 + 数字字符串）"]:::dom
-        C36["截止展示<br/>DueDisplayCore.kt 188（绝对日期唯一口径：明天15:00 / 本周内 / today → 今天 / 明天 / M月d日 · 文本→毫秒只委托 DueTimeCore.parse，显示日期与提醒落点一致 · 相对词锚点 = 说话那一刻（手动覆盖用编辑时刻、模型结论用分析时刻）· 桶码值也展开（this_week → 周一到周日）· 时刻只在文本写了才显示 · 解析不出原样显示）"]:::dom
+        C36["截止展示<br/>DueDisplayCore.kt 188（绝对日期唯一口径：明天15:00 / 本周内 / today → 今天 / 明天 / M月d日 · 文本→毫秒只委托 DueTimeCore.parse，显示日期与提醒落点一致 · 相对词锚点 = 说话那一刻（手动覆盖用编辑时刻、模型结论用分析时刻）· 桶码值也展开（this_week → 周一到周日）· 时刻只在文本写了才显示 · 标签（今天 / 明天）也要带时刻 · 解析不出原样显示）"]:::dom
     end
 
     subgraph L5["⑤ 存储层 · app 私有目录（卸载即删）"]
