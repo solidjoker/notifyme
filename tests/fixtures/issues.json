@@ -1,0 +1,20 @@
+[
+  {
+    "number": 412,
+    "title": "NAS 上 dash 作为默认 shell 时启动报 syntax error",
+    "body": "我的群晖默认 shell 是 dash，装了 0.1.3336 之后每次开终端都报 `Syntax error: Bad function name`，你们写进 .profile 的那段函数 dash 不认。\n\n复现：\n1. 用 dash 作为默认 shell\n2. 重开终端\n3. 看到报错",
+    "author": {"login": "nas-user"},
+    "createdAt": "2026-11-09T00:12:00Z",
+    "url": "https://github.com/example/magpie/issues/412",
+    "labels": [{"name": "bug"}]
+  },
+  {
+    "number": 415,
+    "title": "怎么把 Codex 指到 DeepSeek？",
+    "body": "请教一下配置方法，文档里没找到。",
+    "author": {"login": "newbie"},
+    "createdAt": "2026-11-09T01:00:00Z",
+    "url": "https://github.com/example/magpie/issues/415",
+    "labels": [{"name": "question"}]
+  }
+]

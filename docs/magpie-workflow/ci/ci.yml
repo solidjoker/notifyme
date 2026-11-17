@@ -1,0 +1,80 @@
+name: ci
+
+# 原文那条“CI 改成 main 分支上的测试一定跑完，不再被下一次推送取消”。
+# cancel-in-progress: false 就是这一条。推送一个接一个的时候，别让后一个把前一个的
+# 测试掐掉——被取消的绿色等于没测过。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  selfcheck:
+    name: 自检（编译 + 单测 + 规矩）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # 验收门要读提交说明
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 格式与语法
+        run: python -m compileall -q loops gates tests
+
+      - name: 单测
+        run: python -m unittest discover -s tests -t . -v
+
+      - name: 仓库自检
+        run: python -m gates.selfcheck
+
+  acceptance:
+    name: 验收门（提交说明里的验收记录）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 每个提交都要能被验收门解析通过。缺 Not run、Red/Green 里没有 FAIL，
+      # 都算没过。这一步红了，说明这次的改动“不算做完”。
+      - name: 逐条校验提交说明
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="origin/${{ github.base_ref }}"
+            range="$base..HEAD"
+          else
+            base="HEAD~1"
+            range="HEAD"
+          fi
+          failed=0
+          for sha in $(git rev-list $range); do
+            echo "── $sha $(git log -1 --format=%s $sha)"
+            python -m gates.acceptance_check --commit "$sha" || failed=1
+          done
+          if [ "$failed" != "0" ]; then
+            echo
+            echo "有提交的验收记录不合格。格式见 docs/CODE_STANDARDS.md 第 2 节。"
+            exit 1
+          fi
+
+      # 循环写下的结构化验收记录，也要能过同一套校验。
+      - name: 校验结构化验收记录
+        run: |
+          if [ -d .loopstate/acceptance ] && [ -n "$(ls -A .loopstate/acceptance 2>/dev/null)" ]; then
+            python -m gates.acceptance_check --all .loopstate/acceptance
+          else
+            echo "没有结构化验收记录，跳过"
+          fi

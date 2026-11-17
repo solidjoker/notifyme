@@ -1,0 +1,90 @@
+# workflow.toml — 三个循环的配置
+#
+# 由 magpie 安装器 0.2.0 生成。改完这一份就够，没有别处要同步。
+# 默认值全是「安全档」：不发版、不回复。要它真动手，一项一项开。
+
+[repo]
+root = "."
+product = "notifyme"
+main_branch = "main"
+
+# ---------------------------------------------------------------- 模型
+# 便宜模型：只做分类，不拿主意。原文那句「不然太浪费 Token 了」就是这一档。
+[models.cheap]
+base_url = "http://127.0.0.1:8080/v1"
+api_key_env = "NOTIFYME_GATEWAY_KEY"
+model = "deepseek/deepseek-chat"
+temperature = 0.0
+max_tokens = 256
+
+# 贵模型：分诊、审查、写教训。
+[models.strong]
+base_url = "http://127.0.0.1:8080/v1"
+api_key_env = "NOTIFYME_GATEWAY_KEY"
+model = "claude/claude-opus-5-5"
+temperature = 0.0
+max_tokens = 4096
+
+# ---------------------------------------------------------------- agent
+# 真正改代码的那个。{prompt} 换成渲染后的提示词文本，{prompt_file} 换成落盘路径。
+[agent]
+command = ["cmd", "/c", "dsh.cmd", "--profile", "headless", "{prompt_file}"]
+timeout_sec = 1800
+max_turns = 1
+
+# ---------------------------------------------------------------- loop1
+[loop1]
+enabled = true
+interval_sec = 900
+sources = ["github_issue", "github_pr"]
+cheap_gate = false          # issue 本来就是冲着你来的，不用先筛
+discord_inbox = ".loopstate/inbox/discord.jsonl"
+max_items_per_tick = 5
+max_actions_per_tick = 1
+release = false             # 真打 tag
+reply = false               # 真在 issue 里回话
+merge_pr = false            # 真合 PR
+# 「拉到本地真跑一遍」。不配就等于没跑，PR 一律停在 ready-to-merge 等人。
+local_run = ["cmd", "/c", "gradlew.bat", "testOpenDebugUnitTest"]
+
+[loop2]
+enabled = true
+interval_sec = 600
+inbox = ".loopstate/inbox/x.jsonl"
+keywords = ["notifyme"]
+cheap_gate = true           # 必须开：同名不同物
+max_items_per_tick = 5
+max_actions_per_tick = 1
+release = false
+reply = false
+# 读了整个开放互联网的循环，默认不给发版权。看清楚 docs/ARCHITECTURE.md 再改这个。
+allow_release_permission = false
+
+[loop3]
+enabled = true
+interval_sec = 3600
+nightly = "02:00-05:00"     # 只在这个窗口干活，其余时间空转
+lookback_hours = 24
+max_audits_per_tick = 20
+
+# ---------------------------------------------------------------- 门
+[gate]
+require_acceptance = true
+hazard_policy = "config/hazard_rules.json"
+blocklist = "config/blocklist.txt"
+lessons = "LESSONS.md"
+standards = "docs/CODE_STANDARDS.md"
+
+# ---------------------------------------------------------------- 发布
+# 三条硬条件：一次跑完的绿色测试、安装包一个不少、标成 Latest。缺一条不发。
+# 没配的东西一律记成 NOT RUN，不当没这回事。
+[release]
+command = ["git", "push", "origin", "{tag}"]
+require_green = true
+require_all_installers = true
+installer_count = 2
+installers_dir = "dist"           # 安装包放哪；不配就等于没打齐，发布门会拒
+installer_glob = "*"
+mark_latest = true
+latest_file = "dist/LATEST"       # 里面写着当前 Latest 的 tag
+test_command = []                 # 空 = 跑 python -m gates.selfcheck

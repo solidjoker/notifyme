@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "_comment": "危害清单的机器版。人读版在 docs/COMMUNITY_RULES.md，两处要一起改。命中的一律 block，等维护者放行。",
+  "path_rules": [
+    {
+      "id": "H1",
+      "kind": "ci_release",
+      "severity": "block",
+      "globs": [
+        ".github/**",
+        "scripts/release*",
+        "scripts/deploy*",
+        "dist/**",
+        "build/**",
+        "Makefile",
+        "Dockerfile*",
+        "docker-compose*"
+      ],
+      "why": "改 CI 或发布链路，等于能改自己怎么被验证、怎么被发出去。"
+    },
+    {
+      "id": "H5",
+      "kind": "dependency_change",
+      "severity": "block",
+      "globs": [
+        "package.json",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "go.mod",
+        "go.sum",
+        "requirements.txt",
+        "requirements-*.txt",
+        "pyproject.toml",
+        "poetry.lock",
+        "Pipfile*",
+        "Cargo.toml",
+        "Cargo.lock",
+        "**/*.whl",
+        "**/*.so",
+        "**/*.dll",
+        "**/*.dylib",
+        "**/*.exe"
+      ],
+      "why": "新依赖和新二进制是供应链攻击最常见的入口，而且没法逐行审。"
+    },
+    {
+      "id": "H6",
+      "kind": "pollution",
+      "severity": "block",
+      "globs": ["config/workflow.toml", "config/hazard_rules.json", "config/blocklist.txt"],
+      "why": "循环不许改自己的开关和门禁。"
+    }
+  ],
+  "credential_globs": [
+    "**/.ssh/**",
+    "**/.aws/**",
+    "**/.gnupg/**",
+    "**/.netrc",
+    "**/.npmrc",
+    "**/.pypirc",
+    "**/*.pem",
+    "**/*.key",
+    "**/*.p12",
+    "**/.env",
+    "**/.env.*"
+  ],
+  "credential_content_patterns": [
+    "AKIA[0-9A-Z]{16}",
+    "ghp_[A-Za-z0-9]{30,}",
+    "github_pat_[A-Za-z0-9_]{40,}",
+    "sk-[A-Za-z0-9_-]{20,}",
+    "xox[baprs]-[A-Za-z0-9-]{10,}",
+    "-----BEGIN [A-Z ]*PRIVATE KEY-----"
+  ],
+  "network_pattern": "https?://[^\\s\"'<>)\\]`]+",
+  "allow_hosts": [
+    "github.com",
+    "api.github.com",
+    "raw.githubusercontent.com",
+    "docs.github.com",
+    "localhost",
+    "127.0.0.1",
+    "pypi.org",
+    "python.org"
+  ],
+  "promo_patterns": [
+    "[?&]utm_",
+    "[?&]ref=",
+    "[?&]aff",
+    "[?&]via="
+  ],
+  "promo_context_patterns": [
+    "affiliate",
+    "promo_code",
+    "referral",
+    "返利",
+    "推广链接",
+    "中转站"
+  ],
+  "telemetry_patterns": [
+    "telemetry",
+    "analytics",
+    "sentry",
+    "posthog",
+    "mixpanel",
+    "amplitude",
+    "crash_report"
+  ],
+  "opaque_blob": {
+    "min_len": 200,
+    "min_unique_ratio": 4.0,
+    "_comment": "单行超长且字符种类很少（base64/hex）的行，视为不可审阅代码。"
+  }
+}

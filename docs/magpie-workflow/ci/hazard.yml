@@ -1,0 +1,59 @@
+name: hazard
+
+# 人守的第一道门。命中任何一条就红，PR 停在 needs-human。
+# 清单人读版：docs/COMMUNITY_RULES.md
+# 清单机器版：config/hazard_rules.json
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: hazard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hazard:
+    name: 危害清单
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 查危害
+        id: check
+        shell: bash
+        run: |
+          set +e
+          python -m gates.hazard_check \
+            --base "origin/${{ github.base_ref }}" \
+            --head HEAD \
+            --author "${{ github.event.pull_request.user.login }}" \
+            | tee hazard.txt
+          code=${PIPESTATUS[0]}
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" != "0" ]; then
+            {
+              echo "## 需要人工放行"
+              echo
+              cat hazard.txt
+              echo
+              echo "> 维护者放行之前，这份代码不会在有真实账号的机器上跑。"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 0
+
+      # 这一步只负责让 job 变红，挂在最后，保证摘要已经写出去
+      - name: 判定
+        if: steps.check.outputs.code != '0'
+        run: |
+          echo "::error::命中危害清单，等维护者看过再继续"
+          exit 1

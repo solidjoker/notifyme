@@ -274,6 +274,8 @@ powershell -ExecutionPolicy Bypass -File docs\scripts\local_check.ps1
 
 欢迎 Issue 与 PR。提交即表示你同意项目以 MIT 许可证发布你的贡献。
 
+仓库内置了一套 AI 维护工作流（三个循环 + 错题本 + 五道机器门），默认安全档：不替维护者发版、回复或合并。说明见 [docs/magpie-workflow.md](docs/magpie-workflow.md)。
+
 ## 许可证
 
 [MIT License](LICENSE) © 2026 solidjoker。第三方组件许可见 [THIRD-PARTY.md](THIRD-PARTY.md)。

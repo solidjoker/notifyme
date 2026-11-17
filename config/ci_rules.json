@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "_comment": "由 LESSONS 晋升来的机器检查。enabled=false 或 pattern=null 表示还是桩，待人补实现；selfcheck 会把它们列出来但不判红。",
+  "rules": []
+}

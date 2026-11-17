@@ -1,0 +1,12 @@
+{
+  "source": "someone said it broken",
+  "cause": "修复了一些问题",
+  "change": "优化代码",
+  "verified": [
+    {"where": "", "check": "manual", "result": "SKIP"}
+  ],
+  "red_green": [
+    {"step": "looked at it", "result": "PASS", "note": ""}
+  ],
+  "files": ["docs/CODE_STANDARDS.md"]
+}
