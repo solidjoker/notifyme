@@ -1,0 +1,17 @@
+{
+  "source": "x/@someone (v0.1.3336) / issue #412",
+  "cause": "dash 不支持 `function name()` 写法，写进 NAS 的 shell 配置直接语法错。",
+  "change": "改成 POSIX 兼容写法，并加了一条在 dash 下跑的回归测试。",
+  "verified": [
+    {"where": "macos-15 arm64", "check": "full suite", "result": "PASS"},
+    {"where": "wsl ubuntu 24.04, /bin/sh=dash", "check": "full suite", "result": "PASS"}
+  ],
+  "red_green": [
+    {"step": "revert old code", "result": "FAIL", "note": "dash 报 syntax error"},
+    {"step": "apply new code", "result": "PASS", "note": ""}
+  ],
+  "not_run": [
+    {"what": "真实那台 NAS", "why": "手上没有设备"}
+  ],
+  "files": ["shell/hook.sh", "tests/test_hook.py"]
+}

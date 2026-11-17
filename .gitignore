@@ -64,8 +64,16 @@ dist/
 *.jsonl
 !app/src/test/resources/**/*.jsonl
 !docs/**/*.jsonl
+# magpie 离线演练夹具（workflow 自带，必须入库，否则新克隆跑不起来）
+!tests/fixtures/*.jsonl
 # gh CLI 在仓库根写的设备状态（不影响仓库内容）
 /.local/
 # 端侧运行时数据目录（消息原文 / 分析结果 / 提醒 / 顾问报告 / 端侧模型）
 /files/
 /app/files/
+
+.loopstate/
+*.pyc
+
+# magpie 安装包本体（不入库；装好的源码在 loops/ gates/ prompts/ tests/ config/）
+magpie_workflow-v0.2.0.zip

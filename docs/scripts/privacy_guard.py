@@ -69,8 +69,8 @@ FORBIDDEN_PATH_PREFIXES = (
     "files/",
     "app/files/",
 )
-# *.jsonl = 真实用户数据（消息原文 / 待上报队列）。文档与测试资源目录白名单。
-JSONL_ALLOW_PREFIXES = ("docs/", "app/src/test/resources/")
+# *.jsonl = 真实用户数据（消息原文 / 待上报队列）。文档、测试资源与 magpie 离线演练夹具目录白名单。
+JSONL_ALLOW_PREFIXES = ("docs/", "app/src/test/resources/", "tests/fixtures/")
 
 # G6：.gitignore 必须一直保留的条目（谁把忽略规则删了，守卫就报）
 REQUIRED_GITIGNORE_ENTRIES = (
