@@ -749,6 +749,11 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 修法：`compose` 的 `else` 分支改成 `joinDateTime(if (res != null) label(res) else "", display.timeText)`；`KIND_DATE` / `KIND_TEXT` 两条分支语义不变（自由文本不追加时刻）。`compose` 是四处展示点的唯一出口，一处改动四处同时修好。
   - 测试：`DueDisplayCoreTest.kt` 新增 **5 条**（27 → 32：today + 时刻 / tomorrow + 时刻 / today 无时刻 / 自由文本不追加 / 端到端 `resolveOf` → `compose`）。Android 单测 1482 → **1487 条**。
   - 计数：`DueDisplayCore.kt` 188 行 / 9223 B；`DueDisplayCoreTest.kt` 264 → **297 行**；Android 顶层 .kt 135（全树 142）、`app/src/test` 90 个 .kt、Core 内核 54；服务端仍 905 条。
+- **装一套 magpie 维护工作流进仓库：三个循环 + 错题本 + 五道机器门（feat/magpie-workflow）**
+  - 问题：仓库的 agent 协作全靠人肉触发 —— 每次都要人先想起来「该看 issue 了」「该复盘了」，且改代码前没有机械门；magpie workflow v0.2.0 正好是这套可搬走的骨架（安装器支持脚本化驱动，不必手点 GUI）。
+  - 修法：用官方安装器（`python -m installer --no-browser --port 8765`，只听 127.0.0.1）走 `POST /api/plan` → `POST /api/install` → `POST /api/verify` 装进仓库根；装完做三处刻意取舍 —— ① **两条自带 CI 不启用**（`ci.yml` / `hazard.yml` 移到 `docs/magpie-workflow/ci/` 留档，notifyme 自己的 `android.yml` / `release.yml` 仍是唯一 CI 口径，自检不检查 workflow 存在，移走不影响 verify）；② **payload 自带的 `AGENTS.md` 不覆盖 notifyme 的**（同名冲突按「跳过」处理，notifyme 的 AGENTS.md 原样保留，只在末尾加一条指针）；③ `release` / `reply` / `merge_pr` / `allow_release_permission` 四个开关全 false（循环可以出结论，但不替维护者发版、回复、合并）。另把 zip 本体移出仓库（`.gitignore` 已加），给 `tests/fixtures/*.jsonl` 加 `!` 例外（仓库 `*.jsonl` 全局忽略会挡掉离线演练夹具）。
+  - 测试：`POST /api/verify` → `ok=true`：自检六项全过（编译 + 单测 46 tests OK + 错题本格式 + CI 规则 + 配置与提示词占位符 + 2 条待晋升教训）+ 三循环离线演练全过（loop1 走完 item_in→triage→agent→commit(dry_run)→reply_draft；loop2 读 `tests/fixtures/x.jsonl` 3 条全 keyword_miss；loop3 nothing_to_review）；另在仓库根 `python -m pytest tests/ -q` → **46 passed**（搬走 CI 文件后重跑 verify 仍 `ok=true`）。
+  - 计数：装入 `loops/`(8) `gates/`(6) `prompts/`(5) `tests/`(4 py + 5 fixtures) `config/`(4) `LESSONS.md` `.magpie_install.json` + `docs/` 5 篇文档；新增 `docs/magpie-workflow.md`（156 行）；`.gitignore` +2 行例外与忽略；`AGENTS.md` 末尾 +1 条指针（**注入预算 65243 字节上限，追加前先压缩 9 条旧条目腾空间**）。
 
 ## 12. 决策门汇总
 
