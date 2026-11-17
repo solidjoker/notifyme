@@ -147,6 +147,9 @@ python -m loops.run status
 6. **`selfcheck` 会编译仓库内全部 `.py`**（含 `server/` 与本地 `third_party/llama.cpp`），本地首跑会慢一点。
 7. **payload 的 `tests/` 在仓库根**：notifyme 的 pytest 只跑 `server/` 目录级发现（CI 与 local_check 都是），
    根目录 `tests/` 不会被误收进服务端用例。
+8. **Windows 中文控制台**：`gates/*` 会打印 ✓ 与 ✗，这两个字符不在 GBK 里，裸跑会在最后一行抛
+   `UnicodeEncodeError`。`gates/__init__.py` 里加了 reconfigure shim（标准输出与标准错误改 UTF-8），
+   所以 `python -m gates.selfcheck` / `hazard_check` / `acceptance_check` / `release_check` 在中文控制台直接能跑。
 
 ## 八、维护提醒
 
