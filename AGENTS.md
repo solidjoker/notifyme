@@ -157,15 +157,9 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   端上先把批次二分重试，拆到单条仍 413 才单独隔离该条并继续下一批，
   **不触发整轮 retry**（否则一条毒丸会永久卡住它后面的整条队列）。
 - **`gh pr merge` 会 403 `Resource not accessible by personal access token`**：fine-grained PAT 只有 Issues / Pull requests 写权限，**缺 `Contents: write`**（合并要往 base 写提交），而 `gh pr create` / 写 label / 写 comment 都通。修法三选一：
-  - **① 临时覆盖 `GH_TOKEN`（推荐）**：凭据管理器里 `git:https://github.com` 的 OAuth token（scope 含 `repo`）有写权限，`gh` 优先读 `GH_TOKEN`；**别把 token 打印进日志 / 提交 / CI**：
-    ```powershell
-    $cred = "protocol=https`nhost=github.com`n`n" | git credential fill 2>$null
-    $env:GH_TOKEN = (($cred | Select-String '^password=' | Select-Object -First 1).ToString() -replace '^password=','')
-    gh pr merge 8 --squash --delete-branch
-    Remove-Item Env:\GH_TOKEN
-    ```
-    验证 scope：`gh api -i user | Select-String x-oauth-scopes`（fine-grained PAT 这行是空的）。
+  - **① 临时覆盖 `GH_TOKEN`（推荐）**：凭据管理器里 `git:https://github.com` 的 OAuth token（scope 含 `repo`）有写权限。**别把 token 打印进日志 / 提交 / CI**；验证 scope：`gh api -i user | Select-String x-oauth-scopes`（fine-grained PAT 这行是空的）。
   - **② 给该 PAT 加 `Contents: Read and write`**（范围由维护者定）。**③ 走浏览器点合并**：选 `[data-dd-action-name="pull_requests.merge.open_method"]` 的 Squash → 点 `.merge.open`。
+  - **本机（Windows）三个实测坑**：`git credential fill` 挂在 helper-selector 的交互提示上 → 用 `CredReadW` 直读 `git:https://github.com`；非交互 shell 里 `gh pr merge` 等确认会挂 → 改走 REST `PUT .../pulls/{n}/merge`（配 `GH_PROMPT_DISABLED=1`）；body 带 BOM 会回 400 `Problems parsing JSON` → 用 `[IO.File]::WriteAllText(..., UTF8Encoding($false))`。
 - **Android 单测里起不了 JDK 自带的 HTTP 服务**：单测 classpath = `android.jar` + 显式依赖，Kotlin 走 `-no-jdk`，`com.sun.net.httpserver` 编译期报 `Unresolved reference 'sun'`；纯 JVM 单测起本地服务只能用 `java.net.ServerSocket` 自己写 HTTP/1.1（见 `HttpEndToEndFixture.kt`）。
 - **服务端要写「真实 HTTP 端到端」用例**：用 `werkzeug.serving.make_server("127.0.0.1", 0, app)` 起真实 HTTP/1.1，客户端用 `urllib.request`；数据隔离靠改 `app.DATA_DIR / DB_PATH / JSONL_PATH / ADVISOR_PATH` 到临时目录。两个坑：
 ① 测 413 要把 `app.config["MAX_CONTENT_LENGTH"]` 调小（如 1024）再发几 KB —— 真按 8 MiB 阈值发，服务端读完 body 前就回 413 并断连，客户端 `sendall` 撞连接重置拿不到状态码；
@@ -377,12 +371,12 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **每条建议的数字必须自带口径：`suggests._build` 的 `scope` + `console_classify.suggestScope`**（3+3+1 条守着）。① `scope` 由规则的 `pkg_scoped` 决定，不看请求参数；② `pkg` / `global` 两态，排队与顾问恒 `global`；③ 标题只在全部建议都按来源过滤时才标「仅 X」，每张卡另带一枚口径徽标。
 - **一个句子里的两个计数必须各带口径：`console_classify.syncCounters`**（4 条规则层 + 1 条 UI）。① 逐侧复用 `badgeState` 定档，返 `{msg, ana, mixed}`；② `null`（拿不到）≠ `0`（真的是 0）；③ `filtered` 一票否决两侧；④ UI 只给退化的那侧加「已加载」前缀。
 
-- **枚举的文案映射只在规则层：`console_classify.SOURCE_LABELS` / `sourceLabel` / `sourceBadge` / `queueKindLabel` / `queueStateLabel` / `pairText`**（9+2 条守着）。① 认不出原码原样回显，空值折 `unknown`；② 查表走 `hasOwnProperty`，`constructor` / `__proto__` 不许命中原型链；③ `queueKindLabel` / `queueStateLabel` 未知返 `null`；④ 新增采集通道只改 `SOURCE_LABELS`（钉全集）。
+- **枚举的文案映射只在规则层：`console_classify.SOURCE_LABELS` / `sourceLabel` / `sourceBadge` / `queueKindLabel` / `queueStateLabel` / `pairText`**（9+2 条）。① 认不出原码原样回显，空值折 `unknown`；② 查表走 `hasOwnProperty`，`constructor` / `__proto__` 不许命中原型链；③ `queueKindLabel` / `queueStateLabel` 未知返 `null`；④ 新增采集通道只改 `SOURCE_LABELS`（钉全集）。
 
 - **控制台侧的 S1 码值→中文映射只在规则层**（`console_classify.TOPIC_LABELS` / `DUE_LABELS` + `topicLabel` / `dueLabel` / `importanceChip`）：认不出原码原样回显、空值才回落；`none` 整段不渲染；「截止」优先序 `todo_due → s2.due_time → s1.due_window`；数值重要度与服务端 `util._importance_label` 同源。
 - **同一段里的分布与标量必须能对上：`stats_api._queue_block.by_kind`、`console_classify.mergePairsBy`**（9 条用例）。① 类型计数必须在「过期 → `continue`」**之后**；② 契约 `sum(by_kind.count) == total - stale`；③ `by_pkg` 的 NULL / 空串各成分组而 `normPkg()` 都折成微信 → `mergePairsBy` 归并后**按次数降序、同次数键名升序重排**；④ 加分布字段先问该不该跟同段过期口径走。
 - **控制台「是否待办」只有一份口径：`console_classify.safeBool` / `needActionOf` / `needActionChip`**（三处测试守着）。① 真值表与服务端 `util._safe_bool` 逐条对齐（字符串只认 true/1/yes/on/y/t）—— 别再写 `!!na.value`；② `needActionOf` 优先取顶层 `a.need_action`（= `/stats` 的 todo 口径），缺失才退回 `s1.need_action.value`；③ 徽标两态：⚡待办 / ✓ 无需行动。
 - **悬浮层几何只有一份口径：`OverlayPlacementCore`**（15 条）。① 写 `params.x/y` 前先过 `toContent()`：悬浮窗 `y` 是**内容区**坐标（绝对位置 = y + 状态栏 inset），状态栏只算一遍；② margin 不生效，宽度显式给（卡片 92%、面板 76%）；③ `CENTER` 按内容区居中，对齐整屏加 `panelCenterOffsetY`；④ 屏尺寸用 `Display.getRealMetrics`；⑤ 卡片顺延按前张实测高度，球位 = 屏高 1/3。
 - **库侧 0/1 flag 的读出口只有一份口径：`util._db_bool`（只有 1 / `1` 算真，与 SQL `col = 1` 同口径）+ `console_classify.dbBool` + `console_ui.dbBoolOf`**；写入口的 `_safe_bool` 是另一张表（认 true/yes），两者刻意不同 —— 别用 Python / JS 原生真值判库列。
-- **magpie 维护工作流 v0.2.0 已装进仓库**：三循环 + 错题本 + 五道门在 `loops/` `gates/`；自带两条 CI 不启用（副本 `docs/magpie-workflow/ci/`），见 `docs/magpie-workflow.md`。
+- **magpie 维护工作流 v0.2.0 已装进仓库**：三循环 + 错题本 + 五道门在 `loops/` `gates/`；自带两条 CI 不启用，见 `docs/magpie-workflow.md`。
 

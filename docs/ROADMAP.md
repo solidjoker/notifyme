@@ -778,6 +778,12 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 修法：`static_check.py` 抽出 `download_verified_jar(url, tmp, expected_sha, attempts, sleep_fn, opener)` —— 显式 `User-Agent`、429 / 408 / 425 / 5xx 退避重试 5 次（5 → 10 → 15 → 20 秒）、sha256 不匹配也算可重试、不可重试的 4xx 立即退出、失败清掉半截 `.part`；重试次数可用 `NOTIFYME_KTLINT_ATTEMPTS` 覆盖；CI 加 `actions/cache` 缓存 ktlint jar（`${{ runner.temp }}/notifyme-tools`），命中缓存就不下载。
   - 测试：新增 `server/test_static_check_download.py` **9 条**（429 重试后成功 / 请求带 UA / 404 不重试 / sha256 不匹配重试后报错 / 重试次数封顶且退避递增 / 失败不留半截文件 / URLError 重试 / 重试次数可用 env 覆盖 / 可重试状态集合）；服务端用例 917 → **926**（与上一条合并后合计 **944** 条）。
   - 计数：`docs/scripts/static_check.py` 245 → **305 行**；`.github/workflows/android.yml` 142 → **153 行**（新增缓存步骤 + `NOTIFYME_TOOLS_DIR` 环境变量）；新增 `server/test_static_check_download.py` 201 行 / 7036 B（CRLF）。
+- **PR 合并的三个本机坑每轮都要重踩一遍（docs/record-merge-pitfalls）**
+  - 问题：PR #103 合并时先后撞上三个坑 —— ① `gh pr merge` 用 fine-grained PAT 回 403 `Resource not accessible by personal access token`（缺 `Contents: write`，AGENTS.md 早记着）；② 按 AGENTS.md 的方案 ① 走 `git credential fill` 取凭据，本机 helper-selector 直接挂住等交互（两个后台任务因此被打断）；③ 改走 REST `PUT /repos/{owner}/{repo}/pulls/{n}/merge` 时，body 用 `Set-Content -Encoding UTF8` 写出带 BOM 的 UTF-8，GitHub 回 400 `Problems parsing JSON`。
+  - 修法：`CredReadW` 直接读凭据管理器里的 `git:https://github.com`（token 不打印、不落盘、不进日志）；`gh pr merge` 换成 REST 接口并配 `GH_PROMPT_DISABLED=1`（非交互 shell 里 `gh pr merge` 等确认会挂）；body 用 `[IO.File]::WriteAllText(path, json, UTF8Encoding($false))` 写无 BOM。三个坑写进 AGENTS.md §6「已知的坑」。
+  - 测试：不涉及代码，无新增用例；服务端用例仍 **944** 条。
+  - 计数：AGENTS.md 65204 → **65222** 字节（注入预算 65243 内 —— 新增条目时同步压缩了两条旧条目的措辞）。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：
