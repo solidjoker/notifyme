@@ -3549,3 +3549,80 @@ Android 用例 1384 → **1395 条**（`app/src/test` 86 → **87 个 .kt**）�
 2. **期望值要从源头取，不要抄一份**：用例里写死版本号 = 新建第二个出处；写死后升版会先红，人顺手改掉用例，守门失效。
 3. **排除历史快照要写进规则**：「只判定现状区间」这件事必须由测试显式钉住（`test_historical_snapshot_is_excluded_from_the_check`），否则后人为了「让测试绿」会去改历史记录。
 4. **发布流水线里的常量就是第二出处**：`release.yml` 硬编码 tag 时，version_check 的校验就退化成「常量 == 常量」。
+
+## E-92 CI 下载 ktlint jar 被限流（429）就把整条流水线打成红（fix/ktlint-download-resilience）
+
+**现象.**
+
+PR #103（通知形状取证工具）的 CI 挂在最后一步「Kotlin 静态检查 (ktlint, 只报警不阻断)」上，job 结论是 failure：
+
+```
+urllib.error.HTTPError: HTTP Error 429: Too Many Requests
+File "docs/scripts/static_check.py", line 141, in ensure_jar
+  urllib.request.urlretrieve(KTLINT_URL, tmp)
+Process completed with exit code 1
+```
+
+代码改动本身与该步骤无关 —— 这一步失败只是因为脚本要现下载 ktlint 1.8.0 的 jar，而 Maven Central 当时在限流。
+
+**根因.**
+
+1. `ensure_jar` 用 `urllib.request.urlretrieve` **一次性**下载：任何一次网络抖动 / 限流都以异常退出，脚本的退出码直接决定 CI 结论 —— 一个纯「只报警不阻断」的静态检查步骤，因为下载失败变成了硬阻断。
+2. 下载请求**不带 `User-Agent`**：部分镜像会对匿名 / 无 UA 的请求更早限流。
+3. 失败时**半截文件留在磁盘**：`urlretrieve` 写到一半抛异常，`tmp` 里的 `.part` 不会被清掉，下一次跑可能拿半截 jar 当缓存。
+4. CI **没有任何 jar 缓存**：`android.yml` 虽然给 Gradle / pip 开了缓存，但 ktlint jar 是脚本自己下的，每次 CI 全新下载 —— 限流窗口内每个 PR 都会红。
+
+**修法.**
+
+1. `docs/scripts/static_check.py` 抽出 `download_verified_jar(url, tmp, expected_sha, attempts=None, sleep_fn=time.sleep, opener=None)`：
+   - 显式 `User-Agent: notifyme-static-check/<版本>`；
+   - 可重试状态集合 = `(408, 425, 429, 500, 502, 503, 504)`，退避 5 → 10 → 15 → 20 秒，默认 5 次；
+   - **sha256 不匹配也算可重试**（下载到损坏文件是常见副作用）；
+   - 不可重试的 4xx（如 404）立即退出，不浪费 5 次退避；
+   - `URLError`（连接层失败）同样重试；
+   - 失败时清掉半截 `.part`；
+   - `download_attempts()` 读环境变量 `NOTIFYME_KTLINT_ATTEMPTS`，非法值回落 5。
+2. `ensure_jar` 改为调 `download_verified_jar(KTLINT_URL, tmp, KTLINT_SHA256)`，其余流程不变。
+3. `.github/workflows/android.yml` 加一步 `actions/cache@v4`（path `${{ runner.temp }}/notifyme-tools`，key `ktlint-1.8.0-${{ runner.os }}`），static-check 步骤加 `env NOTIFYME_TOOLS_DIR: ${{ runner.temp }}/notifyme-tools` —— 命中缓存则完全不下载。
+
+**刻意取舍.**
+
+1. **只对「明确可重试」的状态退避**：404 / 403 这类重试多少次都一样，直接失败更快暴露问题（jar 地址写错、被撤下）。
+2. **sha256 不匹配走重试而不是直接报错**：损坏文件几乎都来自被截断的下载，重试往往就好了；真被篡改的话 5 次都会不匹配，最终仍然失败。
+3. **重试次数可由环境变量覆盖，但默认仍是 5**：给 CI / 本地在极端限流时留出口子，同时默认值保证「不配也能自愈」。
+4. **没有把 ktlint 提交进仓库**：71 MB 的 jar 不该进 git，缓存仍然走 `NOTIFYME_TOOLS_DIR` 指向的仓库外目录（这条约束由 `server/test_tooling_cache.py` 守着）。
+5. **static-check 步骤仍是「只报警不阻断」**：本轮只修下载韧性，没改这条步骤的阻断语义 —— 真正的 lint 结论（`issues` 数）依旧不参与 CI 判定。
+
+**测试.**
+
+新增 `server/test_static_check_download.py` **9 条**：
+
+- `test_rate_limited_download_is_retried_then_succeeds`
+- `test_request_carries_an_explicit_user_agent`
+- `test_non_retryable_status_fails_without_retrying`
+- `test_sha256_mismatch_is_retried_and_then_reported`
+- `test_attempts_are_capped_and_backoff_grows`
+- `test_partial_file_is_removed_after_a_failed_attempt`
+- `test_network_error_is_retried`
+- `test_attempt_count_can_be_overridden_by_env`
+- `test_retryable_status_covers_rate_limit_and_server_errors`
+
+**验证.**
+
+- `python -m pytest server/test_static_check_download.py server/test_tooling_cache.py -q` → **14 passed**。
+- `python -m pytest server/ --collect-only -q` → **926 tests collected**（917 + 9）。
+- **真实下载路径实测**（清空缓存 + `NOTIFYME_TOOLS_DIR` 指临时目录）：输出 `[static-check] ktlint 1.8.0（jar 来源：download）` + `static-check-summary issues=0`，落盘 jar 71,470,431 B、sha256 校验通过 → `REAL_DOWNLOAD_EXIT=0`。
+
+**计数.**
+
+- `docs/scripts/static_check.py` 245 → **305 行**（CRLF）。
+- `.github/workflows/android.yml` 142 → **153 行**（新增缓存步骤 + `NOTIFYME_TOOLS_DIR`；yaml 解析 17 steps 通过）。
+- 新增 `server/test_static_check_download.py` 201 行 / 7036 B（CRLF）。
+- 服务端用例 917 → **926** 条。
+
+**教训.**
+
+1. **「只报警不阻断」的步骤也会硬阻断 CI**：static-check 的设计意图是不阻断，但它的**前置依赖**（下载 jar）一旦失败，退出码照样是 1 —— 门禁的语义要连同依赖链一起看。
+2. **基础设施的失败模式要和业务代码一样被测试**：429 / 404 / 截断文件这三类以前全靠运气，9 条用例把它们钉成可回归的行为。
+3. **CI 缓存是韧性的一部分**：重试解决「限流窗口内的抖动」，缓存解决「每次都下载」—— 只做前者，CI 仍然每天都要冒险下载一次 71 MB。
+4. **轮询脚本要钉具体 run id**：本次排查时轮询脚本用 `-match "success"` 匹配整段 JSON，被**上一轮已完成的 run** 的结论命中而提前退出，差点把失败当成功 —— 轮询必须以 run id 为准。

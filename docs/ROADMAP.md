@@ -19,7 +19,7 @@
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
 | 发版现状 | 当前 `versionName` = `0.4.0`（versionCode 26）；**已发布 `v0.4.0`（2026-11-18）** —— 资产 `notifyme-open.apk`（18,857,692 B，arm64-v8a + R8 混淆 + 资源压缩）+ `notifyme-open.apk.sha256`，发布页 https://github.com/solidjoker/notifyme/releases/tag/v0.4.0 。上一版公开 Release 是 `v0.3.8`（2026-10-13），`0.3.9`–`0.3.19` 从未发布。下次发版：改 `app/build.gradle.kts`（`server/test_version_contract.py` 会守住文档同步）→ `git tag v<version> && git push origin v<version>`（tag 必须与 `versionName` 逐字一致） | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
-| 测试 | 纯 JVM 单测 90 个 `.kt` / 1487 条（`app/src/test`）+ 服务端 `server/test_*.py`（917 条） | `git ls-files "app/src/test/**/*.kt"` |
+| 测试 | 纯 JVM 单测 90 个 `.kt` / 1487 条（`app/src/test`）+ 服务端 `server/test_*.py`（926 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
 | 仓库卫生 | CI 隐私守卫拒密钥文件 / APK / 用户 JSONL / 私有旧命名 / 真实用户目录；守卫与版本校验脚本在 `docs/scripts/`，本地与 CI 跑同一份实现 | `docs/scripts/privacy_guard.py` |
@@ -767,6 +767,11 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 守门：`release.yml` 先跑 `version_check.py --expect-tag "$GITHUB_REF_NAME"`（tag 与 `versionName` 不一致直接失败），签名走 4 个仓库 Secrets，`apksigner verify` 过才发 Release。
   - 计数：服务端用例 905 → **917**（新增 `server/test_version_contract.py` 12 条）；`app/build.gradle.kts` versionCode 25 → **26** / versionName 0.3.19 → **0.4.0**。
 
+- **CI 下载 ktlint jar 被限流（429）就把整条流水线打成红（fix/ktlint-download-resilience）**
+  - 问题：PR #103 的 CI 挂在「Kotlin 静态检查」那一步 —— `docs/scripts/static_check.py` 的 `ensure_jar` 用 `urllib.request.urlretrieve` 直接下载 ktlint 1.8.0，Maven Central 返 `HTTP Error 429: Too Many Requests` 时脚本抛异常退出 1，整个 PR 变红。代码本身没问题，是下载环节没有韧性 —— 一次限流就能卡住任何 PR。
+  - 修法：`static_check.py` 抽出 `download_verified_jar(url, tmp, expected_sha, attempts, sleep_fn, opener)` —— 显式 `User-Agent`、429 / 408 / 425 / 5xx 退避重试 5 次（5 → 10 → 15 → 20 秒）、sha256 不匹配也算可重试、不可重试的 4xx 立即退出、失败清掉半截 `.part`；重试次数可用 `NOTIFYME_KTLINT_ATTEMPTS` 覆盖；CI 加 `actions/cache` 缓存 ktlint jar（`${{ runner.temp }}/notifyme-tools`），命中缓存就不下载。
+  - 测试：新增 `server/test_static_check_download.py` **9 条**（429 重试后成功 / 请求带 UA / 404 不重试 / sha256 不匹配重试后报错 / 重试次数封顶且退避递增 / 失败不留半截文件 / URLError 重试 / 重试次数可用 env 覆盖 / 可重试状态集合）；服务端用例 917 → **926**。
+  - 计数：`docs/scripts/static_check.py` 245 → **305 行**；`.github/workflows/android.yml` 142 → **153 行**（新增缓存步骤 + `NOTIFYME_TOOLS_DIR` 环境变量）；新增 `server/test_static_check_download.py` 201 行 / 7036 B（CRLF）。
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：
