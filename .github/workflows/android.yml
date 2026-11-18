@@ -97,12 +97,24 @@ jobs:
           cache: pip
           cache-dependency-path: server/requirements.txt
 
+      - name: Cache ktlint jar (static_check.py)
+        # ktlint jar 有 71 MB：每次 CI 重下既慢，又容易被 Maven Central 限流
+        # （2026-11-18 实测 HTTP 429，直接把 CI 打成红）。
+        # 缓存放 runner.temp（仓库外），命中就复用；换 ktlint 版本要同步改这个 key。
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/notifyme-tools
+          key: ktlint-1.8.0-${{ runner.os }}
+
       - name: Kotlin 静态检查 (ktlint, 只报警不阻断)
         # 规则集在仓库根的 .editorconfig 里被刻意收窄到 5 条（unused import / import 顺序 /
         # 末行换行 / 连续空行 / 多余的 ${}），其余 standard 规则全部 disabled —— 详由见该文件头注释。
         # 这里用默认 --report 模式：有命中会打印明细与 static-check-summary，但退出码仍是 0，
         # 不阻断 PR。本地验收走 docs/scripts/local_check.ps1 的 --strict 口径。
         # ktlint jar 由脚本按固定版本 + sha256 下载并缓存，不参与 Gradle 依赖图。
+        # NOTIFYME_TOOLS_DIR 指到上面缓存的目录（仓库外），命中缓存就免掉 71 MB 下载。
+        env:
+          NOTIFYME_TOOLS_DIR: ${{ runner.temp }}/notifyme-tools
         run: python3 docs/scripts/static_check.py
 
       - name: Python syntax check (server, 目录级)
