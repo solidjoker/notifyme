@@ -3479,3 +3479,72 @@ Android 用例 1384 → **1395 条**（`app/src/test` 86 → **87 个 .kt**）�
 1. **解析对、拼接漏，是最容易漏检的一层**：单测只断言 `d.timeText == "15:00"`（解析层）不会发现「时刻没上屏」，必须再断言 `compose` 的**最终文本**。
 2. **兜底分支最容易被当成「标签分支」**：`else -> label(res)` 看着对，其实把 `timeText` 吞了 —— 写 `when` 时每个分支都要问「这个 Display 的哪些字段用上了」。
 3. **真机夹具比单测更容易暴露问题**：这轮是云手机 dump 里「截止：明天」少了「15:00」才发现的，纯 JVM 单测当时全绿。
+
+## E-91 版本号在文档里散落 7 处，靠人肉同步（feat/version-contract）
+
+**现象.**
+
+`versionName` / `versionCode` 的唯一出处是 `app/build.gradle.kts`，但仓库里另有 7 处文档必须跟着改：
+
+- `docs/ROADMAP.md` 现状速查表的版本行与发版现状行
+- `docs/architecture/README.md` 的代码基线行与 flavor 表（beta = name + `-test`）
+- `docs/BUILD.md` 与 `AGENTS.md` 的 `--expect-tag` 示例
+- `docs/scripts/version_check.py` 的用法示例与 argparse 帮助
+
+这些地方**没有任何机制保证它们跟着改**：漏改时 pytest 全绿、lint 全绿、CI 全绿，等到真打 tag 才发现文档写的是 0.3.19、构建出来是 0.4.0。
+
+**根因.**
+
+版本号是「散落的引用」而不是「单一出处 + 派生值」：gradle 里改一处，人肉复制到 7 个钉点。没有契约测试把「派生关系」写成断言，就只能靠记忆维护。
+
+**修法.**
+
+1. 新增 `server/test_version_contract.py`（192 行 / 12 条）：**期望值从 gradle 取**（`version_check.read_versions(ROOT)`），用例里**不写死版本号**，升版时测试自动跟着期望值走。
+2. 钉住那 7 处钉点：`ROADMAP` 的现状速查表版本行、`ROADMAP` 的发版现状行、`architecture README` 的代码基线行、`architecture README` 的 flavor 表、`BUILD.md` 的 `--expect-tag`、`AGENTS.md` 的 `--expect-tag`、`version_check.py` 的用法示例与帮助文本。
+3. `ROADMAP` §0「M0 前基线快照」里的旧版本行（0.1.3/4）**明确排除在判定外**（取「## 现状速查」到「## 0.」之间的区间），否则历史记录会被当成漂移。
+4. release 流水线必须走 `version_check.py --expect-tag "$GITHUB_REF_NAME"`，且不许在 workflow 里写死 tag（写死 = 下一个版本必然忘记改）。
+5. `version_check` 的 CLI 双向钉：`--expect-tag v<当前版本>` 返 0，`--expect-tag v9.9.9` 返 1。
+
+**刻意取舍.**
+
+- **不把版本号写进用例**：写死就等于新建第二个出处，升版时用例会先红再被「顺手改掉」，失去守门意义。期望值必须从 gradle 现场取。
+- **不删文档里的版本号**：那 7 处是给人看的（发版现状、flavor 表、tag 示例），删了会丢信息；改为让测试盯住它们。
+- **不判定 §0 历史快照**：历史基线本来就该是旧值，纳入判定等于逼着人篡改历史。
+- **不在 workflow 里硬编码 tag**：`GITHUB_REF_NAME` 是唯一来源，否则 tag 校验会变成「校验一个常量」。
+- **本轮只钉版本号，不改发布流程**：release.yml 的签名 / 校验 / 资产流程已可用，改它属于另一件事。
+
+**测试.**
+
+`server/test_version_contract.py` 新增 **12 条**（服务端用例 905 → **917**）：
+
+- `test_gradle_is_the_single_source_of_truth`
+- `test_roadmap_current_table_version_row_matches_gradle`
+- `test_roadmap_release_status_row_matches_gradle`
+- `test_architecture_readme_baseline_line_matches_gradle`
+- `test_architecture_readme_flavor_table_matches_gradle`
+- `test_build_doc_expect_tag_matches_gradle`
+- `test_agents_expect_tag_matches_gradle`
+- `test_version_check_examples_use_current_tag`
+- `test_release_workflow_delegates_to_version_check`
+- `test_historical_snapshot_is_excluded_from_the_check`
+- `test_no_pin_file_mentions_a_stale_expect_tag`
+- `test_version_check_cli_accepts_current_tag_and_rejects_others`
+
+**验证.**
+
+- `python -m pytest server/test_version_contract.py -q` → **12 passed in 0.16s**。
+- **负控制**（importlib 加载测试模块后 monkeypatch 读文件内容）：改 `BUILD.md` 的 tag → 2 条红；改 `ROADMAP` 版本行 → 1 条红；改 architecture README 基线行 → 1 条红；改 `AGENTS.md` 的 tag → 2 条红；**NEG_FAILED_CASES: []**（每种漂移都被抓到）。
+- `python -m pytest server/ -q` 全量 → **917 passed**。
+
+**计数.**
+
+- `server/test_version_contract.py` 192 行 / 8079 B（CRLF）。
+- 服务端用例 905 → **917** 条。
+- `app/build.gradle.kts`：versionCode 25 → **26**，versionName 0.3.19 → **0.4.0**。
+
+**教训.**
+
+1. **「文档里重复出现的派生值」就是待测的契约**：版本号、端口号、模块名、计数 —— 只要它们散落多处且靠人肉同步，就该有一条测试把「派生关系」写成断言。
+2. **期望值要从源头取，不要抄一份**：用例里写死版本号 = 新建第二个出处；写死后升版会先红，人顺手改掉用例，守门失效。
+3. **排除历史快照要写进规则**：「只判定现状区间」这件事必须由测试显式钉住（`test_historical_snapshot_is_excluded_from_the_check`），否则后人为了「让测试绿」会去改历史记录。
+4. **发布流水线里的常量就是第二出处**：`release.yml` 硬编码 tag 时，version_check 的校验就退化成「常量 == 常量」。

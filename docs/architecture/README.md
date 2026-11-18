@@ -6,7 +6,7 @@
 > - 绘制方式：Mermaid 源文件（`diagrams/*.mmd`）→ `@mermaid-js/mermaid-cli@11.17.0` 光栅化
 > - 每张图三份产物：`.mmd`（可编辑源）· `.png`（原生分辨率，14px 中文字体）· `.svg`（无限缩放，浏览器打开）
 > - 中文字体：`Microsoft YaHei, PingFang SC, sans-serif`（Windows 由 `msyh.ttc` 提供）
-> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.3.19` / `versionCode 25` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **135 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 142 个，`app/src/test` 90 个 / 1487 条），服务端已拆成 **8+1 模块**（`app.py` 629 / `util.py` 416 / `storage.py` 954 / `routes.py` 1050 / `console_ui.py` 3969 / `stats_api.py` 201 / `suggests.py` 312 / `extract_common.py` 474 + `console_classify.js` 1064），CI `.github/workflows/android.yml` 共 **14 步**
+> - 代码基线：**9 张图全部已重画到当前代码基线**（`versionName 0.4.0` / `versionCode 26` · Kotlin `2.2.21` · AGP `8.5.2` · Gradle `8.9` · compileSdk/targetSdk `34` · minSdk `26` · JDK `17`）——Android 端 `app/src/main/java/com/notifyme/android/` **135 个顶层 .kt**（另含 `laya/` 子包 7 个，全树 142 个，`app/src/test` 90 个 / 1487 条），服务端已拆成 **8+1 模块**（`app.py` 629 / `util.py` 416 / `storage.py` 954 / `routes.py` 1050 / `console_ui.py` 3969 / `stats_api.py` 201 / `suggests.py` 312 / `extract_common.py` 474 + `console_classify.js` 1064），CI `.github/workflows/android.yml` 共 **14 步**
 
 ---
 
@@ -352,7 +352,7 @@ CREATE INDEX idx_queue_device ON queue_tasks (device_id);
 | | `open`（对外发布） | `beta`（内部测试，产品名 test） |
 |---|---|---|
 | applicationId | `com.notifyme.android` | + `.test` 后缀 |
-| versionName | `0.3.19` | `0.3.19-test` |
+| versionName | `0.4.0` | `0.4.0-test` |
 | 桌面名 | 微信分析助手 | 微信分析助手·测试 |
 | `DEFAULT_*` buildConfigField | **全部空串**，APK 内不含任何密钥 | 从 `secrets.local.properties` 经 `secret(key)` 读取，`bcString(value)` 转义反斜杠与引号 |
 | 产物 | `notifyme-open.apk` | `notifyme-test.apk` |

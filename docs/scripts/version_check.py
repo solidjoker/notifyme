@@ -4,8 +4,8 @@
 
 用法：
     python docs/scripts/version_check.py                          # 打印 versionName / versionCode
-    python docs/scripts/version_check.py --expect-tag v0.3.19     # 校验 tag 与 versionName 一致（release.yml 用）
-    python docs/scripts/version_check.py --expect-version 0.3.19  # 校验版本号等于指定值
+    python docs/scripts/version_check.py --expect-tag v0.4.0      # 校验 tag 与 versionName 一致（release.yml 用）
+    python docs/scripts/version_check.py --expect-version 0.4.0   # 校验版本号等于指定值
     python docs/scripts/version_check.py --github-output           # 额外写进 $GITHUB_OUTPUT
 
 退出码：
@@ -86,7 +86,7 @@ def read_versions(root: Path) -> tuple[Optional[str], Optional[int]]:
 def main(argv: Optional[list] = None) -> int:
     parser = argparse.ArgumentParser(description="notifyme 版本号一致性检查")
     parser.add_argument("--root", default=None, help="仓库根目录（默认取本脚本上两级）")
-    parser.add_argument("--expect-tag", default=None, help="期望的 git tag，如 v0.3.19")
+    parser.add_argument("--expect-tag", default=None, help="期望的 git tag，如 v0.4.0")
     parser.add_argument("--expect-version", default=None, help="期望的 versionName")
     parser.add_argument("--github-output", action="store_true", help="把结果写进 $GITHUB_OUTPUT")
     args = parser.parse_args(argv)
