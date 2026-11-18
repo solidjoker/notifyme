@@ -36,6 +36,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.request
 
 KTLINT_VERSION = "1.8.0"
@@ -48,6 +50,15 @@ KTLINT_URL = (
 )
 # 与 Maven Central 上同名 .sha256 一致；换版本必须同时换这两处。
 KTLINT_SHA256 = "369ad2b789f95a011f807e1fcb690ccef80bd7cd014fd139e73ae82dcc0baeab"
+
+# Maven Central 对默认的 python-urllib User-Agent 会限流（403 / 429），
+# 下 71 MB 的 ktlint 大文件更容易被拒。显式带 UA + 退避重试把这类瞬时故障吃掉。
+KTLINT_USER_AGENT = "notifyme-static-check/" + KTLINT_VERSION
+DOWNLOAD_TIMEOUT = 120
+# 可重试的 HTTP 状态：限流与临时故障（429 / 408 / 425 / 5xx）。
+RETRY_STATUS = (408, 425, 429, 500, 502, 503, 504)
+DOWNLOAD_ATTEMPTS = 5
+DOWNLOAD_BACKOFF = 5.0
 
 # 与 .editorconfig 里的 ktlint_standard_* 开关一一对应，改动要同步。
 ENABLED_RULES = (
@@ -138,15 +149,65 @@ def ensure_jar(offline):
     os.makedirs(os.path.dirname(target), exist_ok=True)
     tmp = target + ".part"
     print("[static-check] 下载 ktlint " + KTLINT_VERSION + "（约 71 MB，只需一次）")
-    urllib.request.urlretrieve(KTLINT_URL, tmp)
-    got = sha256_of(tmp)
-    if got != KTLINT_SHA256:
-        os.remove(tmp)
-        raise SystemExit(
-            "[static-check] sha256 不匹配，拒绝使用：期望 " + KTLINT_SHA256 + " 实得 " + got
-        )
+    download_verified_jar(KTLINT_URL, tmp, KTLINT_SHA256)
     os.replace(tmp, target)
     return target, "download"
+
+
+def download_attempts():
+    """重试次数：可用 NOTIFYME_KTLINT_ATTEMPTS 覆盖（CI 被限流时调大）。"""
+    raw = os.environ.get("NOTIFYME_KTLINT_ATTEMPTS", "")
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = 0
+    return n if n >= 1 else DOWNLOAD_ATTEMPTS
+
+
+def download_verified_jar(
+    url, tmp, expected_sha, attempts=None, sleep_fn=time.sleep, opener=None
+):
+    """把 jar 下到 tmp 并校验 sha256；瞬时故障退避重试。
+
+    真实事故：CI 上 Maven Central 返回 HTTP 429 Too Many Requests，
+    旧实现直接抛栈退出 → 整条 CI 红，且与代码质量无关。
+    """
+    attempts = attempts or download_attempts()
+    opener = opener or urllib.request.urlopen
+    last = ""
+    for i in range(1, attempts + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": KTLINT_USER_AGENT})
+            with opener(req, timeout=DOWNLOAD_TIMEOUT) as resp:
+                with open(tmp, "wb") as fh:
+                    shutil.copyfileobj(resp, fh)
+            got = sha256_of(tmp)
+            if got == expected_sha:
+                return True
+            last = "sha256 不匹配（期望 " + expected_sha + " 实得 " + got + "）"
+        except urllib.error.HTTPError as exc:
+            last = "HTTP " + str(exc.code) + " " + str(exc.reason)
+            if exc.code not in RETRY_STATUS:
+                raise SystemExit("[static-check] 下载 ktlint 失败（不可重试）：" + last)
+        except (urllib.error.URLError, OSError) as exc:
+            last = str(exc)
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        if i < attempts:
+            wait = DOWNLOAD_BACKOFF * i
+            print(
+                "[static-check] 下载失败（"
+                + last
+                + "），第 "
+                + str(i)
+                + " 次重试，等 "
+                + str(wait)
+                + " 秒"
+            )
+            sleep_fn(wait)
+    raise SystemExit(
+        "[static-check] 下载 ktlint 失败：" + last + "（已重试 " + str(attempts) + " 次）"
+    )
 
 
 def run_ktlint(java, jar, extra):

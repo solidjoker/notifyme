@@ -248,6 +248,10 @@ Kotlin 静态检查走 `docs/scripts/static_check.py --strict`：规则集在仓
 （`import-ordering` / `no-unused-imports` / `final-newline` / `no-consecutive-blank-lines` / `string-template`），
 本地是零容忍口径；CI 用默认 `--report` 模式（有命中只打印不阻断）。ktlint 1.8.0 的 jar 由脚本按固定
 sha256 下载并缓存到 `~/.notifyme-tools/ktlint/1.8.0/`，不参与 Gradle 依赖图 —— 首次跑需要联网一次。
+
+jar 下载带 `User-Agent`，遇 Maven Central 限流（429 / 408 / 425 / 5xx）自动退避重试 5 次（5 → 10 → 15 → 20 秒，
+`NOTIFYME_KTLINT_ATTEMPTS` 可调），sha256 校验失败也算可重试；CI 用 `actions/cache` 把 jar 缓存到
+`${{ runner.temp }}/notifyme-tools`，命中缓存就不下载 —— 一次限流不该卡住任何 PR。
 每一步的完整输出写到 `%TEMP%\notifyme-local-check-<时间戳>\`（POSIX 下在 `$TMPDIR`）。
 
 ---
