@@ -86,8 +86,8 @@ android {
         applicationId = "com.notifyme.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 25
-        versionName = "0.3.19"
+        versionCode = 26
+        versionName = "0.4.0"
 
         // ABI 清单放在 buildTypes 里：debug/beta 走 arm64-v8a + x86_64（真机 + 模拟器），
         // release 只打 arm64-v8a（去掉 x86_64 约省 20MB 体积）。
