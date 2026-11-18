@@ -192,3 +192,29 @@ def test_cli_can_filter_by_package(tmp_path):
     TOOL.main(["--input", str(dump), "--pkg", "com.tencent.mm", "--out", str(out)])
     data = json.loads(out.read_text(encoding="utf-8"))
     assert set(data["summary"].keys()) == {"com.tencent.mm"}
+
+
+def test_decode_text_reads_utf16_le_with_bom():
+    """中文 Windows 的 PowerShell 重定向会把 dump 写成 UTF-16LE（带 BOM）。"""
+    raw = b"\xff\xfe" + FIXTURE.encode("utf-16-le")
+    assert TOOL.decode_text(raw) == FIXTURE
+
+
+def test_cli_reads_a_utf16_dump_file(tmp_path):
+    """真机跑一遍就踩到的坑：UTF-16 dump 按 UTF-8 读会一条记录都抽不到。"""
+    dump = tmp_path / "dump_utf16.txt"
+    dump.write_bytes(b"\xff\xfe" + FIXTURE.encode("utf-16-le"))
+    out = tmp_path / "shape.json"
+    code = TOOL.main(["--input", str(dump), "--out", str(out)])
+    assert code == 0
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert len(data["records"]) == 4
+    assert data["summary"]["com.tencent.mm"]["unread_prefix_count"] == 2
+
+
+def test_utf16_and_utf8_dumps_give_the_same_conclusion():
+    summary_utf8 = TOOL.summarize(TOOL.parse_dump(TOOL.decode_text(FIXTURE.encode("utf-8"))))
+    summary_utf16 = TOOL.summarize(
+        TOOL.parse_dump(TOOL.decode_text(b"\xff\xfe" + FIXTURE.encode("utf-16-le")))
+    )
+    assert summary_utf8 == summary_utf16

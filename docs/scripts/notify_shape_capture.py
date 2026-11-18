@@ -36,6 +36,20 @@ STRING_RE = re.compile(r"^String \((.*)\)$", re.S)
 UNREAD_PREFIX_RE = re.compile(r"^\[\d+条\]")
 COLON_RE = re.compile(r"^([^:：]{1,40})([:：])(.*)$", re.S)
 
+def decode_text(raw):
+    """dump 文本的编码不一定是 UTF-8：中文 Windows 的 PowerShell 重定向（> dump.txt）
+    会写成 UTF-16LE（带 BOM），按 UTF-8 读会全是乱码、一条记录都抽不到。
+    这里自动识别，别让「工具说没抽到记录」变成误判。
+    """
+    if raw[:2] == b"\xff\xfe":
+        return raw[2:].decode("utf-16-le", "replace")
+    if raw[:2] == b"\xfe\xff":
+        return raw[2:].decode("utf-16-be", "replace")
+    if b"\x00" in raw[:256]:
+        # 无 BOM 的 UTF-16LE：ASCII 字符后面跟 NUL
+        return raw.decode("utf-16-le", "replace")
+    return raw.decode("utf-8", "replace").lstrip("\ufeff")
+
 
 def split_sender(text):
     """切「发言人: 正文」；时间里的冒号（10:30）不算分隔符。"""
@@ -163,8 +177,8 @@ def summarize(records):
 def read_dump(args):
     """从文件读，或用 adb 现取一份。"""
     if args.input:
-        with open(args.input, "r", encoding="utf-8", errors="replace") as fh:
-            return fh.read()
+        with open(args.input, "rb") as fh:
+            return decode_text(fh.read())
     if not args.serial:
         raise SystemExit("需要 --serial <adb 设备> 或 --input <dump 文件>")
     cmd = ["adb"]
@@ -172,7 +186,7 @@ def read_dump(args):
         cmd += ["-s", args.serial]
     cmd += ["shell", "dumpsys", "notification", "--noredact"]
     proc = subprocess.run(cmd, capture_output=True)
-    return proc.stdout.decode("utf-8", "replace")
+    return decode_text(proc.stdout)
 
 
 def main(argv=None):
