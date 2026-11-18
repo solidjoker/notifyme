@@ -389,7 +389,7 @@ beta 注入：`DEFAULT_ANALYSIS_PROTOCOL="openai"`、`GLM_BASE_URL`/`GLM_API_KEY
 13. `Version check` —— `python3 docs/scripts/version_check.py`
 14. `Upload debug APKs` —— `upload-artifact@v7`，两个 debug APK，保留 14 天
 
-**发布：`.github/workflows/release.yml`** —— 推送 `v<version>` 标签触发，`timeout-minutes: 30`、`concurrency` 不取消旧跑。链路：`version_check.py --expect-tag` 校验 tag 与 `versionName` 一致 → 解码 `NOTIFYME_KEYSTORE_BASE64` → `assembleOpenRelease -PrequireReleaseSigning=true`（缺签名直接 `GradleException`）→ `apksigner verify` → 生成 `.sha256` → `gh release create`。需要的 4 个仓库 Secrets：`NOTIFYME_KEYSTORE_BASE64` / `NOTIFYME_KEYSTORE_PASSWORD` / `NOTIFYME_KEY_ALIAS` / `NOTIFYME_KEY_PASSWORD`。**CI 本身不签名。**
+**发布：`.github/workflows/release.yml`** —— 推送 `v<version>` 标签触发，`timeout-minutes: 30`、`concurrency` 不取消旧跑。链路：`version_check.py --expect-tag` 校验 tag 与 `versionName` 一致 → 解码 `NOTIFYME_KEYSTORE_BASE64` → `assembleOpenRelease -PrequireReleaseSigning=true`（缺签名直接 `GradleException`）→ `apksigner verify` → 生成 `.sha256` → `gh release create`。需要的 4 个仓库 Secrets：`NOTIFYME_KEYSTORE_BASE64` / `NOTIFYME_KEYSTORE_PASSWORD` / `NOTIFYME_KEY_ALIAS` / `NOTIFYME_KEY_PASSWORD`。**CI 本身不签名。最近一次发布：`v0.4.0`（2026-11-18）。**
 
 **设备安装后的四道授权**（都是系统级手动开关，不能运行时申请）
 

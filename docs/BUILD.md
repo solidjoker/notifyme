@@ -176,7 +176,7 @@ copy keystore.properties.example keystore.properties
 校验标签与 `versionName` 一致 → 用 Secrets 里的密钥库签名 `assembleOpenRelease` →
 `apksigner verify` → 生成 `.sha256` → `gh release create` 发布为 latest。
 
-> **发版现状（2026-11-18 核对）**：最近一次公开 Release 仍是 `v0.3.8`（2026-10-13），此后 `versionName` 一路升到 `0.4.0`（versionCode 26）但还没打 tag，所以 `0.3.9`–`0.4.0` 都是**未发布版本**。
+> **发版现状（2026-11-18 核对）**：**已发布 `v0.4.0`（2026-11-18）** —— 资产 `notifyme-open.apk`（18,857,692 B，arm64-v8a + R8 混淆 + 资源压缩）+ `notifyme-open.apk.sha256`，发布页 https://github.com/solidjoker/notifyme/releases/tag/v0.4.0 。上一版公开 Release 是 `v0.3.8`（2026-10-13），`0.3.9`–`0.3.19` 从未发布。下次发版：改 `app/build.gradle.kts` → `git tag v<version> && git push origin v<version>`（tag 必须与 `versionName` 逐字一致）。
 > 这不影响任何自动化：`release.yml` 只在**推送 tag 时**触发，`android.yml` 的版本校验只要求 `versionName` 与 `versionCode` 自洽。
 > 想发版就 `git tag v0.4.0 && git push origin v0.4.0`——tag 必须与 `versionName` 逐字一致，否则第一步就失败。
 > 升不升 `versionName` 由维护者决定（见 [ROADMAP.md](ROADMAP.md) 的硬约束：未经明确要求不推送/不发版）。

@@ -18,7 +18,7 @@
 | release 签名 | 环境变量 > 仓库根 `keystore.properties` > 降级为不签名；CI 用 `-PrequireReleaseSigning=true` 让签名缺失直接失败 | `app/build.gradle.kts:131-169` |
 | CI | `.github/workflows/android.yml`：lint + 全量单测 + 双 flavor + 服务端语法检查（目录级）+ pytest（目录级）+ 隐私守卫 + 版本校验，带依赖缓存 / 60 分钟超时 / 并发取消 | `.github/workflows/android.yml` |
 | 发布 | `.github/workflows/release.yml`：tag 与 versionName 校验 → 签名构建 → `apksigner verify` → SHA256 → `gh release create` | `.github/workflows/release.yml` |
-| 发版现状 | 当前 `versionName` = `0.4.0`（versionCode 26）；最近一次公开 Release 仍是 `v0.3.8`（2026-10-13），`0.3.9`–`0.4.0` 都**还没打 tag** → 均为未发布版本。发版只需 `git tag v0.4.0 && git push origin v0.4.0`（tag 必须与 `versionName` 逐字一致）；升不升版是维护者决定项 | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
+| 发版现状 | 当前 `versionName` = `0.4.0`（versionCode 26）；**已发布 `v0.4.0`（2026-11-18）** —— 资产 `notifyme-open.apk`（18,857,692 B，arm64-v8a + R8 混淆 + 资源压缩）+ `notifyme-open.apk.sha256`，发布页 https://github.com/solidjoker/notifyme/releases/tag/v0.4.0 。上一版公开 Release 是 `v0.3.8`（2026-10-13），`0.3.9`–`0.3.19` 从未发布。下次发版：改 `app/build.gradle.kts`（`server/test_version_contract.py` 会守住文档同步）→ `git tag v<version> && git push origin v<version>`（tag 必须与 `versionName` 逐字一致） | `gh release list`、`git tag --list v*`、`docs/BUILD.md` 的「发版现状」 |
 | 测试 | 纯 JVM 单测 90 个 `.kt` / 1487 条（`app/src/test`）+ 服务端 `server/test_*.py`（917 条） | `git ls-files "app/src/test/**/*.kt"` |
 | 服务端 | 鉴权令牌 `WEIXIN_TOKEN` 必填（未设且未放行则拒启动）；监听 `0.0.0.0:8000` / `127.0.0.1:8000` 按是否鉴权自动决定；`/messages`、`/analysis` 用 `next_before` 游标；`/advisor` 收发顾问报告；`/queue` 收发排队任务快照（控制台第 5 个 Tab） | `server/app.py` |
 | 控制台 | PWA 两栏布局 + 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）+ 顶部概览条 5 指标；会话卡内「日期 / 发送者」两级分组可切换（`wx_group_v1` 持久化）；排队 Tab 支持按设备筛选（设备清单来自 `GET /queue` 的 `devices` 聚合）；归类规则集中在 `server/console_classify.js`（UMD，node 单测） | `server/console_ui.py` |
@@ -760,6 +760,12 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 修法：新增 `server/test_version_contract.py`（12 条），**期望值从 gradle 取**（用例里不写死版本号），逐个钉住那 7 处；ROADMAP §0「M0 前基线快照」明确排除在判定外；release.yml 必须走 `version_check.py --expect-tag "$GITHUB_REF_NAME"`，不许写死 tag。
   - 测试：`server/test_version_contract.py` 新增 **12 条**（服务端用例 905 → **917**）；负控制（改文档一处 → 对应用例转红）逐项验过。
   - 计数：`server/test_version_contract.py` 192 行 / 8079 B；服务端用例 905 → **917**；`app/build.gradle.kts` versionCode 25 → **26** / versionName 0.3.19 → **0.4.0**。
+
+- **发版：v0.4.0 正式发布（tag `v0.4.0`）**
+  - 触发：第 65 轮把版本号钉成契约守卫后升版到 `0.4.0` / versionCode 26，并按仓库既有流程 `git tag v0.4.0 && git push origin v0.4.0`。
+  - 产物：release workflow run 44217831936 success；资产 `notifyme-open.apk`（18,857,692 B，arm64-v8a + R8 混淆 + 资源压缩）+ `notifyme-open.apk.sha256`；发布页 https://github.com/solidjoker/notifyme/releases/tag/v0.4.0 。
+  - 守门：`release.yml` 先跑 `version_check.py --expect-tag "$GITHUB_REF_NAME"`（tag 与 `versionName` 不一致直接失败），签名走 4 个仓库 Secrets，`apksigner verify` 过才发 Release。
+  - 计数：服务端用例 905 → **917**（新增 `server/test_version_contract.py` 12 条）；`app/build.gradle.kts` versionCode 25 → **26** / versionName 0.3.19 → **0.4.0**。
 
 ## 12. 决策门汇总
 

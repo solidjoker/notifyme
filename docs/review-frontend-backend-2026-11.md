@@ -3535,6 +3535,7 @@ Android 用例 1384 → **1395 条**（`app/src/test` 86 → **87 个 .kt**）�
 - `python -m pytest server/test_version_contract.py -q` → **12 passed in 0.16s**。
 - **负控制**（importlib 加载测试模块后 monkeypatch 读文件内容）：改 `BUILD.md` 的 tag → 2 条红；改 `ROADMAP` 版本行 → 1 条红；改 architecture README 基线行 → 1 条红；改 `AGENTS.md` 的 tag → 2 条红；**NEG_FAILED_CASES: []**（每种漂移都被抓到）。
 - `python -m pytest server/ -q` 全量 → **917 passed**。
+- 发版：`git tag v0.4.0` → release workflow run **44217831936 success** → 资产 `notifyme-open.apk`（18,857,692 B）+ `notifyme-open.apk.sha256`。
 
 **计数.**
 
