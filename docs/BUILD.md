@@ -176,9 +176,9 @@ copy keystore.properties.example keystore.properties
 校验标签与 `versionName` 一致 → 用 Secrets 里的密钥库签名 `assembleOpenRelease` →
 `apksigner verify` → 生成 `.sha256` → `gh release create` 发布为 latest。
 
-> **发版现状（2026-11-12 核对）**：最近一次公开 Release 是 `v0.3.8`（2026-10-13），此后 `versionName` 一路升到 `0.3.19` 但没有再打 tag，所以 `0.3.9`–`0.3.19` 都是**未发布版本**。
+> **发版现状（2026-11-18 核对）**：最近一次公开 Release 仍是 `v0.3.8`（2026-10-13），此后 `versionName` 一路升到 `0.4.0`（versionCode 26）但还没打 tag，所以 `0.3.9`–`0.4.0` 都是**未发布版本**。
 > 这不影响任何自动化：`release.yml` 只在**推送 tag 时**触发，`android.yml` 的版本校验只要求 `versionName` 与 `versionCode` 自洽。
-> 想发版就 `git tag v0.3.19 && git push origin v0.3.19`——tag 必须与 `versionName` 逐字一致，否则第一步就失败。
+> 想发版就 `git tag v0.4.0 && git push origin v0.4.0`——tag 必须与 `versionName` 逐字一致，否则第一步就失败。
 > 升不升 `versionName` 由维护者决定（见 [ROADMAP.md](ROADMAP.md) 的硬约束：未经明确要求不推送/不发版）。
 
 需要的 4 个仓库 Secrets（Settings → Secrets and variables → Actions）：
@@ -213,7 +213,7 @@ python docs\scripts\privacy_guard.py --forbid-local-secrets
 
 # 版本号自检（打 tag 前确认版本号与 tag 一致）
 python docs\scripts\version_check.py
-python docs\scripts\version_check.py --expect-tag v0.3.19
+python docs\scripts\version_check.py --expect-tag v0.4.0
 ```
 
 > 本地跑 `--forbid-local-secrets` 会命中你本机的 `secrets.local.properties` / `secrets.local.bat`
@@ -280,7 +280,7 @@ sha256 下载并缓存到 `~/.notifyme-tools/ktlint/1.8.0/`，不参与 Gradle �
 │   ├── console_classify.js     # 控制台归类规则单一事实源（UMD：浏览器 + node 共用，node 可单测；含会话两级分组 groupMessages 与设备分组 groupQueueTasksByDevice）
 │   ├── extract_common.py       # 两个抽取脚本的共享内核（结构化日志 / 原文存档 / 跨进程写锁 / 去重 / 分批提交 / 主库结构兜底，`activate()` 注入宿主配置）
 │   ├── android_db_extract.py / pc_db_extract.py / gen_icons.py  # 本地库提取与图标脚本（安卓 / PC）+ 图标生成
-│   └── test_*.py               # 服务端 pytest 用例（含 test_queue_contract.py 排队通道、test_report_contract.py 消息/分析/顾问 三条上报通道、test_label_contract.py topic/due 码值↔中文 跨端契约守卫、test_importance_contract.py 重要度档位 服务端/规则层/控制台 同源守卫）
+│   └── test_*.py               # 服务端 pytest 用例（含 test_queue_contract.py 排队通道、test_report_contract.py 消息/分析/顾问 三条上报通道、test_label_contract.py topic/due 码值↔中文 跨端契约守卫、test_importance_contract.py 重要度档位 服务端/规则层/控制台 同源守卫、test_version_contract.py 版本号钉点 契约守卫）
 ├── docs/
 │   ├── BUILD.md                # 本文件
 │   ├── ROADMAP.md              # 里程碑 M0–M8、工作量、风险与决策门
