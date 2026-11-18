@@ -195,7 +195,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **顾问通道的口径只有一份**（`AdvisorPayloadCore` 84 行 + 11 条；存档侧 `server/test_advisor_archive.py` 14 条）。① 上传体唯一出口 `uploadJson()`：键集固定 7 个，本地三状态键不上报。② **长度裁剪只在服务端一处**且留痕：`truncated_fields` + `truncated: true`。③ **存档只有一种形状**：读取跨两段（同 id 留最后那条），上限由 `_trim_advisor_jsonl` 收敛，裁掉的份数写 sidecar 随 `GET /advisor` 下发。
 - **版本信息只有一份口径：`VersionInfoCore`**（14 条），控制台版本卡与 ☰ 弹窗都调它。① `versionLine` 必须带 `versionCode`（debug 覆盖时 `versionName` 可能不变）；② beta 的 `versionName` 自带 `-test`，`title()` 不再拼渠道后缀。
 - **版本号只有一处出处**：`app/build.gradle.kts` 是唯一出处；文档里的版本号由 `server/test_version_contract.py`（12 条）钉住，**期望值从 gradle 取**。升版要同步的 7 处钉点由该测试自己列出；§0 历史快照不参与判定。
-- **通知形状取证只有一份口径**：`docs/scripts/notify_shape_capture.py` 出结论（15 条守卫在 `server/test_notify_shape_capture.py`）；结论写进取证记录，别再手抄。
+- **通知形状取证只有一份口径**：`docs/scripts/notify_shape_capture.py` 出结论（18 条守卫在 `server/test_notify_shape_capture.py`）；dump 兼容 UTF-8 / UTF-16；结论写进取证记录，别再手抄。
 - **「截止时间」的显示只有一份口径：`DueDisplayCore`（188 行 / 32 条）**：四处显示（首页待办卡 / 会话卡分析行 / 分析列表 / 会话详情 chip）都走它，「明天15:00」「本周内」换算成**今天 / 明天 / M月d日**（跨年带年份）。① 文本→毫秒**只委托 `DueTimeCore.parse`**（不另写解析器，显示与落点一致）；② 相对词锚点 = 「说话那一刻」（手动覆盖用编辑时刻 `todoDueAt`、模型结论用 `analyzedAt`）；③ 桶码值也展开（`this_week` → 周一~周日区间）；④ 时刻只在文本写了才显示（`DueTimeCore.hasExplicitTime`，不印兜底 09:00）；⑤ 标签也带时刻（明天15:00 → 明天 15:00）；⑥ 解析不出原样显示。
 
 - **历史重复消息只能靠 `MessageDedupeCore` 归并，别在别处另写删行逻辑**：真机量化 78 组 / 271 行是「同一条通知被多次捕获」（微信正文形如 `[11条]发言人: 正文`，未读数一变正文就变，去重键含正文原文）。
