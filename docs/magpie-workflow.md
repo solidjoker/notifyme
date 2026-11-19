@@ -126,16 +126,31 @@ python -m loops.run status
 | 门 | 入口 | 管的什么 |
 | --- | --- | --- |
 | **notifyme 权威自检** | `docs/scripts/local_check.ps1`（七步） | 服务端 pytest + Python 语法 + 隐私守卫 + 版本号 + Android 单测/双 flavor/Lint + Lint 基线 + ktlint |
-| **magpie 自检** | `python -m gates.selfcheck` | 全仓库 `.py` 编译（跳过被剪枝的目录）+ magpie 自己的 61 条单测 + 错题本格式 + `config/ci_rules.json` 里启用的规则 + 配置与提示词占位符 |
+| **magpie 自检** | `python -m gates.selfcheck` | 仓库自身的 `.py` 编译（跳过被剪枝的目录）+ magpie 自己的 68 条单测 + 错题本格式 + `config/ci_rules.json` 里启用的规则 + 剪枝哨兵 + 配置与提示词占位符 |
 | **notifyme CI** | `.github/workflows/android.yml` | 与 local_check 同一套口径 |
 | **magpie 自带 CI** | `docs/magpie-workflow/ci/{ci.yml,hazard.yml}` | 留档未启用 |
 
 开 PR 前仍以 `local_check.ps1` 打印「全部通过，可以开 PR」为准；
-`gates.selfcheck` 是额外一道（61 条单测），两者都要绿。
+`gates.selfcheck` 是额外一道（68 条单测），两者都要绿。
+
 「CI 规则」那一步要扫全仓库 —— 但**已经剪过枝**：vendored 依赖（`third_party/`）、
-构建产物与本地缓存（`build/` `dist/` `tmp/` `.gradle/` `.gradle-home/` `.loopstate/` 等）
-与 `.git/` 都不进（`gates/selfcheck.py` 的 `SKIP_DIR_NAMES`）。
-本机有 `third_party/` 时整轮约 8 秒，剪枝前是 25 秒。
+构建产物与本地缓存、运行时数据与用户数据（`server/data/`、`files/`、`captures/`）、
+`.git/` 等都不进（清单见 `gates/selfcheck.py` 的 `SKIP_DIR_NAMES` 与 `SKIP_REL_PATHS`）。
+本机实测（同一台机、同一棵树，剪枝后扫 **474** 个文件，其中被跟踪文件 468 个**一个没漏**）：
+
+| 步骤 | 剪枝前 | 剪枝后 |
+|---|---|---|
+| 编译 `check_compile` | 3.2 s | **0.24 s** |
+| CI 规则 `check_ci_rules` | 8.1 s | **2.45 s** |
+| 剪枝哨兵 | （无此步） | 0.02 s |
+| 单测 `check_tests` | 3.0 s | 3.0 s |
+| 整轮 | ≈ 15 s | **≈ 5.7 s** |
+
+两个提醒：① 剪枝前的耗时**取决于本机 `.gradle-home/` / `third_party/` 有多大**
+（本机 `.gradle-home/` 2 万文件、`third_party/` 3645 文件、`app/build/` 3978、`app/.cxx/` 880）；
+CI 上没有 `.gradle-home`、没有 `tmp/`，会更接近剪枝后的数。② 剪枝后仍剩的 **2.45 s**
+几乎全在 **L-002 那条正则本身**（45k 行 × 52 µs/行，主要是 90 个 Kotlin 测试文件）——
+遍历已经不是瓶颈，要再快得给引擎加「必要条件预筛」（规则表加 `prefilter` 字段），本轮没做。
 
 ## 七、已知边界（别踩）
 
@@ -146,8 +161,9 @@ python -m loops.run status
    补成了真会查的规则（`enabled: true` + `pattern` + `scope`）——同一行里同时出现「真实 home 引用」
    （`Path.home()` / `expanduser("~")` / `$HOME` / `environ["HOME"]` / 字符串里的 `~`）与
    「用户配置目录名」（`.claude` / `.config` / `.aws` / `.ssh` / `.gnupg` / `.kube` / `.docker` / `.gem` / `.npm`）
-   即判违规；scope 覆盖 `tests/` / `app/src/test/**` / `server/` / `gates/` / `loops/` / `docs/scripts/`，
-   `third_party`（vendored）与 `tmp`（本地草稿）不扫。**新增顶层代码目录要往 scope 里补一条**。
+   即判违规；scope 覆盖 `tests/` / `app/src/test/**` / `server/` / `gates/` / `loops/` / `docs/scripts/`。
+   **新增顶层代码目录要往 scope 里补一条**（`third_party` / `tmp` 现在是**引擎层**就不进，不靠 scope
+   —— 见第 6 条）。
    口径的三个已知边界：引擎**逐行**匹配，拆成两行的写法抓不到；硬编码 `C:\Users\<真实名>` 不在本规则范围
    （那是 AGENTS.md §4.3 的红线）；同一行命中即算，**纯读也报**（从严）。
 3. **`LESSONS.md` 里没有待晋升的条目了**：L-001（修之前先原样复现）/ L-002（测试只许在临时目录里跑）
@@ -157,20 +173,29 @@ python -m loops.run status
    notifyme 侧网关地址指向本机 `127.0.0.1:8080`，安装器给了两条 warning，属预期。
 5. **`tests/fixtures/*.jsonl` 必须入库**：仓库的 `*.jsonl` 全局忽略规则会把它挡掉，
    所以 `.gitignore` 里显式加了 `!tests/fixtures/*.jsonl` 例外；新克隆后离线演练才跑得起来。
-6. **`selfcheck` 编译仓库内的 `.py`，但跳过被剪枝的目录**：`gates/selfcheck.py` 的 `SKIP_DIR_NAMES`
-   里有 `.git` / `.venv` / `__pycache__` / `third_party` / `tmp` / `dist` / `build` / `.loopstate` /
-   `.gradle` / `.gradle-home` / `.idea` / `.kotlin` / `.pytest_cache` / `node_modules`。
-   这些目录里**没有本仓库的正规源码**（`git ls-files` 里没有任何被跟踪的文件落在这些名字的目录下），
-   剪掉只影响速度、不影响覆盖；代价是「第三方代码的语法错误」不再由 selfcheck 报出来
-   （第三方代码坏了该由它自己的构建负责）。**新增一个叫 build / dist / tmp 的源码目录时要同步改这个清单。**
-   剪枝必须用 `os.walk` 的 in-place 剪枝：`rglob` 即使逐条过滤路径段，也已经把整棵树走了一遍
-   （本机 5 万条目 1.5 秒 → 剪枝后 1900 个文件 0.04 秒）。
-7. **payload 的 `tests/` 在仓库根**：notifyme 的 pytest 只跑 `server/` 目录级发现（CI 与 local_check 都是），
+6. **`selfcheck` 编译仓库自身的 `.py`，但跳过被剪枝的目录**：`gates/selfcheck.py` 有两个剪枝清单 ——
+   `SKIP_DIR_NAMES`（点目录名，**任何层级**下同名都剪：`.git` `.venv` `__pycache__` `node_modules`
+   `.gradle` `.gradle-home` `.idea` `.kotlin` `.loopstate` `.pytest_cache`）与
+   `SKIP_REL_PATHS`（**锚定到仓库根**的相对路径，只剪这一个确切位置：`build` `app/build`
+   `app/.cxx` `dist` `tmp` `third_party` `server/data` `files` `app/files` `captures`）。
+   **为什么 `build` / `dist` / `tmp` 要锚定而不是按目录名**：按名字剪的话，将来谁建一个
+   `server/dist/` 的**源码**目录会被静默剪掉，真代码不进检查圈（`server/dist/keep.py` 现在照扫）。
+   **剪枝的代价**：① 第三方代码（`third_party/llama.cpp`）的语法错误不再由 selfcheck 报出来
+   （它坏了该由它自己的构建负责 —— notifyme 的 CI 也不跑 selfcheck）；② 草稿与构建产物的语法错也不再报。
+   **剪枝必须用 `os.walk` 的 in-place 剪枝**：`rglob` 即使逐条过滤路径段，也已经把整棵树走了一遍
+   （本机 5 万条目 1.5 秒 → 剪枝后 474 个文件 0.04 秒）。
+7. **剪枝哨兵：被剪掉的目录里不许有被 git 跟踪的文件**（`check_pruned_tracked()`）。
+   没有这条，剪枝就是个静默的口子：谁建一个叫 `build/` 的源码目录，代码就悄悄不进检查圈了。
+   纯函数 `pruned_tracked_violations(tracked)` 负责判定，git 只负责取跟踪文件列表；
+   **git 不可用时哨兵跳过、不判红**（并在输出里说明跳过原因）。
+   `gates.selfcheck` 的「剪枝哨兵」一节会把**跳过了哪些目录**逐个打出来 ——
+   「没报」不等于「查过了」，别让人误以为扫全了。
+8. **payload 的 `tests/` 在仓库根**：notifyme 的 pytest 只跑 `server/` 目录级发现（CI 与 local_check 都是），
    根目录 `tests/` 不会被误收进服务端用例。
-8. **Windows 中文控制台**：`gates/*` 会打印 ✓ 与 ✗，这两个字符不在 GBK 里，裸跑会在最后一行抛
+9. **Windows 中文控制台**：`gates/*` 会打印 ✓ 与 ✗，这两个字符不在 GBK 里，裸跑会在最后一行抛
    `UnicodeEncodeError`。`gates/__init__.py` 里加了 reconfigure shim（标准输出与标准错误改 UTF-8），
    所以 `python -m gates.selfcheck` / `hazard_check` / `acceptance_check` / `release_check` 在中文控制台直接能跑。
-9. **错题本的晋升会改写活文件**：`python -m gates.lessons_promote --apply` 会把够格的条目挪进
+10. **错题本的晋升会改写活文件**：`python -m gates.lessons_promote --apply` 会把够格的条目挪进
    `docs/CODE_STANDARDS.md` 并从 `LESSONS.md` 删掉它们，同时给 `Machine-checkable: true` 的条目
    在 `config/ci_rules.json` 落一条**空桩**（`enabled: false` + `pattern: null`）。
    空桩要人补实现（补 `pattern` / `scope` 并把 `enabled` 改成 `true`），否则 selfcheck 只把它列成
