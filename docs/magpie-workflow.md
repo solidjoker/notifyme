@@ -126,20 +126,31 @@ python -m loops.run status
 | 门 | 入口 | 管的什么 |
 | --- | --- | --- |
 | **notifyme 权威自检** | `docs/scripts/local_check.ps1`（七步） | 服务端 pytest + Python 语法 + 隐私守卫 + 版本号 + Android 单测/双 flavor/Lint + Lint 基线 + ktlint |
-| **magpie 自检** | `python -m gates.selfcheck` | 全仓库 `.py` 编译 + magpie 自己的 46 条单测 + 错题本格式 + `config/ci_rules.json` 里启用的规则 + 配置与提示词占位符 |
+| **magpie 自检** | `python -m gates.selfcheck` | 全仓库 `.py` 编译 + magpie 自己的 52 条单测 + 错题本格式 + `config/ci_rules.json` 里启用的规则 + 配置与提示词占位符 |
 | **notifyme CI** | `.github/workflows/android.yml` | 与 local_check 同一套口径 |
 | **magpie 自带 CI** | `docs/magpie-workflow/ci/{ci.yml,hazard.yml}` | 留档未启用 |
 
 开 PR 前仍以 `local_check.ps1` 打印「全部通过，可以开 PR」为准；
-`gates.selfcheck` 是额外一道（46 条单测，0.5 秒），两者都要绿。
+`gates.selfcheck` 是额外一道（52 条单测），两者都要绿。
+其中「CI 规则」那一步要扫全树（引擎用 `rglob`，`third_party/llama.cpp` 有 5 万个条目），
+真跑一次约 10 秒 —— 本机有 `third_party/` 时最慢，CI 上没有这个目录会快得多。
 
 ## 七、已知边界（别踩）
 
 1. **magpie 的发布门不适用于 notifyme**：它要求 `dist/` 下 `installer_count = 2` 个安装包且 `dist/LATEST` 标着当前 Latest，
    notifyme 的产物是 Gradle 出的 APK（`app/build/outputs/apk/...`），发版仍走自己的 `release.yml`（打 `v<version>` 标签触发）。
    `gates.release_check` 在本仓库会记成 NOT RUN，属预期。
-2. **`config/ci_rules.json` 目前 `rules: []`**：错题本还没有晋升成机器规则的条目，selfcheck 会把「有教训该晋升」列出来但**不判红**。
-3. **`LESSONS.md` 里有 2 条待晋升**（L-001 修之前先原样复现 / L-002 测试只许在临时目录里跑，均 seen=3）。
+2. **`config/ci_rules.json` 现在有 1 条真规则（L-002）**：2026-11-19 把 L-002「测试只许在临时目录里跑」
+   补成了真会查的规则（`enabled: true` + `pattern` + `scope`）——同一行里同时出现「真实 home 引用」
+   （`Path.home()` / `expanduser("~")` / `$HOME` / `environ["HOME"]` / 字符串里的 `~`）与
+   「用户配置目录名」（`.claude` / `.config` / `.aws` / `.ssh` / `.gnupg` / `.kube` / `.docker` / `.gem` / `.npm`）
+   即判违规；scope 覆盖 `tests/` / `app/src/test/**` / `server/` / `gates/` / `loops/` / `docs/scripts/`，
+   `third_party`（vendored）与 `tmp`（本地草稿）不扫。**新增顶层代码目录要往 scope 里补一条**。
+   口径的三个已知边界：引擎**逐行**匹配，拆成两行的写法抓不到；硬编码 `C:\Users\<真实名>` 不在本规则范围
+   （那是 AGENTS.md §4.3 的红线）；同一行命中即算，**纯读也报**（从严）。
+3. **`LESSONS.md` 里没有待晋升的条目了**：L-001（修之前先原样复现）/ L-002（测试只许在临时目录里跑）
+   都在 2026-11-19 满了 Seen=3，进了 `docs/CODE_STANDARDS.md` 的 `promoted-zone`；
+   L-002 因为标着 `Machine-checkable: true`，还落了一条 CI 规则（见上一条）。
 4. **模型网关与 agent 都是可选项**：没配好也能装、能自检、能离线演练，只是循环不能真的改代码。
    notifyme 侧网关地址指向本机 `127.0.0.1:8080`，安装器给了两条 warning，属预期。
 5. **`tests/fixtures/*.jsonl` 必须入库**：仓库的 `*.jsonl` 全局忽略规则会把它挡掉，
@@ -150,10 +161,20 @@ python -m loops.run status
 8. **Windows 中文控制台**：`gates/*` 会打印 ✓ 与 ✗，这两个字符不在 GBK 里，裸跑会在最后一行抛
    `UnicodeEncodeError`。`gates/__init__.py` 里加了 reconfigure shim（标准输出与标准错误改 UTF-8），
    所以 `python -m gates.selfcheck` / `hazard_check` / `acceptance_check` / `release_check` 在中文控制台直接能跑。
+9. **错题本的晋升会改写活文件**：`python -m gates.lessons_promote --apply` 会把够格的条目挪进
+   `docs/CODE_STANDARDS.md` 并从 `LESSONS.md` 删掉它们，同时给 `Machine-checkable: true` 的条目
+   在 `config/ci_rules.json` 落一条**空桩**（`enabled: false` + `pattern: null`）。
+   空桩要人补实现（补 `pattern` / `scope` 并把 `enabled` 改成 `true`），否则 selfcheck 只把它列成
+   「还是桩」不判红 —— **2026-11-19 才把欠着的 L-002 桩补成真规则**。
+   另：`LESSONS.md` 里若已有同 id 的规则，`--apply` 不会覆盖它（`append_ci_stub` 按 id 去重），
+   所以补好的 `pattern` 不会被下一次晋升抹掉。
 
 ## 八、维护提醒
 
 - 改循环行为 → 改 `loops/`，改门禁 → 改 `gates/`，改判定 → 改 `config/workflow.toml`（唯一配置入口）；
 - 改完跑 `python -m gates.selfcheck` + `python -m loops.run all --once --offline`；
 - 每次真踩坑 → `python -m gates.lessons_promote --add ...` 记进 `LESSONS.md`（别手抄，脚本会记 Seen 计数）；
+- 新教训满 Seen=3 → `python -m gates.lessons_promote --apply` 晋升；标着 `Machine-checkable: true` 的
+  还要**补 `config/ci_rules.json` 里那条桩的 `pattern` / `scope` 并把 `enabled` 改成 `true`**，
+  否则它永远只是桩（selfcheck 会一直列「还是桩」提醒你）；
 - 危害门命中 block 时**停下等维护者**，循环不许自己放行（`config/blocklist.txt` 也只许追加不许删）。

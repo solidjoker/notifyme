@@ -784,6 +784,25 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 测试：不涉及代码，无新增用例；服务端用例仍 **944** 条。
   - 计数：AGENTS.md 65204 → **65222** 字节（注入预算 65243 内 —— 新增条目时同步压缩了两条旧条目的措辞）。
 
+- **错题本晋升成机器规则：L-002 从空桩补成真会查的规则（feat/ci-rule-l002）**
+  - 问题：`LESSONS.md` 的 L-002「测试只许在临时目录里跑」（Seen 2026-10-07 / 10-09 / 10-12，3 个不同日期）
+    在 2026-11-19 满格晋升进 `docs/CODE_STANDARDS.md`，并在 `config/ci_rules.json` 落了一条**空桩**
+    （`enabled: false` + `pattern: null` + `scope: []`）。空桩永远只会被 selfcheck 列成「还是桩」不判红 ——
+    教训进了规范，却没有任何机器检查守住它。
+  - 修法：给 L-002 补上确定性 `pattern` 与 `scope` 并把 `enabled` 改成 `true` ——
+    同一行里同时出现「真实 home 引用」（`Path.home()` / `expanduser("~")` / `expandvars("$HOME…")` /
+    `environ["HOME"|"USERPROFILE"|"HOMEDRIVE"|"HOMEPATH"]` / `getenv(...)` / 字面量 `~`）与
+    「用户配置目录名」（`.claude` / `.config` / `.aws` / `.ssh` / `.gnupg` / `.kube` / `.docker` / `.gem` / `.npm`）
+    即判违规；另有一支单查字面量 `"$HOME"`。
+    `scope` 覆盖本仓库自己维护的代码：`tests/` / `app/src/test/**`（90 个 Kotlin 测试）/
+    `server/` / `gates/` / `loops/` / `docs/scripts/`；`third_party`（vendored）与 `tmp`（本地草稿）不扫。
+  - 测试：`tests/test_gates.py` 新增 `CiRuleTests` **4 条**（magpie 单测 48 → **52**）——
+    规则不再是桩 / 临时假仓库里的违规写法被引擎报出 / 临时目录里的同名目录不误报 / 真仓库命中数为 0；
+    另在 `config/ci_rules.json` 的 `note` 里写明口径边界与「新增顶层代码目录要补 scope」。
+  - 计数：magpie 单测 46 → **52** 条；服务端用例仍 **944** 条；`config/ci_rules.json` 1 条规则由桩转真。
+  - 已知边界（写进 `docs/magpie-workflow.md` §七）：引擎**逐行**匹配，拆成两行的写法抓不到；
+    硬编码 `C:\Users\<真实名>` 不在本规则范围（那是 AGENTS.md §4.3 的红线）；同一行命中即算，**纯读也报**（从严）。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：
