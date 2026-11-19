@@ -830,6 +830,36 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
     端到端两种文案 / 已实现规则逐字节不变 / 空桩逐字节不变 / `append_ci_stub` 不覆盖既有规则。
   - 计数：服务端用例仍 **944** 条；magpie 单测 52 → **61** 条；selfcheck 本机 25 秒 → **8 秒**。
 
+- **剪枝方案被独立复核挑出三处真问题，锚定化 + 加哨兵（fix/magpie-prune-anchored-and-sentinel）**
+  - 问题：上一轮的剪枝按**目录名**（`build` / `dist` / `tmp`）一刀切，且清单漏了三类目录 ——
+    ① `app/.cxx`（NDK 原生产物，880 文件）、`server/data`（**端侧消息原文**，5 个文件）、
+    `files/` / `app/files/` / `captures/`（端侧数据与抓包截图）都不在清单里；
+    将来只要有规则的 scope 放宽成 `**/*`，这些会被扫到（实测 `third_party/llama.cpp`
+    的 `docs/build.md` 有 14 处命中 L-002 的 pattern）；
+    ② 按目录名剪枝是**埋雷**：将来谁建一个叫 `server/dist/` 的源码目录，真代码会被静默剪掉；
+    ③ 文档里「25 秒 → 8 秒」不诚实 —— 那个 25 秒含被剪枝前的单测扫描，逐项实测并非如此。
+  - 修法一：`gates/selfcheck.py` 的剪枝清单拆成两级 ——
+    `SKIP_DIR_NAMES`（点目录名，任何层级同名都剪：`.git` `.venv` `__pycache__` `node_modules`
+    `.gradle` `.gradle-home` `.idea` `.kotlin` `.loopstate` `.pytest_cache`）与
+    `SKIP_REL_PATHS`（**锚定到仓库根**的相对路径，只剪这一个确切位置：`build` `app/build` `app/.cxx`
+    `dist` `tmp` `third_party` `server/data` `files` `app/files` `captures`）。
+    `build` / `dist` / `tmp` 从「按名字」改成「按路径」，`server/dist/keep.py` 这类同名源码目录照扫。
+  - 修法二：加**剪枝哨兵** `check_pruned_tracked()` —— 被剪掉的目录里不许有**被 git 跟踪的文件**
+    （纯函数 `pruned_tracked_violations(tracked)` 负责判定，git 只负责取列表；git 不可用时跳过不判红）。
+    没有它，剪枝就是个静默的口子。`selfcheck` 新增「剪枝哨兵」一节，把**跳过了哪些目录**逐个打出来
+    ——「没报」不等于「查过了」。
+  - 修法三：`check_ci_rules` 的遍历加 `sorted()`（原来是文件系统序，跨机器不一致）；违规列表顺序变确定序。
+  - 测试：`tests/test_gates.py` 新增 `PruneTests` **7 条**（magpie 单测 61 → **68**）——
+    被剪目录确实不扫 / 源码确实照扫 / `server/dist/` 不被误剪 / 哨兵能报出 build、app/build、
+    server/data、.venv、app/.cxx 下的跟踪文件 / 正常文件不报 / 真仓库哨兵为 0。
+  - 覆盖核对（实测）：剪枝后扫 **474** 个文件，被跟踪文件 468 个**一个没漏**（用 `git ls-files -z` 比对，
+    用普通 `ls-files` 会因中文路径被 git 转义而假报 5 条漏检）。
+  - 逐项耗时（同一台机同一棵树）：编译 3.2 s → **0.24 s**；CI 规则 8.1 s → **2.45 s**；
+    哨兵 0.02 s；单测 3.0 s；整轮 ≈ 15 s → **≈ 5.7 s**。
+    剩下的 2.45 s 几乎全在 **L-002 那条正则本身**（45k 行 × 52 µs/行，主要是 90 个 Kotlin 测试文件）——
+    遍历已不是瓶颈，要再快得给引擎加「必要条件预筛」（规则表加 `prefilter` 字段），本轮没做。
+  - 计数：服务端用例仍 **944** 条；magpie 单测 61 → **68** 条。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：

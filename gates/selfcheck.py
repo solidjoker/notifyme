@@ -5,12 +5,13 @@
     python -m gates.selfcheck
 
 查六件事：
-  1. 所有 Python 文件能编译
+  1. 所有 Python 文件能编译（仓库自身的 .py；被剪枝的目录不进，见 SKIP_* 两个清单）
   2. 单测全绿
   3. LESSONS.md 每条都有 Rule / Why / Evidence / Seen
   4. config/ci_rules.json 里启用的规则，逐条对着仓库查
   5. 配置能解析、提示词没缺占位符
   6. 有教训该晋升、有 CI 规则还是桩，报出来（不判红）
+  7. 哨兵：被剪掉的目录里不许有被 git 跟踪的文件（防止真代码被静默剪掉）
 """
 
 from __future__ import annotations
@@ -33,12 +34,20 @@ CI_RULES = REPO_ROOT / "config" / "ci_rules.json"
 # 自检要扫全仓库，但有几类目录不该扫进去：
 #   ① vendored 依赖 —— third_party/llama.cpp 是 CI clone 下来的源码，本机也有，几千个文件；
 #   ② 构建产物与本地缓存 —— build/ dist/ tmp/ .gradle/ .gradle-home/ .loopstate/ 等；
-#   ③ 版本库内部 —— .git/（对象与索引都不是源码）。
-# 这些目录里**没有本仓库的正规源码**（git ls-files 里没有任何被跟踪的文件落在这些名字的
-# 目录下），剪掉它们只影响速度，不影响检查覆盖 —— 唯一的代价是「第三方代码的语法错误」
-# 不再由 selfcheck 报出来（第三方代码坏了该由它自己的构建负责）。
+#   ③ 版本库内部 —— .git/（对象与索引都不是源码）；
+#   ④ 运行时数据与用户数据 —— server/data/（端侧消息原文）、files/、app/files/、captures/。
+# 剪枝**只影响速度**，不影响对本仓库源码的覆盖 —— 前提是「被剪的目录里没有正规源码」，
+# 这件事由 check_pruned_tracked() 这个哨兵盯着（见下）。
 # 剪枝必须用 os.walk 的 in-place 剪枝：rglob 即使逐条过滤 parts，也已经把整棵树走了一遍
 # （本机 5 万条目 1.5 秒 → 剪枝后 1900 个文件 0.04 秒）。
+#
+# 两级清单，刻意分开：
+#   SKIP_DIR_NAMES —— 点目录名，**任何层级**下同名都剪（.git / .venv / __pycache__ 这类
+#                     不可能是源码目录的名字）；
+#   SKIP_REL_PATHS —— 锚定到仓库根的相对路径，**只剪这一个确切位置**。
+#                     build / dist / tmp 用锚定而不是目录名：否则将来有人建一个叫
+#                     `server/dist/` 的**源码**目录会被静默剪掉，真代码不进检查圈
+#                     （现在的隐患是 build / dist / tmp 三个名字）。
 SKIP_DIR_NAMES = frozenset(
     {
         ".git",
@@ -50,9 +59,20 @@ SKIP_DIR_NAMES = frozenset(
         ".pytest_cache",
         ".venv",
         "__pycache__",
-        "build",
-        "dist",
         "node_modules",
+    }
+)
+
+SKIP_REL_PATHS = frozenset(
+    {
+        "build",
+        "app/build",
+        "app/.cxx",
+        "captures",
+        "dist",
+        "files",
+        "app/files",
+        "server/data",
         "third_party",
         "tmp",
     }
@@ -60,14 +80,62 @@ SKIP_DIR_NAMES = frozenset(
 
 
 def iter_repo_files():
-    """遍历仓库里的文件，跳过 SKIP_DIR_NAMES 里的目录（不进入它们）。
+    """遍历仓库里的文件，跳过 SKIP_DIR_NAMES / SKIP_REL_PATHS 里的目录（不进入它们）。
 
     产出与 REPO_ROOT.rglob("*") 同构（Path），但不会走进被跳过的目录。
     """
     for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIR_NAMES]
+        rel = Path(dirpath).relative_to(REPO_ROOT).as_posix()
+        rel = "" if rel == "." else rel
+        keep = []
+        for name in dirnames:
+            if name in SKIP_DIR_NAMES:
+                continue
+            child = f"{rel}/{name}" if rel else name
+            if child in SKIP_REL_PATHS:
+                continue
+            keep.append(name)
+        dirnames[:] = keep
         for name in filenames:
             yield Path(dirpath) / name
+
+
+def pruned_tracked_violations(tracked):
+    """哨兵（纯函数）：被剪掉的目录里若躺着**被 git 跟踪的文件**，报出来。
+
+    没有这条哨兵，「剪枝」就是一个静默的口子：谁建一个叫 `build/` 的源码目录，
+    代码就悄悄不进检查圈了。git 跟踪文件里一条都不该落在被剪目录下。
+    """
+    violations = []
+    for path in tracked:
+        parts = path.replace("\\", "/").split("/")
+        for i, part in enumerate(parts[:-1]):
+            if part in SKIP_DIR_NAMES:
+                violations.append(f"{path}（落在被剪目录 {part}/）")
+                break
+            prefix = "/".join(parts[: i + 1])
+            if prefix in SKIP_REL_PATHS:
+                violations.append(f"{path}（落在被剪目录 {prefix}/）")
+                break
+    return violations
+
+
+def check_pruned_tracked():
+    """跑哨兵：返回 (违规列表, 说明)。git 不可用时跳过（不判红，但要说一句）。"""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "ls-files", "-z"],
+            capture_output=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        return [], f"哨兵跳过（git 不可用：{exc.__class__.__name__}）"
+    tracked = [p for p in proc.stdout.decode("utf-8", errors="replace").split("\0") if p]
+    violations = pruned_tracked_violations(tracked)
+    note = f"哨兵查了 {len(tracked)} 个被跟踪文件，被剪目录下 0 个"
+    if violations:
+        note = f"哨兵查了 {len(tracked)} 个被跟踪文件，其中 {len(violations)} 个落在被剪目录下"
+    return violations, note
 
 
 def section(title: str) -> None:
@@ -134,7 +202,9 @@ def check_ci_rules() -> tuple[list[str], list[str]]:
             violations.append(f"{rule.get('id')} 的正则写坏了：{exc}")
             continue
         files = rule.get("scope") or ["**/*.py"]
-        for path in iter_repo_files():
+        # sorted：遍历顺序改成确定序（os.walk 是文件系统序，跨机器不一致），
+        # 违规列表的顺序才可复现。1 千来个 Path 的排序开销可以忽略。
+        for path in sorted(iter_repo_files()):
             if not path.is_file():
                 continue
             rel = str(path.relative_to(REPO_ROOT)).replace("\\", "/")
@@ -243,6 +313,22 @@ def main(argv: list[str] | None = None) -> int:
         for item in pending:
             print(f"    {item}")
     failures += len(violations)
+
+    section("剪枝哨兵")
+    # 「没报」不等于「查过了」——把跳过了什么说清楚，别让人误以为扫全了。
+    skipped = [p for p in sorted(SKIP_REL_PATHS) if (REPO_ROOT / p).exists()]
+    skipped += [d for d in sorted(SKIP_DIR_NAMES) if (REPO_ROOT / d).exists()]
+    if skipped:
+        print("已跳过（不检查）：" + "、".join(skipped))
+    else:
+        print("没有需要跳过的目录")
+    pruned_bad, note = check_pruned_tracked()
+    if pruned_bad:
+        print("\n".join(f"✗ {item}" for item in pruned_bad))
+        print("  被剪掉的目录里不该有被 git 跟踪的文件 —— 换个目录名，或把它移出剪枝清单。")
+    else:
+        print("✓ " + note)
+    failures += len(pruned_bad)
 
     section("配置与提示词")
     problems, _ = check_config()

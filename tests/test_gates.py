@@ -482,5 +482,96 @@ class CiRuleTests(unittest.TestCase):
         self.assertEqual([], [p for p in pending if p.startswith("L-002")])
 
 
+# --------------------------------------------------------------------------- 剪枝
+
+
+class PruneTests(unittest.TestCase):
+    """扫描剪枝：剪掉的目录里不许有真代码，被剪的必须是确切的路径。
+
+    这几条是剪枝的**安全绳**：
+      1. 剪枝按「锚定相对路径」而不是按目录名 —— 否则将来有人建一个叫
+         `server/dist/` 的源码目录会被静默剪掉，真代码不进检查圈；
+      2. 哨兵：被跟踪的文件一条都不许落在被剪目录下（纯函数，不依赖 git）。
+    """
+
+    def _make_repo(self) -> Path:
+        tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp_dir.cleanup)
+        root = Path(tmp_dir.name)
+        for rel in (
+            "src/main.py",
+            "server/app.py",
+            "server/dist/keep.py",   # 同名但不是仓库根的 dist —— 必须照扫
+            "build/out.py",           # 锚定命中 —— 必须剪掉
+            "app/build/out.py",       # 锚定命中 —— 必须剪掉
+            "tmp/scratch.py",         # 锚定命中 —— 必须剪掉
+            "third_party/dep/x.py",   # 锚定命中 —— 必须剪掉
+            "server/data/messages.jsonl",  # 用户真实数据 —— 必须剪掉
+            "app/.cxx/ndk/thing.o",  # NDK 产物 —— 必须剪掉
+            ".venv/lib/x.py",         # 点目录名 —— 必须剪掉
+            "docs/notes.md",
+        ):
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("x\n", encoding="utf-8")
+        return root
+
+    def _iter_names(self, root: Path) -> set[str]:
+        saved = sc.REPO_ROOT
+        sc.REPO_ROOT = root
+        try:
+            return {p.relative_to(root).as_posix() for p in sc.iter_repo_files()}
+        finally:
+            sc.REPO_ROOT = saved
+
+    def test_pruned_paths_are_not_scanned(self) -> None:
+        scanned = self._iter_names(self._make_repo())
+        for rel in (
+            "build/out.py",
+            "app/build/out.py",
+            "tmp/scratch.py",
+            "third_party/dep/x.py",
+            "server/data/messages.jsonl",
+            "app/.cxx/ndk/thing.o",
+            ".venv/lib/x.py",
+        ):
+            self.assertNotIn(rel, scanned, rel)
+
+    def test_source_files_are_scanned(self) -> None:
+        scanned = self._iter_names(self._make_repo())
+        for rel in ("src/main.py", "server/app.py", "docs/notes.md"):
+            self.assertIn(rel, scanned, rel)
+
+    def test_nested_dist_is_not_pruned_by_name(self) -> None:
+        """`server/dist/` 不是仓库根的 dist —— 锚定剪枝不许把它误剪。"""
+        scanned = self._iter_names(self._make_repo())
+        self.assertIn("server/dist/keep.py", scanned)
+
+    def test_sentinel_flags_a_tracked_file_under_a_pruned_path(self) -> None:
+        violations = sc.pruned_tracked_violations(["build/keep.py"])
+        self.assertEqual(1, len(violations), violations)
+        self.assertIn("build/", violations[0])
+
+    def test_sentinel_flags_nested_and_dot_dirs(self) -> None:
+        self.assertEqual(1, len(sc.pruned_tracked_violations(["app/build/x.kt"])))
+        self.assertEqual(1, len(sc.pruned_tracked_violations(["server/data/messages.jsonl"])))
+        self.assertEqual(1, len(sc.pruned_tracked_violations([".venv/lib/x.py"])))
+        self.assertEqual(1, len(sc.pruned_tracked_violations(["app/.cxx/a.o"])))
+
+    def test_sentinel_is_quiet_on_normal_files(self) -> None:
+        self.assertEqual([], sc.pruned_tracked_violations([
+            "src/main.py",
+            "server/app.py",
+            "server/dist/keep.py",
+            "docs/notes.md",
+            "app/src/main/java/com/notifyme/android/AnalysisCase.kt",
+        ]))
+
+    def test_sentinel_matches_the_real_repo(self) -> None:
+        """真仓库：被跟踪文件一条都不许落在被剪目录下。"""
+        violations, note = sc.check_pruned_tracked()
+        self.assertEqual([], violations, note)
+
+
 if __name__ == "__main__":
     unittest.main()
