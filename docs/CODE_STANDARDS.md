@@ -102,5 +102,5 @@ CI 里任何一条红，不许合。
 - Evidence: 8b41d07, #388
 - Seen: 2026-10-07, 2026-10-09, 2026-10-12
 - Promoted: 2026-11-19（第 3 次被抓到）
-- CI: config/ci_rules.json#L-002（尚未实现，待补正则）
+- CI: config/ci_rules.json#L-002（已实现：enabled + pattern 齐，机器会查）
 <!-- promoted-zone:end -->

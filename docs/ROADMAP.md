@@ -803,6 +803,33 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 已知边界（写进 `docs/magpie-workflow.md` §七）：引擎**逐行**匹配，拆成两行的写法抓不到；
     硬编码 `C:\Users\<真实名>` 不在本规则范围（那是 AGENTS.md §4.3 的红线）；同一行命中即算，**纯读也报**（从严）。
 
+- **magpie 门禁两个毛刺收口：扫描剪枝 + 晋升文案如实反映规则表（fix/magpie-gate-scan-and-stub-text）**
+  - 问题一（扫描）：`gates/selfcheck.py` 两处全树遍历（`check_compile` / `check_ci_rules`）只跳过
+    `.venv` / `__pycache__`，于是 `third_party/llama.cpp`（CI clone、本机也在，几千个文件）、
+    `.gradle-home/`（2 万个文件）、`app/build/`、`tmp/`（本地草稿）全被走一遍 ——
+    本机 5 万条目 1.5 秒；L-002 机器规则落地后「CI 规则」那步约 10 秒，整轮 selfcheck 约 25 秒。
+    更麻烦的是 `tmp/`（本地草稿，未被 .gitignore 覆盖的目录名）也在扫描范围内，
+    本地草稿里若有违规写法会把 selfcheck 弄红，而它根本不是仓库内容。
+  - 问题二（文案）：L-002 补成真规则后，`docs/CODE_STANDARDS.md` 里那行
+    「CI: config/ci_rules.json#L-002（尚未实现，待补正则）」变成假话 ——
+    晋升脚本无条件写这行，不看规则表的真实状态；将来再晋升一条也会继续写假话。
+  - 修法一：`gates/selfcheck.py` 加 `SKIP_DIR_NAMES` 与 `iter_repo_files()`，改用 `os.walk`
+    **in-place 剪枝**（`rglob` 逐条过滤路径段照样走完整棵树）。剪掉的目录里没有本仓库的正规源码
+    （`git ls-files` 里没有任何被跟踪的文件落在这些名字的目录下）——
+    代价只有「第三方代码的语法错误不再由 selfcheck 报出来」。
+    本机实测：整树 50323 条目 / 1.50 秒 → 剪枝后 1948 个文件 / 0.04 秒；selfcheck 25 秒 → **8 秒**，
+    magpie 单测 12 秒 → **3 秒**。
+  - 修法二：`gates/lessons_promote.py` 的 `promote_block()` 加 `ci_ready` 参数（仍是纯函数、不读盘），
+    新增 `rule_is_real()` / `ci_rule_for()` / `ci_rule_ready()` 三个查表助手
+    （口径与引擎一致：enabled 为真**且** pattern 非空才算真规则；表读不出来一律当「不是真规则」，不抛）；
+    `cmd_apply` 调整顺序：先处理 CI 规则桩、再按**写完之后的真实状态**生成晋升块。
+    `append_ci_stub` 的去重逻辑一行未改 —— 已实现的规则不会被回退成桩（两条回归用例钉死）。
+    `docs/CODE_STANDARDS.md` 里 L-002 那行改成「已实现：enabled + pattern 齐，机器会查」。
+  - 测试：`tests/test_gates.py` 新增 **9 条**（magpie 单测 52 → **61**）——
+    默认写「待补」/ 显式 `ci_ready=True` 写「已实现」/ 规则表 5 组真伪组合 / 表坏掉不抛 /
+    端到端两种文案 / 已实现规则逐字节不变 / 空桩逐字节不变 / `append_ci_stub` 不覆盖既有规则。
+  - 计数：服务端用例仍 **944** 条；magpie 单测 52 → **61** 条；selfcheck 本机 25 秒 → **8 秒**。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：
