@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import os
 import py_compile
 import re
 import subprocess
@@ -29,6 +30,45 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CI_RULES = REPO_ROOT / "config" / "ci_rules.json"
 
+# 自检要扫全仓库，但有几类目录不该扫进去：
+#   ① vendored 依赖 —— third_party/llama.cpp 是 CI clone 下来的源码，本机也有，几千个文件；
+#   ② 构建产物与本地缓存 —— build/ dist/ tmp/ .gradle/ .gradle-home/ .loopstate/ 等；
+#   ③ 版本库内部 —— .git/（对象与索引都不是源码）。
+# 这些目录里**没有本仓库的正规源码**（git ls-files 里没有任何被跟踪的文件落在这些名字的
+# 目录下），剪掉它们只影响速度，不影响检查覆盖 —— 唯一的代价是「第三方代码的语法错误」
+# 不再由 selfcheck 报出来（第三方代码坏了该由它自己的构建负责）。
+# 剪枝必须用 os.walk 的 in-place 剪枝：rglob 即使逐条过滤 parts，也已经把整棵树走了一遍
+# （本机 5 万条目 1.5 秒 → 剪枝后 1900 个文件 0.04 秒）。
+SKIP_DIR_NAMES = frozenset(
+    {
+        ".git",
+        ".gradle",
+        ".gradle-home",
+        ".idea",
+        ".kotlin",
+        ".loopstate",
+        ".pytest_cache",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+        "third_party",
+        "tmp",
+    }
+)
+
+
+def iter_repo_files():
+    """遍历仓库里的文件，跳过 SKIP_DIR_NAMES 里的目录（不进入它们）。
+
+    产出与 REPO_ROOT.rglob("*") 同构（Path），但不会走进被跳过的目录。
+    """
+    for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIR_NAMES]
+        for name in filenames:
+            yield Path(dirpath) / name
+
 
 def section(title: str) -> None:
     print(f"\n── {title} " + "─" * max(0, 60 - len(title)))
@@ -36,9 +76,7 @@ def section(title: str) -> None:
 
 def check_compile() -> list[str]:
     bad: list[str] = []
-    for path in sorted(REPO_ROOT.rglob("*.py")):
-        if ".venv" in path.parts or "__pycache__" in path.parts:
-            continue
+    for path in sorted(p for p in iter_repo_files() if p.suffix == ".py"):
         try:
             py_compile.compile(str(path), doraise=True, cfile=str(REPO_ROOT / ".loopstate" / "pyc.tmp"))
         except py_compile.PyCompileError as exc:
@@ -96,8 +134,8 @@ def check_ci_rules() -> tuple[list[str], list[str]]:
             violations.append(f"{rule.get('id')} 的正则写坏了：{exc}")
             continue
         files = rule.get("scope") or ["**/*.py"]
-        for path in REPO_ROOT.rglob("*"):
-            if not path.is_file() or ".venv" in path.parts or "__pycache__" in path.parts:
+        for path in iter_repo_files():
+            if not path.is_file():
                 continue
             rel = str(path.relative_to(REPO_ROOT)).replace("\\", "/")
             if not any(fnmatch.fnmatch(rel, glob) or fnmatch.fnmatch(rel, glob.lstrip("*/")) for glob in files):

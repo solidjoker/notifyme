@@ -138,7 +138,13 @@ def plan(lessons: list[Lesson]) -> list[Lesson]:
 # --------------------------------------------------------------------------- 写入
 
 
-def promote_block(lesson: Lesson, date: str) -> str:
+def promote_block(lesson: Lesson, date: str, ci_ready: bool = False) -> str:
+    """生成一条晋升块。
+
+    ci_ready：这条教训对应的 CI 规则**是不是已经实现了**（enabled 为真且
+    pattern 非空）。查表在调用方做（cmd_apply 读 config/ci_rules.json 后传
+    进来）—— 本函数保持纯函数、不读盘；查不到表时传 False（=「待补正则」）。
+    """
     lines = [
         f"<!-- promoted:{lesson.id} -->",
         f"### {lesson.id} {lesson.title}",
@@ -150,7 +156,10 @@ def promote_block(lesson: Lesson, date: str) -> str:
         f"- Promoted: {date}（第 {len(lesson.seen)} 次被抓到）",
     ]
     if lesson.machine_checkable:
-        lines.append(f"- CI: config/ci_rules.json#{lesson.id}（尚未实现，待补正则）")
+        if ci_ready:
+            lines.append(f"- CI: config/ci_rules.json#{lesson.id}（已实现：enabled + pattern 齐，机器会查）")
+        else:
+            lines.append(f"- CI: config/ci_rules.json#{lesson.id}（尚未实现，待补正则）")
     lines.append("")
     return "\n".join(lines)
 
@@ -174,6 +183,38 @@ def load_ci_rules(path: Path | None = None) -> dict[str, Any]:
     if not path.exists():
         return {"version": 1, "_comment": "由 LESSONS 自动晋升的机器检查。pattern 为空 = 待人工实现。", "rules": []}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def rule_is_real(rule: dict[str, Any]) -> bool:
+    """一条 CI 规则算不算「真规则」：enabled 为真且 pattern 非空。
+
+    口径与 gates/selfcheck.check_ci_rules 一致 —— 那边把 enabled=false 或
+    pattern 为空的算成「还是桩」。
+    """
+    pattern = rule.get("pattern")
+    return bool(rule.get("enabled")) and bool(pattern and str(pattern).strip())
+
+
+def ci_rule_for(lesson_id: str, path: Path | None = None) -> dict[str, Any] | None:
+    """按 id 在 CI 规则表里找规则；表读不出来 / 没有这条 → None（不抛）。"""
+    try:
+        data = load_ci_rules(path)
+    except (OSError, ValueError):
+        return None
+    for rule in data.get("rules") or []:
+        if isinstance(rule, dict) and rule.get("id") == lesson_id:
+            return rule
+    return None
+
+
+def ci_rule_ready(lesson_id: str, path: Path | None = None) -> bool:
+    """该 id 的规则是不是已经「真规则」（enabled + pattern 齐）。
+
+    读不到规则表（文件缺失 / JSON 坏了）时当「不是真规则」—— 查表失败
+    不该把晋升搞挂。
+    """
+    rule = ci_rule_for(lesson_id, path)
+    return rule is not None and rule_is_real(rule)
 
 
 def append_ci_stub(lesson: Lesson) -> bool:
@@ -227,13 +268,21 @@ def cmd_apply(lessons: list[Lesson], date: str, dry_run: bool = False) -> int:
         if f"<!-- promoted:{lesson.id} -->" in standards_text:
             print(f"  {lesson.id} 已经在规范里了，跳过")
             continue
-        blocks.append(promote_block(lesson, date))
         if lesson.machine_checkable:
             if dry_run:
-                print(f"  {lesson.id} → 会写一条 CI 规则桩（待补 pattern）")
+                if ci_rule_for(lesson.id) is None:
+                    print(f"  {lesson.id} → 会写一条 CI 规则桩（待补 pattern）")
+                else:
+                    print(f"  {lesson.id} → CI 规则已存在，不覆盖")
             else:
                 added = append_ci_stub(lesson)
-                print(f"  {lesson.id} → CI 规则桩{'已加' if added else '已存在'}")
+                if added:
+                    print(f"  {lesson.id} → CI 规则桩已加")
+                else:
+                    print(f"  {lesson.id} → CI 规则已存在，不覆盖")
+        # 晋升块要如实反映规则表的真实状态：查表说「真规则」才写「已实现」；
+        # 查不到 / 读表失败一律当「待补正则」。
+        blocks.append(promote_block(lesson, date, ci_ready=ci_rule_ready(lesson.id)))
 
     if not blocks:
         return 0

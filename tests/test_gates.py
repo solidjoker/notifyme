@@ -204,9 +204,10 @@ class LessonTests(unittest.TestCase):
         )
 
         saved = (lp.LESSONS, lp.STANDARDS, lp.CI_RULES)
+        self.ci_rules_path = tmp / "ci_rules.json"
         lp.LESSONS = self.lessons_path
         lp.STANDARDS = self.standards_path
-        lp.CI_RULES = tmp / "ci_rules.json"
+        lp.CI_RULES = self.ci_rules_path
 
         def restore() -> None:
             lp.LESSONS, lp.STANDARDS, lp.CI_RULES = saved
@@ -258,6 +259,135 @@ class LessonTests(unittest.TestCase):
         rules = lp.load_ci_rules(self.lessons_path.parent / "ci_rules.json")["rules"]
         self.assertEqual(["L-002"], [r["id"] for r in rules])
         self.assertFalse(rules[0]["enabled"])
+
+    def _write_ci_rules(self, rules: list[dict]) -> None:
+        """在临时目录里造一份 CI 规则表（绝不碰仓库里的真文件）。"""
+        payload = {"version": 1, "_comment": "单测夹具", "rules": rules}
+        self.ci_rules_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+
+    def _promoted_block(self, lesson_id: str) -> str:
+        """从晋升后的规范里抠出某条教训的块。"""
+        standards = self.standards_path.read_text(encoding="utf-8")
+        marker = f"<!-- promoted:{lesson_id} -->"
+        self.assertIn(marker, standards)
+        return standards.split(marker, 1)[1].split("<!-- promoted-zone:end -->", 1)[0]
+
+    def test_promote_block_defaults_to_pending(self) -> None:
+        """没查表（默认 ci_ready=False）→ 保守写「尚未实现，待补正则」。"""
+        _, lessons = lp.load_lessons(self.lessons_path)
+        lesson = next(x for x in lessons if x.id == "L-002")
+        block = lp.promote_block(lesson, "2026-11-19")
+        self.assertIn("尚未实现，待补正则", block)
+        self.assertNotIn("已实现", block)
+
+    def test_promote_block_reports_implemented_when_ci_ready(self) -> None:
+        """查表说是「真规则」→ 写「已实现」，不再写「尚未实现」。"""
+        _, lessons = lp.load_lessons(self.lessons_path)
+        lesson = next(x for x in lessons if x.id == "L-002")
+        block = lp.promote_block(lesson, "2026-11-19", ci_ready=True)
+        self.assertIn("已实现", block)
+        self.assertNotIn("尚未实现", block)
+
+    def test_ci_rule_ready_reads_the_rule_table(self) -> None:
+        """真规则 = enabled + pattern 齐；空桩 / 别的 id 都不算。"""
+        cases = [
+            ({"id": "L-002", "enabled": True, "pattern": "x"}, True),
+            ({"id": "L-002", "enabled": True, "pattern": ""}, False),
+            ({"id": "L-002", "enabled": False, "pattern": "x"}, False),
+            ({"id": "L-002", "enabled": False, "pattern": None}, False),
+            ({"id": "L-999", "enabled": True, "pattern": "x"}, False),
+        ]
+        for rule, expected in cases:
+            with self.subTest(rule=rule):
+                self._write_ci_rules([rule])
+                self.assertEqual(expected, lp.ci_rule_ready("L-002"))
+
+    def test_ci_rule_ready_when_the_table_cannot_be_read(self) -> None:
+        """规则表缺失 / 坏掉 → 当「不是真规则」，别把晋升搞挂。"""
+        self.assertFalse(self.ci_rules_path.exists())
+        self.assertFalse(lp.ci_rule_ready("L-002"))
+        self.ci_rules_path.write_text("{ 坏掉的 JSON", encoding="utf-8")
+        self.assertFalse(lp.ci_rule_ready("L-002"))
+
+    def test_apply_says_implemented_when_the_rule_is_real(self) -> None:
+        """端到端：规则已实现 → 晋升块写「已实现」，不写「尚未实现」。"""
+        self._write_ci_rules(
+            [
+                {
+                    "id": "L-002",
+                    "title": "测试只许在临时目录里跑",
+                    "enabled": True,
+                    "pattern": "x",
+                    "scope": ["tests/*.py"],
+                }
+            ]
+        )
+        _, lessons = lp.load_lessons(self.lessons_path)
+        lp.cmd_apply(lessons, "2026-11-19")
+        block = self._promoted_block("L-002")
+        self.assertIn("已实现", block)
+        self.assertNotIn("尚未实现", block)
+
+    def test_apply_says_pending_when_the_rule_is_missing(self) -> None:
+        """端到端：规则表里没有 L-002 → 仍是「尚未实现，待补正则」。"""
+        _, lessons = lp.load_lessons(self.lessons_path)
+        lp.cmd_apply(lessons, "2026-11-19")
+        block = self._promoted_block("L-002")
+        self.assertIn("尚未实现，待补正则", block)
+        self.assertNotIn("已实现", block)
+
+    def test_apply_keeps_an_implemented_ci_rule_intact(self) -> None:
+        """回归：已实现的规则不许被回退成桩 —— 前后一字不改。"""
+        self._write_ci_rules(
+            [
+                {
+                    "id": "L-002",
+                    "title": "测试只许在临时目录里跑",
+                    "why": "自动化循环把维护者的凭据写坏了。",
+                    "evidence": "8b41d07, #388",
+                    "enabled": True,
+                    "pattern": "x",
+                    "scope": ["tests/*.py"],
+                    "note": "已实现",
+                }
+            ]
+        )
+        before = self.ci_rules_path.read_text(encoding="utf-8")
+        _, lessons = lp.load_lessons(self.lessons_path)
+        lp.cmd_apply(lessons, "2026-11-19")
+        self.assertEqual(before, self.ci_rules_path.read_text(encoding="utf-8"))
+
+    def test_apply_keeps_a_stub_ci_rule_intact(self) -> None:
+        """回归：已有的空桩也不许被覆盖 / 改写。"""
+        self._write_ci_rules(
+            [
+                {
+                    "id": "L-002",
+                    "title": "测试只许在临时目录里跑",
+                    "enabled": False,
+                    "pattern": None,
+                    "scope": [],
+                }
+            ]
+        )
+        before = self.ci_rules_path.read_text(encoding="utf-8")
+        _, lessons = lp.load_lessons(self.lessons_path)
+        lp.cmd_apply(lessons, "2026-11-19")
+        self.assertEqual(before, self.ci_rules_path.read_text(encoding="utf-8"))
+        self.assertIn("尚未实现，待补正则", self._promoted_block("L-002"))
+
+    def test_append_ci_stub_never_overwrites_an_existing_rule(self) -> None:
+        """append_ci_stub 按 id 去重：规则已在（含已实现的）就原样留着。"""
+        self._write_ci_rules(
+            [{"id": "L-002", "enabled": True, "pattern": "x", "scope": ["tests/*.py"]}]
+        )
+        before = self.ci_rules_path.read_text(encoding="utf-8")
+        _, lessons = lp.load_lessons(self.lessons_path)
+        lesson = next(x for x in lessons if x.id == "L-002")
+        self.assertFalse(lp.append_ci_stub(lesson))
+        self.assertEqual(before, self.ci_rules_path.read_text(encoding="utf-8"))
 
     def test_zone_insert_keeps_markers(self) -> None:
         text = "head\n<!-- promoted-zone:start -->\nold\n<!-- promoted-zone:end -->\ntail\n"

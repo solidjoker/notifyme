@@ -126,14 +126,16 @@ python -m loops.run status
 | 门 | 入口 | 管的什么 |
 | --- | --- | --- |
 | **notifyme 权威自检** | `docs/scripts/local_check.ps1`（七步） | 服务端 pytest + Python 语法 + 隐私守卫 + 版本号 + Android 单测/双 flavor/Lint + Lint 基线 + ktlint |
-| **magpie 自检** | `python -m gates.selfcheck` | 全仓库 `.py` 编译 + magpie 自己的 52 条单测 + 错题本格式 + `config/ci_rules.json` 里启用的规则 + 配置与提示词占位符 |
+| **magpie 自检** | `python -m gates.selfcheck` | 全仓库 `.py` 编译（跳过被剪枝的目录）+ magpie 自己的 61 条单测 + 错题本格式 + `config/ci_rules.json` 里启用的规则 + 配置与提示词占位符 |
 | **notifyme CI** | `.github/workflows/android.yml` | 与 local_check 同一套口径 |
 | **magpie 自带 CI** | `docs/magpie-workflow/ci/{ci.yml,hazard.yml}` | 留档未启用 |
 
 开 PR 前仍以 `local_check.ps1` 打印「全部通过，可以开 PR」为准；
-`gates.selfcheck` 是额外一道（52 条单测），两者都要绿。
-其中「CI 规则」那一步要扫全树（引擎用 `rglob`，`third_party/llama.cpp` 有 5 万个条目），
-真跑一次约 10 秒 —— 本机有 `third_party/` 时最慢，CI 上没有这个目录会快得多。
+`gates.selfcheck` 是额外一道（61 条单测），两者都要绿。
+「CI 规则」那一步要扫全仓库 —— 但**已经剪过枝**：vendored 依赖（`third_party/`）、
+构建产物与本地缓存（`build/` `dist/` `tmp/` `.gradle/` `.gradle-home/` `.loopstate/` 等）
+与 `.git/` 都不进（`gates/selfcheck.py` 的 `SKIP_DIR_NAMES`）。
+本机有 `third_party/` 时整轮约 8 秒，剪枝前是 25 秒。
 
 ## 七、已知边界（别踩）
 
@@ -155,7 +157,14 @@ python -m loops.run status
    notifyme 侧网关地址指向本机 `127.0.0.1:8080`，安装器给了两条 warning，属预期。
 5. **`tests/fixtures/*.jsonl` 必须入库**：仓库的 `*.jsonl` 全局忽略规则会把它挡掉，
    所以 `.gitignore` 里显式加了 `!tests/fixtures/*.jsonl` 例外；新克隆后离线演练才跑得起来。
-6. **`selfcheck` 会编译仓库内全部 `.py`**（含 `server/` 与本地 `third_party/llama.cpp`），本地首跑会慢一点。
+6. **`selfcheck` 编译仓库内的 `.py`，但跳过被剪枝的目录**：`gates/selfcheck.py` 的 `SKIP_DIR_NAMES`
+   里有 `.git` / `.venv` / `__pycache__` / `third_party` / `tmp` / `dist` / `build` / `.loopstate` /
+   `.gradle` / `.gradle-home` / `.idea` / `.kotlin` / `.pytest_cache` / `node_modules`。
+   这些目录里**没有本仓库的正规源码**（`git ls-files` 里没有任何被跟踪的文件落在这些名字的目录下），
+   剪掉只影响速度、不影响覆盖；代价是「第三方代码的语法错误」不再由 selfcheck 报出来
+   （第三方代码坏了该由它自己的构建负责）。**新增一个叫 build / dist / tmp 的源码目录时要同步改这个清单。**
+   剪枝必须用 `os.walk` 的 in-place 剪枝：`rglob` 即使逐条过滤路径段，也已经把整棵树走了一遍
+   （本机 5 万条目 1.5 秒 → 剪枝后 1900 个文件 0.04 秒）。
 7. **payload 的 `tests/` 在仓库根**：notifyme 的 pytest 只跑 `server/` 目录级发现（CI 与 local_check 都是），
    根目录 `tests/` 不会被误收进服务端用例。
 8. **Windows 中文控制台**：`gates/*` 会打印 ✓ 与 ✗，这两个字符不在 GBK 里，裸跑会在最后一行抛
