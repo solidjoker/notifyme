@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 from gates import acceptance_check as acc
 from gates import hazard_check as hz
 from gates import lessons_promote as lp
+from gates import selfcheck as sc
 
 FIXTURES = REPO_ROOT / "tests" / "fixtures"
 LESSONS_FIXTURE = FIXTURES / "lessons_sample.md"
@@ -265,6 +266,90 @@ class LessonTests(unittest.TestCase):
         self.assertIn("old", out)
         self.assertLess(out.index("promoted-zone:start"), out.index("new-block"))
         self.assertLess(out.index("new-block"), out.index("promoted-zone:end"))
+
+
+# --------------------------------------------------------------------------- CI 规则
+
+
+class CiRuleTests(unittest.TestCase):
+    """config/ci_rules.json 里启用的规则：真会查，而且查得准。
+
+    夹具一律落在临时目录（错题本 L-002 本身的要求）：
+    违规样本写进临时目录里的假仓库，模块全局 REPO_ROOT / CI_RULES 指过去，
+    用完还原 —— 绝不碰仓库里的真文件。
+
+    样本里的配置目录名单独放一行：拼样本时它与 home 引用不在同一行。
+    否则本文件自己就在 L-002 的 scope 里，会把这条规则的测试自己拦下来。
+    """
+
+    CFG_DIR = ".claude"
+
+    def setUp(self) -> None:
+        tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp_dir.cleanup)
+        self.tmp = Path(tmp_dir.name)
+
+        saved = (sc.REPO_ROOT, sc.CI_RULES)
+        sc.REPO_ROOT = self.tmp
+        sc.CI_RULES = self.tmp / "config" / "ci_rules.json"
+
+        def restore() -> None:
+            sc.REPO_ROOT, sc.CI_RULES = saved
+
+        self.addCleanup(restore)
+
+    def _use_real_repo(self) -> None:
+        sc.REPO_ROOT = REPO_ROOT
+        sc.CI_RULES = REPO_ROOT / "config" / "ci_rules.json"
+
+    def _copy_real_rules(self) -> None:
+        """把真规则表拷进临时仓库 —— 测的是真 pattern，不是抄一份改名的。"""
+        (self.tmp / "config").mkdir(parents=True, exist_ok=True)
+        src = REPO_ROOT / "config" / "ci_rules.json"
+        (self.tmp / "config" / "ci_rules.json").write_text(
+            src.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+
+    def _rule(self) -> dict:
+        data = json.loads((REPO_ROOT / "config" / "ci_rules.json").read_text(encoding="utf-8"))
+        return next(r for r in data["rules"] if r["id"] == "L-002")
+
+    def test_l002_rule_is_enabled_and_has_a_pattern(self) -> None:
+        """L-002 不再是桩：enabled=true 且 pattern / scope 都填上了。"""
+        rule = self._rule()
+        self.assertTrue(rule["enabled"], rule)
+        self.assertTrue(rule["pattern"], rule)
+        self.assertTrue(rule["scope"], rule)
+
+    def test_l002_reports_a_violation_in_a_temp_fixture(self) -> None:
+        """规则被真正执行：临时假仓库里的违规写法必须被报出来。"""
+        self._copy_real_rules()
+        (self.tmp / "tests").mkdir(parents=True, exist_ok=True)
+        bad_line = "cfg = Path.home() / " + '"' + self.CFG_DIR + '"' + "\n"
+        (self.tmp / "tests" / "test_bad.py").write_text(bad_line, encoding="utf-8")
+
+        violations, pending = sc.check_ci_rules()
+        hits = [v for v in violations if v.startswith("L-002 ")]
+        self.assertTrue(hits, violations)
+        self.assertIn("tests/test_bad.py:1", hits[0])
+        self.assertEqual([], [p for p in pending if p.startswith("L-002")])
+
+    def test_l002_does_not_flag_temp_dir_paths(self) -> None:
+        """临时目录里造一个同名配置目录不算违规 —— 别把自己人拦下来。"""
+        self._copy_real_rules()
+        (self.tmp / "tests").mkdir(parents=True, exist_ok=True)
+        ok_line = "cfg = tmp_path / " + '"' + self.CFG_DIR + '"' + "\n"
+        (self.tmp / "tests" / "test_ok.py").write_text(ok_line, encoding="utf-8")
+
+        violations, _ = sc.check_ci_rules()
+        self.assertEqual([], [v for v in violations if v.startswith("L-002 ")])
+
+    def test_l002_is_clean_on_the_real_repo(self) -> None:
+        """当前仓库必须干净：命中数 0，而且 L-002 不再被列成「还是桩」。"""
+        self._use_real_repo()
+        violations, pending = sc.check_ci_rules()
+        self.assertEqual([], [v for v in violations if v.startswith("L-002 ")])
+        self.assertEqual([], [p for p in pending if p.startswith("L-002")])
 
 
 if __name__ == "__main__":

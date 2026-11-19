@@ -7,10 +7,17 @@
       "title": "测试只许在临时目录里跑",
       "why": "自动化循环在开发机上跑测试，把维护者自己的凭据文件写坏了。",
       "evidence": "8b41d07, #388",
-      "enabled": false,
-      "pattern": null,
-      "scope": [],
-      "note": "从 LESSONS 晋升。补上 pattern / scope 并把 enabled 改成 true，CI 才会真的查。"
+      "enabled": true,
+      "pattern": "(?:(?=.*(?:\\bPath\\s*\\.\\s*home\\s*\\(|\\bexpanduser\\s*\\(\\s*['\\\"]~['\\\"]|\\bexpandvars\\s*\\(\\s*['\\\"][^'\\\"]*HOME|environ\\s*\\[\\s*['\\\"](?:HOME|USERPROFILE|HOMEDRIVE|HOMEPATH)['\\\"]\\s*\\]|environ\\s*\\.\\s*get\\s*\\(\\s*['\\\"](?:HOME|USERPROFILE|HOMEDRIVE|HOMEPATH)['\\\"]|getenv\\s*\\(\\s*['\\\"](?:HOME|USERPROFILE|HOMEDRIVE|HOMEPATH)['\\\"]|['\\\"]~/|['\\\"]~['\\\"]))(?=.*[/'\\\"\\\\]\\.(?:claude|config|aws|ssh|gnupg|kube|docker|gem|npm)\\b)|(?=.*['\\\"]\\$\\{?HOME))",
+      "scope": [
+        "tests/*.py",
+        "app/src/test/**/*.kt",
+        "server/*.py",
+        "gates/*.py",
+        "loops/*.py",
+        "docs/scripts/*.py"
+      ],
+      "note": "已补实现（enabled=true，CI 真会查）：同一行里同时出现「真实 home 引用」（Path.home() / expanduser(\"~\") / $HOME / environ[\"HOME\"] / 字符串里的 ~）与「用户配置目录名」（.claude / .config / .aws / .ssh / .gnupg / .kube / .docker / .gem / .npm），或字面量 \"$HOME\"，即判违规。scope 覆盖本仓库自己维护的代码（tests / app 的 Kotlin 测试 / server / gates / loops / docs/scripts）；third_party（vendored）与 tmp（本地草稿）不扫——新增顶层代码目录时要往 scope 里补一条。引擎逐行匹配，拆成两行的写法抓不到；硬编码 C:\\Users\\<真实名> 不在本规则范围（那是 AGENTS.md §4.3 的红线）。"
     }
   ]
 }
