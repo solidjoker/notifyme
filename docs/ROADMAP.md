@@ -882,6 +882,36 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 计数：服务端用例仍 **944** 条；magpie 单测 68 → **75** 条；
     `check_ci_rules` 2.45 秒 → **0.13 秒**，整轮 selfcheck ≈ 5.7 秒 → **≈ 2.1 秒**；
     覆盖核对：扫 475 个文件，被跟踪文件 468 个一个没漏。
+- **小米 17 真机回归（`ebb079b5` / 25098PN5AC / Android 17 / 1220×2656）：0.3.19 → 0.4.0 全链路绿（docs/xiaomi-device-regression-2026-11-19）**
+  - 背景：`progress.md` 里连着几轮都写着「小米17 未连接，真机回归待插机」——
+    2026-11-19 这台机插着（`adb devices` 可见 `ebb079b5`），把欠着的回归补上。
+  - 升级：`adb install -r app/build/outputs/apk/open/debug/notifyme-open.apk`（open flavor，零密钥）→
+    `0.3.19 (25)` → **`0.4.0 (26)`**，数据保留（`messages.jsonl` 1987 行 / `analysis.jsonl` 110 行原样在）。
+  - 验证（逐项）：
+    ① **监听器在位**：`enabled_notification_listeners` 含 `com.notifyme.android/…NotifyMeListener`；
+    ② **悬浮窗在位**：`APPLICATION_OVERLAY` 156×156，内容区 y=735 → **绝对 885**，
+       与 `OverlayPlacementCoreTest` 钉的小米期望值（2656 屏高 → 球初始 885）**逐像素吻合**；
+    ③ **UI 正常**：首页 ⚡最近待办 1（已加日历）、来源筛选 5 个 chip（含钉钉）、重点关注 4 张会话卡
+       （私聊/群聊徽标 + `发送者: 正文` 预览 + `38+ 条` 折叠箭头）、悬浮球在位；
+    ④ **端侧全链路跑通**（`s1_type=laya_ondevice`，M4 本地模型）：
+       点「分析」→ `入选 1 个会话（候选 156）` → `stage=LOCAL_QUESTIONS` →
+       `fork s1 p=0.45 … need_action_prob=0.45, importance=4.2, due_window=today, topic=smalltalk, confidence=0.02`
+       → `fork escalate → s2` → `LOCAL_PREFILL 618` → `LOCAL_DECODE 3478` → `SAVING` →
+       `WorkManager SUCCESS`；`analysis.jsonl` 110 → **111** 条，新记录 `protocol=laya`、
+       `s1.need_action={value:false, prob:0.4497}`、`s2.summary=闲聊买东西记录`；
+    ⑤ **零崩溃**：整个过程 logcat 无 FATAL / ANR / 被杀（进程 23981 一直活着）；
+    ⑥ **通知形状取证复跑**：工具 `--serial ebb079b5` 出 38 个包的结论，
+       但**微信 / 钉钉 / 飞书三个 IM 当时都没有活跃通知** → 形状结论仍以 2026-11-12 为准；
+       App 侧历史入库数据反向印证：微信 `[2条]姜倩: [图片]`（半角冒号、冒号后无空格）、
+       钉钉 `「11月19日班级通知」通知确认情况`；**飞书仍缺**（已装 `com.ss.android.lark` 但无活跃通知）。
+  - 顺带记两条设备侧事实（都写进了取证记录 §2.5）：
+    ① 钉钉包名是 `com.alibaba.android.rimet`、飞书是 `com.ss.android.lark` ——
+       用 `dingtalk` / `feishu` 关键词去 `pm list packages` 里找**找不到**（本轮踩了一次）；
+    ② **抓 `messages.jsonl` 别用 PowerShell 的 `Out-File -Encoding UTF8`** —— 它会加 BOM，
+       抓回来的第一行解析失败，看着像设备上的数据坏了；用 `cmd /c "adb … > file"` 才字节安全
+       （设备上的文件实测**无 BOM**、1987 行全部解析正常）。
+  - 计数：服务端用例仍 **944** 条；magpie 单测 **77** 条；本轮无代码改动（只更新两份文档）。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：
