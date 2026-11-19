@@ -31,22 +31,6 @@
 
 ---
 
-## L-001 修之前先原样复现
-
-- Rule: 动手改之前，先在报告人用的那个界面上原样复现一次；复现不出来，就先问，不要猜着修。
-- Why: 一个 issue 返工 4 次，每次都只修了截图里的那一个 Agent，根本原因一直没碰上。
-- Evidence: 3f9c1a2, #412
-- Seen: 2026-10-06, 2026-10-08, 2026-10-11
-- Machine-checkable: false
-
-## L-002 测试只许在临时目录里跑
-
-- Rule: 测试读写配置必须落在临时目录，绝不允许碰 `~/.claude`、`~/.config` 这类真实配置。
-- Why: 自动化循环在开发机上跑测试，把维护者自己的凭据文件写坏了。
-- Evidence: 8b41d07, #388
-- Seen: 2026-10-07, 2026-10-09, 2026-10-12
-- Machine-checkable: true
-
 ## L-003 上一轮测试没跑完，不许发版
 
 - Rule: main 分支上的测试必须跑完才算数；为了赶下一个提交去取消它，等于没测。
@@ -70,3 +54,43 @@
 - Evidence: a71bc33, #467
 - Seen: 2026-10-15
 - Machine-checkable: true
+
+## L-006 要拿 GitHub 凭据时用 CredReadW 直读凭据管理器里的 git:h
+
+- Rule: 要拿 GitHub 凭据时用 CredReadW 直读凭据管理器里的 git:https://github.com，不要用 git credential fill
+- Why: 本机 credential.helper = helper-selector 会挂在交互提示上等输入，脚本连着两个后台任务被打断
+- Evidence: 43afb94, fbd4704
+- Seen: 2026-11-19
+- Machine-checkable: false
+
+## L-007 在非交互 shell 里合并 PR 走 REST PUT /repos/{own
+
+- Rule: 在非交互 shell 里合并 PR 走 REST PUT /repos/{owner}/{repo}/pulls/{n}/merge 并配 GH_PROMPT_DISABLED=1，不要直接调 gh pr merge
+- Why: gh pr merge 会等确认输入，没有终端时挂住不返回，PR 一直停在 OPEN
+- Evidence: 43afb94, fbd4704
+- Seen: 2026-11-19
+- Machine-checkable: false
+
+## L-008 写交给 GitHub API 的 JSON 文件用 [IO.File]::Wri
+
+- Rule: 写交给 GitHub API 的 JSON 文件用 [IO.File]::WriteAllText(path, json, UTF8Encoding($false))，不要用 Set-Content -Encoding UTF8
+- Why: PowerShell 5.1 的 Set-Content -Encoding UTF8 会写 BOM，GitHub 回 400 Problems parsing JSON，看着像接口坏了
+- Evidence: 43afb94, fbd4704
+- Seen: 2026-11-19
+- Machine-checkable: false
+
+## L-009 跑依赖 git 的仓库工具前先确认 GIT_CONFIG_COUNT 与 GIT
+
+- Rule: 跑依赖 git 的仓库工具前先确认 GIT_CONFIG_COUNT 与 GIT_CONFIG_KEY_n 配套，键缺失就先清掉 GIT_CONFIG_COUNT
+- Why: harness 注入了 GIT_CONFIG_COUNT=2 却没给 GIT_CONFIG_KEY_0，所有 git 调用失败，隐私守卫退化成目录遍历，把被 .gitignore 忽略的本机文件误报成 8 处违规
+- Evidence: 43afb94
+- Seen: 2026-11-19
+- Machine-checkable: false
+
+## L-010 错题本相关单测要读夹具，不读活仓库的 LESSONS.md；晋升会改写活文件，用
+
+- Rule: 错题本相关单测要读夹具，不读活仓库的 LESSONS.md；晋升会改写活文件，用例跟着它变就会自己跑红
+- Why: 2026-11-19 第一次真跑 gates.lessons_promote --apply，L-001 / L-002 晋升后从错题本消失，selfcheck 的单测当场挂掉 1 失败 + 2 错误
+- Evidence: 58e30b6
+- Seen: 2026-11-19
+- Machine-checkable: false

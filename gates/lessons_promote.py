@@ -107,7 +107,14 @@ def split_document(text: str) -> tuple[str, list[Lesson], str]:
     return head, lessons, ""
 
 
-def load_lessons(path: Path = LESSONS) -> tuple[str, list[Lesson]]:
+def load_lessons(path: Path | None = None) -> tuple[str, list[Lesson]]:
+    """读错题本。
+
+    path 缺省时在**调用时**取模块全局 LESSONS，而不是在函数定义时把默认值
+    绑死 —— 绑死的话，调用方临时换掉 lp.LESSONS 也改不动这里（单测要往临时
+    目录里写，绑死了就会写到真仓库的 LESSONS.md 上）。
+    """
+    path = path or LESSONS
     text = path.read_text(encoding="utf-8")
     head, lessons, _ = split_document(text)
     return head, lessons
@@ -161,14 +168,16 @@ def insert_into_zone(standards_text: str, blocks: list[str]) -> str:
     return f"{head}{ZONE_START}\n{new.rstrip()}\n{ZONE_END}{rest}"
 
 
-def load_ci_rules(path: Path = CI_RULES) -> dict[str, Any]:
+def load_ci_rules(path: Path | None = None) -> dict[str, Any]:
+    """读 CI 规则表；path 缺省时同样在调用时取模块全局 CI_RULES。"""
+    path = path or CI_RULES
     if not path.exists():
         return {"version": 1, "_comment": "由 LESSONS 自动晋升的机器检查。pattern 为空 = 待人工实现。", "rules": []}
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def append_ci_stub(lesson: Lesson) -> bool:
-    data = load_ci_rules()
+    data = load_ci_rules(CI_RULES)
     ids = {rule.get("id") for rule in data.get("rules", [])}
     if lesson.id in ids:
         return False
@@ -230,7 +239,12 @@ def cmd_apply(lessons: list[Lesson], date: str, dry_run: bool = False) -> int:
         return 0
 
     if dry_run:
-        print(f"\n[dry-run] 会把 {len(blocks)} 条挪进 {STANDARDS.relative_to(REPO_ROOT)}：")
+        # 目标可能不在仓库里（单测指向临时目录）—— relative_to 会抛 ValueError。
+        try:
+            target = STANDARDS.relative_to(REPO_ROOT)
+        except ValueError:
+            target = STANDARDS
+        print(f"\n[dry-run] 会把 {len(blocks)} 条挪进 {target}：")
         for block in blocks:
             print(block)
         return len(blocks)
