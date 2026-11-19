@@ -17,6 +17,51 @@
 
 仓库已内置 `gradlew` / `gradlew.bat` 与 `gradle/wrapper/`，首次构建会自动拉取 Gradle 8.9。
 
+### Android SDK 组件清单（sdkmanager）
+
+装齐这五项，本地七步自检（含 Android 四步）才能全跑通：
+
+```powershell
+$sdk = "$env:LOCALAPPDATA\Android\Sdk"      # 或你放的任意位置
+$env:ANDROID_HOME = $sdk
+$env:ANDROID_SDK_ROOT = $sdk
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+
+# cmdline-tools 解压到 $sdk\cmdline-tools\latest\（sdkmanager 要求这个目录名）
+& "$sdk\cmdline-tools\latest\bin\sdkmanager.bat" "platform-tools" "platforms;android-34" "build-tools;34.0.0" "cmake;3.31.6" "ndk;27.2.12479018"
+```
+
+| 组件 | 版本 | 为什么需要 |
+|---|---|---|
+| `platforms;android-34` | 34 | compileSdk / targetSdk |
+| `build-tools;34.0.0` | 34.0.0 | AGP 8.5.2 要求 |
+| `ndk;27.2.12479018` | 27.2.12479018 | M4 端侧 native（llama.cpp）编译，版本必须与 `app/build.gradle.kts` 一致 |
+| `cmake;3.31.6` | 3.31.6 | 同上，`externalNativeBuild` 要用 |
+| `platform-tools` | 最新 | `adb`（真机调试 / 取证） |
+
+另外还要 **`third_party/llama.cpp`（v0.5.0）**：CI 里 clone，**不入库**。
+本地跑 `assembleOpenDebug` / `assembleBetaDebug` 前要放好，否则 native 那步编不过：
+
+```bash
+git clone --depth 1 --branch b4650 https://github.com/ggml-org/llama.cpp third_party/llama.cpp
+```
+
+最后把 `local.properties`（gitignored）指到 SDK：
+
+```properties
+sdk.dir=C\:\Users\<你>\AppData\Local\Android\Sdk
+```
+
+#### 本机实测的三个坑
+
+1. **`local_check.ps1` 必须是 UTF-8 + BOM**：PowerShell 5.1 按 GBK 读无 BOM 的 UTF-8，
+   脚本里的中文会变成乱码并触发语法错（`MissingEndCurlyBrace` 之类）。
+   用编辑工具改它时**别把 BOM 弄丢** —— 丢了就整个脚本跑不起来。
+2. **Gradle 缓存损坏**：`Could not read workspace metadata from …caches\8.9\transforms\…\metadata.bin`
+   会直接 BUILD FAILED（不是代码问题）。删掉整个 `caches\8.9\transforms` 重跑即可。
+3. **首次构建慢**：要下 Gradle 8.9 + 全部依赖 + NDK 编译 native，约 3–5 分钟。
+
+
 依赖（见 `app/build.gradle.kts`）：
 
 | 依赖 | 版本 | 用途 |

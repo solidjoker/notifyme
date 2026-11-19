@@ -168,19 +168,24 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **提醒三级降级链的口径只有一份：`ReminderChainCore`（20 条）**：决策全在 `decide()`，`runReminderChain` 只采集事实。**L1 分两段写**（事件行 + 提醒行）：提醒行缺失 → 不算 L1 成功、跳过 L2、降级 L3 闹钟（文案 `NOTE_CALENDAR_NO_ALERT` 带「App内提醒」→ 老记录推成 alarm）；闹钟也没设上 → `failed(dropEventId)`，调用方删掉孤儿事件。note 文案契约六条锁在单测里。
 - **S1 判定有两处口径：`S1ScaleCore`（18 条）+ `S1NeedActionCore`（21 条）**。① 重要度是 **0-9 十档** score 题，score 就是档位；分制从答案的 legend / probabilities 条目数读（读不到回落 10 档）；**只夹取、不缩放**（旧「score ≤ 1 就 ×9」把闲聊档抬过升级闸 6.0）；缺 score 按概率算期望，都没有则 0.0。② need_action 概率三处读点（`need_action_prob` / `need_action.noul` / `noul`）归一到 `readAnswerProb`，**读不出来返 `null` 不是 0.0**（0.0 = 明确无需行动）→ 置信度归 0 交给升级闸重判；可读形态 `noul`/`prob`/`value` + 数字字符串，越界先夹取，对象形态不猜。systemone 解析抽成 `AnalysisParsing.parseSystemOneAnswers`。改前跑两个同名 Test.kt。
 - **通知抽取口径只有一份：`NotificationTextCore` + `NotificationShapeEvidenceTest`**（+19 条）：真机取证证实微信正文是 `[11条]发言人: 正文`；`hasUnreadPrefix` / `splitSender` / `isPlausibleSender` 是唯一口径。改 `PrefixImParser` / `GenericNotificationParser` / `NotifyMeListener.toRawNotification` 任一都要跑 `NotificationShapeEvidenceTest`（它固化「某家 App 的通知 → 入库字段」的映射）。
-- **`lintOpenDebug` 只剩 3 条 warning，刻意保留别去“修”**：① `ObsoleteLintCustomCheck`（依赖库自带 lint.jar）；② `OldTargetApi`（`targetSdk 34` 是产品决定）；③ `ChromeOsAbiSupport`（release 只打 `arm64-v8a`）。
+- **`lintOpenDebug` 只剩 3 条 warning，刻意保留别去“修”**：`ObsoleteLintCustomCheck` / `OldTargetApi`（`targetSdk 34` 是产品决定）/ `ChromeOsAbiSupport`。
+  **但 `OldTargetApi` 是「环境依赖」项**（按 SDK 元数据里的「最新 API 号」判定，SDK 组件不全的机器上不报）
+  → lint-summary 分两种：**新增** issue 永远判红；**已知项缺失**里 `OldTargetApi` 只提示不判红。
+  改口径动 `local_check.ps1` 的 `$baseline` / `$envDependent`。
+- **本机 Android SDK 已装好**（`$env:LOCALAPPDATA\Android\Sdk`，2026-11-20），七步本地自检（含 Android 四步）
+  能**全 PASS**，不用只靠 CI 判定 —— 组件清单与坑见 [docs/BUILD.md](docs/BUILD.md)。
 - **改 `docs/architecture/diagrams/*.mmd` 必须重渲并回写尺寸表**：`mmdc -i X.mmd -o X.svg`，PNG 给 `-w <viewBox 宽 + 20> -H <viewBox 高 + 60>`；脑图 06 的 viewBox 起点不是 `0 0`（单独 `-w 3200 -H 1600`）；`-h` 是 help 不是高度；渲完量像素回写 README 索引表。
 - **控制台归类规则只在 `server/console_classify.js`**（UMD，无 DOM），别写进 `console_ui.py` 的 HTML；`app.py` 注入 `/*__CONSOLE_CLASSIFY_JS__*/`。改规则跑 `server/test_console_classify.py`（`REQUIRE_NODE=1` 时 node 缺失要 **fail 不是 skip**）；前端降级 `var CC = window.ConsoleClassify || null`。
 - **浏览器调试实例的坑**（点合并备用路径）：WinINET 代理 `127.0.0.1:18888` 会报隧道错，显式 `--proxy-server=http://127.0.0.1:7890`；`--remote-debugging-port` 必须配独立 user-data-dir（136+ 策略）；token 页撞 sudo mode 需 2FA。
 - **排队通道 `/queue` 是 best-effort**：端上 `SyncWorker.pushQueue` 只认 2xx，失败不重试；服务端 `queue_tasks` 按 `(device_id, task_id)` 整份覆盖、保留 7 天，`stale` = `updated_at` 超 30 分钟。
 - **控制台有 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）**：改 `console_ui.py` 后自检三件事：① 内联脚本 `node --check`；② `pytest server/test_console_*.py -q`；③ 浏览器实跑看 `errs: []`。**`patchSections` 只追加 `.pane-sec` 不清理临时节点**。
-- **PWA 外壳配色只有一套 aura 令牌**（`console_ui` 顶部常量 `AURA_BG` / `AURA_ACCENT` / `AURA_GOLD` / `ICON_BG`）：manifest 的 theme / background 与 `CONSOLE_ICON_SVG` 兜底图标、`pwa_icons/*.png`（`gen_icons.py` 读 `ICON_BG`）、SW 离线兜底页四处同源；`app.py` 不再自带 SVG 副本。离线页没法插值，靠 `test_console_ui.py` 8 条钉住。
+- **PWA 外壳配色只有一套 aura 令牌**（`console_ui` 顶部常量 `AURA_BG` / `AURA_ACCENT` / `AURA_GOLD` / `ICON_BG`）：manifest 的 theme / background 与 `CONSOLE_ICON_SVG` 兜底图标、`pwa_icons/*.png`、SW 离线兜底页四处同源。离线页没法插值，靠 `test_console_ui.py` 8 条钉住。
 - **端侧排队上报的 device_id 不能碰硬件标识**：`QueueStateCollector` 用 SharedPreferences("queue_state", "device_seed") 里的随机种子做 FNV-1a 派生（`android-` + 8 位 hex），**不要改用 ANDROID_ID / IMEI / 序列号**。
-- **控制台统计口径＝服务端全库真值，不是前端已加载页**：控制台概览条与统计 Tab 的数据来自 `GET /stats`（server/stats_api.py 聚合全库），
-前端只有在接口不可用或用户切了来源过滤时才退回本地估算，并在指标下方标「估算 · 仅已加载 N 条」。
-两个坑：① `/stats` 的 `by_pkg` / `by_source` / `by_kind` 是**对象数组** `[{pkg|source|kind, count}]`，而前端本地算法生成的是 `{键: 次数}` —— 必须走 `pairList()` 归一化再渲染，
-直接 `Object.keys()` 会打印成 `[object Object]`；② 分析侧的 `redacted` / `redaction_rules` / `redaction_hits` 字段服务端一直返回，
-但前端要显式渲染（`redactBadge` / `redactDetail`）并纳入 `analysisSearchText` 搜索，否则看不到「哪些内容被替换成占位符」。
+- **控制台统计口径＝服务端全库真值，不是前端已加载页**：概览条与统计 Tab 的数据来自 `GET /stats`（stats_api.py 聚合全库），
+前端只有在接口不可用或用户切了来源过滤时才退回本地估算，并标「估算 · 仅已加载 N 条」。
+两个坑：① `/stats` 的 `by_pkg` / `by_source` / `by_kind` 是**对象数组** `[{pkg|source|kind, count}]`，而前端本地算法生成的是 `{键: 次数}` —— 必须走 `pairList()` 归一化，
+直接 `Object.keys()` 会打印成 `[object Object]`；② 分析侧的 `redacted` / `redaction_rules` / `redaction_hits` 前端要显式渲染（`redactBadge` / `redactDetail`）
+并纳入 `analysisSearchText` 搜索，否则看不到「哪些内容被替换成占位符」。
 - **周期分析任务按 tag 反查不到就不上报**：`AnalysisScheduler` 的周期任务不带 tag，`QueueStateCollector.collect()` 只按 tag 采集 —— 控制台「排队」Tab 看不到周期任务，已知取舍不是 bug。
 
 - **会话卡内的「日期 / 发送者」两级分组**：规则在 `console_classify.groupMessages(msgs, dim, getTs, getSender)` —— **按 `getTs` 精确值分桶**，调用方要传当天零点对齐的时间戳（`console_ui.dayStartMs()`）。状态存 `wx_group_v1`，`setConvGroupDim` / `convDimBar` / `groupMsgsByDim` / `convGroupHtml` 一起改。
@@ -231,7 +236,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ⑤ **筛选到某一组时不插分组标题**，但 chip 始终全四个（`FILTERS` = 全部 / 需要处理 / 生效中 / 已过期）；空态区分「一条都没有」（`emptyFilter` 返 null）与「本组没有」；`emptyFilter(totalCount, visibleCount, filter)` 第二参是**筛选后可见条数**，只判总数会让「命中多条」的页面同时显示列表与空态横幅（真机复现过）。
   改分组语义、组内方向或筛选键前先跑 `app/src/test/java/com/notifyme/android/ReminderListCoreTest.kt`（36 条）。
 
-- **会话可见性的四层门槛只有一份口径：`ConvVisibilityCore`**（纯函数 + 28 条），别在 `MainActivity` / `OverlayService` / `AnalysisWorker` 里各写一套：
+- **会话可见性的四层门槛只有一份口径：`ConvVisibilityCore`**（纯函数 + 28 条），别在 `MainActivity` / `OverlayService` / `AnalysisWorker` 各写一套：
   ① **顺序是契约**：关注名单（`WatchlistStore.getUnwatched` 的会话 id，形如 `pkg|会话名`，精确匹配）→ 自身/系统源（`AppSourceRegistry.isBlocked`）→ 启用集合（`AppSourceStore.isEnabled`）→ 首页来源筛选（`AppFilterCore.matches`，空串＝全部恒通过）。顺序只影响 `why()` 把拦截原因归到哪一类，四层全是 AND。
   ② **`forced` 只放宽「启用集合」这一层**。自身/系统源任何情况都拦 —— `isEnabled` 内部虽然也判过 `isBlocked`，但 forced 分支根本不走 `isEnabled`，那条判断此时失效，所以 Core 里这一行不是冗余，删掉就会出现「立即分析」把 a11y 自抓噪声喂给模型。
   ③ **分析门禁传 `AppFilterCore.ALL`**：首页来源筛选只影响展示，不能让「首页正在看飞书」停掉其它来源的周期分析；分析链的关注名单**故意传 `emptySet()`** —— 门禁在 `ConvTagCore.shouldAnalyze`（`forced && !quiet` 放行），两处都判会把「立即分析本会话」一起拦掉。
@@ -347,13 +352,13 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **排队过期行的清理与设备维度过期口径：`storage.cleanup_queue_tasks` / `queue_devices`**（`test_queue.py` 6 条）。① 清理不能只挂上报路径（设备全停报后僵尸行永挂 devices），读取路径 `_ensure_db_ready` 也要调 `_maybe_cleanup_queue`（1h 节流）；② 设备 chip 的 `active` 只算未过 TTL 的 queued+running，另加第 4 键 `stale`；③ 用例 fixture 必须复位 `app_module._queue_cleanup_at`。
 - **排队 Tab 的状态 chip 与汇总同源**（`console_ui.queueStateTotal`；空态另见 `queueEmptyScope` 契约）。① chip 计数走 `queueStateTotal(st)`（优先 `QUEUE_SUMMARY[st]`）——数当前页会让 600 排队 + 20 已完成显示「已完成 0」；② 先加「chip 与 summary 一致」用例。
 - **顾问存档损坏不能冒充「没有报告」**（`suggests._advisor_state` 返三元组 + `ADVISORS_ERR`；`test_stats_api.py` 3 条守着）。
-① 损坏时份数必须给 `None`（`return None, 0, True`），给 `0` 会让 priority 50 的「还没有顾问报告 / 顾问存档 0 份」规则命中 （存档坏但报告还在盘上）；
-② 建议侧改出 priority 85 的「顾问存档损坏，报告读不出来」，夹在 80（待办）与 100（失败排队）之间；
-③ 控制台按 `res[2].ok === false` 置 `ADVISORS_ERR`，错误分支必须排在 `if (!reports.length)` **之前**，否则落进通用空态把用户引去等端上跑复盘。
+① 损坏时份数必须给 `None`（`return None, 0, True`），给 `0` 会让 priority 50 的「还没有顾问报告」规则命中（存档坏但报告还在盘上）；
+② 建议侧改出 priority 85 的「顾问存档损坏，报告读不出来」；
+③ 控制台按 `res[2].ok === false` 置 `ADVISORS_ERR`，错误分支必须排在 `if (!reports.length)` **之前**。
 - **设备台数有「总数」与「在跑数」两个口径：`storage.count_live_devices`**（`test_queue.py` 3 条 + `test_stats_api.py` 2 条 + `test_console_queue.py` 5 条守着）。
-① `summary.devices` / `/stats.queue.devices` 是**现存台数**，含只剩 failed/done、早已停报的僵尸设备；`devices_active` 才是「active > 0 的台数」—— 概览条必须读后者，否则 0 任务也报 2 台。
-② 前端两个入口：`liveDeviceCount()`（离线/估算档，数 `QUEUE_DEVICES` 的 active）与 `deviceTallyText(q)`（统计卡，`设备 N 台（在跑 M 台）`）；缺 `devices_active` 键时按「全在跑」保守回落，别渲染 `NaN`。
-③ 新增聚合键必须同时改 `stats_api._queue_block` 与 `routes.query_queue` 两处，并登记 `test_module_split.EXPECTED_OWNER`。
+① `summary.devices` / `/stats.queue.devices` 是**现存台数**（含只剩 failed/done 的僵尸设备）；`devices_active` 才是「active > 0 的台数」—— 概览条必须读后者，否则 0 任务也报 2 台。
+② 前端两个入口：`liveDeviceCount()` 与 `deviceTallyText(q)`；缺 `devices_active` 键时按「全在跑」保守回落，别渲染 `NaN`。
+③ 新增聚合键必须同时改 `stats_api._queue_block` 与 `routes.query_queue` 两处。
 
 - **概览条「待处理」的会话数读 `todo_convs` 不是 `convs`**（`console_ui.renderOverview`，`test_console_ui.py` 1 条守着）。① `/stats` 有两个会话数：`convs`=有分析结果的、`todo_convs`=其中有待办的；那格数字是待办条数，副标题须配 `todo_convs`，否则与 `/suggests/next` 的「分布在 N 个会话」同屏打架。② 加键要接消费点。③ 断言写「新键在 + 旧键不在」。
 
@@ -376,7 +381,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **控制台侧的 S1 码值→中文映射只在规则层**（`console_classify.TOPIC_LABELS` / `DUE_LABELS` + `topicLabel` / `dueLabel` / `importanceChip`）：认不出原码原样回显、空值才回落；`none` 整段不渲染；「截止」优先序 `todo_due → s2.due_time → s1.due_window`；数值重要度与服务端 `util._importance_label` 同源。
 - **同一段里的分布与标量必须能对上：`stats_api._queue_block.by_kind`、`console_classify.mergePairsBy`**（9 条用例）。① 类型计数必须在「过期 → `continue`」**之后**；② 契约 `sum(by_kind.count) == total - stale`；③ `by_pkg` 的 NULL / 空串各成分组而 `normPkg()` 都折成微信 → `mergePairsBy` 归并后**按次数降序、同次数键名升序重排**；④ 加分布字段先问该不该跟同段过期口径走。
 - **控制台「是否待办」只有一份口径：`console_classify.safeBool` / `needActionOf` / `needActionChip`**（三处测试守着）。① 真值表与服务端 `util._safe_bool` 逐条对齐（字符串只认 true/1/yes/on/y/t）—— 别再写 `!!na.value`；② `needActionOf` 优先取顶层 `a.need_action`（= `/stats` 的 todo 口径），缺失才退回 `s1.need_action.value`；③ 徽标两态：⚡待办 / ✓ 无需行动。
-- **悬浮层几何只有一份口径：`OverlayPlacementCore`**（15 条）。① 写 `params.x/y` 前先过 `toContent()`：悬浮窗 `y` 是**内容区**坐标（绝对位置 = y + 状态栏 inset），状态栏只算一遍；② margin 不生效，宽度显式给（卡片 92%、面板 76%）；③ `CENTER` 按内容区居中，对齐整屏加 `panelCenterOffsetY`；④ 屏尺寸用 `Display.getRealMetrics`；⑤ 卡片顺延按前张实测高度，球位 = 屏高 1/3。
-- **库侧 0/1 flag 的读出口只有一份口径：`util._db_bool`（只有 1 / `1` 算真，与 SQL `col = 1` 同口径）+ `console_classify.dbBool` + `console_ui.dbBoolOf`**；写入口的 `_safe_bool` 是另一张表（认 true/yes），两者刻意不同 —— 别用 Python / JS 原生真值判库列。
+- **悬浮层几何只有一份口径：`OverlayPlacementCore`**（15 条）。① 写 `params.x/y` 前先过 `toContent()`：悬浮窗 `y` 是**内容区**坐标（绝对位置 = y + 状态栏 inset），状态栏只算一遍；② margin 不生效，宽度显式给（卡片 92%、面板 76%）；③ `CENTER` 按内容区居中，对齐整屏加 `panelCenterOffsetY`；④ 屏尺寸用 `Display.getRealMetrics`。
+- **库侧 0/1 flag 的读出口只有一份口径：`util._db_bool`（只有 1 / `1` 算真，与 SQL `col = 1` 同口径）+ `console_classify.dbBool` + `console_ui.dbBoolOf`**；写入口的 `_safe_bool` 是另一张表（认 true/yes），两者刻意不同。
 - **magpie 维护工作流 v0.2.0 已装进仓库**：三循环 + 错题本 + 五道门在 `loops/` `gates/`；自带两条 CI 不启用，见 `docs/magpie-workflow.md`。
 

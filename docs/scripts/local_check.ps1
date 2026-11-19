@@ -97,20 +97,35 @@ if (-not $SkipAndroid) {
         # lint.xml 的基线口径（app/lint.xml 只有注释、刻意不 ignore 任何东西）：
         # 报告里的 issue id 集合必须「恰好等于」下面这三条。多出一条就本地失败 ——
         # 这样新增问题一定会被人看到，而不是被 ignore 掉后悄悄消失。
+        #
+        # 但「已知项**缺失**」要分两种：
+        #   ① 消失的 issue 说明代码把它修好了 → 真变化，要报（且要更新基线）；
+        #   ② 消失的 issue 是**环境依赖**（OldTargetApi 依赖 SDK 元数据里「最新 API 号」，
+        #      SDK 组件不全 / 版本组合不同的机器上它根本不报）→ 不是回归，
+        #      只提示、不判红。判据：该 issue 在**基线清单的「环境依赖」名单**里。
+        # 新增 issue（$extra）永远判红 —— 那才是要拦的东西。
         $baseline = @('ChromeOsAbiSupport', 'ObsoleteLintCustomCheck', 'OldTargetApi')
+        # 依赖 SDK 元数据 / 组件版本，缺失不代表回归的已知项
+        $envDependent = @('OldTargetApi')
         $ids = @([regex]::Matches($content, 'id="([A-Za-z0-9_]+)"') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
         $extra = @($ids | Where-Object { $baseline -notcontains $_ })
-        $missing = @($baseline | Where-Object { $ids -notcontains $_ })
-        $drift = @($extra + $missing).Count
+        $missingAll = @($baseline | Where-Object { $ids -notcontains $_ })
+        $missingHard = @($missingAll | Where-Object { $envDependent -notcontains $_ })
+        $missingSoft = @($missingAll | Where-Object { $envDependent -contains $_ })
+        $drift = @($extra + $missingHard).Count
         Write-Host ''
         Write-Host ('=== [lint-summary] issues=' + $issues + ' errors=' + $errors + ' baseline-drift=' + $drift) -ForegroundColor Cyan
         if ($extra.Count -gt 0) {
             Write-Host ('    出现基线外的新 issue：' + ($extra -join ', ')) -ForegroundColor Yellow
             Write-Host '    要么修掉它，要么（确认无害后）把 id 加进 docs/scripts/local_check.ps1 与 app/lint.xml 的基线清单。' -ForegroundColor Yellow
         }
-        if ($missing.Count -gt 0) {
-            Write-Host ('    基线里的 issue 不见了：' + ($missing -join ', ')) -ForegroundColor Yellow
+        if ($missingHard.Count -gt 0) {
+            Write-Host ('    基线里的 issue 不见了：' + ($missingHard -join ', ')) -ForegroundColor Yellow
             Write-Host '    说明规则集或 SDK 版本变了，同步更新基线清单。' -ForegroundColor Yellow
+        }
+        if ($missingSoft.Count -gt 0) {
+            Write-Host ('    ~ 环境依赖的 issue 未出现：' + ($missingSoft -join ', ')) -ForegroundColor DarkGray
+            Write-Host '      这类 issue 依赖 SDK 元数据里的「最新 API 号」，SDK 组件不全时不会报；不是回归，不判红。' -ForegroundColor DarkGray
         }
         $script:Results.Add([pscustomobject]@{ Step = 'lint-summary'; Exit = ($errors + $drift); Ok = (($errors -eq 0) -and ($drift -eq 0)); Log = $lintXml }) | Out-Null
     }

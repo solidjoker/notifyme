@@ -912,6 +912,28 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
        （设备上的文件实测**无 BOM**、1987 行全部解析正常）。
   - 计数：服务端用例仍 **944** 条；magpie 单测 **77** 条；本轮无代码改动（只更新两份文档）。
 
+- **本机装齐 Android SDK：七步本地自检第一次全 PASS（fix/local-android-sdk）**
+  - 问题：本仓库的验收清单要求 `testOpenDebugUnitTest` / `assembleOpenDebug` / `assembleBetaDebug` /
+    `lintOpenDebug` 四步都本地跑过，但本机**没有 Android SDK**（C: / D: 均无 sdk 目录），
+    于是每轮 PR 都只能靠 CI 判定，本地无法自证。
+  - 修法：装齐 SDK 五件套 + `third_party/llama.cpp`（v0.5.0），并把 `local.properties` 指向它：
+    `cmdline-tools/latest`（sdkmanager）+ `platform-tools` + `platforms;android-34` +
+    `build-tools;34.0.0` + `ndk;27.2.12479018` + `cmake;3.31.6`。
+    组件清单与安装命令写进 [docs/BUILD.md](docs/BUILD.md) §环境要求。
+  - 顺带修掉 lint 基线的一处**误判**：`OldTargetApi` 由 `GradleDetector` 按 SDK 元数据里的
+    「最新 API 号」判定，**SDK 组件不全 / 版本组合不同的机器上它根本不报** ——
+    本机装完 SDK 后 lint 只有 2 条（`ChromeOsAbiSupport` / `ObsoleteLintCustomCheck`），
+    而 `local_check.ps1` 的基线是 3 条，缺一条就被判成「基线漂移」判红。
+    改法：lint-summary 分两种 —— **新增** issue 永远判红（那才是要拦的）；
+    **已知项缺失**里 `OldTargetApi` 归「环境依赖」，只提示不判红（其余缺失仍判红，那是代码把它修好了）。
+    口径写在 `docs/scripts/local_check.ps1` 的 `$baseline` / `$envDependent` 两个数组。
+  - 测试：`docs/scripts/local_check.ps1` 的七步全部 PASS ——
+    server-tests 944 passed / python-syntax / privacy-guard / version-check 0.4.0-26 /
+    **android-test-assemble-lint**（单测 1487 条 0 失败 0 错误、双 flavor 构建、lint 2 条 0 error）/
+    lint-summary issues=2 errors=0 baseline-drift=0 / static-check issues=0 rules=0 enabled=5。
+  - 计数：服务端用例仍 **944** 条；Android 单测 **1487** 条（89 个测试类，skipped=2）；
+    magpie 单测 **77** 条；本轮无业务代码改动。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：
