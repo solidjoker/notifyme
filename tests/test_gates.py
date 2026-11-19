@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import itertools
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -571,6 +573,167 @@ class PruneTests(unittest.TestCase):
         """真仓库：被跟踪文件一条都不许落在被剪目录下。"""
         violations, note = sc.check_pruned_tracked()
         self.assertEqual([], violations, note)
+
+
+# --------------------------------------------------------------------------- 预筛
+
+
+# L-002「必须被抓到」的写法清单放在夹具文件里，不写在测试源码里 ——
+# 原因：tests/ 本身在 L-002 的 scope 内，把违规行写进 .py 源码，
+# 引擎会把**这个测试文件自己**判成违规（2026-11-19 实测踩到过）。
+L002_VIOLATIONS_FIXTURE = FIXTURES / "l002_violations.txt"
+
+
+def known_violations() -> list[str]:
+    """读 L-002 的已知违规样本（每行一条）。"""
+    return [
+        line
+        for line in L002_VIOLATIONS_FIXTURE.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+class PrefilterTests(unittest.TestCase):
+    """必要条件预筛：快，但不能因此漏报。
+
+    prefilter 是一组字面子串，引擎先用廉价的 `in` 挡掉无关行，再跑那条昂贵的正则。
+    风险只有一个 —— **写窄了会静默漏报**。这里用两条护栏钉住：
+      1. 每条 KNOWN_VIOLATIONS 都必须既命中 pattern 又通过 prefilter；
+      2. 同一批样本上，带 prefilter 与不带 prefilter 的判定结果必须完全一致。
+    """
+
+    def _rule(self) -> dict:
+        data = json.loads((REPO_ROOT / "config" / "ci_rules.json").read_text(encoding="utf-8"))
+        return next(r for r in data["rules"] if r["id"] == "L-002")
+
+    def test_known_violations_still_match_the_pattern(self) -> None:
+        rule = self._rule()
+        compiled = re.compile(rule["pattern"])
+        for line in known_violations():
+            with self.subTest(line=line):
+                self.assertTrue(compiled.search(line), f"这条应该被 pattern 命中：{line}")
+
+    def test_known_violations_pass_the_prefilter(self) -> None:
+        """护栏一：已知违规行必须都能通过预筛 —— 否则规则会静默漏报。"""
+        rule = self._rule()
+        tokens = sc.rule_prefilter(rule)
+        self.assertTrue(tokens, "L-002 应当配了 prefilter")
+        for line in known_violations():
+            with self.subTest(line=line):
+                self.assertTrue(
+                    any(token in line for token in tokens),
+                    f"已知违规行过不了预筛 = 静默漏报：{line}",
+                )
+
+    def test_every_derived_token_is_covered_by_a_sample(self) -> None:
+        """每个派生 token 都必须被至少一条已知违规样本用到。
+
+        派生 token 来自 pattern 的命名组，改 pattern 就会改 token 集合；
+        这条用例保证「token 集合」与「样本集合」不会各走各的 ——
+        新加一个命名组却没加样本时，当场红。
+        """
+        rule = self._rule()
+        tokens = sc.rule_prefilter(rule)
+        samples = known_violations()
+        for token in tokens:
+            with self.subTest(token=token):
+                self.assertTrue(
+                    any(token in line for line in samples),
+                    f"派生 token {token!r} 没有任何已知样本覆盖",
+                )
+
+    def test_prefilter_is_derived_not_handwritten(self) -> None:
+        """预筛必须是**派生**的：规则表里不许再出现 prefilter 字段。
+
+        手抄的 prefilter 是 pattern 的第二份真相 —— 改了 pattern 忘了同步预筛，
+        规则就会静默漏报（2026-11-19 在真仓库副本上端到端复现过：
+        pattern 加一个目录名、prefilter 没同步，违规文件躺在仓库里、测试全绿、引擎报 0 条）。
+        """
+        rule = self._rule()
+        self.assertNotIn("prefilter", rule, "规则表里不该再有手抄的 prefilter 字段")
+        self.assertTrue(rule["pattern"].count("(?P<"), "pattern 里应该有命名组供引擎派生 token")
+
+    def test_derived_tokens_come_from_the_named_groups(self) -> None:
+        """派生 token 必须正好是各命名组的候选字面量（不多不少）。"""
+        rule = self._rule()
+        expected = [
+            "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+            "claude", "config", "aws", "ssh", "gnupg", "kube", "docker", "gem", "npm",
+        ]
+        self.assertEqual(expected, sc.rule_prefilter(rule))
+
+    def test_every_generated_violation_passes_the_prefilter(self) -> None:
+        """性质测试：凡是被 pattern 命中的行，都必须过得了预筛。
+
+        语料由「home 引用形态 × 配置目录形态」组合生成（配置目录名从命名组里取，
+        所以 pattern 加了新的目录名，语料也跟着长）。这是「预筛是必要条件」的
+        机器验证 —— 比样本护栏覆盖面大得多。
+        """
+        rule = self._rule()
+        compiled = re.compile(rule["pattern"])
+        tokens = sc.rule_prefilter(rule)
+        dirs = re.search(r"\(\?P<dirs>([^)]*)\)", rule["pattern"]).group(1).split("|")
+        homes = [
+            'Path.home()',
+            'os.path.expanduser("~")',
+            'os.environ["HOME"]',
+            'os.environ["USERPROFILE"]',
+            'os.environ.get("HOME")',
+            'os.getenv("HOMEDRIVE")',
+            '"~"',
+        ]
+        corpus = []
+        for home, d in itertools.product(homes, dirs):
+            corpus.append(f'x = {home} / ".{d}"')
+            corpus.append(f'x = ".{d}" / {home}')
+        # 拆开写：这一行源码本身若含裸的 $HOME，会被 L-002 判成违规（分支 B）——
+        # 测试文件自己就在 scope 里。样本真身放在夹具文件里。
+        corpus.append('raw = ' + chr(34) + chr(36) + 'HOME' + chr(34))
+        corpus.append('x = 1')
+        for line in corpus:
+            with self.subTest(line=line):
+                if compiled.search(line):
+                    self.assertTrue(
+                        any(token in line for token in tokens),
+                        f"命中 pattern 却过不了预筛 = 静默漏报：{line}",
+                    )
+
+    def test_prefilter_does_not_change_verdicts(self) -> None:
+        """护栏二：同一批样本上，带 / 不带 prefilter 的判定必须完全一致。"""
+        rule = self._rule()
+        compiled = re.compile(rule["pattern"])
+        tokens = sc.rule_prefilter(rule)
+
+        samples = known_violations() + [
+            'flask_app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024',
+            'self.config = {"a": 1}',
+            '(tmp_path / ".claude").write_text("{}")',
+            'home = Path.home()',
+            'base = os.path.join(home, ".notifyme-tools")',
+            'os.environ["HOME"] = str(tmp_path)',
+        ]
+
+        def judge(line: str, use_prefilter: bool) -> bool:
+            if use_prefilter and not any(token in line for token in tokens):
+                return False
+            return bool(compiled.search(line))
+
+        for line in samples:
+            with self.subTest(line=line):
+                self.assertEqual(judge(line, False), judge(line, True), line)
+
+    def test_handwritten_prefilter_field_is_rejected(self) -> None:
+        """规则表里写 prefilter 字段 → 判非法（那是 pattern 的第二份真相）。"""
+        for bad in (["HOME"], "HOME", [""], [None], [123]):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    sc.rule_prefilter({"pattern": "x", "prefilter": bad})
+
+    def test_rule_without_named_groups_has_no_fast_path(self) -> None:
+        """没有命名组的规则照常工作（快路径是可选的，退回慢路径而已）。"""
+        self.assertEqual([], sc.rule_prefilter({}))
+        self.assertEqual([], sc.rule_prefilter({"pattern": "abc"}))
+        self.assertEqual([], sc.rule_prefilter({"pattern": None}))
 
 
 if __name__ == "__main__":
