@@ -183,6 +183,41 @@ def check_lessons() -> list[str]:
     return problems
 
 
+def rule_prefilter(rule: dict) -> list[str]:
+    """从规则的 pattern 里**派生**必要条件预筛（不手抄第二份真相）。
+
+    预筛是一组字面子串：一行只有至少含其中一个 token，才可能是违规行。
+    引擎据此先做一次廉价的 `in` 判断，再跑那条昂贵的正则 —— L-002 那条 426 字符的
+    正则在 45k 行上要 2.4 秒，预筛后只要 0.13 秒。
+
+    **token 从哪儿来**：从 pattern 里的**命名组**派生 —— 规则把「作为必要条件的字面量」
+    放进命名组（如 `(?P<dirs>claude|config|...)`），引擎取各组的候选字面量做 token。
+    这样 **pattern 与预筛是一份真相**：改了 pattern 里的字面量集合，token 跟着变；
+    不存在「改了 pattern 忘了同步预筛 → 静默漏报」这条通路。
+
+    **规则表里不要再写 `prefilter` 字段** —— 那是手抄的第二份真相，正是这条通路的来源，
+    所以这里直接判它非法（报错，不静默忽略）。
+
+    **它是必要条件，不是等价条件**：凡是能命中 pattern 的行，一定至少含有一个 token。
+    「改 pattern 加了新分支、字面量却没放进命名组」这一种残余漏报，引擎层看不出来 ——
+    由 `tests/test_gates.py` 的已知违规样本护栏兜着（见 KNOWN_VIOLATIONS）。
+    """
+    if "prefilter" in rule:
+        raise ValueError(
+            "规则表里不要再写 prefilter —— 预筛由 pattern 的命名组自动派生（手抄两份会 desync）"
+        )
+    pattern = rule.get("pattern")
+    if not isinstance(pattern, str):
+        return []
+    tokens: list[str] = []
+    for match in re.finditer(r"\(\?P<(\w+)>([^)]*)\)", pattern):
+        for alt in match.group(2).split("|"):
+            alt = alt.strip()
+            if alt and alt not in tokens:
+                tokens.append(alt)
+    return tokens
+
+
 def check_ci_rules() -> tuple[list[str], list[str]]:
     """返回 (违反项, 待实现项)。"""
     if not CI_RULES.exists():
@@ -201,6 +236,11 @@ def check_ci_rules() -> tuple[list[str], list[str]]:
         except re.error as exc:
             violations.append(f"{rule.get('id')} 的正则写坏了：{exc}")
             continue
+        try:
+            prefilter = rule_prefilter(rule)
+        except ValueError as exc:
+            violations.append(f"{rule.get('id')} 的 prefilter 写坏了：{exc}")
+            continue
         files = rule.get("scope") or ["**/*.py"]
         # sorted：遍历顺序改成确定序（os.walk 是文件系统序，跨机器不一致），
         # 违规列表的顺序才可复现。1 千来个 Path 的排序开销可以忽略。
@@ -215,6 +255,10 @@ def check_ci_rules() -> tuple[list[str], list[str]]:
             except (OSError, UnicodeDecodeError):
                 continue
             for lineno, line in enumerate(text.splitlines(), 1):
+                # 预筛：不含任何 token 的行不可能违规，先用廉价的 in 挡掉，
+                # 再跑那条昂贵的正则。
+                if prefilter and not any(token in line for token in prefilter):
+                    continue
                 if compiled.search(line):
                     violations.append(f"{rule.get('id')} {rel}:{lineno} → {line.strip()[:80]}")
     return violations, pending
