@@ -70,7 +70,6 @@ def iter_repo_files():
             yield Path(dirpath) / name
 
 
-
 def section(title: str) -> None:
     print(f"\n── {title} " + "─" * max(0, 60 - len(title)))
 
