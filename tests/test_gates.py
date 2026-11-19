@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from gates import hazard_check as hz
 from gates import lessons_promote as lp
 
 FIXTURES = REPO_ROOT / "tests" / "fixtures"
+LESSONS_FIXTURE = FIXTURES / "lessons_sample.md"
 
 
 # --------------------------------------------------------------------------- 验收门
@@ -173,30 +175,88 @@ class HazardTests(unittest.TestCase):
 
 
 class LessonTests(unittest.TestCase):
+    """错题本的解析与晋升。
+
+    这几个用例读 tests/fixtures/lessons_sample.md，**不读活仓库的 LESSONS.md** ——
+    活仓库那本会随 `python -m gates.lessons_promote --apply` 变化（够格的条目挪进
+    docs/CODE_STANDARDS.md 后就从错题本里消失了），用例跟着它变就会在一次晋升后
+    自己跑红：2026-11-19 第一次真跑 --apply 时，L-001 / L-002 一晋升，
+    selfcheck 的 46 条单测当场挂掉 1 失败 + 2 错误。
+
+    晋升本身改写文件，所以这里把 lp.LESSONS / lp.STANDARDS / lp.CI_RULES 全指到
+    临时目录 —— 单测不许碰仓库里的真文件（见错题本 L-002）。
+    """
+
+    def setUp(self) -> None:
+        tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp_dir.cleanup)
+        tmp = Path(tmp_dir.name)
+
+        self.lessons_path = tmp / "LESSONS.md"
+        self.standards_path = tmp / "CODE_STANDARDS.md"
+        self.lessons_path.write_text(
+            LESSONS_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        self.standards_path.write_text(
+            "head\n<!-- promoted-zone:start -->\n<!-- promoted-zone:end -->\ntail\n",
+            encoding="utf-8",
+        )
+
+        saved = (lp.LESSONS, lp.STANDARDS, lp.CI_RULES)
+        lp.LESSONS = self.lessons_path
+        lp.STANDARDS = self.standards_path
+        lp.CI_RULES = tmp / "ci_rules.json"
+
+        def restore() -> None:
+            lp.LESSONS, lp.STANDARDS, lp.CI_RULES = saved
+
+        self.addCleanup(restore)
+
     def test_parses_all_lessons(self) -> None:
-        _, lessons = lp.load_lessons()
-        self.assertGreaterEqual(len(lessons), 5)
-        self.assertEqual("L-001", lessons[0].id)
+        _, lessons = lp.load_lessons(LESSONS_FIXTURE)
+        self.assertEqual(["L-001", "L-002", "L-005"], [x.id for x in lessons])
+        self.assertEqual("修之前先原样复现", lessons[0].title)
 
     def test_three_distinct_days_is_ready(self) -> None:
-        _, lessons = lp.load_lessons()
+        _, lessons = lp.load_lessons(LESSONS_FIXTURE)
         by_id = {lesson.id: lesson for lesson in lessons}
         self.assertTrue(lp.ready(by_id["L-001"]))
         self.assertFalse(lp.ready(by_id["L-005"]))
 
     def test_machine_checkable_is_read(self) -> None:
-        _, lessons = lp.load_lessons()
+        _, lessons = lp.load_lessons(LESSONS_FIXTURE)
         by_id = {lesson.id: lesson for lesson in lessons}
         self.assertTrue(by_id["L-002"].machine_checkable)
         self.assertFalse(by_id["L-001"].machine_checkable)
 
     def test_apply_dry_run_writes_nothing(self) -> None:
-        lessons_before = lp.LESSONS.read_text(encoding="utf-8")
-        standards_before = lp.STANDARDS.read_text(encoding="utf-8")
-        _, lessons = lp.load_lessons()
+        lessons_before = self.lessons_path.read_text(encoding="utf-8")
+        standards_before = self.standards_path.read_text(encoding="utf-8")
+        _, lessons = lp.load_lessons(self.lessons_path)
         lp.cmd_apply(lessons, "2026-11-17", dry_run=True)
-        self.assertEqual(lessons_before, lp.LESSONS.read_text(encoding="utf-8"))
-        self.assertEqual(standards_before, lp.STANDARDS.read_text(encoding="utf-8"))
+        self.assertEqual(lessons_before, self.lessons_path.read_text(encoding="utf-8"))
+        self.assertEqual(standards_before, self.standards_path.read_text(encoding="utf-8"))
+
+    def test_apply_promotes_ready_and_keeps_the_rest(self) -> None:
+        """真晋升一次（不碰真仓库）：够格的进规范，剩下的留在错题本。"""
+        _, lessons = lp.load_lessons(self.lessons_path)
+        moved = lp.cmd_apply(lessons, "2026-11-19")
+        self.assertEqual(2, moved)
+
+        standards = self.standards_path.read_text(encoding="utf-8")
+        self.assertIn("<!-- promoted:L-001 -->", standards)
+        self.assertIn("<!-- promoted:L-002 -->", standards)
+
+        _, remaining = lp.load_lessons(self.lessons_path)
+        self.assertEqual(["L-005"], [x.id for x in remaining])
+
+    def test_apply_writes_ci_stub_only_for_machine_checkable(self) -> None:
+        """L-002 标着 Machine-checkable: true → 落一条 CI 规则桩（enabled=false）。"""
+        _, lessons = lp.load_lessons(self.lessons_path)
+        lp.cmd_apply(lessons, "2026-11-19")
+        rules = lp.load_ci_rules(self.lessons_path.parent / "ci_rules.json")["rules"]
+        self.assertEqual(["L-002"], [r["id"] for r in rules])
+        self.assertFalse(rules[0]["enabled"])
 
     def test_zone_insert_keeps_markers(self) -> None:
         text = "head\n<!-- promoted-zone:start -->\nold\n<!-- promoted-zone:end -->\ntail\n"
