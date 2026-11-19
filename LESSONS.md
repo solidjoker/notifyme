@@ -86,3 +86,11 @@
 - Evidence: 43afb94
 - Seen: 2026-11-19
 - Machine-checkable: false
+
+## L-010 错题本相关单测要读夹具，不读活仓库的 LESSONS.md；晋升会改写活文件，用
+
+- Rule: 错题本相关单测要读夹具，不读活仓库的 LESSONS.md；晋升会改写活文件，用例跟着它变就会自己跑红
+- Why: 2026-11-19 第一次真跑 gates.lessons_promote --apply，L-001 / L-002 晋升后从错题本消失，selfcheck 的单测当场挂掉 1 失败 + 2 错误
+- Evidence: 58e30b6
+- Seen: 2026-11-19
+- Machine-checkable: false
