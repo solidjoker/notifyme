@@ -194,14 +194,25 @@ adb -s <serial> shell am start -n com.notifyme.android/.S2EvalActivity `
 adb -s <serial> pull /sdcard/Android/data/com.notifyme.android/files/s2-usability.md docs/
 ```
 
+> **路径里的包名按 flavor 变**：open flavor 是 `com.notifyme.android`，
+> **beta flavor 带 `.test` 后缀**（`com.notifyme.android.test`）——
+> 装 beta 时上面三条命令里的包名与目录都要跟着改。
+
 ### 7.2 前置条件
 
 1. **端侧 S2 模型已下载**（MiniCPM5-2B，`LocalModelStore.MODEL_S2 = "minicpm5_2b"`，
    来源 modelscope `OpenBMB/MiniCPM5-2B-GGUF`，约 1.5 GB）。
 2. **云端槽位已配置**（App 的分析设置里配好 URL / key / 模型）。没配就只采端侧一侧，
    云端那列全是「未交付」—— 端侧真机数字照样拿得到。
-3. 云端从设备访问本机服务端需要端口转发：`adb reverse tcp:8000 tcp:8000`
-   （App 里填 `http://127.0.0.1:8000/v1`）。
+3. 云端从设备访问本机服务端需要端口转发 —— **端口要用你实际端点的那个**
+   （本评测记录的云端端点是 `127.0.0.1:8080`，而 App 自己的服务端默认 8000）：
+   ```powershell
+   adb reverse tcp:8080 tcp:8080      # 云端评测端点
+   adb reverse tcp:8000 tcp:8000      # App 自建服务端（如果你用 App 自己的槽位）
+   ```
+   App 里填的 URL 要与 `adb reverse` 的那一侧一致，否则 25 分钟白跑。
+4. **设备要过端侧准入**：本地推理要求 arm64-v8a 且总内存 ≥ 8 GB
+   （`LocalDeviceCapabilities`）。不满足时端侧引擎直接不可用 —— 那一列会全是「未交付」。
 
 ### 7.3 与 HTTP 侧的口径一致性（两份评测必须能逐项对比）
 
@@ -218,15 +229,31 @@ adb -s <serial> pull /sdcard/Android/data/com.notifyme.android/files/s2-usabilit
 
 ### 7.4 未交付与预算
 
-端侧模型未就绪会抛 `LocalEngineException`，该样本按「未交付」记入报告 §四，**不**进任何分母。
+端侧模型未就绪会抛 `LocalEngineException`，该样本按「未交付」记入报告 §四，
+**不进分项通过率的分母**（那几格的分母是「已交付条数」）。
+
+⚠️ **但 headline「六项全过（可用）」那格的分母是样本数** —— 所以某一侧一条都没交付时，
+那一格会显示 `0/20（0.0%）`，**读作「未测」，不是「0% 可用」**。两件事要分清：
+「没跑起来」与「跑了但全挂」。
+
 整轮预算由 `--ei budget_ms` / `--ei timeout_ms` 控制（默认 25min / 120s），耗尽即停，
-剩余条数写进报告 §四之二，同样不进分母。真机 2B 比 0.5B 替身慢一个量级，预算要留够。
+剩余条数写进报告 §四之二，同样不进分项通过率的分母。真机 2B 比 0.5B 替身慢一个量级，预算要留够。
+
+### 7.5 真机端侧的三条「不知道会看错」的限制
+
+1. **端侧采样没钉**：`LlamaCppEngine` 默认 `temperature = 0.3`、无 seed（与生产同路径），
+   实际生成上限 = `n_ctx(4096) − prompt 占用`（≈3586），**不是 4096**。
+   端侧数字两次跑会不同，按区间读；云端那一侧钉了 `temperature=0 + seed`。
+2. **端侧单次调用没有硬超时**：native 推理是阻塞 JNI 调用，协程取消不了它；
+   报告里「单次上限」对端侧这一列是尽力而为。
+3. **采集期间别让 App 同时分析**：端侧引擎不持 App 的分析互斥锁，两边共用同一个
+   llama context，会互相清 KV、把输出弄走形。跑之前先关掉周期分析与悬浮窗。
 
 ## 8. 相关文件
 
 | 文件 | 作用 |
 |---|---|
-| `app/src/main/java/com/notifyme/android/S2Usability.kt` | 六项判据 + 分项统计 + Markdown（纯函数，349 行） |
+| `app/src/main/java/com/notifyme/android/S2Usability.kt` | 六项判据 + 分项统计 + Markdown（纯函数，368 行） |
 | `app/src/test/java/com/notifyme/android/S2UsabilityTest.kt` | 判据口径单测（34 条） |
 | `app/src/test/java/com/notifyme/android/S2EvalHttpTest.kt` | HTTP 侧评测入口（无配置文件时自动跳过） |
 | `app/src/main/java/com/notifyme/android/AnalysisParsing.kt` | `parseS2Output` / `rejectPlaceholderEcho`；摘要兜底已委托 `S2Usability.fallbackSummary` |

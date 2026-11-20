@@ -78,19 +78,35 @@ class S2EvalActivity : Activity() {
         Thread {
             try {
                 val config = AnalysisConfig(applicationContext)
+                val slot = config.s2Slot()
                 val plan = S1EvalBudgetCore.resolvePlan(
                     budgetMs.toString(),
                     timeoutMs.toString()
                 )
+                val labelBytes = datasetFile.readBytes()
+                val outFile = File(out)
+                // 中间结果落盘：真机跑 25 分钟可能被系统杀掉（模型常驻 1.5GB + KV，
+                // 是低内存 killer 的首选目标），被杀时至少留一份半成品，
+                // 而不是「报告文件连 0 字节都没有」。
+                val partialFile = File(out + ".partial")
                 val report = runBlocking {
                     S2EvalRunner.collect(
                         context = applicationContext,
                         datasetPath = datasetFile,
-                        cloudSlot = config.s2Slot(),
+                        cloudSlot = slot,
                         limit = limit,
                         plan = plan,
                         onProgress = { done, total, conv ->
                             Log.i(TAG, "进度 $done/$total · $conv")
+                        },
+                        onPartial = { done ->
+                            runCatching {
+                                partialFile.parentFile?.mkdirs()
+                                partialFile.writeText(
+                                    partialMarkdown(done, slot, labelBytes, plan),
+                                    Charsets.UTF_8
+                                )
+                            }.onFailure { Log.w(TAG, "中间结果落盘失败", it) }
                         }
                     )
                 }
@@ -98,12 +114,13 @@ class S2EvalActivity : Activity() {
                     header = listOf(
                         "> 生成时间：" + LocaleTextCore.seconds(System.currentTimeMillis()),
                         "> 样本：" + report.cases.size + " 条人工标注合成会话",
+                        "> 样本指纹：sha256=" + S2EvalReport.sampleFingerprint(labelBytes),
                         "> 端侧：**真机** MiniCPM5-2B（LocalLlmEngines，与生产 runS2Local 同一条路径）",
-                        "> 云端：分析设置里的槽位（未配置则本轮只采端侧）",
+                        "> 云端端点：" + (slot?.let { it.model + " @ " + it.url } ?: "未配置（本轮只采端侧）"),
+                        "> " + S2EvalReport.timezoneLine(),
                         "> 时间预算：" + S1EvalBudgetCore.describe(report.plan),
                         "> 判据：" + S2Usability.legend()
                     ),
-                    cases = report.cases,
                     cloud = report.cloud,
                     local = report.local,
                     rows = report.rows,
@@ -123,13 +140,23 @@ class S2EvalActivity : Activity() {
                         "**「可用」是六项判据全过**，判据都在窗口内的客观事实（S1 桶、窗口末条时间）上，" +
                             "不看措辞好坏。措辞好不好请直接看第五节的原始样例。",
                         "**占位照抄不抛异常**：生产链路会 `rejectPlaceholderEcho` 回退 S1，" +
-                            "评测里保留输出并记一条 `非占位照抄` 失败，才能统计「模型跑飞」的比例。"
+                            "评测里保留输出并记一条 `非占位照抄` 失败，才能统计「模型跑飞」的比例。",
+                        "**端侧采样没钉**：LlamaCppEngine 默认 temperature=0.3、无 seed（与生产同路径），" +
+                            "实际生成上限 = n_ctx(4096) − prompt 占用（≈3586），不是 4096 —— " +
+                            "端侧数字两次跑会不同，按区间读；云端那一侧钉了 temperature=0 + seed。",
+                        "**端侧单次调用没有硬超时**：native 推理是阻塞 JNI 调用，协程取消不了它；" +
+                            "报告里「单次上限」对端侧这一列是尽力而为，实际耗时可能超过。",
+                        "**「未交付」只不进分项通过率的分母**：第一节「六项全过」那格的分母是**样本数**，" +
+                            "所以端侧一条都没交付时那一格会显示 0/20 —— 读作**未测**，不是 0% 可用。",
+                        "**采集期间别让 App 同时分析**：端侧引擎不持 App 的分析互斥锁，" +
+                            "两边共用同一个 llama context，会互相清 KV、把输出弄走形。" +
+                            "跑之前先关掉周期分析与悬浮窗。"
                     ),
                     plan = report.plan
                 )
-                val outFile = File(out)
-                outFile.parentFile?.mkdirs()
-                outFile.writeText(md, Charsets.UTF_8)
+                val reportFile = File(out)
+                reportFile.parentFile?.mkdirs()
+                reportFile.writeText(md, Charsets.UTF_8)
                 Log.i(TAG, "报告已写入 $out，共 ${md.length} 字符")
                 Log.i(
                     TAG,
@@ -151,6 +178,46 @@ class S2EvalActivity : Activity() {
             start()
         }
         finish()
+    }
+
+    /** 中间结果用的半成品报告（结构与最终报告一致，只是样本还没跑完）。 */
+    private fun partialMarkdown(
+        done: List<S2EvalRunner.Outcome>,
+        slot: AnalysisConfig.SlotConfig?,
+        labelBytes: ByteArray,
+        plan: S1EvalBudgetCore.Plan
+    ): String {
+        val cases = done.map {
+            S1Accuracy.Case(
+                pkg = it.cloud.conversation.ifEmpty { "com.unknown" },
+                conversation = it.conversation,
+                isGroup = false,
+                messages = emptyList(),
+                expect = S1Accuracy.Expect(false, 0.0, "none", "smalltalk")
+            )
+        }
+        val s1Of: (S1Accuracy.Case) -> AnalysisCase.Companion.S1Result = { S2Usability.labelAsS1(it) }
+        val cloudOutcomes = done.associate { it.caseId to it.cloud }
+        val localOutcomes = done.associate { it.caseId to it.local }
+        return S2EvalReport.render(
+            header = listOf(
+                "> 生成时间：" + LocaleTextCore.seconds(System.currentTimeMillis()),
+                "> **中间结果（采集未完成）**：已完成 " + done.size + " 条",
+                "> 样本指纹：sha256=" + S2EvalReport.sampleFingerprint(labelBytes),
+                "> 云端端点：" + (slot?.let { it.model + " @ " + it.url } ?: "未配置（本轮只采端侧）"),
+                "> " + S2EvalReport.timezoneLine()
+            ),
+            cloud = S2Usability.score("云端", cases, cloudOutcomes, s1Of),
+            local = S2Usability.score("端侧", cases, localOutcomes, s1Of),
+            rows = emptyList(),
+            cloudOutcomes = cloudOutcomes,
+            localOutcomes = localOutcomes,
+            cloudRaw = emptyMap(),
+            localRaw = emptyMap(),
+            skipped = emptyList(),
+            limits = listOf("这是采集被中断时的半成品，最终报告以正式那份为准。"),
+            plan = plan
+        )
     }
 
     companion object {

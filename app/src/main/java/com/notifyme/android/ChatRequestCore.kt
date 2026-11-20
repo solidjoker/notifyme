@@ -25,6 +25,8 @@ import org.json.JSONObject
  * ③ **请求体键集合是契约**：`model` / `messages` / `response_format` / `max_tokens` / `stream`,
  *    `messages` 恒为 `system` → `user` 两条。加字段先想清楚三个通道是否都该带上 ——
  *    单测 `payloadKeepsSingleRequestShape` 守着这份键集合。
+ *    **唯一例外是评测通道的采样参数**（[EVAL_TEMPERATURE] / [EVAL_SEED]）：
+ *    它们由 [payload] 的可选参数按需追加，**生产调用方不传就是原样那五个键**。
  *
  * 刻意不做的事：HTTP 本身（OkHttp 的 `Request` / `MediaType` / 异常分类）留在各 Worker ——
  * 那是通道语义（重试 vs 静默），不是公共口径；`Authorization` 头也由调用方按 `slot.key` 决定。
@@ -33,6 +35,19 @@ internal object ChatRequestCore {
 
     /** 端点后缀：判断「已经补过」与「需要补」都用它，别在调用方重复字面量。 */
     const val SUFFIX = "/chat/completions"
+
+    /**
+     * 评测通道钉死的采样参数（**只给评测用**，生产调用方不传）。
+     *
+     * 为什么必须钉：不钉 temperature / seed 时，同一批样本两次跑会给出不同数字
+     * （实测 2026-11-13：S2 六项全过第一轮 15/20、第二轮 16/20），评测就失去回归价值。
+     * 云端 176B 走 ROCm、端侧走 llama-server，都不保证逐 bit 复现 —— 钉采样参数只是
+     * **减少**抖动，不是消除；报告里仍按「区间」读。
+     *
+     * 两个常量只有一份：HTTP 侧评测（`S2EvalHttpTest`）与真机端侧采集（`S2EvalRunner`）共用。
+     */
+    const val EVAL_TEMPERATURE = 0.0
+    const val EVAL_SEED = 20261113
 
     /**
      * 单次响应的 `max_tokens` 上限口径。
@@ -59,12 +74,19 @@ internal object ChatRequestCore {
      *
      * [systemPrompt] 允许为空串（评测通道拿不到 system 文案时会传空），
      * [maxTokens] 必须为正；返回的是**已序列化的字符串**，调用方直接当 body 用。
+     *
+     * [temperature] / [seed] 是**评测通道专用**的采样钉子，默认 null = 不写这两个键
+     * （生产请求体的键集合是契约，一个都不许多）。评测必须钉住它们：不钉时同一批样本
+     * 两次跑会给出不同数字（实测 2026-11-13：第一轮六项全过 15/20、第二轮 16/20），
+     * 评测就失去回归价值。
      */
     fun payload(
         model: String,
         systemPrompt: String,
         userContent: String,
-        maxTokens: Int = MAX_TOKENS
+        maxTokens: Int = MAX_TOKENS,
+        temperature: Double? = null,
+        seed: Int? = null
     ): String = JSONObject().apply {
         put("model", model)
         put("messages", JSONArray().apply {
@@ -75,6 +97,8 @@ internal object ChatRequestCore {
         put("response_format", JSONObject().put("type", "json_object"))
         put("max_tokens", maxTokens)
         put("stream", false)
+        if (temperature != null) put("temperature", temperature)
+        if (seed != null) put("seed", seed)
     }.toString()
 
     private fun message(role: String, content: String): JSONObject = JSONObject().apply {

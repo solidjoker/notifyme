@@ -21,19 +21,32 @@ package com.notifyme.android
 internal object S2EvalReport {
 
     /**
+     * 样本指纹：报告头里写一行，两边同文件必同指纹。
+     *
+     * 为什么需要：两份报告都只写「样本：20 条」——推错文件（拿了另一份标注）
+     * 看不出来，两列数字就白比。指纹是「这两份报告用的是同一批样本」的最小证据。
+     */
+    fun sampleFingerprint(datasetBytes: ByteArray): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(datasetBytes)
+        return digest.joinToString("") { "%02x".format(it) }.take(12)
+    }
+
+    /** 报告头里的时区行：prompt 的「今天」与 due 桶判定都吃设备时区。 */
+    fun timezoneLine(): String = "时区：" + java.util.TimeZone.getDefault().id
+
+    /**
      * @param header 头部说明行（调用方自定：生成时间 / 样本数 / 两端端点 / 时间预算 / 判据说明）
-     * @param cases 参与评测的样本
      * @param cloud 云端一侧的汇总
      * @param local 端侧一侧的汇总
      * @param rows 逐样本状态
      * @param cloudRaw 云端原始输出（按 caseId）
      * @param localRaw 端侧原始输出（按 caseId）
-     * @param skipped 预算耗尽未测试的样本（不进任何分母）
+     * @param skipped 预算耗尽未测试的样本（不进分项通过率的分母）
      * @param limits 口径与限制那几条（调用方自定：替身版与真机版的措辞不同）
      */
     fun render(
         header: List<String>,
-        cases: List<S1Accuracy.Case>,
         cloud: S2Usability.Side,
         local: S2Usability.Side,
         rows: List<S2Usability.Row>,
