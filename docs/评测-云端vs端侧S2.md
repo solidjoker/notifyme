@@ -171,12 +171,56 @@ Remove-Item -Recurse -Force app\build\test-results\testOpenDebugUnitTest -ErrorA
 
 ## 7. 怎么拿到真机端侧数字
 
-真机 S2 走 `LocalLlmEngines.forModel(context, LocalModelStore.MODEL_S2)`，与生产 `runS2Local` 同一条代码路径。两步：
+真机 S2 走 `LocalLlmEngines.forModel(context, LocalModelStore.MODEL_S2)`，与生产 `runS2Local` 同一条代码路径。
 
-1. 设备上先下好 S2 模型（MiniCPM5-2B，`LocalModelStore.MODEL_S2 = "minicpm5_2b"`，来源 modelscope `OpenBMB/MiniCPM5-2B-GGUF`）。
-2. `S2EvalHttpTest` 的 `LOCAL_URL` 换成设备侧暴露的端点，或者按 `S1EvalActivity` 的做法在 debug 源集加一个 S2 采集 Activity（**尚未实现，本轮只留 HTTP 侧**）。
+**采集器已实现**（2026-11-20）：`app/src/main/java/com/notifyme/android/S2EvalRunner.kt`（采集内核）
++ `app/src/debug/java/com/notifyme/android/S2EvalActivity.kt`（debug 入口），
+与 S1 的 `S1EvalRunner` / `S1EvalActivity` 同一套分法。
+
+### 7.1 三步
+
+```powershell
+# 1) 把标注样本推到设备（与 HTTP 侧同一份 app/src/test/resources/eval-labels.json）
+adb -s <serial> push app/src/test/resources/eval-labels.json `
+    /sdcard/Android/data/com.notifyme.android/files/eval-labels.json
+
+# 2) 起采集（云端槽位从 App 的「分析设置」读；没配就只采端侧一侧）
+adb -s <serial> shell am start -n com.notifyme.android/.S2EvalActivity `
+    --es dataset /sdcard/Android/data/com.notifyme.android/files/eval-labels.json `
+    --es out     /sdcard/Android/data/com.notifyme.android/files/s2-usability.md `
+    --ei limit 20 --ei budget_ms 1500000 --ei timeout_ms 120000
+
+# 3) 取报告
+adb -s <serial> pull /sdcard/Android/data/com.notifyme.android/files/s2-usability.md docs/
+```
+
+### 7.2 前置条件
+
+1. **端侧 S2 模型已下载**（MiniCPM5-2B，`LocalModelStore.MODEL_S2 = "minicpm5_2b"`，
+   来源 modelscope `OpenBMB/MiniCPM5-2B-GGUF`，约 1.5 GB）。
+2. **云端槽位已配置**（App 的分析设置里配好 URL / key / 模型）。没配就只采端侧一侧，
+   云端那列全是「未交付」—— 端侧真机数字照样拿得到。
+3. 云端从设备访问本机服务端需要端口转发：`adb reverse tcp:8000 tcp:8000`
+   （App 里填 `http://127.0.0.1:8000/v1`）。
+
+### 7.3 与 HTTP 侧的口径一致性（两份评测必须能逐项对比）
+
+| 口径 | 唯一出处 |
+|---|---|
+| S1 输入（人工标注当 S1 结论） | `S2Usability.labelAsS1`（HTTP 侧与真机侧共用） |
+| 六项判据 | `S2Usability.checks`（生产与评测同源） |
+| 报告排版（逐样本状态串 / 分项表 / 未交付明细 / 预算耗尽节） | `S2EvalReport.render`（HTTP 侧与真机侧共用） |
+| 时间预算 | `S1EvalBudgetCore`（S1/S2 共用） |
+
+报告渲染原本只有 HTTP 侧一份（写在 test 源集里），真机侧用不了；抄一份必然漂开，
+所以提到 `app/src/main/java/com/notifyme/android/S2EvalReport.kt`，
+两边只差「头部说明」与「限制那几条」——那几条本来就该不同（替身版说 0.5B，真机版说 2B）。
+
+### 7.4 未交付与预算
 
 端侧模型未就绪会抛 `LocalEngineException`，该样本按「未交付」记入报告 §四，**不**进任何分母。
+整轮预算由 `--ei budget_ms` / `--ei timeout_ms` 控制（默认 25min / 120s），耗尽即停，
+剩余条数写进报告 §四之二，同样不进分母。真机 2B 比 0.5B 替身慢一个量级，预算要留够。
 
 ## 8. 相关文件
 
@@ -189,3 +233,7 @@ Remove-Item -Recurse -Force app\build\test-results\testOpenDebugUnitTest -ErrorA
 | `app/src/main/java/com/notifyme/android/S1EvalBudgetCore.kt` | 时间预算内核（S1/S2 共用） |
 | `app/src/test/resources/eval-labels.json` | 20 条人工标注合成样本（S1/S2 共用） |
 | `docs/eval-s2-cloud-vs-local.md` | 机器生成的原始报告（分项 + 逐样本 + 原始输出） |
+| `app/src/main/java/com/notifyme/android/S2EvalRunner.kt` | 真机端侧采集内核（走 `LocalLlmEngines`，与生产 `runS2Local` 同一条路径） |
+| `app/src/main/java/com/notifyme/android/S2EvalReport.kt` | 报告渲染（HTTP 侧与真机侧共用，保证两列数字可逐项对比） |
+| `app/src/debug/java/com/notifyme/android/S2EvalActivity.kt` | 真机采集入口（debug 源集，`adb shell am start` 触发） |
+| `app/src/test/java/com/notifyme/android/S2EvalReportTest.kt` | 采集口径单测（6 条：S1 输入同源 / 报告同构 / 未交付不进分母） |
