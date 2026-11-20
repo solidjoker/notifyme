@@ -38,9 +38,10 @@ import org.junit.Test
 class S2EvalHttpTest {
 
     private companion object {
-        /** 固定采样：评测是回归比对，不是创作，温度必须为 0。 */
-        const val SAMPLING_TEMPERATURE = 0.0
-        const val SAMPLING_SEED = 20261113
+        // 采样参数只有一份（ChatRequestCore）：HTTP 侧评测与真机端侧采集共用，
+        // 否则两边的云端请求体字段集合不同，报告里的云端列就不可比。
+        const val SAMPLING_TEMPERATURE = ChatRequestCore.EVAL_TEMPERATURE
+        const val SAMPLING_SEED = ChatRequestCore.EVAL_SEED
     }
 
     private data class Endpoint(val url: String, val key: String, val model: String)
@@ -66,9 +67,10 @@ class S2EvalHttpTest {
         val labelFile = c.labelPath ?: File("src/test/resources/eval-labels.json")
         Assume.assumeTrue("跳过：缺少标注样本 " + labelFile.absolutePath, labelFile.exists())
 
-        val all = S1Accuracy.parse(labelFile.readText())
+        val labelBytes = labelFile.readBytes()
+        val all = S1Accuracy.parse(String(labelBytes, Charsets.UTF_8))
         Assume.assumeTrue("跳过：标注样本为空", all.isNotEmpty())
-        val cases = all.take(c.limit.coerceAtLeast(1))
+        val cases = S2EvalRunner.takeCases(all, c.limit.coerceAtLeast(1))
 
         val cloud = LinkedHashMap<String, S2Usability.Outcome>()
         val local = LinkedHashMap<String, S2Usability.Outcome>()
@@ -122,7 +124,7 @@ class S2EvalHttpTest {
         val localSide = S2Usability.score("端侧", cases, local, s1Of)
         val rows = S2Usability.rows(cases, cloud, local, s1Of)
 
-        val md = render(c, cases, cloudSide, localSide, rows, cloud, local, cloudRaw, localRaw, skipped)
+        val md = render(c, cases, labelBytes, cloudSide, localSide, rows, cloud, local, cloudRaw, localRaw, skipped)
         c.out.parentFile?.mkdirs()
         c.out.writeText(md)
         println("S2 评测报告：" + c.out.absolutePath)
@@ -178,6 +180,7 @@ class S2EvalHttpTest {
     private fun render(
         cfg: EvalConfig,
         cases: List<S1Accuracy.Case>,
+        labelBytes: ByteArray,
         cloud: S2Usability.Side,
         local: S2Usability.Side,
         rows: List<S2Usability.Row>,
@@ -190,13 +193,14 @@ class S2EvalHttpTest {
         header = listOf(
             "> 生成时间：" + timestamp(),
             "> 样本：" + cases.size + " 条人工标注合成会话（非真机采集）",
+            "> 样本指纹：sha256=" + S2EvalReport.sampleFingerprint(labelBytes),
             "> 云端端点：" + cfg.cloud.model + " @ " + cfg.cloud.url,
             "> 端侧端点：" + cfg.local.model + " @ " + cfg.local.url +
                 "（端侧替身：真机 S2 是 MiniCPM5-2B，本机未备，用 qwen2.5-0.5b 当下限）",
+            "> " + S2EvalReport.timezoneLine(),
             "> 时间预算：" + S1EvalBudgetCore.describe(cfg.plan),
             "> 判据：" + S2Usability.legend()
         ),
-        cases = cases,
         cloud = cloud,
         local = local,
         rows = rows,
@@ -216,51 +220,29 @@ class S2EvalHttpTest {
             "**「可用」是六项判据全过**，判据都在窗口内的客观事实（S1 桶、窗口末条时间）上，" +
                 "不看措辞好坏。措辞好不好请直接看第五节的原始样例。",
             "**占位照抄不抛异常**：生产链路会 `rejectPlaceholderEcho` 回退 S1，" +
-                "评测里保留输出并记一条 `非占位照抄` 失败，才能统计「模型跑飞」的比例。"
+                "评测里保留输出并记一条 `非占位照抄` 失败，才能统计「模型跑飞」的比例。",
+            "**「未交付」只不进分项通过率的分母**：第一、二节里「六项全过」那格的分母是**样本数**，" +
+                "所以某侧一条都没交付时那一格会显示 0/20 —— 读作**未测**，不是 0% 可用。" +
+                "分项通过率那几格的分母才是「已交付条数」。"
         ),
         plan = cfg.plan
     )
 
-    private fun codeBlock(lines: Collection<String>): String {
-        val fence = String(charArrayOf(96.toChar(), 96.toChar(), 96.toChar()))
-        val sb = StringBuilder()
-        sb.append(fence).append("json\n")
-        if (lines.isEmpty()) sb.append("（无）\n") else lines.forEach {
-            // 原始输出不做 esc() 截断：截到 120 字符只剩半截 JSON，复核不了解析是否走形。
-            // 只中和围栏本身，避免模型输出里出现三个反引号把代码块提前闭合。
-            sb.append(it.replace(fence, "```".replace("`", "'"))).append("\n")
-        }
-        sb.append(fence).append("\n\n")
-        return sb.toString()
-    }
-
     private fun timestamp(): String =
         LocaleTextCore.seconds(System.currentTimeMillis())
 
-    private fun ms(v: Long?): String = if (v == null || v <= 0L) "-" else LocaleTextCore.fixed(v / 1000.0, 1) + "s"
-
-    private fun esc(s: String?): String =
-        (s ?: "").replace("|", "\\|").replace("\n", " ").take(120)
-
     private fun chat(ep: Endpoint, system: String, user: String, timeoutMs: Long): String {
-        var url = ep.url.trim().trimEnd('/')
-        if (!url.endsWith("/chat/completions")) url += "/chat/completions"
-        val body = org.json.JSONObject().apply {
-            put("model", ep.model)
-            put("messages", org.json.JSONArray().apply {
-                put(org.json.JSONObject().put("role", "system").put("content", system))
-                put(org.json.JSONObject().put("role", "user").put("content", user))
-            })
-            put("response_format", org.json.JSONObject().put("type", "json_object"))
-            // 采样参数必须钉住：不写 temperature / seed 时同一批样本两次跑给出不同数字
-            // （实测 2026-11-13：第一轮六项全过 15/20、第二轮 16/20），评测就失去回归价值。
-            put("temperature", SAMPLING_TEMPERATURE)
-            put("seed", SAMPLING_SEED)
-            // 与生产 runS2OpenAi 同口径：S2 的 max_tokens 是 4096（S1 才是 512）
-            put("max_tokens", 4096)
-            put("stream", false)
-        }.toString()
-
+        // 端点归一与请求体构造都走 ChatRequestCore（唯一出处）——
+        // 与真机侧采集（S2EvalRunner）共用同一份，报告里的「云端」两列才可比。
+        val url = ChatRequestCore.endpoint(ep.url)
+        val body = ChatRequestCore.payload(
+            ep.model,
+            system,
+            user,
+            ChatRequestCore.MAX_TOKENS,
+            ChatRequestCore.EVAL_TEMPERATURE,
+            ChatRequestCore.EVAL_SEED
+        )
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = minOf(15_000L, timeoutMs).toInt()

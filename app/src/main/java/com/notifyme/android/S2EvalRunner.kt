@@ -6,8 +6,10 @@ package com.notifyme.android
 import android.content.Context
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -52,8 +54,18 @@ internal object S2EvalRunner {
         .readTimeout(180, TimeUnit.SECONDS)
         .build()
 
-    /** S2 的 max_tokens 与生产 runS2OpenAi 同口径（4096；S1 才是 512）。 */
-    private const val S2_MAX_TOKENS = 4096
+    /** S2 的 max_tokens 与生产 runS2OpenAi 同口径（用 ChatRequestCore 那一个默认值，别再抄一份）。 */
+    private val S2_MAX_TOKENS = ChatRequestCore.MAX_TOKENS
+
+    /**
+     * 取前 [limit] 条样本 —— **两侧共用**（HTTP 侧评测与真机采集）。
+     *
+     * 口径：`limit <= 0` 取全部；否则取前 N 条。
+     * 两侧若各写一份，「limit=0」这种边界就会分叉（一边取全部、一边取 1 条），
+     * 报告里的样本集就不一样了。
+     */
+    fun takeCases(all: List<S1Accuracy.Case>, limit: Int): List<S1Accuracy.Case> =
+        if (limit > 0 && all.size > limit) all.take(limit) else all
 
     /** 一条样本两侧各自的采集结果。失败也返回（带错误文本），不让一个坏样本中断整批。 */
     data class Outcome(
@@ -92,11 +104,12 @@ internal object S2EvalRunner {
         cloudSlot: AnalysisConfig.SlotConfig?,
         limit: Int = 0,
         plan: S1EvalBudgetCore.Plan = S1EvalBudgetCore.resolvePlan(null, null),
-        onProgress: ((done: Int, total: Int, conv: String) -> Unit)? = null
+        onProgress: ((done: Int, total: Int, conv: String) -> Unit)? = null,
+        onPartial: ((List<Outcome>) -> Unit)? = null
     ): Report = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext
         val all = S1Accuracy.parse(datasetPath.readText())
-        val cases = if (limit > 0 && all.size > limit) all.take(limit) else all
+        val cases = takeCases(all, limit)
 
         val outcomes = ArrayList<Outcome>(cases.size)
         val cloudRaw = LinkedHashMap<String, String>()
@@ -105,8 +118,6 @@ internal object S2EvalRunner {
         val startedAt = System.currentTimeMillis()
 
         for ((idx, case) in cases.withIndex()) {
-            onProgress?.invoke(idx + 1, cases.size, case.conversation)
-
             val kase = AnalysisCase.fromMessages(case.pkg, case.conversation, case.messages)
             if (kase == null) {
                 val empty = S2Usability.Outcome(
@@ -118,6 +129,8 @@ internal object S2EvalRunner {
                 outcomes.add(
                     Outcome(case.caseId, case.conversation, empty, empty, "", "")
                 )
+                onProgress?.invoke(idx + 1, cases.size, case.conversation)
+                onPartial?.invoke(outcomes.toList())
                 continue
             }
 
@@ -141,7 +154,8 @@ internal object S2EvalRunner {
                 } else {
                     val got = callCloud(cloudSlot, system, user, timeout, kase, case)
                     cloudText = got.raw
-                    cloudRaw[case.caseId] = got.raw
+                    // 失败时 raw 是空串：不写进 map，否则报告 §五「原始输出样例」会取到空块。
+                    if (got.raw.isNotEmpty()) cloudRaw[case.caseId] = got.raw
                     cloudOut = got.outcome
                 }
             }
@@ -162,7 +176,14 @@ internal object S2EvalRunner {
                 val t0 = System.currentTimeMillis()
                 try {
                     val engine = LocalLlmEngines.forModel(appContext, LocalModelStore.MODEL_S2)
-                    localText = engine.chat(system, user, S2_MAX_TOKENS, null)
+                    // 超时保护：S1EvalBudgetCore 的预算只在**两次调用之间**检查，
+                    // 端侧这一支没有它兜着 —— 一条卡死会把整轮拖住。
+                    // **注意**：withTimeout 取消不了已在跑的阻塞 native 调用
+                    // （LlamaCppEngine 的 chat 是一次不检查取消的 JNI 调用），
+                    // 所以这里是「尽量」，不是硬超时 —— 报告 §六 的限制里写明了这一点。
+                    localText = withTimeout(timeout) {
+                        engine.chat(system, user, S2_MAX_TOKENS, null)
+                    }
                     localRaw[case.caseId] = localText
                     val parsed = AnalysisParsing.parseS2Output(
                         AnalysisParsing.extractJsonFromText(localText), kase, localText
@@ -173,8 +194,11 @@ internal object S2EvalRunner {
                         out = parsed,
                         elapsedMs = System.currentTimeMillis() - t0
                     )
+                } catch (e: CancellationException) {
+                    // 协程取消要往上抛：吞掉它会破坏结构化并发。
+                    throw e
                 } catch (e: Throwable) {
-                    // 端侧模型未就绪 / 推理失败：该样本按「未交付」记入报告，不进分母。
+                    // 端侧模型未就绪 / 推理失败 / 超时：该样本按「未交付」记入报告，不进分项通过率的分母。
                     localOut = S2Usability.Outcome(
                         caseId = case.caseId,
                         conversation = case.conversation,
@@ -195,6 +219,12 @@ internal object S2EvalRunner {
                     localRaw = localText
                 )
             )
+            // 进度在**这条跑完之后**报（带耗时），不是「即将开始」——
+            // 真机单条几十秒，只报「开始」看不出哪条卡住。
+            onProgress?.invoke(idx + 1, cases.size, case.conversation)
+            // 每条结束就把当前结果推出去（调用方据此落 .partial 报告）：
+            // 真机跑 25 分钟被系统杀掉时，中间结果不至于全丢。
+            onPartial?.invoke(outcomes.toList())
 
             if (S1EvalBudgetCore.exhausted(startedAt, System.currentTimeMillis(), plan.totalBudgetMs)) {
                 for (rest in cases.drop(idx + 1)) {
@@ -270,12 +300,25 @@ internal object S2EvalRunner {
         val request = Request.Builder()
             .url(ChatRequestCore.endpoint(slot.url))
             .post(
-                ChatRequestCore.payload(slot.model, systemPrompt, userContent)
-                    .toRequestBody(JSON_MEDIA_TYPE)
+                // 请求体走 ChatRequestCore（唯一出处）；采样参数按评测口径钉死 ——
+                // 与 HTTP 侧评测（S2EvalHttpTest）用同一对常量，云端两列才可比。
+                ChatRequestCore.payload(
+                    slot.model,
+                    systemPrompt,
+                    userContent,
+                    S2_MAX_TOKENS,
+                    ChatRequestCore.EVAL_TEMPERATURE,
+                    ChatRequestCore.EVAL_SEED
+                ).toRequestBody(JSON_MEDIA_TYPE)
             )
             .apply { if (slot.key.isNotEmpty()) header("Authorization", "Bearer ${slot.key}") }
             .build()
-        return client.newCall(request).execute().use { response ->
+        // 单次调用上限：评测口径（budget 算出来的剩余时间），比 client 的固定读超时更紧。
+        val call = client.newBuilder()
+            .readTimeout(timeoutMs.coerceAtLeast(1_000L), TimeUnit.MILLISECONDS)
+            .build()
+            .newCall(request)
+        return call.execute().use { response ->
             if (!response.isSuccessful) throw IllegalStateException("HTTP " + response.code)
             response.body?.string().orEmpty()
         }

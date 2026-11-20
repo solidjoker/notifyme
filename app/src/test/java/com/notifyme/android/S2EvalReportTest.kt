@@ -20,21 +20,27 @@ import org.junit.Test
  */
 class S2EvalReportTest {
 
+    /**
+     * 造一条标注样本。
+     *
+     * 注意 [S1Accuracy.Case.caseId] 是**计算属性**（按 pkg + 会话名 + 窗口末条时间派生），
+     * 不是构造参数 —— 所以「让样本彼此不同」要靠会话名与时间戳，这里两个都给。
+     */
     private fun case(
-        caseId: String = "c1",
+        name: String = "c1",
         needAction: Boolean = true,
         importance: Double = 5.0,
         dueWindow: String = "today",
         topic: String = "work_task"
     ) = S1Accuracy.Case(
         pkg = "com.tencent.mm",
-        conversation = "会话-" + caseId,
+        conversation = "会话-" + name,
         messages = listOf(
             ChatMessage(
                 sender = "同事",
                 text = "明天十点开会",
-                timestamp = 1_700_000_000_000L,
-                conversation = "会话-" + caseId,
+                timestamp = 1_700_000_000_000L + name.hashCode().toLong() * 1000L,
+                conversation = "会话-" + name,
                 isGroup = false,
                 source = "eval",
                 pkg = "com.tencent.mm"
@@ -72,7 +78,6 @@ class S2EvalReportTest {
     fun renderProducesAllSections() {
         val md = S2EvalReport.render(
             header = listOf("> 生成时间：测试", "> 端侧：真机 MiniCPM5-2B"),
-            cases = listOf(case()),
             cloud = S2Usability.Side("云端", 1, 1, 1, mapOf(), 1000L),
             local = S2Usability.Side("端侧", 1, 1, 1, mapOf(), 2000L),
             rows = emptyList(),
@@ -102,7 +107,6 @@ class S2EvalReportTest {
     fun renderNumbersMatchTheSides() {
         val md = S2EvalReport.render(
             header = listOf("> 头"),
-            cases = listOf(case()),
             cloud = S2Usability.Side("云端", 1, 1, 1, mapOf(), 1000L),
             local = S2Usability.Side("端侧", 1, 1, 1, mapOf(), 2000L),
             rows = emptyList(),
@@ -123,7 +127,6 @@ class S2EvalReportTest {
     fun renderListsUndeliveredAndSkipped() {
         val md = S2EvalReport.render(
             header = listOf("> 头"),
-            cases = listOf(case()),
             cloud = S2Usability.Side("云端", 1, 0, 0, mapOf(), 0L),
             local = S2Usability.Side("端侧", 1, 0, 0, mapOf(), 0L),
             rows = emptyList(),
@@ -147,12 +150,37 @@ class S2EvalReportTest {
     }
 
     @Test
+    fun sampleFingerprintIsStableAndShort() {
+        // 报告头写指纹：两份报告用了同一批样本就必须同指纹（推错文件要能看出来）。
+        val a = S2EvalReport.sampleFingerprint("样本".toByteArray(Charsets.UTF_8))
+        val b = S2EvalReport.sampleFingerprint("样本".toByteArray(Charsets.UTF_8))
+        val c = S2EvalReport.sampleFingerprint("另一批".toByteArray(Charsets.UTF_8))
+        assertEquals(a, b)
+        assertTrue(a != c)
+        assertEquals(12, a.length)
+    }
+
+    @Test
+    fun takeCasesIsSharedByBothSides() {
+        // limit <= 0 → 全取；limit > 条数 → 全取；limit 正常 → 前 N 条。
+        // 两侧共用这一个实现（HTTP 侧评测与真机采集），否则样本集会分叉。
+        val all = (1..20).map { case(name = "c$it") }
+        assertEquals(20, S2EvalRunner.takeCases(all, 0).size)
+        assertEquals(20, S2EvalRunner.takeCases(all, -1).size)
+        assertEquals(20, S2EvalRunner.takeCases(all, 99).size)
+        assertEquals(5, S2EvalRunner.takeCases(all, 5).size)
+        // 取到的必须是**同一批**样本（caseId 是按 pkg+会话+窗口末条派生的计算属性）。
+        assertEquals(all.take(5).map { it.caseId }, S2EvalRunner.takeCases(all, 5).map { it.caseId })
+        // 20 条样本的 caseId 必须互不相同（否则报告里两条会撞成同一个 key）。
+        assertEquals(20, all.map { it.caseId }.distinct().size)
+    }
+
+    @Test
     fun renderKeepsRawOutputUntruncated() {
         // 原始输出不做截断：截到 120 字符只剩半截 JSON，复核不了解析是否走形。
         val raw = "{\"summary\":\"" + "长".repeat(300) + "\"}"
         val md = S2EvalReport.render(
             header = listOf("> 头"),
-            cases = emptyList(),
             cloud = S2Usability.Side("云端", 0, 0, 0, mapOf(), 0L),
             local = S2Usability.Side("端侧", 0, 0, 0, mapOf(), 0L),
             rows = emptyList(),

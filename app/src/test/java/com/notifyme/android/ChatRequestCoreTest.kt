@@ -89,6 +89,47 @@ class ChatRequestCoreTest {
     }
 
     @Test
+    fun payloadOmitsSamplingParamsByDefault() {
+        // 生产调用方不传采样参数 → 请求体里**不许**多出 temperature / seed
+        // （键集合是契约，见 payloadKeepsSingleRequestShape）。
+        val body = JSONObject(ChatRequestCore.payload("glm-5.3", "sys", "usr"))
+        assertFalse(body.has("temperature"))
+        assertFalse(body.has("seed"))
+    }
+
+    @Test
+    fun payloadAddsSamplingParamsOnlyWhenGiven() {
+        // 评测通道显式传 → 才出现这两个键（不钉采样参数，同一批样本两次跑数字会变）。
+        val body = JSONObject(
+            ChatRequestCore.payload(
+                "glm-5.3",
+                "sys",
+                "usr",
+                4096,
+                ChatRequestCore.EVAL_TEMPERATURE,
+                ChatRequestCore.EVAL_SEED
+            )
+        )
+        assertEquals(0.0, body.getDouble("temperature"), 1e-9)
+        assertEquals(20261113, body.getInt("seed"))
+        // 其它键一个不多
+        assertEquals(
+            setOf("model", "messages", "response_format", "max_tokens", "stream", "temperature", "seed"),
+            body.keys().asSequence().toSet()
+        )
+    }
+
+    @Test
+    fun payloadSamplingParamsAreIndependentlyOptional() {
+        // 只给 temperature 不给 seed 也合法（部分服务端不认 seed）。
+        val body = JSONObject(
+            ChatRequestCore.payload("m", "s", "u", 4096, temperature = 0.0)
+        )
+        assertTrue(body.has("temperature"))
+        assertFalse(body.has("seed"))
+    }
+
+    @Test
     fun payloadMessagesAreSystemThenUser() {
         val messages = JSONObject(ChatRequestCore.payload("m", "SYS", "USR"))
             .getJSONArray("messages")

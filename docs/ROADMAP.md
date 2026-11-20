@@ -960,6 +960,43 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - **真机数字待补**：本轮小米 17 物理掉线（`adb devices` 只剩模拟器），采集器已就绪但没在真机上跑过；
     插回机后按 `docs/评测-云端vs端侧S2.md` §7.1 的三步跑一遍即可填上「真机端侧」那一列。
 
+- **S2 采集器的对抗式复核：修掉「Activity 没注册」等 9 处（fix/s2-collector-review-fixes）**
+  - 背景：上一轮把真机端侧 S2 采集器合进去了，但它**从未在真机上跑过** ——
+    对抗式复核专门找「真机上会炸 / 报告会误导」的地方，结果找到 4 个必改 + 3 个建议 + 9 个建议项。
+  - **必改 1（P0，最致命）**：`S2EvalActivity` **没注册进 `app/src/debug/AndroidManifest.xml`** ——
+    `adb shell am start` 会直接回「Activity class does not exist」，
+    文档 §7.1 那三步命令第一步就废、报告永远出不来。已补注册
+    （`exported="true"` 必须有：targetSdk 34 下 `adb shell` 启非导出组件会被 Permission Denial）。
+    已验证：合并后的 `merged_manifests/openDebug/.../AndroidManifest.xml` 里已有 `S2EvalActivity`。
+  - **必改 2（P0）**：云端那一支**没钉采样参数** —— 生产 `ChatRequestCore.payload` 的键集合是契约
+    （不含 temperature / seed），而 HTTP 侧评测自己拼 body 并钉了 `temperature=0 + seed`
+    （不钉时同一批样本两次跑数字不同，评测失去回归价值）。
+    改成：`ChatRequestCore.payload` 加**可选** `temperature` / `seed`（默认 null → 生产键集合一字不变），
+    评测常量提到 `ChatRequestCore.EVAL_TEMPERATURE` / `EVAL_SEED`，两侧共用；
+    HTTP 侧的请求体也改走 `ChatRequestCore`（此前它自己拼 body，是「同一口径两份」的第二份实现）。
+  - **必改 3（P0）**：端侧那一支**没有超时控制** —— `S1EvalBudgetCore` 的预算只在两次调用之间检查，
+    一条卡死会拖死整轮。补 `withTimeout`（注意：协程取消不了已在跑的阻塞 JNI 调用，
+    所以是「尽量」不是硬超时，这条已写进报告 §六的限制）。
+  - **必改 4（P0）**：报告里的「云端」列**无法证明可比** —— 缺端点/模型、缺时区、缺样本指纹。
+    补：报告头加「云端端点」「时区」「样本指纹 sha256」（`S2EvalReport.sampleFingerprint` /
+    `timezoneLine`，两侧共用）；HTTP 侧的请求体也统一走 `ChatRequestCore`。
+  - **建议项（已做）**：进度回调挪到「这条跑完之后」并带耗时；每条结束把中间结果落 `.partial`
+    （真机跑 25 分钟被低内存 killer 杀掉时不至于「报告文件连 0 字节都没有」）；
+    `catch (e: CancellationException)` 重新抛出（不破坏结构化并发）；
+    失败的云端 raw 不写进 map（否则报告 §五取到空块）；
+    `limit` 取法两侧统一（`S2EvalRunner.takeCases`，两侧共用）；
+    `max_tokens` 四份收敛成 `ChatRequestCore.MAX_TOKENS` 一份；
+    `S2EvalReport.render` 的 `cases` 死参删掉；HTTP 侧改用共享渲染器后残留的三段死代码删掉。
+  - **口径修正（P0）**：「未交付不进分母」这句话**只对分项通过率成立** —— headline
+    「六项全过」那格的分母是**样本数**，所以某一侧一条都没交付时那格会显示 `0/20`，
+    **读作「未测」不是「0% 可用」**。文档 §7 与报告 §六的限制都改成了准确说法。
+  - **文档修正**：`adb reverse` 的端口（评测端点是 8080、App 自建服务端是 8000，原文写 8000 会连不上）、
+    设备准入要求（arm64-v8a + ≥8GB）、beta flavor 的包名带 `.test` 后缀、
+    `S2Usability` 行数过期（349 → 368）。
+  - **测试**：`S2EvalReportTest` 6 → **9 条**（补样本指纹稳定性、`takeCases` 两侧同批）；
+    `ChatRequestCoreTest` 补 **3 条**（生产不传时无采样键 / 评测传时才有 / 两者独立可选）。
+  - 计数：Android 单测 1493 → **1498** 条（90 个测试类，0 失败 0 错误）；服务端用例仍 **944** 条；magpie 单测 **77** 条。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：
