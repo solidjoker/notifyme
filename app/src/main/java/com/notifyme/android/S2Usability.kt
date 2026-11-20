@@ -106,6 +106,25 @@ internal object S2Usability {
     }
 
     /**
+     * 把人工标注当 S1 结论注入（解耦 S1 准确率与 S2 可用性）。
+     *
+     * 口径只有一份：HTTP 侧评测（`S2EvalHttpTest`）与真机端侧采集（`S2EvalRunner`）
+     * 都调这里 —— 写两遍会让两边的「S1 输入」悄悄漂开，比分项差几个点更难发现。
+     *
+     * 为什么用标注而不是模型结论：S2 的输入是「同一个窗口 + S1 结论」。
+     * 真实链路里 S1 误判会让 S2 跟着歪，那是 S1 准确率的后果，不是 S2 的能力问题；
+     * S1 判得准不准已由 `docs/评测-云端vs端侧S1.md` 单独量化。
+     */
+    fun labelAsS1(case: S1Accuracy.Case): AnalysisCase.Companion.S1Result =
+        AnalysisCase.Companion.S1Result(
+            needActionProb = if (case.expect.needAction) 1.0 else 0.0,
+            importance = case.expect.importance,
+            dueWindow = case.expect.dueWindow,
+            topic = case.expect.topic,
+            confidence = 0.9
+        )
+
+    /**
      * 与 [AnalysisParsing.parseS2Output] 完全同口径的摘要兜底：
      * 窗口末条原文、换行压成空格、截 [MAX_SUMMARY_CHARS] 字。
      * 生产侧直接调这里，避免评测与线上两份实现慢慢漂开。

@@ -934,6 +934,32 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
   - 计数：服务端用例仍 **944** 条；Android 单测 **1487** 条（89 个测试类，skipped=2）；
     magpie 单测 **77** 条；本轮无业务代码改动。
 
+- **真机端侧 S2 采集器落地：M4 任务 6 的最后一块补齐（feat/s2-device-eval-collector）**
+  - 问题：`docs/评测-云端vs端侧S2.md` §7 明写「真机端侧数字**尚未实现**，本轮只留 HTTP 侧」。
+    HTTP 侧的端侧那一列是 llama-server 上的 qwen2.5-**0.5b 替身**，参数差 4 倍，
+    那 10~15% 的可用率只能读作**下限**（§4 限制 1）—— 「端侧 2B 到底行不行」至今没有实测数字。
+  - 修法：新增采集器，与 S1 的分法一致（内核在主源码集、入口在 debug 源集）：
+    - `app/src/main/java/com/notifyme/android/S2EvalRunner.kt`：逐条样本走
+      `LocalLlmEngines.forModel(context, LocalModelStore.MODEL_S2)`（与生产 `runS2Local` 同一条路径），
+      `max_tokens=4096`、prompt / 解析全复用生产口径；模型未就绪或推理失败按「未交付」记，不进分母；
+      整轮时间预算复用 `S1EvalBudgetCore`（与 S1/S2 评测同口径），耗尽即停；
+    - `app/src/main/java/com/notifyme/android/S2EvalReport.kt`：**报告渲染的唯一出处**。
+      原本渲染只在 HTTP 侧的 test 源集里，真机侧用不了，抄一份必然漂开 —— 提上来后两边共用，
+      只有「头部说明」与「限制那几条」按调用方给（替身版说 0.5B，真机版说 2B，本来就该不同）；
+    - `app/src/debug/java/com/notifyme/android/S2EvalActivity.kt`：debug 入口，
+      `adb shell am start` 触发，参数 `--es dataset / --es out / --ei limit / --ei budget_ms / --ei timeout_ms`；
+    - `S2Usability.labelAsS1`：把「人工标注当 S1 结论」提为共享口径
+      （原本是 `S2EvalHttpTest` 的 private 方法，真机侧要同样的输入就会写第二份）；
+      HTTP 侧改为调它，两边不再各写一份。
+  - 测试：新增 `app/src/test/java/com/notifyme/android/S2EvalReportTest.kt` **6 条** ——
+    ① need_action → prob 1.0/0.0 的映射；② 标注字段原样保留且置信度固定 0.9；
+    ③ 报告六节齐全；④ 表里的时延取自 Outcome 而非原始输出；
+    ⑤ 未交付明细与预算耗尽节都在；⑥ 原始输出**不截断**（截到 120 字符只剩半截 JSON）。
+  - 计数：Android 单测 1487 → **1493** 条（90 个测试类，0 失败 0 错误）；
+    服务端用例仍 **944** 条；magpie 单测 **77** 条。
+  - **真机数字待补**：本轮小米 17 物理掉线（`adb devices` 只剩模拟器），采集器已就绪但没在真机上跑过；
+    插回机后按 `docs/评测-云端vs端侧S2.md` §7.1 的三步跑一遍即可填上「真机端侧」那一列。
+
 ## 12. 决策门汇总
 
 D1–D4 已在 2026-10-04 拍板（下表「结论」列即最终决定，不再重开）：

@@ -140,13 +140,7 @@ class S2EvalHttpTest {
 
     /** 把人工标注当 S1 结论注入（解耦 S1 准确率与 S2 可用性，见类注释）。 */
     private fun labelAsS1(case: S1Accuracy.Case): AnalysisCase.Companion.S1Result =
-        AnalysisCase.Companion.S1Result(
-            needActionProb = if (case.expect.needAction) 1.0 else 0.0,
-            importance = case.expect.importance,
-            dueWindow = case.expect.dueWindow,
-            topic = case.expect.topic,
-            confidence = 0.9
-        )
+        S2Usability.labelAsS1(case)
 
     private fun callOne(
         ep: Endpoint,
@@ -192,72 +186,40 @@ class S2EvalHttpTest {
         cloudRaw: Map<String, String>,
         localRaw: Map<String, String>,
         skipped: List<String>
-    ): String {
-        val sb = StringBuilder()
-        sb.append("# 云端 vs 端侧 S2 摘要可用性对比（ROADMAP M4 遗留项）\n\n")
-        sb.append("> 生成时间：").append(timestamp()).append("\n")
-        sb.append("> 样本：").append(cases.size).append(" 条人工标注合成会话（非真机采集）\n")
-        sb.append("> 云端端点：").append(cfg.cloud.model).append(" @ ").append(cfg.cloud.url).append("\n")
-        sb.append("> 端侧端点：").append(cfg.local.model).append(" @ ").append(cfg.local.url)
-            .append("（端侧替身：真机 S2 是 MiniCPM5-2B，本机未备，用 qwen2.5-0.5b 当下限）\n")
-        sb.append("> 时间预算：").append(S1EvalBudgetCore.describe(cfg.plan)).append("\n")
-        sb.append("> 判据：").append(S2Usability.legend()).append("\n\n")
-
-        sb.append("## 一、综合可用性\n\n")
-        sb.append(S2Usability.markdown(cloud, local))
-        sb.append("\n")
-
-        sb.append("## 二、分项判据通过率（分母 = 已交付条数）\n\n")
-        sb.append(S2Usability.checksMarkdown(cloud, local))
-        sb.append("\n")
-
-        sb.append("## 三、逐样本状态\n\n")
-        sb.append("| 会话 | 云端 | 端侧 | 云端时延 | 端侧时延 |\n")
-        sb.append("|---|---|---|---|---|\n")
-        for (r in rows) {
-            val co = cloudOutcomes[r.caseId]
-            val lo = localOutcomes[r.caseId]
-            sb.append("| ").append(esc(r.conversation))
-                .append(" | ").append(S2Usability.marks(r.cloud))
-                .append(" | ").append(S2Usability.marks(r.local))
-                .append(" | ").append(ms(co?.elapsedMs))
-                .append(" | ").append(ms(lo?.elapsedMs))
-                .append(" |\n")
-        }
-        sb.append("\n> 状态串顺序：").append(S2Usability.legend()).append("（✓ 通过 / ✗ 不通过）\n\n")
-
-        val failures = S2Usability.failureLines(cloudOutcomes) + S2Usability.failureLines(localOutcomes)
-        if (failures.isNotEmpty()) {
-            sb.append("## 四、未交付明细\n\n")
-            for (f in failures) sb.append("- ").append(esc(f)).append("\n")
-            sb.append("\n")
-        }
-
-        if (skipped.isNotEmpty()) {
-            sb.append("## 四之二、预算耗尽未测试（不计入任何分母）\n\n")
-            sb.append(S1EvalBudgetCore.exhaustedNote(cfg.plan, skipped.size)).append("\n\n")
-            for (s in skipped) sb.append("- ").append(esc(s)).append("\n")
-            sb.append("\n")
-        }
-
-        sb.append("## 五、原始输出样例（便于复核解析是否走形）\n\n")
-        sb.append("### 云端样例\n\n").append(codeBlock(cloudRaw.values.take(2)))
-        sb.append("### 端侧样例\n\n").append(codeBlock(localRaw.values.take(2)))
-
-        sb.append("## 六、口径与限制\n\n")
-        sb.append("1. **S1 输入用人工标注而不是模型结论**：need_action 转 prob 1.0/0.0，" +
-            "importance/due_window/topic 直接用标注值。这样做是为了把「S2 输出可不可用」" +
-            "和「S1 判得准不准」解耦——后者已由 `docs/评测-云端vs端侧S1.md` 单独量化。" +
-            "真实链路里 S1 误判会让 S2 跟着歪，那是 S1 准确率的后果，不是 S2 的能力问题。\n")
-        sb.append("2. **端侧替身是 base 补全模型**：真机 S2 用 MiniCPM5-2B（chat 模板 + 结构化约束），" +
-            "本机只有 qwen2.5-0.5b 且走 llama-server 的 chat 端点。" +
-            "0.5B 的数字只能读作**下限**，不能当成端侧真机的实测结论。\n")
-        sb.append("3. **「可用」是六项判据全过**，判据都在窗口内的客观事实（S1 桶、窗口末条时间）上，" +
-            "不看措辞好坏。措辞好不好请直接看第五节的原始样例。\n")
-        sb.append("4. **占位照抄不抛异常**：生产链路会 `rejectPlaceholderEcho` 回退 S1，" +
-            "评测里保留输出并记一条 `非占位照抄` 失败，才能统计「模型跑飞」的比例。\n")
-        return sb.toString()
-    }
+    ): String = S2EvalReport.render(
+        header = listOf(
+            "> 生成时间：" + timestamp(),
+            "> 样本：" + cases.size + " 条人工标注合成会话（非真机采集）",
+            "> 云端端点：" + cfg.cloud.model + " @ " + cfg.cloud.url,
+            "> 端侧端点：" + cfg.local.model + " @ " + cfg.local.url +
+                "（端侧替身：真机 S2 是 MiniCPM5-2B，本机未备，用 qwen2.5-0.5b 当下限）",
+            "> 时间预算：" + S1EvalBudgetCore.describe(cfg.plan),
+            "> 判据：" + S2Usability.legend()
+        ),
+        cases = cases,
+        cloud = cloud,
+        local = local,
+        rows = rows,
+        cloudOutcomes = cloudOutcomes,
+        localOutcomes = localOutcomes,
+        cloudRaw = cloudRaw,
+        localRaw = localRaw,
+        skipped = skipped,
+        limits = listOf(
+            "**S1 输入用人工标注而不是模型结论**：need_action 转 prob 1.0/0.0，" +
+                "importance/due_window/topic 直接用标注值。这样做是为了把「S2 输出可不可用」" +
+                "和「S1 判得准不准」解耦——后者已由 `docs/评测-云端vs端侧S1.md` 单独量化。" +
+                "真实链路里 S1 误判会让 S2 跟着歪，那是 S1 准确率的后果，不是 S2 的能力问题。",
+            "**端侧替身是 base 补全模型**：真机 S2 用 MiniCPM5-2B（chat 模板 + 结构化约束），" +
+                "本机只有 qwen2.5-0.5b 且走 llama-server 的 chat 端点。" +
+                "0.5B 的数字只能读作**下限**，不能当成端侧真机的实测结论。",
+            "**「可用」是六项判据全过**，判据都在窗口内的客观事实（S1 桶、窗口末条时间）上，" +
+                "不看措辞好坏。措辞好不好请直接看第五节的原始样例。",
+            "**占位照抄不抛异常**：生产链路会 `rejectPlaceholderEcho` 回退 S1，" +
+                "评测里保留输出并记一条 `非占位照抄` 失败，才能统计「模型跑飞」的比例。"
+        ),
+        plan = cfg.plan
+    )
 
     private fun codeBlock(lines: Collection<String>): String {
         val fence = String(charArrayOf(96.toChar(), 96.toChar(), 96.toChar()))
