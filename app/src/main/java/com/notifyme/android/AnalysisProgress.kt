@@ -37,6 +37,43 @@ enum class AnalysisStage {
 }
 
 /**
+ * 批次里单个任务的状态（首页「正在分析」清单用）。
+ *
+ * 为什么要有清单：一次「分析一轮」是**多个会话**逐个跑（Worker 里的 `cases`），
+ * 但 [AnalysisRunState] 只带**当前那一个**会话的阶段与 token —— 页面上因此只可能出现
+ * 「某个会话头上的一根细进度条」，看不到「这轮一共要分析哪几个、现在轮到谁、谁已经好了」。
+ * 卡片一旦滚出屏幕就彻底没信息了。
+ */
+enum class AnalysisTaskStatus {
+    /** 队列里等着，还没轮到 */
+    PENDING,
+
+    /** 正在跑（当前那个） */
+    RUNNING,
+
+    /** 跑完了（分析出结果，或被预筛就地结案） */
+    DONE,
+
+    /** 跑砸了（异常 / 模型不可用） */
+    FAILED
+}
+
+/**
+ * 批次里的一个任务（首页清单的一行）。
+ *
+ * @param convKeyId 会话复合键（与 [AnalysisRunState.convKeyId] 同口径）
+ * @param conversation 会话名（清单里显示什么）
+ * @param status 当前状态
+ * @param note 补充说明（如「预筛结案」「端侧模型未就绪」）
+ */
+data class AnalysisBatchTask(
+    val convKeyId: String,
+    val conversation: String,
+    val status: AnalysisTaskStatus,
+    val note: String = ""
+)
+
+/**
  * 一次分析运行中的实时状态（M15）。
  *
  * 只存在于内存：Worker 发布、Activity 订阅；进程被杀就自然消失，
@@ -47,6 +84,7 @@ enum class AnalysisStage {
  * @param token       已生成 token（仅 [AnalysisStage.LOCAL_DECODE] 有意义）
  * @param maxToken    采样上限（不是预期输出长度）
  * @param startedAt   [SystemClock.elapsedRealtime] 起点，用于算已用时间
+ * @param batch       本批任务清单（首页「正在分析」卡片的数据源）；空 = 单会话分析
  */
 data class AnalysisRunState(
     val convKeyId: String,
@@ -57,7 +95,8 @@ data class AnalysisRunState(
     val caseTotal: Int = 1,
     val token: Int = 0,
     val maxToken: Int = 0,
-    val startedAt: Long = SystemClock.elapsedRealtime()
+    val startedAt: Long = SystemClock.elapsedRealtime(),
+    val batch: List<AnalysisBatchTask> = emptyList()
 ) {
     /** 已用毫秒数（调用方给 now 便于测试）。 */
     fun elapsedMs(now: Long = SystemClock.elapsedRealtime()): Long =
@@ -230,4 +269,98 @@ object AnalysisProgressUi {
             }
         }
     }
+
+    // ---------------- 首页「正在分析」清单（M26） ----------------
+
+    /** 清单最多列出几行，剩下的折叠成「还有 N 个」（一屏放不下 20 行任务）。 */
+    const val MAX_VISIBLE_ROWS = 5
+
+    /**
+     * 清单标题用的资源 id（纯函数，可单测）。
+     *
+     * **别在 Core 里写中文串**：界面文案走 `strings.xml` + [Context.templateText]，
+     * 数字槽位才能恒 ASCII（`getString(id, 数字)` 在 ar-EG 下出 `٢٠٠`）。
+     * 「哪种状态用哪句话」的映射留在这里，是为了让这份映射只有一份。
+     */
+    fun runningTitleRes(allDone: Boolean): Int =
+        if (allDone) R.string.analysis_running_title_done else R.string.analysis_running_title
+
+    /**
+     * 清单标题：`⚡ 正在分析 2/8`（= 正在跑第 2 个，共 8 个）。
+     *
+     * 语义分三种，别混：
+     *  - 有人在跑 → 「⚡ 正在分析 2/8」= **正在跑第 2 个**，共 8 个；
+     *  - 还没开跑 → 「⚡ 正在分析 0/8」；
+     *  - 全部跑完 → 「✓ 分析完成 8/8」。
+     *
+     * 刻意**不**用「已完成/总数」当标题：那读起来像「0/1 = 一个都没跑成」，
+     * 而实际正跑着第一个（已完成数在每行状态里已经能看到）。
+     *
+     * @param batch 本批任务
+     * @return 标题文案；batch 为空时返 null（整块隐藏）
+     */
+    fun runningTitle(context: Context, batch: List<AnalysisBatchTask>): String? {
+        if (batch.isEmpty()) return null
+        val runningIdx = batch.indexOfFirst { it.status == AnalysisTaskStatus.RUNNING }
+        val allDone = doneCount(batch) == batch.size
+        if (runningIdx >= 0) {
+            return context.templateText(runningTitleRes(false), runningIdx + 1, batch.size)
+        }
+        return if (allDone) {
+            context.templateText(runningTitleRes(true), batch.size, batch.size)
+        } else {
+            context.templateText(runningTitleRes(false), 0, batch.size)
+        }
+    }
+
+    /**
+     * 清单里要显示的行（最多 [MAX_VISIBLE_ROWS] 条，其余折叠）。
+     *
+     * 「正在跑的」必须排前面 —— 折叠时不能把正在跑的那条折掉。
+     */
+    fun visibleRows(batch: List<AnalysisBatchTask>): List<AnalysisBatchTask> {
+        if (batch.size <= MAX_VISIBLE_ROWS) return batch
+        val running = batch.filter { it.status == AnalysisTaskStatus.RUNNING }
+        val head = batch.filter { it.status != AnalysisTaskStatus.RUNNING }
+        val keep = MAX_VISIBLE_ROWS - running.size.coerceAtMost(MAX_VISIBLE_ROWS)
+        return (running + head.take(keep)).take(MAX_VISIBLE_ROWS)
+    }
+
+    /** 折叠掉的条数（0 = 全列出来了）。 */
+    fun hiddenCount(batch: List<AnalysisBatchTask>): Int =
+        (batch.size - visibleRows(batch).size).coerceAtLeast(0)
+
+    /** 单个任务的状态文案资源 id（纯函数，可单测）。 */
+    fun taskStatusRes(status: AnalysisTaskStatus): Int = when (status) {
+        AnalysisTaskStatus.PENDING -> R.string.analysis_status_pending
+        AnalysisTaskStatus.RUNNING -> R.string.analysis_status_running
+        AnalysisTaskStatus.DONE -> R.string.analysis_status_done
+        AnalysisTaskStatus.FAILED -> R.string.analysis_status_failed
+    }
+
+    /** 单个任务的状态文案。 */
+    fun taskStatus(context: Context, status: AnalysisTaskStatus): String =
+        context.getString(taskStatusRes(status))
+
+    /**
+     * 已完成条数：状态为 [AnalysisTaskStatus.DONE] 的任务数（纯函数，可单测）。
+     *
+     * 口径说明：「完成」= 分析出了结果**或**被预筛就地结案（预筛 sharp 的会话不调模型，
+     * 但对用户来说这条也确实处理完了，不该一直挂在「排队中」）。
+     */
+    fun doneCount(batch: List<AnalysisBatchTask>): Int =
+        batch.count { it.status == AnalysisTaskStatus.DONE }
+
+    /** 清单里要不要显示：只有真在跑（有任务）时才显示。纯函数，可单测。 */
+    fun shouldShowRunning(batch: List<AnalysisBatchTask>): Boolean = batch.isNotEmpty()
+
+    /**
+     * 清单的「内容指纹」：只有指纹变了才需要重建那几行（纯函数，可单测）。
+     *
+     * 为什么：decode 阶段每 8 个 token 一次回调，一次分析几百次 —— 每次都把
+     * 十几行 View 重新 inflate 一遍会白烧主线程。指纹只吃**状态与顺序**，
+     * 不吃 token 数（token 变的是进度条，不是清单）。
+     */
+    fun batchSignature(batch: List<AnalysisBatchTask>): String =
+        batch.joinToString("|") { it.convKeyId + ":" + it.status.name + ":" + it.note }
 }

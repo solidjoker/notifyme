@@ -334,6 +334,24 @@ class AnalysisWorker(
         var done = 0
         var escalatedCount = 0
         var filteredCount = 0
+        // M26 首页「正在分析」清单：批次名单先建好（全是排队中），
+        // 逐个推进状态，并随每 case 的进度一起发布出去。
+        // 不建名单的话，页面上只剩「某个会话头上的一根细进度条」，
+        // 看不到这轮一共要分析哪几个、轮到谁、谁好了。
+        val batchTasks = ArrayList<AnalysisBatchTask>(cases.size)
+        for (c in cases) {
+            batchTasks.add(
+                AnalysisBatchTask(
+                    convKeyId = ConvKey(c.pkg, c.conversation).id,
+                    conversation = c.conversation,
+                    status = AnalysisTaskStatus.PENDING
+                )
+            )
+        }
+        // M26：批次一开始就发布一次 —— 用户点「分析一轮」后立刻就能看到
+        // 「一共要分析哪几个」，而不是等第一个 case 跑起来才出现。
+        // （否则整轮都被预筛就地结案时，清单一次都不会出现。）
+        publishBatch(convKeyId = "", conversation = "", batchTasks, index = 0, total = cases.size)
         for ((index, kase) in cases.withIndex()) {
             // M11：WorkManager 到时限会 cancel 本 worker。逐 case 已落盘 + caseId 去重，
             // 提前让出并 retry 即可从下一个未完成会话续跑，不再白烧剩余会话的 token。
@@ -361,19 +379,32 @@ class AnalysisWorker(
                     )
                     AnalysisStore.append(applicationContext, filteredRecord(kase, preFork))
                     filteredCount++
+                    // M26 清单：预筛结案也算这条处理完了（对用户来说确实不用再等）
+                    markTask(batchTasks, index, AnalysisTaskStatus.DONE, "预筛结案")
+                    publishBatch(
+                        ConvKey(kase.pkg, kase.conversation).id, kase.conversation,
+                        batchTasks, index, cases.size
+                    )
                 } else {
                     Log.i(
                         TAG_FORK,
                         "fork prefilter p=" + LocaleTextCore.fixed(pre.prob, 2) +
                             " split → s1 | " + kase.conversation
                     )
+                    markTask(batchTasks, index, AnalysisTaskStatus.RUNNING)
                     val record = analyzeOneCase(
                         config, slot, baseUrl, kase, preFork,
-                        caseIndex = index, caseTotal = cases.size
+                        caseIndex = index, caseTotal = cases.size,
+                        batch = batchTasks
                     )
                     AnalysisStore.append(applicationContext, record)
                     done++
                     if (record.escalated) escalatedCount++
+                    markTask(batchTasks, index, AnalysisTaskStatus.DONE)
+                    publishBatch(
+                        ConvKey(kase.pkg, kase.conversation).id, kase.conversation,
+                        batchTasks, index, cases.size
+                    )
 
                     // M9 悬浮卡（分析路径）：S1 判定需要行动才弹，覆盖全部关注态
                     // （SENTINEL_ALL）等即时路径不弹卡的场景；卡带 caseId，「标记已处理」即删除该 case
@@ -484,6 +515,47 @@ class AnalysisWorker(
     private class HttpException(val code: Int, val body: String = "") : Exception("HTTP $code")
 
     /**
+     * 推进批次名单里第 [index] 条的状态（M26 首页「正在分析」清单）。
+     *
+     * 就地改 [batch] 里的元素（列表是可变的），调用方随后在发进度时快照出去。
+     */
+    private fun markTask(
+        batch: MutableList<AnalysisBatchTask>,
+        index: Int,
+        status: AnalysisTaskStatus,
+        note: String = ""
+    ) {
+        if (index !in batch.indices) return
+        val old = batch[index]
+        batch[index] = old.copy(status = status, note = note)
+    }
+
+    /**
+     * 发布一次批次进度（M26 首页「正在分析」清单的数据源）。
+     *
+     * 阶段用 [AnalysisStage.PREPARING] —— 这一刻还没进入某个 case 的推理，
+     * 阶段文案无所谓，重要的是**清单本身**要立刻出现在首页。
+     */
+    private fun publishBatch(
+        convKeyId: String,
+        conversation: String,
+        batch: List<AnalysisBatchTask>,
+        index: Int,
+        total: Int
+    ) {
+        AnalysisProgressBus.publish(
+            AnalysisRunState(
+                convKeyId = convKeyId,
+                conversation = conversation,
+                stage = AnalysisStage.PREPARING,
+                caseIndex = index + 1,
+                caseTotal = total,
+                batch = batch.toList()
+            )
+        )
+    }
+
+    /**
      * 分析一个 case：fork 2 S1 判定 -> fork 3 条件触发 S2 深分析 -> 组装 case 记录。
      * S1：本地模型类型走端侧引擎，其余走 laya 协议服务；
      * S2：本地服务商走端侧引擎，否则走 openai 协议槽位。
@@ -496,7 +568,8 @@ class AnalysisWorker(
         kase: AnalysisCase,
         prefilterFork: AnalysisCaseRecord.ForkRecord,
         caseIndex: Int = 0,
-        caseTotal: Int = 1
+        caseTotal: Int = 1,
+        batch: List<AnalysisBatchTask> = emptyList()
     ): AnalysisCaseRecord {
         // M15：本 case 的进度广播。startedAt 每 case 重置，UI 的「已用时间」按会话算；
         // 首个 case 之前本地模型要加载（构造 LlamaCppEngine 即加载 GGUF），先报加载阶段。
@@ -511,7 +584,9 @@ class AnalysisWorker(
                     caseTotal = caseTotal,
                     token = token,
                     maxToken = maxToken,
-                    startedAt = startedAt
+                    startedAt = startedAt,
+                    // M26：清单快照随每次进度发布（首页「正在分析」卡片的数据源）
+                    batch = batch.toList()
                 )
             )
         }

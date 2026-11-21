@@ -113,6 +113,42 @@
             android:background="@color/divider" />
     </LinearLayout>
 
+    <!-- M26 正在分析：首页顶部的「本轮任务清单」（在跑/排队/已完成逐条列出）。
+         没有分析在跑时整块隐藏；分析结束时由 MainActivity 收起。 -->
+    <LinearLayout
+        android:id="@+id/llHomeRunning"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/card_bg"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tvHomeRunningTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="16dp"
+            android:paddingTop="10dp"
+            android:paddingEnd="16dp"
+            android:textColor="@color/brand_green"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:id="@+id/llHomeRunningRows"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="8dp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/divider" />
+    </LinearLayout>
+
     <!-- 组头点击热区说明：点文字区进详情、点箭头折叠 -->
     <TextView
         android:layout_width="match_parent"

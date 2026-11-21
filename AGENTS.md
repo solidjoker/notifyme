@@ -152,7 +152,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - 单测是纯 JVM（`unitTests.isReturnDefaultValues = true`），只有不依赖 Android 框架的逻辑才放得进 `app/src/test/`。
 - `lintOpenDebug` 输出里的 `e: ... Module was compiled with an incompatible version of Kotlin` 是 AGP 8.5.2 内嵌 lint 的 Kotlin 编译器（2.0.x）解析 2.2.21 元数据的噪音，**不影响编译**；别因此动 Kotlin 版本。
 - **同步水位口径＝「已结算前缀」**：水位只推进到「本轮被接受 ∪ 本轮新被隔离」的连续前缀；
-  中间有洞（被拒未隔离 / 未脱敏 / 结论不明）时**停在洞前绝不越过** —— 越过的记录 `analyzedAt <= 水位` 会被当已同步跳过，**永远补报不了**。改水位逻辑时同步看 `SyncWatermarkCore` 单测。
+  中间有洞（被拒未隔离 / 未脱敏 / 结论不明）时**停在洞前绝不越过** —— 越过的记录 `analyzedAt <= 水位` 会被当已同步跳过，**永远补报不了**。改水位逻辑看 `SyncWatermarkCore` 单测。
 - **413 单独处置**：服务端单条请求体上限 8 MiB，超限的那一条是「毒丸」，重试无用。
   端上先把批次二分重试，拆到单条仍 413 才单独隔离该条并继续下一批，
   **不触发整轮 retry**（否则一条毒丸会永久卡住它后面的整条队列）。
@@ -161,13 +161,18 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   - **② 给该 PAT 加 `Contents: Read and write`**（范围由维护者定）。**③ 走浏览器点合并**：选 `[data-dd-action-name="pull_requests.merge.open_method"]` 的 Squash → 点 `.merge.open`。
   - **本机（Windows）三个实测坑**：`git credential fill` 挂在 helper-selector 的交互提示上 → 用 `CredReadW` 直读 `git:https://github.com`；非交互 shell 里 `gh pr merge` 等确认会挂 → 改走 REST `PUT .../pulls/{n}/merge`（配 `GH_PROMPT_DISABLED=1`）；body 带 BOM 会回 400 `Problems parsing JSON` → 用 `[IO.File]::WriteAllText(..., UTF8Encoding($false))`。
 - **Android 单测里起不了 JDK 自带的 HTTP 服务**：单测 classpath = `android.jar` + 显式依赖，Kotlin 走 `-no-jdk`，`com.sun.net.httpserver` 编译期报 `Unresolved reference 'sun'`；纯 JVM 单测起本地服务只能用 `java.net.ServerSocket` 自己写 HTTP/1.1（见 `HttpEndToEndFixture.kt`）。
-- **服务端要写「真实 HTTP 端到端」用例**：用 `werkzeug.serving.make_server("127.0.0.1", 0, app)` 起真实 HTTP/1.1，客户端用 `urllib.request`；数据隔离靠改 `app.DATA_DIR / DB_PATH / JSONL_PATH / ADVISOR_PATH` 到临时目录。两个坑：
+- **服务端要写「真实 HTTP 端到端」用例**：`werkzeug.serving.make_server("127.0.0.1", 0, app)` 起真实 HTTP/1.1，客户端用 `urllib.request`；数据隔离靠改 `app.DATA_DIR / DB_PATH / JSONL_PATH / ADVISOR_PATH` 到临时目录。两个坑：
 ① 测 413 要把 `app.config["MAX_CONTENT_LENGTH"]` 调小（如 1024）再发几 KB —— 真按 8 MiB 阈值发，服务端读完 body 前就回 413 并断连，客户端 `sendall` 撞连接重置拿不到状态码；
 ② 404/413 是 JSON，但 **405 仍是 Flask 默认 HTML**。参考 `server/test_http_e2e.py`（34 例）。
 - **「HTTP 触发 + 后台线程执行」型接口的端到端写法**：`/admin/extract` 用 `_run_extract_bg` + `_probe_main_db_writable`，端点只回 202 + job_id；后台失败要在 `/admin/extract/status` 读出 `error_kind=busy`。
 - **提醒三级降级链的口径只有一份：`ReminderChainCore`（20 条）**：决策全在 `decide()`，`runReminderChain` 只采集事实。**L1 分两段写**（事件行 + 提醒行）：提醒行缺失 → 不算 L1 成功、跳过 L2、降级 L3 闹钟（文案 `NOTE_CALENDAR_NO_ALERT` 带「App内提醒」→ 老记录推成 alarm）；闹钟也没设上 → `failed(dropEventId)`，调用方删掉孤儿事件。note 文案契约六条锁在单测里。
 - **S1 判定有两处口径：`S1ScaleCore`（18 条）+ `S1NeedActionCore`（21 条）**。① 重要度是 **0-9 十档** score 题，score 就是档位；分制从答案的 legend / probabilities 条目数读（读不到回落 10 档）；**只夹取、不缩放**（旧「score ≤ 1 就 ×9」把闲聊档抬过升级闸 6.0）；缺 score 按概率算期望，都没有则 0.0。② need_action 概率三处读点（`need_action_prob` / `need_action.noul` / `noul`）归一到 `readAnswerProb`，**读不出来返 `null` 不是 0.0**（0.0 = 明确无需行动）→ 置信度归 0 交给升级闸重判；可读形态 `noul`/`prob`/`value` + 数字字符串，越界先夹取，对象形态不猜。systemone 解析抽成 `AnalysisParsing.parseSystemOneAnswers`。改前跑两个同名 Test.kt。
 - **通知抽取口径只有一份：`NotificationTextCore` + `NotificationShapeEvidenceTest`**（+19 条）：真机取证证实微信正文是 `[11条]发言人: 正文`；`hasUnreadPrefix` / `splitSender` / `isPlausibleSender` 是唯一口径。改 `PrefixImParser` / `GenericNotificationParser` / `NotifyMeListener.toRawNotification` 任一都要跑 `NotificationShapeEvidenceTest`（它固化「某家 App 的通知 → 入库字段」的映射）。
+- **首页「正在分析」任务清单的口径全在 `AnalysisProgressUi`（M26）**：`AnalysisRunState.batch`
+  带批次名单（`AnalysisBatchTask` 四态：排队中/分析中/已完成/失败），`AnalysisWorker` 逐 case 推进并广播，
+  `MainActivity.renderRunning` 渲染首页顶部那张卡。三条别改：**标题是「正在跑第几个/共几个」**
+  （不是「已完成几个」，「0/1」读起来像「一个都没跑成」）；**最多列 5 行**其余折叠（正在跑的那条必须留着）；
+  **重建靠内容指纹**（只吃状态与顺序，不吃 token 数）——decode 每 8 token 一次回调，全重建白烧主线程。
 - **`lintOpenDebug` 只剩 3 条 warning，刻意保留别去“修”**：`ObsoleteLintCustomCheck` / `OldTargetApi`（`targetSdk 34` 是产品决定）/ `ChromeOsAbiSupport`。
   **但 `OldTargetApi` 是「环境依赖」项**（按 SDK 元数据里的「最新 API 号」判定，SDK 组件不全的机器上不报）
   → lint-summary 分两种：**新增** issue 永远判红；**已知项缺失**里 `OldTargetApi` 只提示不判红。
@@ -175,30 +180,30 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **本机 Android SDK 已装好**（`$env:LOCALAPPDATA\Android\Sdk`，2026-11-20），七步本地自检（含 Android 四步）
   能**全 PASS**，不用只靠 CI 判定 —— 组件清单与坑见 [docs/BUILD.md](docs/BUILD.md)。
 - **改 `docs/architecture/diagrams/*.mmd` 必须重渲并回写尺寸表**：`mmdc -i X.mmd -o X.svg`，PNG 给 `-w <viewBox 宽 + 20> -H <viewBox 高 + 60>`；脑图 06 的 viewBox 起点不是 `0 0`（单独 `-w 3200 -H 1600`）；`-h` 是 help 不是高度；渲完量像素回写 README 索引表。
-- **控制台归类规则只在 `server/console_classify.js`**（UMD，无 DOM），别写进 `console_ui.py` 的 HTML；`app.py` 注入 `/*__CONSOLE_CLASSIFY_JS__*/`。改规则跑 `server/test_console_classify.py`（`REQUIRE_NODE=1` 时 node 缺失要 **fail 不是 skip**）；前端降级 `var CC = window.ConsoleClassify || null`。
+- **控制台归类规则只在 `server/console_classify.js`**（UMD，无 DOM），别写进 `console_ui.py` 的 HTML；`app.py` 注入 `/*__CONSOLE_CLASSIFY_JS__*/`。改规则跑 `server/test_console_classify.py`（`REQUIRE_NODE=1` 时 node 缺失要 **fail 不是 skip**）。
 - **浏览器调试实例的坑**（点合并备用路径）：WinINET 代理 `127.0.0.1:18888` 会报隧道错，显式 `--proxy-server=http://127.0.0.1:7890`；`--remote-debugging-port` 必须配独立 user-data-dir（136+ 策略）；token 页撞 sudo mode 需 2FA。
 - **排队通道 `/queue` 是 best-effort**：端上 `SyncWorker.pushQueue` 只认 2xx，失败不重试；服务端 `queue_tasks` 按 `(device_id, task_id)` 整份覆盖、保留 7 天，`stale` = `updated_at` 超 30 分钟。
-- **控制台有 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）**：改 `console_ui.py` 后自检三件事：① 内联脚本 `node --check`；② `pytest server/test_console_*.py -q`；③ 浏览器实跑看 `errs: []`。**`patchSections` 只追加 `.pane-sec` 不清理临时节点**。
-- **PWA 外壳配色只有一套 aura 令牌**（`console_ui` 顶部常量 `AURA_BG` / `AURA_ACCENT` / `AURA_GOLD` / `ICON_BG`）：manifest 的 theme / background 与 `CONSOLE_ICON_SVG` 兜底图标、`pwa_icons/*.png`、SW 离线兜底页四处同源。离线页没法插值，靠 `test_console_ui.py` 8 条钉住。
-- **端侧排队上报的 device_id 不能碰硬件标识**：`QueueStateCollector` 用 SharedPreferences("queue_state", "device_seed") 里的随机种子做 FNV-1a 派生（`android-` + 8 位 hex），**不要改用 ANDROID_ID / IMEI / 序列号**。
+- **控制台有 5 个 Tab（会话 / 待办 / 排队 / 统计 / 顾问）**：改 `console_ui.py` 后自检三件事：① 内联脚本 `node --check`；② `pytest server/test_console_*.py -q`；③ 浏览器实跑看 `errs: []`。**`patchSections` 只追加 `.pane-sec`**。
+- **PWA 外壳配色只有一套 aura 令牌**（`console_ui` 顶部常量 `AURA_BG` / `AURA_ACCENT` / `AURA_GOLD` / `ICON_BG`）：manifest 的 theme / background、`CONSOLE_ICON_SVG` 兜底图标、`pwa_icons/*.png`、SW 离线兜底页四处同源。离线页没法插值，靠 `test_console_ui.py` 8 条钉住。
+- **端侧排队上报的 device_id 不能碰硬件标识**：`QueueStateCollector` 用 SharedPreferences("queue_state", "device_seed") 里的随机种子做 FNV-1a 派生（`android-` + 8 位 hex），**别改用 ANDROID_ID / IMEI / 序列号**。
 - **控制台统计口径＝服务端全库真值，不是前端已加载页**：概览条与统计 Tab 的数据来自 `GET /stats`（stats_api.py 聚合全库），
 前端只有在接口不可用或用户切了来源过滤时才退回本地估算，并标「估算 · 仅已加载 N 条」。
-两个坑：① `/stats` 的 `by_pkg` / `by_source` / `by_kind` 是**对象数组** `[{pkg|source|kind, count}]`，而前端本地算法生成的是 `{键: 次数}` —— 必须走 `pairList()` 归一化，
+两个坑：① `/stats` 的 `by_pkg` / `by_source` / `by_kind` 是**对象数组** `[{pkg|source|kind, count}]`，前端本地算法生成的是 `{键: 次数}` —— 必须走 `pairList()` 归一化，
 直接 `Object.keys()` 会打印成 `[object Object]`；② 分析侧的 `redacted` / `redaction_rules` / `redaction_hits` 前端要显式渲染（`redactBadge` / `redactDetail`）
 并纳入 `analysisSearchText` 搜索，否则看不到「哪些内容被替换成占位符」。
 - **周期分析任务按 tag 反查不到就不上报**：`AnalysisScheduler` 的周期任务不带 tag，`QueueStateCollector.collect()` 只按 tag 采集 —— 控制台「排队」Tab 看不到周期任务，已知取舍不是 bug。
 
 - **会话卡内的「日期 / 发送者」两级分组**：规则在 `console_classify.groupMessages(msgs, dim, getTs, getSender)` —— **按 `getTs` 精确值分桶**，调用方要传当天零点对齐的时间戳（`console_ui.dayStartMs()`）。状态存 `wx_group_v1`，`setConvGroupDim` / `convDimBar` / `groupMsgsByDim` / `convGroupHtml` 一起改。
 - **排队 Tab 的「设备」维度有两套口径**：设备清单来自 `GET /queue` 的 `devices` 聚合（`storage.queue_devices()`，`summary.devices` 是台数），控制台设备 chip 用这一份；前端 `console_classify.groupQueueTasksByDevice` 是纯函数版（离线/单测用），两处别混算。
-- **端云与跨层字段有契约守卫**：① 排队 `server/test_queue_contract.py` 比对 `QueueStateCore.buildPayload` 与 `storage._normalize_queue_task`（字段名 / 键 / 枚举 / 长度上限）。② **消息 / 分析 / 顾问三通道 `server/test_report_contract.py`**（39 条）：端上 `toJson` + `SyncWorker` 与服务端读的键比对 —— 客户端键集钉死、必填 ⊆ 客户端、客户端 ⊆ 服务端读 ∪ 白名单（`appLabel` 与三个本地状态键不消费）。③ **topic / due 码值↔中文 `server/test_label_contract.py`**（15 条）：端上 `TopicLabelCore.kt` 与 `console_classify.js` 的码值 / 文案 / 别名表一致。④ **重要度档位 `server/test_importance_contract.py`**：服务端 `util._importance_label`、规则层 `importanceKey`、控制台 `impLabel` 四处同源。改一端忘另一端 CI 直接红。
-- **顾问通道的口径只有一份**（`AdvisorPayloadCore` 84 行 + 11 条；存档侧 `server/test_advisor_archive.py` 14 条）。① 上传体唯一出口 `uploadJson()`：键集固定 7 个，本地三状态键不上报。② **长度裁剪只在服务端一处**且留痕：`truncated_fields` + `truncated: true`。③ **存档只有一种形状**：读取跨两段（同 id 留最后那条），上限由 `_trim_advisor_jsonl` 收敛，裁掉的份数写 sidecar 随 `GET /advisor` 下发。
+- **端云与跨层字段有契约守卫**：① 排队 `server/test_queue_contract.py` 比对 `QueueStateCore.buildPayload` 与 `storage._normalize_queue_task`（字段名 / 键 / 枚举 / 长度上限）。② **消息 / 分析 / 顾问三通道 `server/test_report_contract.py`**（39 条）：端上 `toJson` + `SyncWorker` 与服务端读的键比对 —— 客户端键集钉死、必填 ⊆ 客户端、客户端 ⊆ 服务端读 ∪ 白名单（`appLabel` 与三个本地状态键不消费）。③ **topic / due 码值↔中文 `server/test_label_contract.py`**（15 条）：端上 `TopicLabelCore.kt` 与 `console_classify.js` 的码值 / 文案 / 别名表一致。④ **重要度档位 `server/test_importance_contract.py`**：服务端 `util._importance_label`、规则层 `importanceKey`、控制台 `impLabel` 同源。改一端忘另一端 CI 直接红。
+- **顾问通道的口径只有一份**（`AdvisorPayloadCore` + 11 条；存档侧 `server/test_advisor_archive.py` 14 条）。① 上传体唯一出口 `uploadJson()`：键集固定 7 个，本地三状态键不上报。② **长度裁剪只在服务端一处**且留痕：`truncated_fields` + `truncated: true`。③ **存档只有一种形状**：读取跨两段（同 id 留最后那条），上限由 `_trim_advisor_jsonl` 收敛，裁掉的份数写 sidecar 随 `GET /advisor` 下发。
 - **版本信息只有一份口径：`VersionInfoCore`**（14 条），控制台版本卡与 ☰ 弹窗都调它。① `versionLine` 必须带 `versionCode`（debug 覆盖时 `versionName` 可能不变）；② beta 的 `versionName` 自带 `-test`，`title()` 不再拼渠道后缀。
 - **版本号只有一处出处**：`app/build.gradle.kts` 是唯一出处；文档里的版本号由 `server/test_version_contract.py`（12 条）钉住，**期望值从 gradle 取**。升版要同步的 7 处钉点由该测试自己列出；§0 历史快照不参与判定。
 - **通知形状取证只有一份口径**：`docs/scripts/notify_shape_capture.py` 出结论（18 条守卫在 `server/test_notify_shape_capture.py`）；dump 兼容 UTF-8 / UTF-16；结论写进取证记录，别再手抄。
 - **「截止时间」的显示只有一份口径：`DueDisplayCore`（188 行 / 32 条）**：四处显示（首页待办卡 / 会话卡分析行 / 分析列表 / 会话详情 chip）都走它，「明天15:00」「本周内」换算成**今天 / 明天 / M月d日**（跨年带年份）。① 文本→毫秒**只委托 `DueTimeCore.parse`**（不另写解析器，显示与落点一致）；② 相对词锚点 = 「说话那一刻」（手动覆盖用编辑时刻 `todoDueAt`、模型结论用 `analyzedAt`）；③ 桶码值也展开（`this_week` → 周一~周日区间）；④ 时刻只在文本写了才显示（`DueTimeCore.hasExplicitTime`，不印兜底 09:00）；⑤ 标签也带时刻（明天15:00 → 明天 15:00）；⑥ 解析不出原样显示。
 
 - **历史重复消息只能靠 `MessageDedupeCore` 归并，别在别处另写删行逻辑**：真机量化 78 组 / 271 行是「同一条通知被多次捕获」（微信正文形如 `[11条]发言人: 正文`，未读数一变正文就变，去重键含正文原文）。
-口径保守：同 App + 同会话 + 同发送者 + 剥掉未读前缀后正文相同，**且组内至少一行带 `[N条]` 前缀**才归并；裸正文相同（用户真连发）不动，损坏行 / 空正文原位保留。老行 `sender == conversation` 必须先 `NotificationTextCore.splitSender` 还原再算键；正文两侧都要剥前缀。`dedupeRepeated` 在 `removed == 0` 时不碰文件。
+口径保守：同 App + 同会话 + 同发送者 + 剥掉未读前缀后正文相同，**且组内至少一行带 `[N条]` 前缀**才归并；裸正文相同（用户真连发）不动，损坏行 / 空正文原位保留。老行 `sender == conversation` 先用 `NotificationTextCore.splitSender` 还原再算键；正文两侧都要剥前缀。`dedupeRepeated` 在 `removed == 0` 时不碰文件。
 
 - **首页「按来源 App」筛选 chips 的口径在 `AppFilterCore`**（+ 16 条；`AppFilterStore` 只存 `app_filter` / `selected_pkg`）。四条：
 ① chip 只列当前窗口内真出现过的来源（`MessageStore.readRecent(500)` 口径），不列 `AppSourceRegistry` 全集 —— 点了必然空白的 chip 比不给更差；
@@ -207,7 +212,8 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **分析范围（M12）的口径全在 `AnalysisScopeCore`**（+ 30 条；`AnalysisScopeStore` internal 只落盘）。① 落盘只存选择不存毫秒（存毫秒会把「近 7 天」钉死），回填走 `loadStored()`。
 ② `immediateScope` 直接返 `UNLIMITED`（forceKey 不受范围约束）。③ `forced()` 跳过启用集合与 DONE/NOISE（`isBlocked` 一律不放行），但 `skipDedup()` 只在手动轮放开。
-④ 「近 N 天」含今天，自定义结束日取 23:59:59.999、反填自动交换；`parseDay` 回读校验，2 月 30 日返 null。⑤ 会话 id 用 JSONArray，会话名含 `|`、坏 JSON 返空集。改前跑 `AnalysisScopeCoreTest.kt`。
+④ 「近 N 天」含今天，自定义结束日取 23:59:59.999、反填自动交换；`parseDay` 回读校验，2 月 30 日返 null。⑤ 会话 id 用 JSONArray，会话名含 `|`、坏 JSON 返空集。
+**`explicit` 只看 convIds 非空**（点了名才算显式）—— 改「自定义时间段」不叫显式，手动轮因此仍走去重。改前跑 `AnalysisScopeCoreTest.kt`。
 - **姓名别名的盐只有一份口径：`AliasSaltCore` / `AliasSaltStore`**（纯函数 16 条单测；Store internal 只落盘）。别名摘要输入是 `sha256(盐 ‖ 0x00 ‖ 名字)` 取前 6 位 hex，盐是本机 `SecureRandom` 32 字节、存 `privacy_config` 的 `alias_salt` 键（`PrivacyConfig.PREFS_NAME` 是 `internal const`，别改回 private 另开 prefs）。四条契约：
   ① **盐为空必须逐字节退化为 `sha256(名字)`**（`LEGACY_SALT = ByteArray(0)`）—— 老设备升级后历史别名不能变，改摘要输入会让历史脱敏记录对不上号；
   ② `decode` 对非 64 字符 / 非 hex 返回 **null 而不是抛**，调用方就地重生成（`ensure` 第二项为 null 表示「无需落盘」，别无条件写回）；
@@ -238,35 +244,35 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **会话可见性的四层门槛只有一份口径：`ConvVisibilityCore`**（纯函数 + 28 条），别在 `MainActivity` / `OverlayService` / `AnalysisWorker` 各写一套：
   ① **顺序是契约**：关注名单（`WatchlistStore.getUnwatched` 的会话 id，形如 `pkg|会话名`，精确匹配）→ 自身/系统源（`AppSourceRegistry.isBlocked`）→ 启用集合（`AppSourceStore.isEnabled`）→ 首页来源筛选（`AppFilterCore.matches`，空串＝全部恒通过）。顺序只影响 `why()` 把拦截原因归到哪一类，四层全是 AND。
-  ② **`forced` 只放宽「启用集合」这一层**。自身/系统源任何情况都拦 —— `isEnabled` 内部虽然也判过 `isBlocked`，但 forced 分支根本不走 `isEnabled`，那条判断此时失效，所以 Core 里这一行不是冗余，删掉就会出现「立即分析」把 a11y 自抓噪声喂给模型。
-  ③ **分析门禁传 `AppFilterCore.ALL`**：首页来源筛选只影响展示，不能让「首页正在看飞书」停掉其它来源的周期分析；分析链的关注名单**故意传 `emptySet()`** —— 门禁在 `ConvTagCore.shouldAnalyze`（`forced && !quiet` 放行），两处都判会把「立即分析本会话」一起拦掉。
-  ④ **首页「最近待办」与悬浮面板必须同口径**（都走 `visibleKeys`）：悬浮面板曾漏接首页筛选，首页筛了飞书、面板还列微信待办（真机复现过）。面板的可选项要用「过了前三层门槛」的来源集算 `AppFilterCore.resolve` 的回落，不能拿未过滤的全集，否则停用来源会让筛选卡住、面板整页空白。
+  ② **`forced` 只放宽「启用集合」这一层**。自身/系统源任何情况都拦 —— forced 分支根本不走 `isEnabled`，那条 `isBlocked` 判断此时失效，删掉就会出现「立即分析」把 a11y 自抓噪声喂给模型。
+  ③ **分析门禁传 `AppFilterCore.ALL`**：首页来源筛选只影响展示，不能让「首页正在看飞书」停掉其它来源的周期分析；分析链的关注名单**故意传 `emptySet()`** —— 门禁在 `ConvTagCore.shouldAnalyze`，两处都判会把「立即分析本会话」一起拦掉。
+  ④ **首页「最近待办」与悬浮面板必须同口径**（都走 `visibleKeys`）：悬浮面板曾漏接首页筛选（真机复现过）。面板的可选项要用「过了前三层门槛」的来源集算 `AppFilterCore.resolve` 的回落，否则停用来源会让筛选卡住、面板整页空白。
   改门槛顺序、加第五层或改 forced 语义前先跑 `app/src/test/java/com/notifyme/android/ConvVisibilityCoreTest.kt`。
 
 - **会话详情页的消息窗口口径全在 `ConvWindowCore`**（纯函数 + 38 条），别在 `ConversationActivity` 里另写一套：
   ① **必须先按 `convKey` 过滤再排序**：旧写法 `readRecent(500).filter{convKey}.sortedBy{timestamp}` 先在全库最近 500 条里选、再挑本会话，别的会话刷屏就把本会话历史挤掉；`slice()` 反过来做。
-  ② **请求行数必须封顶**：`requestLines(limit)` 取 8 倍（默认 4000，硬上限 50000）。`readTailLines` 按行数向文件头扩容，给爆 `Int.MAX_VALUE` 会退化成全量读、大文件直接 OOM。
+  ② **请求行数必须封顶**：`requestLines(limit)` 取 8 倍（默认 4000，硬上限 50000）。`readTailLines` 按行数向文件头扩容，爆 `Int.MAX_VALUE` 会退化成全量读、大文件 OOM。
   ③ **`ts <= 0` 的未标注日期消息归 0 参与排序**，超 `limit` 时保留最近若干条而不是最早。
-  ④ **「共 N 条」只在 `preview().countedAll` 为真时才能报**：条数可信 = 已读到文件头（`linesRead < requested`，打满一律当没读全）**且** 命中未被 `limit` 砍掉（`visible < limit`）；否则走 `chat_truncated_window` / `chat_window_partial`，别拿窗口内命中数冒充总数。
+  ④ **「共 N 条」只在 `preview().countedAll` 为真时才能报**：条数可信 = 已读到文件头（`linesRead < requested`）**且** 命中未被 `limit` 砍掉（`visible < limit`）；否则走 `chat_truncated_window` / `chat_window_partial`，别拿窗口内命中数冒充总数。
   ⑤ **`MAX_RENDER = 200` 只留一份**；`MessageStore.readWindow` 因返回 `internal` 类型必须加 `internal`（否则报 `public function exposes its internal return type`）。
   ⑥ **别再用 `readRecent(500)` 挑「本会话的一条消息」**：`latest(window)` 补日历描述、`knownIsGroup(window)` 判群聊，窗口占满时两处取 null；`knownIsGroup` 空窗口必须回 **null** 而不是 false。
-  ⑦ **`AnalysisListActivity.buildSourceMap` 同理**：`sourceKeys(records)` 给要读窗口的会话键集合（去重保序、跳过空会话名老记录），每键各读一次 `readWindow` 再交 `sourceMap` 还原原文。取不满返空串、调用方隐藏 —— 宁可不显示，也不拿别的窗口内容冒充原文（第三次复现）。
+  ⑦ **`AnalysisListActivity.buildSourceMap` 同理**：`sourceKeys(records)` 给要读窗口的会话键集合（去重保序、跳过空会话名老记录），每键各读一次 `readWindow` 再交 `sourceMap` 还原原文。取不满返空串、调用方隐藏 —— 不拿别的窗口内容冒充原文（第三次复现）。
   改窗口大小、排序方向或可信度判据前先跑 `ConvWindowCoreTest.kt`（38 条，含 600 条噪声 + 本会话回归）。
 
 - **分析候选的取样口径全在 `CandidateWindowCore`**（纯函数 + 16 条），别在 `AnalysisWorker` 里另写一套：
-  ① **候选集合不是「全局最近 N 条」，而是「每会话留够用的几条」**：下游一个 case 只吃 `AnalysisCase.WINDOW_SIZE = 10` 条（`takeLast`），候选只决定「哪些会话值得开一轮」。`readRecent(500).groupBy` 会让刷屏会话把安静会话挤出候选 —— `readRecent` 同源隐患第四次复现（前三：详情页 / `latest`+`knownIsGroup` / 分析列表原文）。
+  ① **候选集合不是「全局最近 N 条」，而是「每会话留够用的几条」**：下游一个 case 只吃 `AnalysisCase.WINDOW_SIZE = 10` 条（`takeLast`），候选只决定「哪些会话值得开一轮」。`readRecent(500).groupBy` 会让刷屏会话把安静会话挤出候选 —— 同源隐患第四次复现（前三：详情页 / `latest`+`knownIsGroup` / 分析列表原文）。
   ② **`PER_CONV = 50` 是「10 条窗口 + 范围过滤余量」**：范围是过去的自定义区间时，更新的消息会先占掉名额，余量太小会让区间内消息整块消失（留 10 条时区间内 0 条、留 50 条时 30 条）。别涨到 `MessageStoreCore.TAIL_LINES = 5000` 量级，那等于放弃「每会话只留一窗」。
   ③ **组内必须按时间升序、且 `timestamp <= 0` 归 0 排最前**：与 `ConvWindowCore.slice` 同口径，未标注日期的消息不能被更晚的真实消息顶掉；超 `perConv` 只保最近若干条，`perConv <= 0` 返空表（调用方传错时保守退化）。
-  ④ **`MessageStore.candidateGroups` 必须 `internal`**：它返回 `Map<ConvKey, List<ChatMessage>>` 但被 `CandidateWindowCore` 的参数类型牵连，声明成 public 会报 `public function exposes its internal return type`（与 `readWindow` 同一个坑）。
-  ⑤ **分组顺序保首次出现（`LinkedHashMap`）**，后续 `sortedBy { windowEnd }` 是稳定排序 —— 同一份输入必须得到同一轮入选顺序，改排序方式前先想清楚「可复现」这条。
+  ④ **`MessageStore.candidateGroups` 必须 `internal`**：它返回 `Map<ConvKey, List<ChatMessage>>` 被 `CandidateWindowCore` 的参数类型牵连，声明成 public 会报 `public function exposes its internal return type`（与 `readWindow` 同一个坑）。
+  ⑤ **分组顺序保首次出现（`LinkedHashMap`）**，后续 `sortedBy { windowEnd }` 是稳定排序 —— 同一份输入必须同一轮入选顺序。
   改 `PER_CONV`、排序方向或分组语义前先跑 `app/src/test/java/com/notifyme/android/CandidateWindowCoreTest.kt`（16 条，含「600 条噪声 + 本会话仍在候选」与旧写法对照实验）。
 
 - **分析记录（`analysis.jsonl`）的取窗口口径全在 `AnalysisWindowCore`**（纯函数 + 27 条；文件级操作在 `AnalysisWindowFile`），别在 Activity / Worker 里另写 `readRecent(N).filter{}` / `groupBy{}`：
   ① **`AnalysisStore.readRecent(context, limit)` 是「文件尾部 limit 行」**，只留给本意就是全局最近 N 条的调用点；要「某会话全部 / 每会话最新一条 / 全库列表」走 `readGrouped` / `readForConversation` / `readRecentWindow` / `latestByConvKey`（口径见下条「近 N 条」），否则尾部被别的会话占满、安静会话的 case 一条读不到。
   ② **窗口量级分两档**：`TAIL_LINES = 5_000` 给列表与首页聚合；`POLL_LINES = 1_500` 给详情页轮询（每 4 秒）与悬浮面板 —— 这两条路径给 5 000 = 每 4 秒解析 5 000 行。`LIST_LIMIT = 200` 只是展示上限，`UNLIMITED = -1` 是「本会话不限条数」。
-  ③ **`group()` 保首次出现序、组内按 `windowEnd` 升序**（即窗口推进顺序）；`latest()` 取每组末条，**同 `windowEnd` 取最后写入那条**（旧 `maxByOrNull` 取第一条，别为它改语义）。
+  ③ **`group()` 保首次出现序、组内按 `windowEnd` 升序**；`latest()` 取每组末条，**同 `windowEnd` 取最后写入那条**（旧 `maxByOrNull` 取第一条，别为它改语义）。
   ④ **不按会话设条数上限**（与 `CandidateWindowCore.PER_CONV` 不同），内存由 `TAIL_LINES` 兜住；窗口外老 case 读不到是已知局限，别把 `TAIL_LINES` 涨到几十万来「修」它。
-  ⑤ **新增返回这些内部类型的 `AnalysisStore` 方法必须 `@Synchronized` + `JsonlStore(storeFile(context))` 现造**，否则并发追加会读到半行；`AnalysisWindowFile` 自身只管读、不缓存。
+  ⑤ **新增返回内部类型的 `AnalysisStore` 方法必须 `@Synchronized` + `JsonlStore(storeFile(context))` 现造**，否则并发追加会读到半行；`AnalysisWindowFile` 只管读、不缓存。
   改前跑 `app/src/test/java/com/notifyme/android/AnalysisWindowCoreTest.kt`（27 条，含 600 条噪声 + 本会话 3 条）。
 
 - **首页信息流的取样口径全在 `FeedWindowCore`**（纯函数 + 27 条），别在 `MainActivity.buildFeed` 里另写一套：
@@ -274,7 +280,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   ② `perConvFor(convCount)` 把 `TOTAL_BUDGET = 6000` 摊薄再夹进 `[20, PER_CONV = 200]`；`20 = 2 × AnalysisCase.WINDOW_SIZE`，既保证每会话凑得出一窗、又限制按天折叠后的翻页深度。
   ③ 会话间按「该会话最近一条」倒序、组内升序，`timestamp <= 0` 归 0 排最前，并列保首次出现序（同一输入必须同一首页顺序）。
   ④ `Bucket.truncated` 两档：读到文件头时 `size > keep`、没读到文件头时 `size >= keep` —— 条数是下限时界面必须写 `N+ 条`（`R.string.msg_count_at_least`）。
-  ⑤ `MessageStore.feedGroups` 必须 `internal`；`REQUEST_LINES = 20000` 比 `TAIL_LINES = 5000` 大是刻意的（安静会话在文件靠前位置）。
+  ⑤ `MessageStore.feedGroups` 必须 `internal`；`REQUEST_LINES = 20000` 比 `TAIL_LINES = 5000` 大是刻意的。
   改名额/排序/截断前先跑 `FeedWindowCoreTest.kt`（27 条，含 600 条噪声与旧写法对照）。
 
 - **「近 N 条」取数只有三种口径，别再新写 `readRecent(N)`**（第七批同源隐患，2026-11-13 收口）：
@@ -316,7 +322,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
   刻意例外别顺手改：`"%02x".format(it)` 的 hex、`AnalysisCase` 已钉 `Locale.US` / `Locale.CHINESE` 的题面、`S1Eval` 的 `Locale.US` ISO 时间。对照单测钉 `Locale` 时**时区也要一起钉**（`SimpleDateFormat` 取系统时区，CI runner 是 UTC、本机 +08 —— 本轮 CI 就是这条先红）。改前跑 `LocaleTextCoreTest`（含 ar-EG / de-DE 回归）。
 
 - **静态检查基线：`docs/scripts/static_check.py` + `.editorconfig`**（ktlint 1.8.0）。只开 5 条（`ENABLED_RULES`：import-ordering / no-unused-imports / final-newline / no-consecutive-blank-lines / string-template），加规则须同步 `.editorconfig`；glob 带 `!third_party/**`；CI `--report`、local_check 第 7 步 `--strict`、清账 `--fix`；`local_check.ps1` 必须 UTF-8+BOM。
-- **S2 摘要可用性只有一把尺子：`S2Usability`**（349 行 + 34 条）。① 可用 = 六项判据全过（`delivered`/`no_placeholder`/`summary`/`due`/`action`/`tasks`），措辞不进判据；② `due` 判「与 S1 同桶」+ 60s 容差；③ 兜底摘要只有 `fallbackSummary(kase)`；④ 报告文件名纯 ASCII；⑤ 只断言跑通不断言答对。
+- **S2 摘要可用性只有一把尺子：`S2Usability`**（+ 34 条）。① 可用 = 六项判据全过（`delivered`/`no_placeholder`/`summary`/`due`/`action`/`tasks`），措辞不进判据；② `due` 判「与 S1 同桶」+ 60s 容差；③ 兜底摘要只有 `fallbackSummary(kase)`；④ 报告文件名纯 ASCII；⑤ 只断言跑通不断言答对。
 
 
 - **采集诊断页的累计统计只有一份口径：`AllTimeStatsCore`**（+ 16 条）。① 累计不是 `readRecent(N)`（窗口一满就静默偏小），是 `scanAll`（`SCAN_LINES=50000`）；② 被截断要能报 `capped(totalLines, scannedLines)`；③ object 层 `allTimeStats` 必须 `internal`。
@@ -329,7 +335,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 - **Intent extras→会话键、运行时权限各一份口径**（`ConvExtrasCore` + `PermissionGateCore`）。① 包名空白回落微信且**不 trim**，会话名空白=无会话返 **null**（`ConvKey("", pkg)` 永匹配不到消息）。② `needsPostNotifications` 同时看 sdkInt 与结果；`allGranted` 空结果 false。③ 权限名用 `PERM_POST_NOTIFICATIONS` 字面量（写 `Manifest.permission.POST_NOTIFICATIONS` 报 `InlinedApi`，lint 漂到 4 条）。
 - **服务端地址与鉴头各一份口径：`SyncEndpointCore`**（73 行 / 18 条）。① `base()` 顺序是契约：trim → 去尾斜杠 → 剥尾部 `/weixin`；② 只拼接，不猜 `/v1`（`ChatRequestCore`），不补 `/chat/completions`；③ `authorized()` 用 `isNotBlank` 且返回同一 builder（可链式、不成双头）；`SyncConfig` setter 会 trim，纯空白令牌不可达。
 
-- **两条提取腿的共享内核只有一份口径：`server/extract_common.py`**（`android_db_extract.py` 1260→813 行、`pc_db_extract.py` 1122→673）。① 六个 env 常量必须继续在两侧脚本里定义（monkeypatch 要目标），common 内走 `_setting(name)`；
+- **两条提取腿的共享内核只有一份口径：`server/extract_common.py`**（`android_db_extract.py` 1260→813 行、`pc_db_extract.py` 1122→673）。① 六个 env 常量继续在两侧脚本里定义（monkeypatch 要目标），common 内走 `_setting(name)`；
 ② `_setting` 判 `None` 不判真值（`COMMIT_INTERVAL = 0` 合法）；③ `activate(module)` 登记 `_HOST`，**import 尾部 + 每个入口函数开头都要再调**（只登记一次时后导入的 pde 顶掉 ade，表现 `commits=1` 且锁写进真实 `server/data/`）；
 ④ `_archive_path` / `_lock_path` 用 `_setting("MAIN_DB")` 调用时解析。改前跑 `test_extract_common.py` + `test_extract.py` + `test_extract_cursor.py`。
 - **游标分页只有一份解析口径：`server/util._parse_cursor`**（`EXPECTED_OWNER` 守归属）。① **两段都校验**：毫秒在 `MIN_TS_MS..MAX_TS_MS`、rowid 在 `0..MAX_ROWID` —— 只校验毫秒段时超 int64 的 rowid 抛 `OverflowError` 整页 500，负 rowid 恒空页。② 空值/纯空白返 `(None, None)`。③ `_` 多于两段 400。④ 只给毫秒时 rowid 取 `MAX_ROWID`。
@@ -360,7 +366,7 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 ② 前端两个入口：`liveDeviceCount()` 与 `deviceTallyText(q)`；缺 `devices_active` 键时按「全在跑」保守回落，别渲染 `NaN`。
 ③ 新增聚合键必须同时改 `stats_api._queue_block` 与 `routes.query_queue` 两处。
 
-- **概览条「待处理」的会话数读 `todo_convs` 不是 `convs`**（`console_ui.renderOverview`，`test_console_ui.py` 1 条守着）。① `/stats` 有两个会话数：`convs`=有分析结果的、`todo_convs`=其中有待办的；那格数字是待办条数，副标题须配 `todo_convs`，否则与 `/suggests/next` 的「分布在 N 个会话」同屏打架。② 加键要接消费点。③ 断言写「新键在 + 旧键不在」。
+- **概览条「待处理」的会话数读 `todo_convs` 不是 `convs`**（`console_ui.renderOverview`，`test_console_ui.py` 1 条守着）。① `/stats` 有两个会话数：`convs`=有分析结果的、`todo_convs`=其中有待办的；那格数字是待办条数，副标题须配 `todo_convs`，否则与 `/suggests/next` 的「分布在 N 个会话」同屏打架。② 断言写「新键在 + 旧键不在」。
 
 - **`/messages` 与 `/analysis` 必须回报被脏值守卫挡掉的行数：`skipped`**。① 只数 Python 侧 `except` 恒 0（脏行早在 `typeof` 守卫被挡），须发独立 `SELECT COUNT(*) WHERE NOT (guard) [AND 过滤段]`；② 无过滤也照算，`count + skipped == /stats`；③ 前端只能覆盖（`Math.max`）。
 - **列表接口夹了上限就必须回「总数 / 是否截断」**（`routes.query_advisor`：`min(limit, 100)`）。① 响应体补 `total`（截断前条数）与 `has_more = total > count`，损坏分支也回 `0 / false`；② 角标读 `ADVISOR_TOTAL`（缺省退回已加载条数）；③ 截断用例别钉末位（三批可落同一毫秒），只钉首位最新 + 长度。
@@ -373,15 +379,15 @@ CI 还开了：Gradle / pip 依赖缓存、job 级 `timeout-minutes`（构建 60
 
 - **角标这类聚合数字默认口径是全库：`console_classify.badgeState`**（4 条规则层 + 1 条 UI 守着）。① `{value, scope}` 两态 `library`/`loaded`；② `total` 缺失/负数/非小数一律回落本页，`null`（拿不到）≠ `0`；③ 用户已筛选（`APP_FILTER` 或搜索）时不报全库；④ 读屏在 `scope` 为 `loaded` 时补「（本页）」；排队与顾问不套。
 
-- **每条建议的数字必须自带口径：`suggests._build` 的 `scope` + `console_classify.suggestScope`**（3+3+1 条守着）。① `scope` 由规则的 `pkg_scoped` 决定，不看请求参数；② `pkg` / `global` 两态，排队与顾问恒 `global`；③ 标题只在全部建议都按来源过滤时才标「仅 X」，每张卡另带一枚口径徽标。
-- **一个句子里的两个计数必须各带口径：`console_classify.syncCounters`**（4 条规则层 + 1 条 UI）。① 逐侧复用 `badgeState` 定档，返 `{msg, ana, mixed}`；② `null`（拿不到）≠ `0`（真的是 0）；③ `filtered` 一票否决两侧；④ UI 只给退化的那侧加「已加载」前缀。
+- **每条建议的数字必须自带口径：`suggests._build` 的 `scope` + `console_classify.suggestScope`**（3+3+1 条守着）。① `scope` 由规则的 `pkg_scoped` 决定，不看请求参数；② `pkg` / `global` 两态，排队与顾问恒 `global`；③ 标题只在全部建议都按来源过滤时才标「仅 X」。
+- **一个句子里的两个计数必须各带口径：`console_classify.syncCounters`**（4 条规则层 + 1 条 UI）。① 逐侧复用 `badgeState` 定档，返 `{msg, ana, mixed}`；② `null` ≠ `0`；③ `filtered` 一票否决两侧；④ UI 只给退化的那侧加「已加载」前缀。
 
-- **枚举的文案映射只在规则层：`console_classify.SOURCE_LABELS` / `sourceLabel` / `sourceBadge` / `queueKindLabel` / `queueStateLabel` / `pairText`**（9+2 条）。① 认不出原码原样回显，空值折 `unknown`；② 查表走 `hasOwnProperty`，`constructor` / `__proto__` 不许命中原型链；③ `queueKindLabel` / `queueStateLabel` 未知返 `null`；④ 新增采集通道只改 `SOURCE_LABELS`（钉全集）。
+- **枚举的文案映射只在规则层：`console_classify.SOURCE_LABELS` / `sourceLabel` / `sourceBadge` / `queueKindLabel` / `queueStateLabel` / `pairText`**（9+2 条）。① 认不出原码原样回显，空值折 `unknown`；② 查表走 `hasOwnProperty`，`constructor` / `__proto__` 不许命中原型链；③ `queueKindLabel` / `queueStateLabel` 未知返 `null`；④ 新增采集通道只改 `SOURCE_LABELS`。
 
-- **控制台侧的 S1 码值→中文映射只在规则层**（`console_classify.TOPIC_LABELS` / `DUE_LABELS` + `topicLabel` / `dueLabel` / `importanceChip`）：认不出原码原样回显、空值才回落；`none` 整段不渲染；「截止」优先序 `todo_due → s2.due_time → s1.due_window`；数值重要度与服务端 `util._importance_label` 同源。
+- **控制台侧的 S1 码值→中文映射只在规则层**（`console_classify.TOPIC_LABELS` / `DUE_LABELS` + `topicLabel` / `dueLabel` / `importanceChip`）：认不出原码原样回显、空值才回落；`none` 整段不渲染；「截止」优先序 `todo_due → s2.due_time → s1.due_window`。
 - **同一段里的分布与标量必须能对上：`stats_api._queue_block.by_kind`、`console_classify.mergePairsBy`**（9 条用例）。① 类型计数必须在「过期 → `continue`」**之后**；② 契约 `sum(by_kind.count) == total - stale`；③ `by_pkg` 的 NULL / 空串各成分组而 `normPkg()` 都折成微信 → `mergePairsBy` 归并后**按次数降序、同次数键名升序重排**；④ 加分布字段先问该不该跟同段过期口径走。
-- **控制台「是否待办」只有一份口径：`console_classify.safeBool` / `needActionOf` / `needActionChip`**（三处测试守着）。① 真值表与服务端 `util._safe_bool` 逐条对齐（字符串只认 true/1/yes/on/y/t）—— 别再写 `!!na.value`；② `needActionOf` 优先取顶层 `a.need_action`（= `/stats` 的 todo 口径），缺失才退回 `s1.need_action.value`；③ 徽标两态：⚡待办 / ✓ 无需行动。
+- **控制台「是否待办」只有一份口径：`console_classify.safeBool` / `needActionOf` / `needActionChip`**（三处测试守着）。① 真值表与服务端 `util._safe_bool` 逐条对齐（只认 true/1/yes/on/y/t）—— 别再写 `!!na.value`；② `needActionOf` 优先取顶层 `a.need_action`（= `/stats` 的 todo 口径），缺失才退回 `s1.need_action.value`；③ 徽标两态：⚡待办 / ✓ 无需行动。
 - **悬浮层几何只有一份口径：`OverlayPlacementCore`**（15 条）。① 写 `params.x/y` 前先过 `toContent()`：悬浮窗 `y` 是**内容区**坐标（绝对位置 = y + 状态栏 inset），状态栏只算一遍；② margin 不生效，宽度显式给（卡片 92%、面板 76%）；③ `CENTER` 按内容区居中，对齐整屏加 `panelCenterOffsetY`；④ 屏尺寸用 `Display.getRealMetrics`。
-- **库侧 0/1 flag 的读出口只有一份口径：`util._db_bool`（只有 1 / `1` 算真，与 SQL `col = 1` 同口径）+ `console_classify.dbBool` + `console_ui.dbBoolOf`**；写入口的 `_safe_bool` 是另一张表（认 true/yes），两者刻意不同。
-- **magpie 维护工作流 v0.2.0 已装进仓库**：三循环 + 错题本 + 五道门在 `loops/` `gates/`；自带两条 CI 不启用，见 `docs/magpie-workflow.md`。
+- **库侧 0/1 flag 的读出口只有一份口径：`util._db_bool`（只有 1 / `1` 算真）+ `console_classify.dbBool` + `console_ui.dbBoolOf`**；写入口的 `_safe_bool` 是另一张表（认 true/yes），两者刻意不同。
+- **magpie 维护工作流 v0.2.0 已装进仓库**：三循环 + 错题本 + 五道门在 `loops/` `gates/`，见 `docs/magpie-workflow.md`。
 

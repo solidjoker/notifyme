@@ -390,7 +390,66 @@ class MainActivity : Activity() {
      */
     private val analysisProgressListener = AnalysisProgressBus.Listener { state ->
         applyAnalysisProgress(state)
+        // M26：首页「正在分析」清单（批次名单）。进度回调每次都带最新快照，
+        // 500ms 一次也不卡 —— 清单最多十几行。
+        renderRunning(state)
     }
+
+    /**
+     * M26 首页「正在分析」清单：把这轮要分析的任务逐条列出来。
+     *
+     * 为什么要有：一次分析是**多个会话**逐个跑，但 [AnalysisRunState] 只带当前那一个的阶段；
+     * 页面上原本只有「某个会话头上的一根细进度条」，看不到「一共几个、轮到谁、谁好了」，
+     * 卡片滚出屏幕就彻底没信息。
+     *
+     * 只在**真在跑**时显示（state 为 null = 本轮结束 → 收起）。
+     *
+     * 重建时机用「内容指纹」把住：decode 阶段每 8 个 token 一次回调，
+     * 每次都重建十几行 View 会白烧主线程 —— token 变的是进度条，不是清单。
+     */
+    private fun renderRunning(state: AnalysisRunState?) {
+        val section = findViewById<LinearLayout>(R.id.llHomeRunning)
+        val rows = findViewById<LinearLayout>(R.id.llHomeRunningRows)
+        val batch = state?.batch.orEmpty()
+        val title = AnalysisProgressUi.runningTitle(this, batch)
+        if (title == null) {
+            if (section.visibility != View.GONE) {
+                section.visibility = View.GONE
+                rows.removeAllViews()
+                runningSignature = null
+            }
+            return
+        }
+        section.visibility = View.VISIBLE
+        findViewById<TextView>(R.id.tvHomeRunningTitle).text = title
+        val signature = AnalysisProgressUi.batchSignature(batch)
+        if (signature == runningSignature) return
+        runningSignature = signature
+        rows.removeAllViews()
+        val shown = AnalysisProgressUi.visibleRows(batch)
+        for (task in shown) {
+            val row = layoutInflater.inflate(R.layout.item_home_running, rows, false)
+            row.findViewById<TextView>(R.id.tvHomeRunningText).text = task.conversation
+            row.findViewById<TextView>(R.id.tvHomeRunningStatus).text =
+                AnalysisProgressUi.taskStatus(this, task.status)
+            // 点这条进对应会话（与会话卡交互一致）
+            row.setOnClickListener {
+                ConversationActivity.start(this, ConvKey.parse(task.convKeyId))
+            }
+            rows.addView(row)
+        }
+        val hidden = AnalysisProgressUi.hiddenCount(batch)
+        if (hidden > 0) {
+            val more = layoutInflater.inflate(R.layout.item_home_running, rows, false)
+            more.findViewById<TextView>(R.id.tvHomeRunningText).text =
+                templateText(R.string.analysis_running_more, hidden)
+            more.findViewById<TextView>(R.id.tvHomeRunningStatus).text = ""
+            rows.addView(more)
+        }
+    }
+
+    /** 上次渲染的清单内容指纹（M26：变了才重建那几行）。 */
+    private var runningSignature: String? = null
 
     private fun applyAnalysisProgress(state: AnalysisRunState?) {
         for (i in 0 until recyclerMessages.childCount) {
