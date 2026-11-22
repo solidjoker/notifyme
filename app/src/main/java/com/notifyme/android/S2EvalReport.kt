@@ -87,7 +87,9 @@ internal object S2EvalReport {
         val failures = failureGroups("云端", cloudOutcomes) + failureGroups("端侧", localOutcomes)
         if (failures.isNotEmpty()) {
             sb.append("## 四、未交付明细\n\n")
-            for (f in failures) sb.append("- ").append(esc(f)).append("\n")
+            // 不走 esc()：它会 take(120) 把行尾的**原因**切掉，而原因才是这行的信息量。
+            // 换行/竖线由 failureGroups 自己保证（会话名里的 `|` 仍要转义）。
+            for (f in failures) sb.append("- ").append(escKeepReason(f)).append("\n")
             sb.append("\n")
         }
 
@@ -128,10 +130,21 @@ internal object S2EvalReport {
             .filter { it.out == null }
             .groupBy { (it.error ?: "未交付").trim() }
             .map { (reason, items) ->
-                val names = items.map { it.conversation }.joinToString("、")
+                // 只裁**会话名列表**，原因原样保留：
+                // 整行 take(120) 会把行尾的**原因**先切掉（实测离 120 只差 4 字就断了），
+                // 而原因正是这一行唯一的信息量。
+                val names = if (items.size <= MAX_NAMES_IN_GROUP) {
+                    items.map { it.conversation }.joinToString("、")
+                } else {
+                    items.take(MAX_NAMES_IN_GROUP).map { it.conversation }
+                        .joinToString("、") + " 等 ${items.size} 个"
+                }
                 if (items.size == 1) "$side · $names：$reason"
                 else "$side · $names（共 ${items.size} 条）：$reason"
             }
+
+    /** 一行里最多列几个会话名（其余折叠成「等 N 个」）。 */
+    const val MAX_NAMES_IN_GROUP = 5
 
     /** 单条时延：Outcome 里记的毫秒数。 */
     private fun latencyOf(outcome: S2Usability.Outcome?): String {
@@ -154,4 +167,12 @@ internal object S2EvalReport {
 
     private fun esc(s: String?): String =
         (s ?: "").replace("|", "\\|").replace("\n", " ").take(120)
+
+    /**
+     * 未交付行的转义：**只转义竖线与换行，不截断**。
+     *
+     * 与 [esc] 的区别就在「不截断」—— 这行末尾是失败原因，截了等于没写。
+     */
+    private fun escKeepReason(s: String?): String =
+        (s ?: "").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
 }

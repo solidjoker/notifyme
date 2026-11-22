@@ -60,6 +60,9 @@ class AnalysisWorker(
          *  总开关只关「自动」，不关手动：否则用户点了毫无反应（M20 实测）。 */
         const val KEY_MANUAL = "manual"
 
+        /** 收尾后进度态保留多久（毫秒）——够用户看清「几个好了、几个失败」（M26）。 */
+        const val CLEAR_AFTER_MS = 4_000L
+
         /** 单轮最多分析会话数 */
         private const val MAX_CONVERSATIONS_PER_ROUND = 10
 
@@ -101,10 +104,12 @@ class AnalysisWorker(
         try {
             return runRound()
         } finally {
-            // 先摘监听再发 null：null 表示收尾，不该再触发 FGS 提升。
+            // 先摘监听再清状态：null 表示收尾，不该再触发 FGS 提升。
             // FGS 通知由 WorkManager 在 Worker 结束时自动撤掉。
             AnalysisProgressBus.removeListener(foregroundListener)
-            AnalysisProgressBus.publish(null)
+            // M26：延迟清，别让「✓ 分析完成 N/N」和失败态一闪即消
+            // （发布是合并派发，立刻 publish(null) 会把最后那条状态合并掉）。
+            AnalysisProgressBus.clearAfter(CLEAR_AFTER_MS)
         }
     }
 
@@ -444,18 +449,23 @@ class AnalysisWorker(
             } catch (e: IOException) {
                 // M10：失败也要写状态行——否则控制台永远停留在上一轮「成功」，
                 // 网络断了用户无感知（advisor 诊断文本已含在 msg 里）
+                // M26：这条也标 FAILED —— 否则首页清单上它永远停在「分析中」，
+                // 用户看着一条永远转圈的会话。
+                failTask(batchTasks, index, "网络错误")
                 val msg = recordRetryFailure(config, "网络错误 ${e.message ?: "未知"}", done)
                 recordResult(config, msg)
                 Log.w(TAG, "分析失败: 网络错误", e)
                 return Result.retry()
             } catch (e: HttpException) {
                 val detail = if (e.body.isBlank()) "" else " ${TextClipCore.clip(e.body, 120)}"
+                failTask(batchTasks, index, "HTTP ${e.code}")
                 val msg = recordRetryFailure(config, "HTTP ${e.code}$detail", done)
                 recordResult(config, msg)
                 Log.w(TAG, "分析失败: HTTP ${e.code}$detail")
                 return Result.retry()
             } catch (e: LocalEngineException) {
                 // 本地引擎层失败（未编译/加载失败/内存不足）：用户态，不重试
+                failTask(batchTasks, index, "引擎不可用")
                 recordResultQuiet(quiet, config, "失败：${e.message}（已完成 $done 个会话）")
                 Log.w(TAG, "分析失败: 本地引擎", e)
                 return Result.success()
@@ -519,15 +529,35 @@ class AnalysisWorker(
      *
      * 就地改 [batch] 里的元素（列表是可变的），调用方随后在发进度时快照出去。
      */
+    /**
+     * 把批次名单里当前这条标成 FAILED 并广播出去（M26）。
+     *
+     * 失败态此前**从未被产出**：`AnalysisTaskStatus.FAILED` 与 `analysis_status_failed`
+     * 都在，但三条 catch 都没标 —— 清单上出问题的那条永远停在「分析中」。
+     */
+    private fun failTask(
+        batch: MutableList<AnalysisBatchTask>,
+        index: Int,
+        note: String
+    ) {
+        markTask(batch, index, AnalysisTaskStatus.FAILED, note)
+        publishBatch("", "", batch, index, batch.size)
+    }
+
     private fun markTask(
         batch: MutableList<AnalysisBatchTask>,
         index: Int,
         status: AnalysisTaskStatus,
         note: String = ""
     ) {
-        if (index !in batch.indices) return
-        val old = batch[index]
-        batch[index] = old.copy(status = status, note = note)
+        val next = AnalysisProgressUi.advance(batch, index, status, note)
+        if (next === batch) {
+            // 下标越界 = 名单与 cases 错位了 —— 静默跳过会让清单少一条却看不出来。
+            Log.w(TAG, "批次名单下标越界：index=$index size=${batch.size}，该条状态没更新")
+            return
+        }
+        batch.clear()
+        batch.addAll(next)
     }
 
     /**

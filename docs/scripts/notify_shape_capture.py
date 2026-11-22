@@ -15,6 +15,10 @@
   adb -s <serial> shell dumpsys notification --noredact > dump.txt
   python docs/scripts/notify_shape_capture.py --input dump.txt --out shape.json
 
+  # 等对方发消息时用（通知被划掉就没了，所以轮询等着）：
+  python docs/scripts/notify_shape_capture.py --serial <serial> --pkg com.ss.android.lark \
+      --watch --timeout 600 --out feishu-shape.json
+
 输出：人读摘要（每包一行）+ --out 指定的 JSON 明细。
 """
 
@@ -23,6 +27,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 
 # 只抽解析器实际读的字段；tickerText/category/smallIcon/color 等与入库口径无关。
 FIELD_KEYS = ("android.title", "android.text", "android.bigText", "android.subText")
@@ -189,15 +194,76 @@ def read_dump(args):
     return decode_text(proc.stdout)
 
 
+def dump_from_adb(serial):
+    """现取一份 dumpsys notification --noredact。"""
+    cmd = ["adb"]
+    if serial:
+        cmd += ["-s", serial]
+    cmd += ["shell", "dumpsys", "notification", "--noredact"]
+    proc = subprocess.run(cmd, capture_output=True)
+    return decode_text(proc.stdout)
+
+
+def watch(serial, pkg, timeout_s, interval_s):
+    """轮询直到目标包出现通知为止。
+
+    为什么需要轮询：`dumpsys notification` 只看**当前还在通知栏里**的通知 ——
+    对方发来的消息一旦被划掉、或系统超时撤掉，形状证据就没了。
+    「等别人发消息」这个动作本身要几十秒到几分钟，人守着 dump 抢时间不现实。
+
+    返回 (文本, 等待秒数)；超时返回 (最后一份文本, -1)。
+    """
+    deadline = time.time() + timeout_s
+    waited = 0
+    last = ""
+    while True:
+        text = dump_from_adb(serial)
+        last = text
+        records = parse_dump(text)
+        if pkg:
+            records = [r for r in records if r.get("pkg") == pkg]
+        if records:
+            return text, waited
+        if time.time() >= deadline:
+            return last, -1
+        time.sleep(interval_s)
+        waited += interval_s
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="通知形状取证工具（dumpsys notification -> 结论）")
     ap.add_argument("--serial", help="adb 设备 serial")
     ap.add_argument("--input", help="已有的 dumpsys 输出文件")
     ap.add_argument("--pkg", help="只看某个包")
     ap.add_argument("--out", help="把明细与结论写成 JSON")
+    ap.add_argument(
+        "--watch",
+        action="store_true",
+        help="轮询直到目标包出现通知再出结论（等别人发消息时用）",
+    )
+    ap.add_argument("--timeout", type=int, default=300, help="--watch 的最长等待秒数（默认 300）")
+    ap.add_argument("--interval", type=int, default=10, help="--watch 的轮询间隔秒数（默认 10）")
     args = ap.parse_args(argv)
 
-    text = read_dump(args)
+    if args.watch:
+        if args.input:
+            raise SystemExit("--watch 与 --input 互斥（--watch 是现取）")
+        if not args.serial:
+            raise SystemExit("--watch 需要 --serial <adb 设备>")
+        print("轮询中（每 %ds 一次，最多 %ds）…… 等到 %s 的通知出现就出结论" % (
+            args.interval, args.timeout, args.pkg or "任意包"))
+        text, waited = watch(args.serial, args.pkg, args.timeout, args.interval)
+        if waited < 0:
+            print("超时：%ds 内没等到 %s 的通知" % (args.timeout, args.pkg or "任意包"))
+            text = read_dump(args)
+        else:
+            print("等到了（等了约 %ds）" % waited)
+        args.input = None
+        _watch_text = text
+    else:
+        _watch_text = None
+
+    text = _watch_text if _watch_text is not None else read_dump(args)
     records = parse_dump(text)
     if args.pkg:
         records = [r for r in records if r.get("pkg") == args.pkg]

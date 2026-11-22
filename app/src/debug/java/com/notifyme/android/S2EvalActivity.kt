@@ -123,14 +123,18 @@ class S2EvalActivity : Activity() {
                         "> 生成时间：" + LocaleTextCore.seconds(System.currentTimeMillis()),
                         "> 样本：" + report.cases.size + " 条人工标注合成会话",
                         "> 样本指纹：sha256=" + S2EvalReport.sampleFingerprint(labelBytes),
-                        // 端侧写**实际状态**：写死「真机 MiniCPM5-2B」会把
+                        // 端侧写**实际交付情况**：写死「真机 MiniCPM5-2B」会把
                         // 「设备/模型没就绪」读成「2B 模型不行」——
                         // 报告里最容易被误读的就是这一句。
-                        "> 端侧：" + if (report.localEngineReady) {
-                            "MiniCPM5-2B（**已就绪**，LocalLlmEngines，与生产 runS2Local 同一条路径）"
+                        // 判据用**实际交付条数**，不只看引擎就绪快照：
+                        // 引擎就绪但推理全失败（OOM/超时/解码失败）也是 0 交付，
+                        // 那时写「已就绪」照样会被读成「2B 不行」。
+                        "> 端侧：" + if (report.localDelivered > 0) {
+                            "MiniCPM5-2B（**已交付 ${report.localDelivered} 条**，" +
+                                "LocalLlmEngines，与生产 runS2Local 同一条路径）"
                         } else {
-                            "MiniCPM5-2B（**未就绪**：${report.localUnavailableReason}）" +
-                                "——本轮端侧没有交付，下面那列 0% 读作「未测」"
+                            "MiniCPM5-2B（**本轮 0 交付**：${report.localUnavailableReason}）" +
+                                "——下面那列 0% 读作「未测」，不是「2B 不行」"
                         },
                         "> 云端端点：" + (slot?.let { it.model + " @ " + it.url } ?: "未配置（本轮只采端侧）"),
                         "> " + S2EvalReport.timezoneLine(),

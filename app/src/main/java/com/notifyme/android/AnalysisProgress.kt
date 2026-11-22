@@ -176,6 +176,28 @@ object AnalysisProgressBus {
         mainHandler.removeCallbacks(dispatch)
         mainHandler.post(dispatch)
     }
+
+    /**
+     * 延迟清空进度态（M26）。
+     *
+     * 为什么不能立刻 `publish(null)`：发布是**合并派发**（同一帧内多次 publish 只派发一次），
+     * 所以「最后一条全部 DONE」的状态紧接着被 `publish(null)` 合并掉 ——
+     * 首页那张「正在分析」卡片在**≤1 帧**就没了，「✓ 分析完成 N/N」用户根本看不到。
+     *
+     * 延迟一小段时间再清：完成态能停留一下，用户能看清「几个好了、几个失败」。
+     *
+     * @param delayMs 延迟毫秒数；<=0 表示立刻清（等价 publish(null)）
+     */
+    fun clearAfter(delayMs: Long) {
+        if (delayMs <= 0L) {
+            publish(null)
+            return
+        }
+        mainHandler.removeCallbacks(clearRunnable)
+        mainHandler.postDelayed(clearRunnable, delayMs)
+    }
+
+    private val clearRunnable = Runnable { publish(null) }
 }
 
 /** 进度展示：文案拼装 + 控件渲染（三处 UI 共用，避免各写一套）。 */
@@ -314,16 +336,44 @@ object AnalysisProgressUi {
     }
 
     /**
+     * 推进批次名单里第 [index] 条的状态（**纯函数，可单测**）。
+     *
+     * 为什么放 Core：Worker 里的同名私有方法此前**从没被单测覆盖**，
+     * 而它决定了清单上「这条到底好了没」—— 逻辑错一次，整轮清单都是错的。
+     *
+     * @param index 在批次里的位置（与 Worker 的 `cases` 下标一一对应）
+     * @return 新的名单；index 越界时**原样返回**（调用方自己判，不要静默改别人的条目）
+     */
+    fun advance(
+        batch: List<AnalysisBatchTask>,
+        index: Int,
+        status: AnalysisTaskStatus,
+        note: String = ""
+    ): List<AnalysisBatchTask> {
+        if (index !in batch.indices) return batch
+        val copy = ArrayList(batch)
+        copy[index] = copy[index].copy(status = status, note = note)
+        return copy
+    }
+
+    /**
      * 清单里要显示的行（最多 [MAX_VISIBLE_ROWS] 条，其余折叠）。
      *
-     * 「正在跑的」必须排前面 —— 折叠时不能把正在跑的那条折掉。
+     * **保持处理顺序**（Worker 按窗口时间升序排的 `cases`）—— 把 RUNNING 挪到最前会
+     * 让用户读成「7 后面是 1」，而且「下一个是谁」就再也看不出来了。
+     *
+     * 唯一的例外：正在跑的那条**不能被折掉** —— 它落在可见窗口之外时，
+     * 用它顶掉窗口里**最后一条**，其余行的相对顺序不动。
      */
     fun visibleRows(batch: List<AnalysisBatchTask>): List<AnalysisBatchTask> {
         if (batch.size <= MAX_VISIBLE_ROWS) return batch
-        val running = batch.filter { it.status == AnalysisTaskStatus.RUNNING }
-        val head = batch.filter { it.status != AnalysisTaskStatus.RUNNING }
-        val keep = MAX_VISIBLE_ROWS - running.size.coerceAtMost(MAX_VISIBLE_ROWS)
-        return (running + head.take(keep)).take(MAX_VISIBLE_ROWS)
+        val visible = batch.take(MAX_VISIBLE_ROWS).toMutableList()
+        val runningIdx = batch.indexOfFirst { it.status == AnalysisTaskStatus.RUNNING }
+        if (runningIdx >= MAX_VISIBLE_ROWS) {
+            // 正在跑的那条在折叠区里 → 顶掉可见区最后一条（位置保持不变）
+            visible[MAX_VISIBLE_ROWS - 1] = batch[runningIdx]
+        }
+        return visible
     }
 
     /** 折叠掉的条数（0 = 全列出来了）。 */
