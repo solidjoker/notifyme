@@ -9,6 +9,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaType
@@ -198,8 +199,22 @@ internal object S2EvalRunner {
                     // **注意**：withTimeout 取消不了已在跑的阻塞 native 调用
                     // （LlamaCppEngine 的 chat 是一次不检查取消的 JNI 调用），
                     // 所以这里是「尽量」，不是硬超时 —— 报告 §六 的限制里写明了这一点。
-                    localText = withTimeout(timeout) {
-                        engine.chat(system, user, S2_MAX_TOKENS, null)
+                    //
+                    // ★ 必须拿 AnalysisWorker 的分析互斥锁：
+                    // 端侧引擎是**进程级单例**（LocalLlmEngines 按 modelId 缓存实例），
+                    // 采集与 App 自己的周期分析共用同一个 llama context。两边同时
+                    // prefill 会各自写 KV cache 的位置，llama_decode 会报
+                    // "inconsistent sequence positions"，整轮采集变成 0 交付。
+                    // 同类症状在 progress.md:778 有记录（KV cache 未清 → 第二次起
+                    // prefill 解码失败）；那次是另一个成因，但症状同类。
+                    //
+                    // withTimeout 在 withLock **内层**：超时抛出的时刻晚于 native 调用
+                    // 真正结束，所以锁一定是在推理跑完之后才释放 —— 反过来写会在
+                    // 推理还在跑时就放锁，并发问题原样回来。
+                    localText = AnalysisWorker.ANALYSIS_MUTEX.withLock {
+                        withTimeout(timeout) {
+                            engine.chat(system, user, S2_MAX_TOKENS, null)
+                        }
                     }
                     localRaw[case.caseId] = localText
                     val parsed = AnalysisParsing.parseS2Output(
@@ -278,9 +293,27 @@ internal object S2EvalRunner {
             plan = plan,
             localEngineReady = localReady,
             localDelivered = localOutcomes.values.count { it.out != null },
-            localUnavailableReason = localReason,
+            // 引擎就绪但一条都没交付时，原因要取**真实的失败原因**（如「prefill 解码失败」），
+            // 不能拿引擎快照的「未加载」去写报告头 —— 那会把「跑了但全挂」读成「没跑起来」。
+            localUnavailableReason = if (localReady) {
+                localFailureReason(localOutcomes) ?: localReason
+            } else {
+                localReason
+            },
             cloudSlot = cloudSlot
         )
+    }
+
+    /**
+     * 端侧未交付的原因归并：取**出现次数最多**的那条（并列时取第一条）。
+     * 20 条全挂同一个原因时，报告头与「未交付明细」节写的是同一句话。
+     */
+    private fun localFailureReason(outcomes: Map<String, S2Usability.Outcome>): String? {
+        val reasons = outcomes.values.mapNotNull { it.error?.trim()?.takeIf { r -> r.isNotEmpty() } }
+        if (reasons.isEmpty()) return null
+        return reasons.groupingBy { it }.eachCount().entries
+            .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+            .first().key
     }
 
     /** 云端一次调用：HTTP + 解析，失败也返回 Outcome。 */

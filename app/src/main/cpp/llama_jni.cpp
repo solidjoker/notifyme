@@ -82,6 +82,16 @@ void report_progress(JNIEnv * env, jobject cb, int phase, int current, int total
     if (env->ExceptionCheck()) { env->ExceptionClear(); }
     env->DeleteLocalRef(cls);
 }
+
+// llama.cpp / ggml 的日志默认走 stderr，Android 上看不到 —— 转到 logcat，
+// 否则「prefill 解码失败」这类 native 报错没有任何现场可查。
+void llama_log_to_logcat(enum ggml_log_level level, const char * text, void * user_data) {
+    (void) user_data;
+    int prio = ANDROID_LOG_INFO;
+    if (level >= GGML_LOG_LEVEL_ERROR) { prio = ANDROID_LOG_ERROR; }
+    else if (level >= GGML_LOG_LEVEL_WARN) { prio = ANDROID_LOG_WARN; }
+    __android_log_print(prio, LOG_TAG, "%s", text);
+}
 } // namespace
 
 extern "C" {
@@ -90,7 +100,7 @@ JNIEXPORT void JNICALL
 Java_com_notifyme_android_LlamaJni_nativeBackendInit(JNIEnv *, jclass) {
     static bool initialized = false;
     if (initialized) { return; }
-    llama_log_set(nullptr, nullptr);
+    llama_log_set(llama_log_to_logcat, nullptr);
     llama_backend_init();
     initialized = true;
     LOGI("llama backend initialized");
@@ -200,6 +210,7 @@ Java_com_notifyme_android_LlamaJni_nativeComplete(
     // the previous version added every prompt token in one batch, so any prompt
     // longer than that wrote past the end of the buffer (heap corruption).
     const int prompt_total = static_cast<int>(prompt_tokens.size());
+    LOGI("prefill start: prompt=%d tokens, n_ctx=%d, chunk=%d", prompt_total, st->n_ctx, PREFILL_CHUNK);
     report_progress(env, progress, PHASE_PREFILL, 0, prompt_total);
     for (size_t start = 0; start < prompt_tokens.size(); start += PREFILL_CHUNK) {
         const size_t end = std::min(
@@ -210,7 +221,9 @@ Java_com_notifyme_android_LlamaJni_nativeComplete(
             common_batch_add(st->batch, prompt_tokens[i],
                              static_cast<llama_pos>(i), {0}, want_logit);
         }
-        if (llama_decode(st->ctx, st->batch) != 0) {
+        const int rc = llama_decode(st->ctx, st->batch);
+        if (rc != 0) {
+            LOGE("prefill decode failed: rc=%d at chunk [%zu, %zu)", rc, start, end);
             common_sampler_free(sampler);
             throw_rt(env, "prefill 解码失败");
             return nullptr;
