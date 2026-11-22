@@ -84,8 +84,7 @@ internal object S2EvalReport {
         }
         sb.append("\n> 状态串顺序：").append(S2Usability.legend()).append("（✓ 通过 / ✗ 不通过）\n\n")
 
-        val failures = S2Usability.failureLines(cloudOutcomes) +
-            S2Usability.failureLines(localOutcomes)
+        val failures = failureGroups("云端", cloudOutcomes) + failureGroups("端侧", localOutcomes)
         if (failures.isNotEmpty()) {
             sb.append("## 四、未交付明细\n\n")
             for (f in failures) sb.append("- ").append(esc(f)).append("\n")
@@ -109,6 +108,30 @@ internal object S2EvalReport {
         }
         return sb.toString()
     }
+
+    /**
+     * 未交付明细**按侧 + 按原因**归并。
+     *
+     * 为什么不能一行一条：
+     *  - 20 条样本全因同一个原因失败（模型没下好 / 云端没配槽位）时，
+     *    一行一条就是 20 行同样的字；
+     *  - 更要紧的是**分不出是哪一侧失败** —— 云端与端侧的未交付混在一张列表里，
+     *    读的人会以为「两端都挂了」。
+     *
+     * 归并后形如：`端侧 · 老板、朋友、…（共 20 条）：模型尚未下载完成：MiniCPM5-2B`。
+     */
+    fun failureGroups(
+        side: String,
+        outcomes: Map<String, S2Usability.Outcome>
+    ): List<String> =
+        outcomes.values
+            .filter { it.out == null }
+            .groupBy { (it.error ?: "未交付").trim() }
+            .map { (reason, items) ->
+                val names = items.map { it.conversation }.joinToString("、")
+                if (items.size == 1) "$side · $names：$reason"
+                else "$side · $names（共 ${items.size} 条）：$reason"
+            }
 
     /** 单条时延：Outcome 里记的毫秒数。 */
     private fun latencyOf(outcome: S2Usability.Outcome?): String {

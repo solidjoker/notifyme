@@ -87,7 +87,13 @@ internal object S2EvalRunner {
         val cloudRaw: Map<String, String>,
         val localRaw: Map<String, String>,
         val skipped: List<String>,
-        val plan: S1EvalBudgetCore.Plan
+        val plan: S1EvalBudgetCore.Plan,
+        /** 端侧引擎是否就绪（false = 本轮端侧一条都没交付，别把 0% 读成「2B 不行」）。 */
+        val localEngineReady: Boolean = false,
+        /** 端侧不可用的原因（模型没下完 / 内存不达准入 / 引擎加载失败…）。 */
+        val localUnavailableReason: String = "",
+        /** 本轮用的云端槽位（null = 没配，报告里如实写「未配置」）。 */
+        val cloudSlot: AnalysisConfig.SlotConfig? = null
     )
 
     /**
@@ -110,6 +116,14 @@ internal object S2EvalRunner {
         val appContext = context.applicationContext
         val all = S1Accuracy.parse(datasetPath.readText())
         val cases = takeCases(all, limit)
+
+        // 端侧引擎的就绪状态取**一次**：
+        // 不可用时 forModel 返回的是快照（不缓存），每条再问一遍会把「模型没下好」
+        // 这类原因重复问 N 次。报告头要如实写「已就绪 / 未就绪」——
+        // 写死「真机 MiniCPM5-2B」会让人把「设备没就绪」读成「2B 模型不行」。
+        val localEngine = LocalLlmEngines.forModel(appContext, LocalModelStore.MODEL_S2)
+        val localReady = localEngine.isReady
+        val localReason = localEngine.unavailableReason
 
         val outcomes = ArrayList<Outcome>(cases.size)
         val cloudRaw = LinkedHashMap<String, String>()
@@ -246,7 +260,10 @@ internal object S2EvalRunner {
             cloudRaw = cloudRaw,
             localRaw = localRaw,
             skipped = skipped,
-            plan = plan
+            plan = plan,
+            localEngineReady = localReady,
+            localUnavailableReason = localReason,
+            cloudSlot = cloudSlot
         )
     }
 
