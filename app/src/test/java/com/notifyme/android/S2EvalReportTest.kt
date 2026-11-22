@@ -176,6 +176,45 @@ class S2EvalReportTest {
     }
 
     @Test
+    fun failureGroupsMergesSameReasonAndKeepsSide() {
+        // 20 条全因同一个原因失败时不能列 20 行；更要紧的是**分不出是哪一侧失败**
+        // ——云端与端侧的未交付混在一张列表里，读的人会以为「两端都挂了」。
+        val outcomes = mapOf(
+            "a" to S2Usability.Outcome("a", "老板", null, 0L, "模型尚未下载完成：MiniCPM5-2B"),
+            "b" to S2Usability.Outcome("b", "朋友", null, 0L, "模型尚未下载完成：MiniCPM5-2B"),
+            "c" to S2Usability.Outcome("c", "妈妈", null, 0L, "端侧引擎未就绪")
+        )
+        val groups = S2EvalReport.failureGroups("端侧", outcomes)
+        assertEquals(2, groups.size)
+        assertTrue(
+            "同原因要合并成一行：\n" + groups.joinToString("\n"),
+            groups.any { it.contains("老板、朋友（共 2 条）") && it.contains("模型尚未下载完成") }
+        )
+        assertTrue(
+            "每行都要标明是哪一侧：\n" + groups.joinToString("\n"),
+            groups.all { it.startsWith("端侧 · ") }
+        )
+    }
+
+    @Test
+    fun failureGroupsSkipsDeliveredOnes() {
+        val delivered = AnalysisParsing.S2Output(
+            summary = "开会",
+            dueTime = "",
+            suggestedAction = "准备",
+            tasks = emptyList(),
+            rawJson = "{}"
+        )
+        val outcomes = mapOf(
+            "a" to S2Usability.Outcome("a", "老板", null, 0L, "未交付"),
+            "b" to S2Usability.Outcome("b", "朋友", delivered, 10L, null)
+        )
+        val groups = S2EvalReport.failureGroups("云端", outcomes)
+        assertEquals(1, groups.size)
+        assertTrue(groups[0].contains("老板"))
+    }
+
+    @Test
     fun renderKeepsRawOutputUntruncated() {
         // 原始输出不做截断：截到 120 字符只剩半截 JSON，复核不了解析是否走形。
         val raw = "{\"summary\":\"" + "长".repeat(300) + "\"}"

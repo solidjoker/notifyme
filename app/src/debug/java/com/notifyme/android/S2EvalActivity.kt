@@ -63,6 +63,7 @@ class S2EvalActivity : Activity() {
         val timeoutMs = intent.getLongExtra("timeout_ms", DEFAULT_TIMEOUT_MS)
 
         if (dataset.isBlank()) {
+            Log.e(TAG, "缺少 --es dataset")
             Toast.makeText(this, "缺少 --es dataset", Toast.LENGTH_LONG).show()
             finish()
             return
@@ -70,6 +71,13 @@ class S2EvalActivity : Activity() {
 
         val datasetFile = File(dataset)
         if (!datasetFile.exists()) {
+            // 静默退出过一次：只弹 Toast，logcat 里什么都没有，排查时以为采集器崩了。
+            // 每次提前退出都留一行日志（TAG=S2Eval），adb logcat -s S2Eval 就能看到原因。
+            Log.e(
+                TAG,
+                "样本不存在：$dataset（绝对路径=${datasetFile.absolutePath}，" +
+                    "可读=${datasetFile.canRead()}）"
+            )
             Toast.makeText(this, "样本不存在：$dataset", Toast.LENGTH_LONG).show()
             finish()
             return
@@ -115,7 +123,15 @@ class S2EvalActivity : Activity() {
                         "> 生成时间：" + LocaleTextCore.seconds(System.currentTimeMillis()),
                         "> 样本：" + report.cases.size + " 条人工标注合成会话",
                         "> 样本指纹：sha256=" + S2EvalReport.sampleFingerprint(labelBytes),
-                        "> 端侧：**真机** MiniCPM5-2B（LocalLlmEngines，与生产 runS2Local 同一条路径）",
+                        // 端侧写**实际状态**：写死「真机 MiniCPM5-2B」会把
+                        // 「设备/模型没就绪」读成「2B 模型不行」——
+                        // 报告里最容易被误读的就是这一句。
+                        "> 端侧：" + if (report.localEngineReady) {
+                            "MiniCPM5-2B（**已就绪**，LocalLlmEngines，与生产 runS2Local 同一条路径）"
+                        } else {
+                            "MiniCPM5-2B（**未就绪**：${report.localUnavailableReason}）" +
+                                "——本轮端侧没有交付，下面那列 0% 读作「未测」"
+                        },
                         "> 云端端点：" + (slot?.let { it.model + " @ " + it.url } ?: "未配置（本轮只采端侧）"),
                         "> " + S2EvalReport.timezoneLine(),
                         "> 时间预算：" + S1EvalBudgetCore.describe(report.plan),

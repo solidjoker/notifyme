@@ -198,6 +198,17 @@ adb -s <serial> pull /sdcard/Android/data/com.notifyme.android/files/s2-usabilit
 > **beta flavor 带 `.test` 后缀**（`com.notifyme.android.test`）——
 > 装 beta 时上面三条命令里的包名与目录都要跟着改。
 
+### 7.1.1 两个实测坑（先踩过再说）
+
+1. **样本要推在「装好之后」**：采集 Activity 读的是 `dataset` 参数给的**文件路径**，
+   而 `adb push` 到 `/sdcard/Android/data/<pkg>/files/` 的文件**会被卸载清掉** ——
+   先 push 再装包，采集时那句「样本不存在」照样出现。顺序：**装 → push → 起采集**。
+2. **没就绪时报告照样出，但别读错**：端侧模型没下载完 / 设备不达准入（arm64 + ≥8GB）时，
+   报告头部会写「端侧：MiniCPM5-2B（**未就绪**：<原因>）——本轮端侧没有交付，
+   下面那列 0% 读作『未测』」。**没就绪 ≠ 模型不行**，别把 0% 当成可用率。
+   （早先那版报告头写死「真机 MiniCPM5-2B」，会把「设备没就绪」读成「2B 不行」——
+   已改。）
+
 ### 7.2 前置条件
 
 1. **端侧 S2 模型已下载**（MiniCPM5-2B，`LocalModelStore.MODEL_S2 = "minicpm5_2b"`，
@@ -228,6 +239,10 @@ adb -s <serial> pull /sdcard/Android/data/com.notifyme.android/files/s2-usabilit
 两边只差「头部说明」与「限制那几条」——那几条本来就该不同（替身版说 0.5B，真机版说 2B）。
 
 ### 7.4 未交付与预算
+
+未交付明细**按侧 + 按原因归并**（不是一行一条）：20 条全因同一个原因失败时，
+报告写「端侧 · 老板、朋友、…（共 20 条）：模型尚未下载完成：MiniCPM5-2B（GGUF Q4_K_M）」。
+云端与端侧**分开列** —— 混在一张列表里会让人以为「两端都挂了」。
 
 端侧模型未就绪会抛 `LocalEngineException`，该样本按「未交付」记入报告 §四，
 **不进分项通过率的分母**（那几格的分母是「已交付条数」）。
