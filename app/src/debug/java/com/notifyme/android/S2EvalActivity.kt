@@ -84,9 +84,29 @@ class S2EvalActivity : Activity() {
         }
 
         Thread {
+            // 采集期间把 App 的「分析总开关」关掉并停掉周期排期，采完恢复原状。
+            //
+            // 为什么必须：端侧引擎是**进程级单例**（LocalLlmEngines），App 自己的
+            // 周期分析与本采集共用同一个 llama context。两者同时 prefill 会把 KV
+            // cache 的位置写乱（llama_decode 报 "inconsistent sequence positions"），
+            // 真机实测：采集条目全部「prefill 解码失败」、0 交付，App 进程还会崩。
+            // AnalysisWorker.ANALYSIS_MUTEX 已经把两边的推理串行化，但排队要等
+            // 整个生产轮跑完（真机一轮 10 个会话 ≈ 20 分钟），会把采集的整轮预算吃光 ——
+            // 所以这里直接停掉周期排期。
+            //
+            // 只在 debug 源集里做，release 包不含这个 Activity，生产链路零影响。
+            val cfg = AnalysisConfig(applicationContext)
+            val savedEnabled = cfg.enabled
+            val savedInterval = cfg.intervalMinutes
+            var paused = false
             try {
-                val config = AnalysisConfig(applicationContext)
-                val slot = config.s2Slot()
+                if (savedEnabled) {
+                    cfg.enabled = false
+                    AnalysisScheduler.cancel(applicationContext)
+                    paused = true
+                    Log.i(TAG, "采集期间暂停周期分析（结束后恢复 enabled=$savedEnabled）")
+                }
+                val slot = cfg.s2Slot()
                 val plan = S1EvalBudgetCore.resolvePlan(
                     budgetMs.toString(),
                     timeoutMs.toString()
@@ -129,9 +149,16 @@ class S2EvalActivity : Activity() {
                         // 判据用**实际交付条数**，不只看引擎就绪快照：
                         // 引擎就绪但推理全失败（OOM/超时/解码失败）也是 0 交付，
                         // 那时写「已就绪」照样会被读成「2B 不行」。
+                        // 三态要分清：**没就绪**（没跑）/ **跑了但全挂**（跑了，输出不合格）/
+                        // **交付了**。第二态写「引擎已就绪但 0 交付：<真实原因>」，
+                        // 别写成「引擎未加载」——那是没就绪时的说法。
                         "> 端侧：" + if (report.localDelivered > 0) {
                             "MiniCPM5-2B（**已交付 ${report.localDelivered} 条**，" +
                                 "LocalLlmEngines，与生产 runS2Local 同一条路径）"
+                        } else if (report.localEngineReady) {
+                            "MiniCPM5-2B（引擎**已就绪**，但**本轮 0 交付**：" +
+                                "${report.localUnavailableReason.ifBlank { "全部推理失败" }})" +
+                                "——下面那列 0% 读作「未测」，不是「2B 不行」"
                         } else {
                             "MiniCPM5-2B（**本轮 0 交付**：${report.localUnavailableReason}）" +
                                 "——下面那列 0% 读作「未测」，不是「2B 不行」"
@@ -190,6 +217,17 @@ class S2EvalActivity : Activity() {
                 Log.e(TAG, "采集失败", e)
                 runOnUiThread {
                     Toast.makeText(this, "采集失败：${e.message}", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                // 恢复周期分析（只在暂停过的情况下恢复，别把用户原本关着的开关打开）
+                if (paused) {
+                    runCatching {
+                        cfg.enabled = savedEnabled
+                        if (savedEnabled) {
+                            AnalysisScheduler.schedule(applicationContext, savedInterval)
+                        }
+                        Log.i(TAG, "已恢复周期分析（enabled=$savedEnabled，间隔 ${savedInterval}min）")
+                    }.onFailure { Log.w(TAG, "恢复周期分析失败", it) }
                 }
             }
         }.apply {

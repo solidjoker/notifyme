@@ -177,37 +177,96 @@ Remove-Item -Recurse -Force app\build\test-results\testOpenDebugUnitTest -ErrorA
 + `app/src/debug/java/com/notifyme/android/S2EvalActivity.kt`（debug 入口），
 与 S1 的 `S1EvalRunner` / `S1EvalActivity` 同一套分法。
 
-### 7.1 三步
+### 7.1 一条命令（主路径）
 
 ```powershell
-# 1) 把标注样本推到设备（与 HTTP 侧同一份 app/src/test/resources/eval-labels.json）
-adb -s <serial> push app/src/test/resources/eval-labels.json `
-    /sdcard/Android/data/com.notifyme.android/files/eval-labels.json
+powershell -ExecutionPolicy Bypass -File docs/scripts/run_s2_device_eval.ps1 --serial <设备序列号>
+```
 
-# 2) 起采集（云端槽位从 App 的「分析设置」读；没配就只采端侧一侧）
+脚本把整条链路串起来：**装包 → push 样本 → 起采集 → 等 → pull 报告 → 打印结论摘要**。
+
+| 步骤 | 做什么 | 失败时报什么 |
+|---|---|---|
+| 1 装包 | `adb install -r -d` 装 debug APK（`--skip-install` 跳过；`-r` 保留数据，端侧模型不会被清掉） | APK 不存在 / 签名不一致（设备上是别的 key） |
+| 2 查入口 | `cmd package resolve-activity` 确认 `S2EvalActivity` 在（**只有 debug 包有**） | 「装的包里没有采集入口」 |
+| 3 push 样本 | 推到 **App 内部目录**（`/data/local/tmp` → `run-as cp`），**不**走 `/sdcard/Android/data/...` | 体积与本地不一致直接报错 |
+| 4 起采集 | `am start ... --es dataset --es out --ei limit --el budget_ms --el timeout_ms` | `am start` 报 Error（Activity 不存在 / 设备锁屏） |
+| 5 等报告 | 轮询设备上的报告文件（**先删旧报告**，免得拉到上一轮的结果） | 超时 → 有 `.partial` 就拉半成品，退出码 2 |
+| 6 pull + 摘要 | `run-as cat` 读回，打印口径行 / 综合可用性表 / 未交付明细 / 预算耗尽节 | 退出码 3 |
+
+参数：
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `--serial <S>` | 自动（只有一台在线设备时） | 目标设备序列号（`adb devices` 里那一列） |
+| `--apk <路径>` | `app/build/outputs/apk/open/debug/notifyme-open.apk` | 要装的 debug APK |
+| `--labels <路径>` | `app/src/test/resources/eval-labels.json` | 标注样本（与 HTTP 侧同一份） |
+| `--out <路径>` | `docs/s2-usability-device.md` | 报告拉到本地的位置 |
+| `--limit <N>` | `20` | 采前 N 条样本（`0` = 不限） |
+| `--budget-ms <N>` | `1500000`（25min） | 整轮预算；`S1EvalBudgetCore` 上限 **60min**，超了静默夹到 60min |
+| `--timeout-ms <N>` | `120000`（120s） | 单次调用上限；上限 **10min**，超了静默夹到 10min |
+| `--skip-install` | 关 | 不装包（设备上已经有带采集入口的 debug 包时用） |
+| `--skip-push` | 关 | 不推样本（设备上已经有 `eval-labels.json` 时用） |
+| `--package <包名>` | `com.notifyme.android` | beta flavor 用 `com.notifyme.android.test` |
+| `--adb <路径>` | 自动找 SDK 里的 `platform-tools/adb.exe` | adb 可执行文件 |
+| `--wait-seconds <N>` | 整轮预算 + 300 | 等报告的最长秒数 |
+| `--legacy-sdcard` | 关 | 样本/报告改走 `/sdcard/Android/data/<pkg>/files`（老系统兜底，新系统上 App 可能读不到） |
+
+退出码：`0` 成功并拿到报告 / `1` 用法或环境错误 / `2` 采集没跑完（只落了 `.partial`）/ `3` 设备上没产出报告。
+脚本**不含任何 token / key**，也不打印它们：云端槽位在 App 的「分析设置」里配，脚本只管端侧链路。
+`--help` 打印完整用法。
+
+### 7.1.1 手敲三步（备选，脚本跑不了时用）
+
+```powershell
+# 0) 装 debug 包（采集入口只在 debug 源集里）
+adb -s <serial> install -r -d app/build/outputs/apk/open/debug/notifyme-open.apk
+
+# 1) 把标注样本推进 App 的**内部目录**（不是 /sdcard/Android/data/...，见 7.1.2 第 1 条）
+adb -s <serial> push app/src/test/resources/eval-labels.json /data/local/tmp/eval-labels.json
+adb -s <serial> shell "run-as com.notifyme.android cp /data/local/tmp/eval-labels.json files/eval-labels.json"
+
+# 2) 起采集（budget_ms / timeout_ms 必须用 --el，见 7.1.2 第 3 条）
 adb -s <serial> shell am start -n com.notifyme.android/.S2EvalActivity `
-    --es dataset /sdcard/Android/data/com.notifyme.android/files/eval-labels.json `
-    --es out     /sdcard/Android/data/com.notifyme.android/files/s2-usability.md `
-    --ei limit 20 --ei budget_ms 1500000 --ei timeout_ms 120000
+    --es dataset /data/user/0/com.notifyme.android/files/eval-labels.json `
+    --es out     /data/user/0/com.notifyme.android/files/s2-usability.md `
+    --ei limit 6 --el budget_ms 3600000 --el timeout_ms 600000
 
-# 3) 取报告
-adb -s <serial> pull /sdcard/Android/data/com.notifyme.android/files/s2-usability.md docs/
+# 3) 取报告（内部目录要先删旧文件，否则拉到的是上一轮的）
+adb -s <serial> shell "run-as com.notifyme.android rm -f files/s2-usability.md"
+adb -s <serial> exec-out run-as com.notifyme.android cat files/s2-usability.md > docs/s2-usability-device.md
 ```
 
 > **路径里的包名按 flavor 变**：open flavor 是 `com.notifyme.android`，
 > **beta flavor 带 `.test` 后缀**（`com.notifyme.android.test`）——
-> 装 beta 时上面三条命令里的包名与目录都要跟着改。
+> 装 beta 时上面的包名与目录都要跟着改（脚本用 `--package` 传）。
 
-### 7.1.1 两个实测坑（先踩过再说）
+### 7.1.2 五个实测坑（先踩过再说）
 
-1. **样本要推在「装好之后」**：采集 Activity 读的是 `dataset` 参数给的**文件路径**，
-   而 `adb push` 到 `/sdcard/Android/data/<pkg>/files/` 的文件**会被卸载清掉** ——
-   先 push 再装包，采集时那句「样本不存在」照样出现。顺序：**装 → push → 起采集**。
-2. **没就绪时报告照样出，但别读错**：端侧模型没下载完 / 设备不达准入（arm64 + ≥8GB）时，
-   报告头部会写「端侧：MiniCPM5-2B（**未就绪**：<原因>）——本轮端侧没有交付，
-   下面那列 0% 读作『未测』」。**没就绪 ≠ 模型不行**，别把 0% 当成可用率。
-   （早先那版报告头写死「真机 MiniCPM5-2B」，会把「设备没就绪」读成「2B 不行」——
-   已改。）
+1. **样本不能放 `/sdcard/Android/data/<pkg>/files/`**：那个目录是 adb（shell 用户）建的，
+   权限 `0770 shell:ext_data_rw`，**App 进程（另一个 uid）读不到** —— Android 11+ 上实测
+   `Permission denied`，采集器只会报「样本不存在」，很容易被误判成「采集器坏了」。
+   走 App 的**内部目录**（`/data/user/0/<pkg>/files`，`adb push` 到 `/data/local/tmp` 再
+   `run-as cp`），报告也从内部目录 `run-as cat` 读回。
+2. **样本要 push 在「装好之后」**：卸载会清掉 `/sdcard/Android/data/<pkg>/files/` 下的文件。
+   顺序：**装 → push → 起采集**（脚本已保证）。
+3. **`budget_ms` / `timeout_ms` 必须用 `--el`（long extra），不能用 `--ei`**：
+   `am start --ei` 放的是 Integer，而 `S2EvalActivity` 用 `getLongExtra` 取；
+   Android 14+ 的 `Bundle` 不再把 Integer 强转 Long，取不到就**回默认值**。
+   真机实测：传 `--ei budget_ms 900000 --ei timeout_ms 600000`，报告头仍写
+   「单次上限 120s · 整轮预算 25min」—— 改参数不生效，且**看不出来**。
+   （`--ei limit` 是 int extra，`getIntExtra` 取得到，不用改。）
+4. **采集期间 App 自己的周期分析会跟采集器抢同一个 llama context**：
+   端侧引擎是**进程级单例**（`LocalLlmEngines`），两边同时 prefill 会把 KV cache 的位置写乱，
+   `llama_decode` 直接报 `inconsistent sequence positions` → 采集条目全部
+   「prefill 解码失败」、0 交付，App 进程还会崩（真机实测，见 7.5）。
+   现在两边已用 `AnalysisWorker.ANALYSIS_MUTEX` 串行化，采集 Activity 还会在采集期间
+   **暂停周期分析并在结束后恢复**（只影响 debug 包，生产链路零影响）。
+   手动跑时仍建议先在 App 设置里关掉周期分析与悬浮窗。
+5. **没就绪 ≠ 模型不行**：报告头要分三态读 ——
+   **没就绪**（模型没下完 / 设备不达准入）、「**跑了但全挂**」（引擎就绪但推理全失败，
+   报告头会写真实原因如「prefill 解码失败」）、「**交付了**」。
+   前两种下面那列 0% 都读作「**未测**」，不是「2B 不行」。
 
 ### 7.2 前置条件
 
@@ -224,6 +283,13 @@ adb -s <serial> pull /sdcard/Android/data/com.notifyme.android/files/s2-usabilit
    App 里填的 URL 要与 `adb reverse` 的那一侧一致，否则 25 分钟白跑。
 4. **设备要过端侧准入**：本地推理要求 arm64-v8a 且总内存 ≥ 8 GB
    （`LocalDeviceCapabilities`）。不满足时端侧引擎直接不可用 —— 那一列会全是「未交付」。
+   小米 17（25098PN5AC / Android 17 / arm64-v8a / MemTotal 15446992 kB ≈ 14.7 GiB）满足。
+5. **要能从 adb 进 App 的内部目录**：`run-as` 只对 **debuggable** 包可用，
+   所以设备上必须是 debug 包（采集入口也只在 debug 源集里，两件事是一件事）。
+6. **adb 本身要是能跑的**：本机 `C:\mumu_adb\adb.exe` 缺依赖 DLL，直接执行会以
+   `STATUS_DLL_NOT_FOUND`（退出码 -1073741515）失败，在 `adb devices` 里表现为
+   「设备全没了」—— 很容易被误判成「设备没连」。用 SDK 里的
+   `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`，或 `--adb` 指定。
 
 ### 7.3 与 HTTP 侧的口径一致性（两份评测必须能逐项对比）
 
@@ -251,18 +317,84 @@ adb -s <serial> pull /sdcard/Android/data/com.notifyme.android/files/s2-usabilit
 那一格会显示 `0/20（0.0%）`，**读作「未测」，不是「0% 可用」**。两件事要分清：
 「没跑起来」与「跑了但全挂」。
 
-整轮预算由 `--ei budget_ms` / `--ei timeout_ms` 控制（默认 25min / 120s），耗尽即停，
-剩余条数写进报告 §四之二，同样不进分项通过率的分母。真机 2B 比 0.5B 替身慢一个量级，预算要留够。
+整轮预算由 `--el budget_ms` / `--el timeout_ms` 控制（默认 25min / 120s），耗尽即停，
+剩余条数写进报告 §四之二，同样不进分项通过率的分母。
 
-### 7.5 真机端侧的三条「不知道会看错」的限制
+#### 真机上单条要多久（小米 17 实测）
+
+| 阶段 | 实测 | 说明 |
+|---|---|---|
+| prefill | 499 token ≈ **21 s**（约 24 tok/s） | prompt 长度随样本变（2 条消息 ≈ 500 token，10 条消息 ≈ 700 token） |
+| decode | 最多 `n_ctx(4096) − prompt` ≈ 3597 token ≈ **550 s**（约 6.5 tok/s） | **模型不吐 EOG**，一路生成到上下文边界才停（`llama_jni.cpp` 的 `gen_limit` 钳制） |
+| **单条合计** | **≈ 9.7 分钟** | 约 1/3 花在 prefill，2/3 花在跑飞的 decode |
+
+**所以默认参数在这个设备上是错的**：
+
+- 默认 `--timeout-ms 120000`（120s）**小于单条实测耗时**。`withTimeout` 取消不了阻塞的
+  native 调用，超时是在 JNI 调用**返回之后**才抛 —— 结果照样被丢掉，
+  每条都会被记成「端侧推理超时」→ **0 交付**，报告读作「未测」，
+  但模型其实跑完了（真机上最容易被误读的一种失败）。
+- 默认 `--budget-ms 1500000`（25min）只够跑 **2~3 条**。
+
+**建议值**：
+
+```powershell
+--timeout-ms 600000   # 10min（`S1EvalBudgetCore.MAX_CALL_TIMEOUT_MS` 的上限）—— 必须大于单条实测耗时
+--budget-ms  3600000  # 60min（`MAX_TOTAL_BUDGET_MS` 的上限）
+```
+
+注意 **20 条全量需要 ≈ 3.3 小时**，而整轮预算被 `S1EvalBudgetCore` 硬夹在 60min ——
+**一轮跑不满 20 条**。两条路：① 分批跑（4 轮 × 5 条，每轮 `--limit` 取不同的样本偏移，
+注意 `takeCases` 取的是**前 N 条**，所以分批要靠改样本文件或加 `--offset`）；
+② 调 `S1EvalBudgetCore.MAX_TOTAL_BUDGET_MS`（会影响 S1/S2 HTTP 评测的兜底上限，改前想清楚）。
+
+### 7.5 真机端侧的限制与已知风险
 
 1. **端侧采样没钉**：`LlamaCppEngine` 默认 `temperature = 0.3`、无 seed（与生产同路径），
-   实际生成上限 = `n_ctx(4096) − prompt 占用`（≈3586），**不是 4096**。
+   实际生成上限 = `n_ctx(4096) − prompt 占用`（≈3597），**不是 4096**。
    端侧数字两次跑会不同，按区间读；云端那一侧钉了 `temperature=0 + seed`。
 2. **端侧单次调用没有硬超时**：native 推理是阻塞 JNI 调用，协程取消不了它；
    报告里「单次上限」对端侧这一列是尽力而为。
-3. **采集期间别让 App 同时分析**：端侧引擎不持 App 的分析互斥锁，两边共用同一个
-   llama context，会互相清 KV、把输出弄走形。跑之前先关掉周期分析与悬浮窗。
+3. **并发会写坏 KV cache**：采集与 App 自己的周期分析共用同一个 llama context，
+   两边同时 prefill → `llama_decode` 报 `inconsistent sequence positions`
+   （真机实测：20 条全「prefill 解码失败」、0 交付，App 进程还崩了）。
+   现在两边已用 `AnalysisWorker.ANALYSIS_MUTEX` 串行化，采集期间还会暂停周期分析。
+4. **内存**：模型 1.5 GB（mmap）+ KV cache ≈ 168 MiB
+   （42 层 × 2 个 KV 头 × 128 维 × 2 字节 × 4096 token）+ 计算缓冲 263 MiB
+   → 进程 RSS 实测 **2.6~2.8 GB**。12 GB 机器够用，但模型常驻时容易被低内存 killer 盯上 ——
+   采集器每跑完一条就落一份 `.partial` 报告，被杀时至少留半成品。
+5. **native 侧日志默认看不见**：`llama_log_set(nullptr, nullptr)` 让 llama.cpp 的日志
+   走 stderr，Android 上进不了 logcat，native 报错只剩一句「prefill 解码失败」。
+   现在 native 侧把 ggml 日志转到了 logcat（tag `notifyme-llama`），
+   排查时用 `adb logcat -d -s notifyme-llama`。
+
+### 7.6 真机数字怎么读
+
+报告第一节是三列并排的表：
+
+```
+| 指标 | 云端 S2 | 端侧 S2 | 两侧差值 |
+| 样本数 | 20 | 20 | - |
+| 已交付（HTTP + JSON） | 18/20（90.0%） | 15/20（75.0%） | -15.0% |
+| 六项全过（可用） | 12/20（60.0%） | 6/20（30.0%） | -30.0% |
+| 单次调用中位时延 | 7.0s | 580.0s | - |
+```
+
+- **「端侧 S2」列的「六项全过（可用）」那一格，就是「端侧 2B 的可用率」** ——
+  这才是 M4 要回答的问题；「云端 S2」列是**对照**，不是本轮的主角。
+  两列的模型不同（真机 MiniCPM5-2B vs 云端槽位里的模型），**不要直接相减看差值**。
+- **「已交付」那格是分母为「已交付条数」的分项通过率的分子**；
+  「六项全过」那格的分母是**样本数**。
+- **端侧一栏是 0 交付 / 0% 时，先看报告头**：
+  - 头写「**本轮 0 交付**：模型尚未下载完成 / 设备架构内存不达准入」→ **没跑起来**，读「未测」；
+  - 头写「引擎**已就绪**，但**本轮 0 交付**：prefill 解码失败」→ **跑了但全挂**，读「未测」，
+    原因看 §四「未交付明细」；
+  - 头写「**已交付 N 条**」→ 这 N 条是真实交付，分母才是样本数。
+  三种都**不是**「2B 不行」。
+- **「四之二、预算耗尽未测试」那节里的样本没进任何分母** —— 预算不够时
+  分母会小于样本数，读的时候把两件事分开：「跑了的 N 条里可用率多少」和「样本一共 M 条」。
+- 端侧两次跑数字会不同（温度 0.3、无 seed、生成上限被上下文钳制），
+  **按区间读**，别拿两次的差当回归。
 
 ## 8. 相关文件
 
@@ -277,5 +409,6 @@ adb -s <serial> pull /sdcard/Android/data/com.notifyme.android/files/s2-usabilit
 | `docs/eval-s2-cloud-vs-local.md` | 机器生成的原始报告（分项 + 逐样本 + 原始输出） |
 | `app/src/main/java/com/notifyme/android/S2EvalRunner.kt` | 真机端侧采集内核（走 `LocalLlmEngines`，与生产 `runS2Local` 同一条路径） |
 | `app/src/main/java/com/notifyme/android/S2EvalReport.kt` | 报告渲染（HTTP 侧与真机侧共用，保证两列数字可逐项对比） |
-| `app/src/debug/java/com/notifyme/android/S2EvalActivity.kt` | 真机采集入口（debug 源集，`adb shell am start` 触发） |
-| `app/src/test/java/com/notifyme/android/S2EvalReportTest.kt` | 采集口径单测（6 条：S1 输入同源 / 报告同构 / 未交付不进分母） |
+| `app/src/debug/java/com/notifyme/android/S2EvalActivity.kt` | 真机采集入口（debug 源集，`adb shell am start` 触发；采集期间自动暂停 App 周期分析） |
+| `docs/scripts/run_s2_device_eval.ps1` | 真机采集「一条命令」脚本（装包 → push → 起采集 → 等 → pull → 摘要） |
+| `app/src/test/java/com/notifyme/android/S2EvalReportTest.kt` | 采集口径单测（12 条：S1 输入同源 / 报告同构 / 未交付不进分母） |

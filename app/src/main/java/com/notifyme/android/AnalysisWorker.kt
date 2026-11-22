@@ -80,8 +80,14 @@ class AnalysisWorker(
          * 若不串行化，两个 Worker 会各自以空 caseId 集起步、把同一批会话
          * 重复分析并重复写入 analysis.jsonl。
          * 用协程 Mutex 而非 synchronized（临界区内有挂起点，synchronized 不允许）。
+         *
+         * visibility 是 internal：端侧 S2 采集器（[S2EvalRunner]）也要拿这把锁 ——
+         * 端侧引擎是进程级单例（[LocalLlmEngines]），采集与生产分析共用同一个
+         * llama context，两边同时 prefill 会把 KV cache 位置写乱
+         * （llama_decode 报 "inconsistent sequence positions"），
+         * 采集侧的表现是条目全部「未交付」。见 docs/评测-云端vs端侧S2.md §7.1.1。
          */
-        private val ANALYSIS_MUTEX = Mutex()
+        internal val ANALYSIS_MUTEX = Mutex()
     }
 
     override suspend fun doWork(): Result {
