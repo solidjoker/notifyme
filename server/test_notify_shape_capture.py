@@ -194,6 +194,70 @@ def test_cli_can_filter_by_package(tmp_path):
     assert set(data["summary"].keys()) == {"com.tencent.mm"}
 
 
+def test_watch_returns_as_soon_as_target_pkg_appears(monkeypatch):
+    """--watch：轮询到目标包出现就停（不必等满 timeout）。"""
+    calls = []
+
+    def fake_dump(serial):
+        calls.append(serial)
+        # 前两次只有微信，第三次才出现飞书
+        if len(calls) < 3:
+            return FIXTURE
+        return FIXTURE + """
+  NotificationRecord(0x44ce79f: pkg=com.ss.android.lark user=UserHandle{0} id=9 tag=null key=0|com.ss.android.lark|10002|null|10130: ...
+    channel=message_channel
+    postTime=2026-11-22 09:40:00.000000+0800
+    extras:
+      android.title = String (某群)
+      android.text = String (张三:在吗)
+"""
+
+    monkeypatch.setattr(TOOL, "dump_from_adb", fake_dump)
+    monkeypatch.setattr(TOOL.time, "sleep", lambda _s: None)
+    text, waited = TOOL.watch("serial-x", "com.ss.android.lark", timeout_s=60, interval_s=1)
+    assert waited >= 0
+    assert "com.ss.android.lark" in text
+    assert len(calls) == 3
+
+
+def test_watch_times_out_and_returns_last_dump(monkeypatch):
+    """--watch：等不到就超时退出，返回 -1（调用方据此说「没等到」）。"""
+    monkeypatch.setattr(TOOL, "dump_from_adb", lambda serial: FIXTURE)
+    monkeypatch.setattr(TOOL.time, "sleep", lambda _s: None)
+    text, waited = TOOL.watch("serial-x", "com.ss.android.lark", timeout_s=0, interval_s=1)
+    assert waited == -1
+    assert "com.tencent.mm" in text
+
+
+def test_watch_ignores_other_packages(monkeypatch):
+    """--watch 只认目标包：通知栏里有别家的通知不算数。"""
+    monkeypatch.setattr(TOOL, "dump_from_adb", lambda serial: FIXTURE)
+    monkeypatch.setattr(TOOL.time, "sleep", lambda _s: None)
+    _text, waited = TOOL.watch("serial-x", "com.ss.android.lark", timeout_s=0, interval_s=1)
+    assert waited == -1
+
+
+def test_cli_rejects_watch_with_input(tmp_path):
+    """--watch 与 --input 互斥：--watch 是「现取并轮询」，给了文件就没法轮询。"""
+    dump = tmp_path / "dump.txt"
+    dump.write_text(FIXTURE, encoding="utf-8")
+    try:
+        TOOL.main(["--input", str(dump), "--watch", "--serial", "x"])
+    except SystemExit as exc:
+        assert "--watch" in str(exc)
+    else:
+        raise AssertionError("--watch 与 --input 同时给时应当退出")
+
+
+def test_cli_rejects_watch_without_serial():
+    try:
+        TOOL.main(["--watch"])
+    except SystemExit as exc:
+        assert "--serial" in str(exc)
+    else:
+        raise AssertionError("--watch 没有 --serial 时应当退出")
+
+
 def test_decode_text_reads_utf16_le_with_bom():
     """中文 Windows 的 PowerShell 重定向会把 dump 写成 UTF-16LE（带 BOM）。"""
     raw = b"\xff\xfe" + FIXTURE.encode("utf-16-le")

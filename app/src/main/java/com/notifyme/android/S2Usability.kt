@@ -359,10 +359,4 @@ internal object S2Usability {
     private fun pair(ok: Int, total: Int): String = ok.toString() + "/" + total + "（" + pct(if (total == 0) 0.0 else ok.toDouble() / total) + "）"
 
     private fun ms(v: Long): String = if (v <= 0L) "-" else LocaleTextCore.fixed(v / 1000.0, 1) + "s"
-
-    /** 失败样本的说明列表（报告里「为什么没交付」用）。 */
-    fun failureLines(outcomes: Map<String, Outcome>): List<String> =
-        outcomes.values.mapNotNull { o ->
-            if (o.out != null) null else o.conversation + "：" + (o.error ?: "未交付").let { TextClipCore.clip(it, 120) }
-        }
 }

@@ -215,6 +215,34 @@ class S2EvalReportTest {
     }
 
     @Test
+    fun failureGroupKeepsLongReasonIntact() {
+        // 整行 take(120) 会把行尾的**原因**先切掉（实测离 120 只差 4 字就断了），
+        // 而原因正是这一行唯一的信息量。
+        val reason = "端侧推理失败：" + "很长的原因".repeat(30)
+        val outcomes = mapOf("a" to S2Usability.Outcome("a", "老板", null, 0L, reason))
+        val groups = S2EvalReport.failureGroups("端侧", outcomes)
+        assertEquals(1, groups.size)
+        assertTrue(
+            "原因不能被截断：\n" + groups[0],
+            groups[0].contains(reason)
+        )
+    }
+
+    @Test
+    fun failureGroupFoldsLongConversationList() {
+        // 会话名太多时折叠成「等 N 个」，但**原因**原样保留。
+        val reason = "模型尚未下载完成：MiniCPM5-2B（GGUF Q4_K_M）"
+        val outcomes = (1..12).associate { i ->
+            "c$i" to S2Usability.Outcome("c$i", "会话$i", null, 0L, reason)
+        }
+        val groups = S2EvalReport.failureGroups("端侧", outcomes)
+        assertEquals(1, groups.size)
+        assertTrue("要标出总数：\n" + groups[0], groups[0].contains("共 12 条"))
+        assertTrue("会话名要折叠：\n" + groups[0], groups[0].contains("等 12 个"))
+        assertTrue("原因要原样：\n" + groups[0], groups[0].contains(reason))
+    }
+
+    @Test
     fun renderKeepsRawOutputUntruncated() {
         // 原始输出不做截断：截到 120 字符只剩半截 JSON，复核不了解析是否走形。
         val raw = "{\"summary\":\"" + "长".repeat(300) + "\"}"

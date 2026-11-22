@@ -637,7 +637,7 @@
     <!-- M26 首页「正在分析」任务清单 -->
     <string name="analysis_running_title">⚡ 正在分析 %1$d/%2$d</string>
     <string name="analysis_running_title_done">✓ 分析完成 %1$d/%2$d</string>
-    <string name="analysis_running_more">还有 %1$d 个会话在队列里</string>
+    <string name="analysis_running_more">还有 %1$d 个会话未显示</string>
     <string name="analysis_status_pending">排队中</string>
     <string name="analysis_status_running">分析中</string>
     <string name="analysis_status_done">已完成</string>

@@ -362,7 +362,9 @@ class S2UsabilityTest {
             "a" to S2Usability.Outcome("a", "甲项目群", out()),
             "b" to S2Usability.Outcome("b", "乙闲聊群", null, 0L, "HTTP 429")
         )
-        val lines = S2Usability.failureLines(outcomes)
+        // 未交付明细的渲染已挪到 S2EvalReport.failureGroups（按侧 + 按原因归并），
+        // S2Usability 不再保留第二份实现 —— 两份口径迟早漂开。
+        val lines = S2EvalReport.failureGroups("云端", outcomes)
         assertEquals(1, lines.size)
         assertTrue(lines[0].contains("乙闲聊群"))
         assertTrue(lines[0].contains("HTTP 429"))

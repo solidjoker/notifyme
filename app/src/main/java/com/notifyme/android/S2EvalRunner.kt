@@ -8,6 +8,7 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaType
@@ -90,6 +91,8 @@ internal object S2EvalRunner {
         val plan: S1EvalBudgetCore.Plan,
         /** 端侧引擎是否就绪（false = 本轮端侧一条都没交付，别把 0% 读成「2B 不行」）。 */
         val localEngineReady: Boolean = false,
+        /** 端侧**实际交付**条数（报告头按它写，不按引擎快照 —— 引擎就绪但推理全失败也算 0）。 */
+        val localDelivered: Int = 0,
         /** 端侧不可用的原因（模型没下完 / 内存不达准入 / 引擎加载失败…）。 */
         val localUnavailableReason: String = "",
         /** 本轮用的云端槽位（null = 没配，报告里如实写「未配置」）。 */
@@ -208,8 +211,20 @@ internal object S2EvalRunner {
                         out = parsed,
                         elapsedMs = System.currentTimeMillis() - t0
                     )
+                } catch (e: TimeoutCancellationException) {
+                    // ★ 必须排在 CancellationException 之前：
+                    // TimeoutCancellationException 是 CancellationException 的子类，
+                    // 被下面那个分支命中就原样抛出 → **整轮采集中止，报告都写不出来**。
+                    // 而「真机 2B 单条超 120s」恰恰是常态风险，不能因此报废整轮。
+                    localOut = S2Usability.Outcome(
+                        caseId = case.caseId,
+                        conversation = case.conversation,
+                        out = null,
+                        elapsedMs = System.currentTimeMillis() - t0,
+                        error = "端侧推理超时（${timeout}ms）"
+                    )
                 } catch (e: CancellationException) {
-                    // 协程取消要往上抛：吞掉它会破坏结构化并发。
+                    // 真正的协程取消（父作用域被取消）要往上抛：吞掉它会破坏结构化并发。
                     throw e
                 } catch (e: Throwable) {
                     // 端侧模型未就绪 / 推理失败 / 超时：该样本按「未交付」记入报告，不进分项通过率的分母。
@@ -262,6 +277,7 @@ internal object S2EvalRunner {
             skipped = skipped,
             plan = plan,
             localEngineReady = localReady,
+            localDelivered = localOutcomes.values.count { it.out != null },
             localUnavailableReason = localReason,
             cloudSlot = cloudSlot
         )

@@ -1015,8 +1015,9 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
       每次状态变化都随进度一起发布。
     - `MainActivity.renderRunning`：首页顶部（待办卡下方）新增「正在分析」卡片，
       标题 + 逐行任务；点某行直接进对应会话（`ConvKey.parse` 还原键）。
-    - 纯函数全在 `AnalysisProgressUi`（`runningTitle` / `taskStatus` / `taskLine` /
-      `doneCount` / `visibleRows` / `hiddenCount` / `batchSignature`），**13 条单测**钉住。
+    - 纯函数全在 `AnalysisProgressUi`（`runningTitle` / `runningTitleRes` / `taskStatus` /
+      `taskStatusRes` / `advance` / `doneCount` / `visibleRows` / `hiddenCount` /
+      `batchSignature`），**15 条单测**钉住。
   - 三条设计决定：
     1. **标题是「正在跑第几个 / 共几个」不是「已完成几个」** —— 「0/1」读起来像「一个都没跑成」，
        而实际正跑着第一个（已完成数在每行状态里已经能看到）。跑完变成「✓ 分析完成 N/N」。
@@ -1036,7 +1037,45 @@ M9 让重要消息以悬浮层直接出现在任意界面之上。
     数据零丢失（messages 1695 行 / analysis 106 行 / models 2.5 GB / 全部 prefs）。
     另记：MIUI 拦 adb 安装（`INSTALL_FAILED_USER_RESTRICTED`）时是**屏幕确认弹窗**超时，
     自动点掉「继续安装」即可（不是签名/权限问题）。
-  - 计数：Android 单测 1498 → **1511** 条（+13）；服务端用例仍 **944** 条；magpie 单测 **77** 条。
+  - 计数：Android 单测 1498 → **1508** 条（+10）；服务端用例仍 **944** 条；magpie 单测 **77** 条。
+
+- **M26 清单 + S2 报告的对抗式复核：修掉 7 处真问题（fix/m26-adversarial-fixes）**
+  - 背景：#115 的首页清单**直接上了真机、没经过对抗式复核**；#116 的 S2 报告改动也没人挑刺。
+    本轮派子代理对着源码逐行复核，挖出 7 个真问题（其中 2 个致命）。
+  - **必改 1（致命）**：`S2EvalRunner` 的端侧超时保护**被自己架空** ——
+    `withTimeout` 抛的 `TimeoutCancellationException` 是 `CancellationException` 的子类，
+    被我写的「协程取消要往上抛」那个 catch 命中后原样抛出 → **整轮采集中止，报告与 .partial 都写不出来**。
+    而「真机 2B 单条超 120s」恰恰是常态风险。修法：先 catch `TimeoutCancellationException`
+    记成「端侧推理超时」再继续下一条。
+  - **必改 2**：`AnalysisTaskStatus.FAILED` 与 `analysis_status_failed` **从未被产出** ——
+    Worker 的三个 catch（IOException / HttpException / LocalEngineException）都没标状态，
+    清单上出问题的那条永远停在「分析中」。修法：catch 里 `failTask()`（标 FAILED + 广播）。
+  - **必改 3**：「✓ 分析完成 N/N」在生产里**基本看不到** ——
+    `AnalysisProgressBus.publish` 是**合并派发**（同一帧多次 publish 只派发一次），
+    而 Worker 的 `finally` 里紧跟 `publish(null)` → 最后那条完成态被合并掉，卡片 ≤1 帧就消失。
+    修法：`AnalysisProgressBus.clearAfter(delayMs)`，Worker 收尾后延迟 4 秒再清。
+  - **必改 4**：`visibleRows` 把 RUNNING 挪到最前 → 清单不再是「处理顺序」，
+    用户读成「7 后面是 1」，「下一个是谁」再也看不出来。修法：保持顺序，
+    正在跑的那条落在可见窗口外时**顶掉最后一条**，其余相对顺序不动。
+  - **必改 5**：S2 报告头只看「引擎就绪」不看「实际交付」——
+    引擎就绪但推理全失败（OOM / 超时 / 解码失败）时头写「已就绪」、下面那列 0%，
+    **上一轮要修的那个误读原样保留**。修法：头部按**实际交付条数**写。
+  - **必改 6**：`ConvKey.parse("")` 返回的是 `legacy("") = ConvKey(微信, "")`，**不是 null** ——
+    批次开始那一帧 `convKeyId` 确实是空的，通知点进去会开一个「空会话」的详情页，
+    而不是设计里说的回落控制台。修法：`takeIf { it.conversation.isNotBlank() }`。
+  - **必改 7**：`S2Usability.failureLines` 变成死代码 —— 生产已改用 `S2EvalReport.failureGroups`，
+    两份「未交付明细」实现迟早漂开（AGENTS.md §6 反复点名的那类隐患）。修法：删掉前者，
+    契约测试迁到 `failureGroups`。
+  - **顺带修**：
+    ① 失败原因被 `esc().take(120)` 截断 —— 整行截断先切掉行尾的**原因**（实测离 120 只差 4 字就断了），
+       而原因是这行唯一的信息量。修法：只裁会话名列表（超过 5 个折叠成「等 N 个」），原因原样保留；
+    ② `markTask` 从 Worker 私有方法搬到 `AnalysisProgressUi.advance`（纯函数，可单测），
+       下标越界时**记日志**而不是静默跳过；
+    ③ 「还有 N 个会话**在队列里**」的 N 是未显示数（可能含已完成项）→ 改成「未显示」；
+    ④ `docs/scripts/notify_shape_capture.py` 加 `--watch`：轮询直到目标包出现通知再出结论
+       （通知被划掉就没了，人守着 dump 抢时间不现实）—— 飞书取证就差这一条。
+  - 计数：Android 单测 1508 → **1517** 条（+9）；服务端用例 **944 → 949** 条（+5 取证脚本 watch 模式）；
+    magpie 单测 **77** 条。
 
 ## 12. 决策门汇总
 

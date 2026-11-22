@@ -65,11 +65,16 @@ object AnalysisProgressNotifier {
      * 解不出来（准备阶段 id 为空）回落控制台。
      */
     private fun contentIntent(context: Context, state: AnalysisRunState): PendingIntent {
-        val intent = runCatching { ConvKey.parse(state.convKeyId) }.getOrNull()?.let { key ->
-            ConversationActivity.createIntent(context, key)
-        } ?: Intent(context, ConsoleActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        }
+        // 注意 ConvKey.parse("") 返回的是 legacy("") = ConvKey(微信, "")，**不是 null** ——
+        // 不显式判 conversation 是不是空白，批次开始那一帧（id 确实是空的）
+        // 就会开一个「空会话」的详情页，而不是设计里说的回落控制台。
+        val intent = runCatching { ConvKey.parse(state.convKeyId) }.getOrNull()
+            ?.takeIf { it.conversation.isNotBlank() }
+            ?.let { key ->
+                ConversationActivity.createIntent(context, key)
+            } ?: Intent(context, ConsoleActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
         return PendingIntent.getActivity(
             context,
             // 不同会话给不同 PI，避免系统复用旧 intent 打开上一个会话
